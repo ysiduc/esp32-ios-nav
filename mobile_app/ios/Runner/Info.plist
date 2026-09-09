@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>ESP32 Nav & ANCS</string>
+	<string>ESP32 Nav and ANCS</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -46,21 +46,21 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- Quyền Bluetooth kết nối ESP32 -->
+	<!-- Quyen Bluetooth ket noi ESP32 -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Ứng dụng cần Bluetooth để kết nối và truyền dữ liệu chỉ đường, bản đồ đến màn hình ESP32</string>
+	<string>Ung dung can Bluetooth de ket noi va truyen du lieu chi duong den man hinh ESP32</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Ứng dụng cần Bluetooth để kết nối với thiết bị ESP32</string>
+	<string>Ung dung can Bluetooth de ket noi voi thiet bi ESP32</string>
 
-	<!-- Quyền Vị trí GPS lấy lộ trình thời gian thực -->
+	<!-- Quyen Vi tri GPS -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần vị trí để vẽ lộ trình OpenStreetMap và điều hướng chỉ đường turn-by-turn</string>
+	<string>Ung dung can vi tri de ve lo trinh ban do va dieu huong chi duong</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Ứng dụng cần vị trí liên tục để tiếp tục cập nhật hướng rẽ sang ESP32 ngay cả khi tắt màn hình</string>
+	<string>Ung dung can vi tri lien tuc de tiep tuc cap nhat huong re sang ESP32 ngay ca khi tat man hinh</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Ứng dụng cần vị trí liên tục để điều hướng trong chế độ nền</string>
+	<string>Ung dung can vi tri lien tuc de dieu huong trong che do nen</string>
 
-	<!-- Chế độ chạy ngầm Background Modes -->
+	<!-- Background Modes -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
