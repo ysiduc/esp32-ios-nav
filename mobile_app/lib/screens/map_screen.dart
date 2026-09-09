@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
-import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../models/route_model.dart';
 import '../services/ble_service.dart';
 import '../services/google_maps_parser.dart';
@@ -53,7 +52,6 @@ class _MapScreenState extends State<MapScreen> {
 
   List<MapPlace> _searchResults = [];
   Timer? _debounceTimer;
-  StreamSubscription? _intentSub;
   String? _clipboardGoogleMapsText;
   String? _lastDismissedClipboardText;
 
@@ -75,37 +73,6 @@ class _MapScreenState extends State<MapScreen> {
       }
       setState(() {});
     });
-
-    _initSharingIntent();
-  }
-
-  void _initSharingIntent() {
-    try {
-      // 1. Listen for shares while app is in memory
-      _intentSub = ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> value) {
-        if (value.isNotEmpty) {
-          for (final file in value) {
-            if (file.path.isNotEmpty) {
-              _handleGoogleMapsOrSharedInput(file.path);
-              break;
-            }
-          }
-        }
-      }, onError: (_) {});
-
-      // 2. Listen for shares when app is opened from closed state
-      ReceiveSharingIntent.instance.getInitialMedia().then((List<SharedMediaFile> value) {
-        if (value.isNotEmpty) {
-          for (final file in value) {
-            if (file.path.isNotEmpty) {
-              _handleGoogleMapsOrSharedInput(file.path);
-              break;
-            }
-          }
-          ReceiveSharingIntent.instance.reset();
-        }
-      });
-    } catch (_) {}
   }
 
   Future<void> _checkClipboardForGoogleMaps() async {
@@ -191,7 +158,6 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _debounceTimer?.cancel();
-    _intentSub?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
