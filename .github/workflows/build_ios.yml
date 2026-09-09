@@ -1,0 +1,45 @@
+name: Build iOS IPA Package
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Compile & Package iOS IPA
+    runs-on: macos-14
+    steps:
+      - name: 1. Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: 2. Setup Flutter Environment
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 3. Install Dependencies
+        working-directory: mobile_app
+        run: |
+          flutter pub get
+
+      - name: 4. Build iOS App (Release, No CodeSign)
+        working-directory: mobile_app
+        run: |
+          flutter build ios --release --no-codesign
+
+      - name: 5. Package as IPA Payload
+        working-directory: mobile_app/build/ios/iphoneos
+        run: |
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r ../../../esp32_nav_app.ipa Payload
+          ls -lh ../../../esp32_nav_app.ipa
+
+      - name: 6. Upload IPA as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32_nav_ios_ipa
+          path: mobile_app/esp32_nav_app.ipa
+          retention-days: 14
