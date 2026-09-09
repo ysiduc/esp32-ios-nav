@@ -34,7 +34,7 @@ jobs:
         run: |
           mkdir -p Payload
           cp -r Runner.app Payload/
-          zip -r ../../../esp32_nav_app.ipa Payload
+          zip -r -y ../../../esp32_nav_app.ipa Payload
           ls -lh ../../../esp32_nav_app.ipa
 
       - name: 6. Upload IPA as Artifact

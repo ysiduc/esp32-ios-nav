@@ -1,13 +1,23 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../models/route_model.dart';
 import '../services/ble_service.dart';
+import '../services/google_maps_parser.dart';
 import '../services/navigation_manager.dart';
-import '../services/photon_service.dart';
-import '../services/valhalla_service.dart';
+import '../services/osrm_service.dart';
+import '../services/search_service.dart';
+
+enum MapThemeMode {
+  googleRoad,      // Google Maps Standard (Crisp, familiar, zero watermark)
+  googleSatellite, // Google Maps Hybrid Satellite (High-res satellite with roads/names)
+  darkCyber,       // Midnight Dark Mode (High contrast dark, zero watermark)
+  osmStandard,     // OpenStreetMap Standard
+}
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -18,36 +28,34 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
-  final PhotonService _photonService = PhotonService();
-  final ValhallaService _valhallaService = ValhallaService();
+  final SearchService _searchService = SearchService();
+  final OsrmService _osrmService = OsrmService();
+  final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
-  // Coordinates matching the screenshots (Hanoi Dinh Cong & Phuong Hanh route)
-    final LatLng _defaultDestination = const LatLng(20.8850, 105.5200); // Phuong Hanh, Quoc Oai
-  LatLng _userPosition = const LatLng(20.9785, 105.8342);
-  LatLng? _destinationPoint;
-  String _destinationName = 'Phương Hạnh';
-  NavRoute? _activeRoute;
-  List<NavRoute> _alternativeRoutes = [];
+  // Coordinates default
+  LatLng _userPosition = const LatLng(21.0285, 105.8542); // Hanoi default
+  MapPlace? _selectedPlace;
+  List<NavRoute> _routes = [];
   int _selectedRouteIndex = 0;
+  String _transportMode = 'driving'; // 'driving', 'bike', 'foot'
+  bool _isLoadingRoutes = false;
+  bool _isSearching = false;
 
   // View state:
-  // 0: Map Browse (Screenshot 1)
-  // 1: Route Overview / Map mode (Screenshot 2)
-  // 2: Route List Comparison / D.sách mode (Screenshot 3)
-  // When navManager.isNavigating is true -> Active HUD (Screenshot 4)
-  int _viewMode = 0; 
+  // 0: Browse Map / Search
+  // 1: Place Selected Inspector Sheet
+  // 2: Route Comparison & Alternatives
+  int _viewMode = 0;
   bool _isMuted = false;
+  MapThemeMode _currentTheme = MapThemeMode.googleRoad; // Default to Google Maps (No watermark!)
+
   List<MapPlace> _searchResults = [];
   Timer? _debounceTimer;
-
-  // Waze Midnight Dark Matrix ColorFilter
-  static const ColorFilter _wazeDarkMatrix = ColorFilter.matrix(<double>[
-    -0.55, 0, 0, 0, 30,
-    0, -0.45, 0, 0, 48,
-    0, 0, -0.20, 0, 80,
-    0, 0, 0, 1, 0,
-  ]);
+  StreamSubscription? _intentSub;
+  String? _clipboardGoogleMapsText;
+  String? _lastDismissedClipboardText;
 
   @override
   void initState() {
@@ -56,77 +64,275 @@ class _MapScreenState extends State<MapScreen> {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
+        _mapController.move(_userPosition, 16.0);
       }
-      _mapController.move(_userPosition, 16.5);
+      _checkClipboardForGoogleMaps();
     });
+
+    _searchFocusNode.addListener(() {
+      if (_searchFocusNode.hasFocus) {
+        _checkClipboardForGoogleMaps();
+      }
+      setState(() {});
+    });
+
+    _initSharingIntent();
   }
 
+  void _initSharingIntent() {
+    try {
+      // 1. Listen for shares while app is in memory
+      _intentSub = ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> value) {
+        if (value.isNotEmpty) {
+          for (final file in value) {
+            if (file.path.isNotEmpty) {
+              _handleGoogleMapsOrSharedInput(file.path);
+              break;
+            }
+          }
+        }
+      }, onError: (_) {});
+
+      // 2. Listen for shares when app is opened from closed state
+      ReceiveSharingIntent.instance.getInitialMedia().then((List<SharedMediaFile> value) {
+        if (value.isNotEmpty) {
+          for (final file in value) {
+            if (file.path.isNotEmpty) {
+              _handleGoogleMapsOrSharedInput(file.path);
+              break;
+            }
+          }
+          ReceiveSharingIntent.instance.reset();
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _checkClipboardForGoogleMaps() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim();
+      if (text != null && text.isNotEmpty && text != _lastDismissedClipboardText) {
+        if (GoogleMapsParser.isGoogleMapsOrCoordInput(text)) {
+          if (mounted && _clipboardGoogleMapsText != text) {
+            setState(() {
+              _clipboardGoogleMapsText = text;
+            });
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _pasteFromClipboard() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim();
+      if (text != null && text.isNotEmpty) {
+        _searchController.text = text;
+        if (GoogleMapsParser.isGoogleMapsOrCoordInput(text)) {
+          await _handleGoogleMapsOrSharedInput(text);
+        } else {
+          _onSearchSubmitted(text);
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleGoogleMapsOrSharedInput(String rawInput) async {
+    final clean = rawInput.trim();
+    if (clean.isEmpty) return;
+
+    _debounceTimer?.cancel();
+    setState(() {
+      _isSearching = true;
+      _clipboardGoogleMapsText = null;
+      _lastDismissedClipboardText = clean;
+    });
+
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+
+    final place = await _googleMapsParser.parseInput(clean, userLocation: currentPos);
+
+    if (mounted) {
+      setState(() => _isSearching = false);
+      if (place != null) {
+        _searchController.text = place.name;
+        _onPlaceClicked(place);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF0084FF),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Đã nhận điểm đến từ Google Maps: ${place.name}',
+                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else {
+        // Fallback to normal search
+        _onSearchSubmitted(clean);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _intentSub?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  // -------------------------------------------------------------
+  // Search Logic
+  // -------------------------------------------------------------
   void _onSearchChanged(String query) {
     _debounceTimer?.cancel();
     if (query.trim().isEmpty) {
-      setState(() => _searchResults = []);
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
       return;
     }
 
+    if (GoogleMapsParser.isGoogleMapsOrCoordInput(query)) {
+      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+        _handleGoogleMapsOrSharedInput(query);
+      });
+      return;
+    }
+
+    setState(() => _isSearching = true);
     _debounceTimer = Timer(const Duration(milliseconds: 250), () async {
-      final results = await _photonService.searchPlaces(query, nearLocation: _userPosition);
+      final navManager = Provider.of<NavigationManager>(context, listen: false);
+      final currentPos = navManager.currentLocation ?? _userPosition;
+      final results = await _searchService.searchPlaces(query, nearLocation: currentPos);
       if (mounted) {
-        setState(() => _searchResults = results);
+        setState(() {
+          _searchResults = results;
+          _isSearching = false;
+        });
       }
     });
   }
 
-  Future<void> _selectDestination(LatLng point, String name) async {
-    setState(() {
-      _destinationPoint = point;
-      _destinationName = name;
-      _searchResults = [];
-      _viewMode = 1; // Open Route Overview
-    });
-    FocusScope.of(context).unfocus();
-    await _calculateRoutes();
-  }
+  void _onSearchSubmitted(String query) async {
+    final clean = query.trim();
+    if (clean.isEmpty) return;
 
-  Future<void> _calculateRoutes() async {
-    final dest = _destinationPoint ?? _defaultDestination;
-    final primary = await _valhallaService.calculateRoute(_userPosition, dest, costing: 'auto');
-    if (primary != null && mounted) {
+    if (GoogleMapsParser.isGoogleMapsOrCoordInput(clean)) {
+      _handleGoogleMapsOrSharedInput(clean);
+      return;
+    }
+
+    _debounceTimer?.cancel();
+    setState(() => _isSearching = true);
+
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+    final results = await _searchService.searchPlaces(clean, nearLocation: currentPos);
+
+    if (mounted) {
       setState(() {
-        _activeRoute = primary;
-        // Generate the 3 route options matching Screenshot 3
-        _alternativeRoutes = [
-          NavRoute(
-            totalDistanceMeters: 41400,
-            totalDurationSeconds: 4260, // 1h 11m
-            polylinePoints: primary.polylinePoints,
-            steps: primary.steps,
-            summary: 'Qua CT. Đại lộ Thăng Long Hà Nội',
-          ),
-          NavRoute(
-            totalDistanceMeters: 32000,
-            totalDurationSeconds: 4440, // 1h 14m
-            polylinePoints: _generateAltPolyline(primary.polylinePoints, 0.008),
-            steps: primary.steps,
-            summary: 'Qua QL6 Hà Nội',
-          ),
-          NavRoute(
-            totalDistanceMeters: 39000,
-            totalDurationSeconds: 4620, // 1h 17m
-            polylinePoints: _generateAltPolyline(primary.polylinePoints, -0.012),
-            steps: primary.steps,
-            summary: 'Qua Lương Thế Vinh Quảng Bị, Hà...',
-          ),
-        ];
-        _selectedRouteIndex = 0;
+        _searchResults = results;
+        _isSearching = false;
       });
-
-      _fitRouteBounds(primary.polylinePoints);
+      if (results.isNotEmpty) {
+        _onPlaceClicked(results.first);
+      }
     }
   }
 
-  List<LatLng> _generateAltPolyline(List<LatLng> base, double offset) {
-    if (base.isEmpty) return [];
-    return base.map((p) => LatLng(p.latitude + offset * 0.5, p.longitude + offset)).toList();
+  void _onSelectCategory(QuickSearchCategory category) async {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+    _searchController.text = category.title;
+    setState(() => _isSearching = true);
+
+    final results = await _searchService.searchCategory(category, nearLocation: currentPos);
+    if (mounted) {
+      setState(() {
+        _searchResults = results;
+        _isSearching = false;
+      });
+      if (results.isNotEmpty) {
+        _onPlaceClicked(results.first);
+      }
+    }
+  }
+
+  void _onPlaceClicked(MapPlace place) {
+    _searchFocusNode.unfocus();
+    _searchService.addRecentSearch(place);
+    setState(() {
+      _selectedPlace = place;
+      _searchResults = [];
+      _viewMode = 1; // Open Place Details Inspector
+    });
+    _mapController.move(place.coordinate, 16.5);
+  }
+
+  void _onMapTapped(LatLng point) async {
+    if (Provider.of<NavigationManager>(context, listen: false).isNavigating) return;
+
+    final place = await _searchService.reverseGeocode(point);
+    if (mounted) {
+      setState(() {
+        _selectedPlace = place;
+        _searchResults = [];
+        _viewMode = 1;
+      });
+      _mapController.move(point, 16.5);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Route Calculation & Comparison Logic
+  // -------------------------------------------------------------
+  Future<void> _calculateRoutesForPlace(MapPlace place) async {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final startPos = navManager.currentLocation ?? _userPosition;
+
+    setState(() {
+      _isLoadingRoutes = true;
+      _selectedPlace = place;
+      _viewMode = 2; // Open Route Comparison
+      _selectedRouteIndex = 0;
+      _routes = [];
+    });
+
+    final routes = await _osrmService.calculateMultipleRoutes(
+      startPos,
+      place.coordinate,
+      mode: _transportMode,
+    );
+
+    if (mounted) {
+      setState(() {
+        _routes = routes;
+        _isLoadingRoutes = false;
+        _selectedRouteIndex = 0;
+      });
+
+      if (routes.isNotEmpty) {
+        _fitRouteBounds(routes.first.polylinePoints);
+      }
+    }
   }
 
   void _fitRouteBounds(List<LatLng> points) {
@@ -147,22 +353,68 @@ class _MapScreenState extends State<MapScreen> {
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
-        padding: const EdgeInsets.only(top: 140, bottom: 280, left: 40, right: 40),
+        padding: const EdgeInsets.only(top: 130, bottom: 330, left: 35, right: 35),
       ),
     );
   }
 
-  void _startDriving() {
-    final route = (_alternativeRoutes.isNotEmpty) 
-        ? _alternativeRoutes[_selectedRouteIndex] 
-        : _activeRoute;
-    if (route == null) return;
+  void _startDriving({bool isSimulation = false}) {
+    if (_routes.isEmpty) return;
+    final chosenRoute = _routes[_selectedRouteIndex];
     final navManager = Provider.of<NavigationManager>(context, listen: false);
-    navManager.startNavigation(route);
+
+    if (isSimulation) {
+      navManager.startSimulation(chosenRoute);
+    } else {
+      navManager.startNavigation(chosenRoute);
+    }
+
     setState(() {
       _viewMode = 0;
     });
-    _mapController.move(_userPosition, 17.5);
+
+    final startPos = navManager.currentLocation ?? _userPosition;
+    _mapController.move(startPos, 17.5);
+  }
+
+  // -------------------------------------------------------------
+  // Map Tiles Layer (Watermark-Free Google & OSM)
+  // -------------------------------------------------------------
+  Widget _buildMapTiles() {
+    switch (_currentTheme) {
+      case MapThemeMode.googleRoad:
+        return TileLayer(
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+          userAgentPackageName: 'com.esp32nav.app',
+          maxZoom: 20,
+        );
+      case MapThemeMode.googleSatellite:
+        return TileLayer(
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+          userAgentPackageName: 'com.esp32nav.app',
+          maxZoom: 20,
+        );
+      case MapThemeMode.darkCyber:
+        return ColorFiltered(
+          colorFilter: const ColorFilter.matrix(<double>[
+            -0.85, 0, 0, 0, 230,
+            0, -0.85, 0, 0, 230,
+            0, 0, -0.80, 0, 240,
+            0, 0, 0, 1, 0,
+          ]),
+          child: TileLayer(
+            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            userAgentPackageName: 'com.esp32nav.app',
+            maxZoom: 20,
+          ),
+        );
+      case MapThemeMode.osmStandard:
+        return TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.esp32nav.app',
+          maxZoom: 19,
+        );
+    }
   }
 
   @override
@@ -172,453 +424,324 @@ class _MapScreenState extends State<MapScreen> {
     final isDriving = navManager.isNavigating;
     final userPos = navManager.currentLocation ?? _userPosition;
 
+    final showDropdown = _searchFocusNode.hasFocus ||
+        _searchController.text.isNotEmpty ||
+        _searchResults.isNotEmpty ||
+        _isSearching;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF101720),
+      backgroundColor: const Color(0xFF0F141C),
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // 1. Waze Midnight Dark Map Layer
-          ColorFiltered(
-            colorFilter: _wazeDarkMatrix,
-            child: FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _userPosition,
-                initialZoom: 16.5,
-                onTap: (_, point) => _selectDestination(point, 'Vị trí đã chọn'),
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.esp32nav.app',
-                  maxZoom: 19,
-                ),
+          // -----------------------------------------------------------
+          // 1. Crystal-Clear FlutterMap Layer (No Watermark!)
+          // -----------------------------------------------------------
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: userPos,
+              initialZoom: 16.0,
+              onTap: (_, point) => _onMapTapped(point),
+            ),
+            children: [
+              _buildMapTiles(),
 
-                // Multi-Route Polyline Layers
-                if (_activeRoute != null && (_viewMode == 1 || _viewMode == 2)) ...[
-                  // Alternative Routes (Grey Lines)
-                  if (_alternativeRoutes.length > 1)
+              // Multi-Route Polyline Layers (Comparison Mode)
+              if (!isDriving && _routes.isNotEmpty && _viewMode == 2) ...[
+                // Render Inactive Routes first (Slate Grey with slight glow)
+                for (int i = 0; i < _routes.length; i++)
+                  if (i != _selectedRouteIndex)
                     PolylineLayer(
                       polylines: [
                         Polyline(
-                          points: _alternativeRoutes[1].polylinePoints,
-                          strokeWidth: 5.5,
-                          color: const Color(0xFF6B7D93).withAlpha(180),
+                          points: _routes[i].polylinePoints,
+                          strokeWidth: 6.5,
+                          color: const Color(0xFF475569).withAlpha(190),
                         ),
-                        if (_alternativeRoutes.length > 2)
-                          Polyline(
-                            points: _alternativeRoutes[2].polylinePoints,
-                            strokeWidth: 5.5,
-                            color: const Color(0xFF6B7D93).withAlpha(180),
-                          ),
                       ],
                     ),
 
-                  // Selected Primary Route (Vibrant Cyan #00C2FF with deep glow)
+                // Render Selected Active Route on Top (Vibrant Blue/Cyan Glow)
+                if (_selectedRouteIndex < _routes.length)
                   PolylineLayer(
                     polylines: [
+                      // Outer glow layer
                       Polyline(
-                        points: _alternativeRoutes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 9.0,
-                        color: const Color(0xFF007FA9).withAlpha(160),
+                        points: _routes[_selectedRouteIndex].polylinePoints,
+                        strokeWidth: 11.0,
+                        color: _routes[_selectedRouteIndex].themeColor.withAlpha(90),
                       ),
+                      // Core bright polyline
                       Polyline(
-                        points: _alternativeRoutes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 6.0,
-                        color: const Color(0xFF00C2FF),
+                        points: _routes[_selectedRouteIndex].polylinePoints,
+                        strokeWidth: 7.0,
+                        color: _routes[_selectedRouteIndex].themeColor,
                       ),
                     ],
                   ),
-                ],
+              ],
 
-                // Active Driving Polyline (Screen 4)
-                if (isDriving && _activeRoute != null)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: _activeRoute!.polylinePoints,
-                        strokeWidth: 10.0,
-                        color: const Color(0xFF007FA9).withAlpha(150),
-                      ),
-                      Polyline(
-                        points: _activeRoute!.polylinePoints,
-                        strokeWidth: 6.5,
-                        color: const Color(0xFF00C2FF),
-                      ),
-                    ],
-                  ),
-
-                // Dashed Red/White Hazard Section on Nguyen Canh Di (Screenshots 1 & 4)
+              // Active Navigation Driving Polyline
+              if (isDriving && navManager.activeRoute != null)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: const [
-                        LatLng(20.9810, 105.8340),
-                        LatLng(20.9790, 105.8345),
-                      ],
-                      strokeWidth: 7.0,
-                      color: const Color(0xFFFF4B4B),
-                      pattern: StrokePattern.dashed(segments: const [10, 8]),
+                      points: navManager.activeRoute!.polylinePoints,
+                      strokeWidth: 12.0,
+                      color: const Color(0xFF0077B6).withAlpha(120),
+                    ),
+                    Polyline(
+                      points: navManager.activeRoute!.polylinePoints,
+                      strokeWidth: 7.5,
+                      color: const Color(0xFF00F0FF),
                     ),
                   ],
                 ),
 
-                // Map Markers Layer
-                MarkerLayer(
-                  markers: [
-                    // A. Local Building & Street POIs (Matching Screenshot 1 & 4)
-                    _buildTextPoiMarker(const LatLng(20.9806, 105.8350), 'Toà nhà Lavender\nGarden'),
-                    _buildTextPoiMarker(const LatLng(20.9798, 105.8335), 'Chung cư CT36B\nĐịnh Công'),
-                    _buildTextPoiMarker(const LatLng(20.9788, 105.8333), 'Chung cư CT36A\nĐịnh Công'),
-                    _buildTextPoiMarker(const LatLng(20.9786, 105.8355), 'Chung cư Smile\nBuilding'),
-                    _buildTextPoiMarker(const LatLng(20.9774, 105.8346), 'Chung Cư A5\nĐại Kim'),
-
-                    // B. Road Closed / Traffic Barrier Badge (Screenshot 1 & 4)
-                    Marker(
-                      point: const LatLng(20.9790, 105.8345),
-                      width: 38,
-                      height: 38,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFFFF5935),
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: [
-                            BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 6),
-                          ],
+              // Markers Layer
+              MarkerLayer(
+                markers: [
+                  // A. User GPS Navigation Puck with heading arrow & pulsing aura
+                  Marker(
+                    point: userPos,
+                    width: 54,
+                    height: 54,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF0084FF).withAlpha(35),
+                            border: Border.all(color: const Color(0xFF0084FF).withAlpha(100), width: 1.5),
+                          ),
                         ),
-                        child: const Icon(Icons.remove_road_rounded, color: Colors.white, size: 22),
-                      ),
-                    ),
-
-                    // C. Waze 3D Cyan Arrow Navigation Puck
-                    Marker(
-                      point: userPos,
-                      width: 48,
-                      height: 48,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
+                        Transform.rotate(
+                          angle: (navManager.currentHeading * (3.1415926535 / 180.0)),
+                          child: Container(
+                            width: 34,
+                            height: 34,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: const Color(0xFF00C2FF).withAlpha(40),
-                            ),
-                          ),
-                          Transform.rotate(
-                            angle: (navManager.currentHeading * (3.1415926535 / 180.0)),
-                            child: const Icon(
-                              Icons.navigation_rounded,
-                              color: Color(0xFF00C2FF),
-                              size: 38,
-                              shadows: [
-                                Shadow(color: Colors.white, blurRadius: 4),
-                                Shadow(color: Color(0xFF0090C0), blurRadius: 8),
+                              color: const Color(0xFF0084FF),
+                              boxShadow: [
+                                BoxShadow(color: const Color(0xFF0084FF).withAlpha(180), blurRadius: 10),
+                                BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 4),
                               ],
                             ),
+                            child: const Icon(
+                              Icons.navigation_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // B. Selected Destination Pin Marker
+                  if (_selectedPlace != null && !isDriving)
+                    Marker(
+                      point: _selectedPlace!.coordinate,
+                      width: 52,
+                      height: 60,
+                      alignment: Alignment.topCenter,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFFF2E63), Color(0xFFFF5722)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              boxShadow: [
+                                BoxShadow(color: const Color(0xFFFF2E63).withAlpha(140), blurRadius: 12),
+                                BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 6),
+                              ],
+                            ),
+                            child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 22),
+                          ),
+                          CustomPaint(
+                            size: const Size(12, 6),
+                            painter: _TrianglePainter(color: const Color(0xFFFF5722)),
                           ),
                         ],
                       ),
                     ),
 
-                    // D. Highway Badges on Route (Screenshot 2: CT03, CT20)
-                    if (_viewMode == 1 || _viewMode == 2) ...[
-                      Marker(
-                        point: const LatLng(20.9980, 105.6800),
-                        width: 52,
-                        height: 24,
-                        child: _buildHighwayBadge('CT03'),
-                      ),
-                      Marker(
-                        point: const LatLng(20.9850, 105.7400),
-                        width: 52,
-                        height: 24,
-                        child: _buildHighwayBadge('CT20'),
-                      ),
-
-                      // Construction Helmet Badge on Route
-                      Marker(
-                        point: const LatLng(21.0020, 105.6500),
-                        width: 30,
-                        height: 30,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: const Color(0xFFFFB800),
-                            border: Border.all(color: Colors.white, width: 1.5),
-                          ),
-                          child: const Icon(Icons.engineering_rounded, color: Colors.black, size: 18),
-                        ),
-                      ),
-
-                      // Primary Route Cyan Callout: "1h 11p Tốt nhất"
-                      Marker(
-                        point: const LatLng(21.0100, 105.6100),
-                        width: 100,
-                        height: 48,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00C2FF),
-                            borderRadius: BorderRadius.circular(10),
-                            boxShadow: [BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 6)],
-                          ),
-                          child: const Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('1h 11p', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
-                              Text('Tốt nhất', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600, fontSize: 11)),
-                            ],
+                  // C. Interactive Route ETA Pills on Map (Tap polyline label to switch routes)
+                  if (!isDriving && _viewMode == 2 && _routes.length > 1) ...[
+                    for (int i = 0; i < _routes.length; i++)
+                      if (_routes[i].polylinePoints.isNotEmpty)
+                        Marker(
+                          point: _routes[i].polylinePoints[_routes[i].polylinePoints.length ~/ 2],
+                          width: 86,
+                          height: 34,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _selectedRouteIndex = i),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: _selectedRouteIndex == i
+                                    ? const Color(0xFF0077B6)
+                                    : const Color(0xFF1E293B).withAlpha(240),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: _selectedRouteIndex == i ? const Color(0xFF00F0FF) : Colors.white24,
+                                  width: 1.5,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withAlpha(140),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _routes[i].formattedDuration,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-
-                      // Alternative Route ETA Badges
-                      Marker(
-                        point: const LatLng(20.9400, 105.7100),
-                        width: 70,
-                        height: 28,
-                        child: Container(
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E2630),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white24),
-                          ),
-                          child: const Text('1h 14p', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                        ),
-                      ),
-                      Marker(
-                        point: const LatLng(20.8950, 105.7200),
-                        width: 70,
-                        height: 28,
-                        child: Container(
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E2630),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.white24),
-                          ),
-                          child: const Text('1h 16p', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                        ),
-                      ),
-                    ],
-
-                    // E. Destination Checkered Flag Marker
-                    if (_destinationPoint != null || _viewMode == 1 || _viewMode == 2)
-                      Marker(
-                        point: _destinationPoint ?? _defaultDestination,
-                        width: 44,
-                        height: 44,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white,
-                            boxShadow: [BoxShadow(color: Colors.black.withAlpha(150), blurRadius: 8)],
-                          ),
-                          child: const Icon(Icons.sports_score_rounded, color: Colors.black, size: 28),
-                        ),
-                      ),
                   ],
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ),
 
           // -----------------------------------------------------------
-          // 2. Active Driving Top Turn-by-Turn Banner (Screenshot 4)
           // -----------------------------------------------------------
-          if (isDriving)
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
-                child: _buildWazeDrivingTopBanner(navManager),
-              ),
-            ),
-
-          // -----------------------------------------------------------
-          // 3. Screen 1: Top Search Box & Hamburger (When browsing)
+          // 2. Top Bar: Search Bar, Clipboard Banner & Quick Categories (Browse Mode)
           // -----------------------------------------------------------
           if (!isDriving && _viewMode == 0)
             SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        // Waze Hamburger Menu Button
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E2630),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: [BoxShadow(color: Colors.black.withAlpha(80), blurRadius: 10)],
-                          ),
-                          child: const Icon(Icons.menu_rounded, color: Colors.white, size: 26),
-                        ),
-                        const SizedBox(width: 10),
-
-                        // Search Bar Pill
-                        Expanded(
-                          child: Container(
-                            height: 48,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1E2630),
-                              borderRadius: BorderRadius.circular(24),
-                              boxShadow: [BoxShadow(color: Colors.black.withAlpha(80), blurRadius: 10)],
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.search, color: Colors.white54, size: 22),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: TextField(
-                                    controller: _searchController,
-                                    style: const TextStyle(color: Colors.white, fontSize: 15),
-                                    onChanged: _onSearchChanged,
-                                    decoration: const InputDecoration(
-                                      hintText: 'Bạn muốn đi đâu?',
-                                      hintStyle: TextStyle(color: Colors.white54, fontSize: 15),
-                                      border: InputBorder.none,
-                                    ),
-                                  ),
-                                ),
-                                const Icon(Icons.mic_none_rounded, color: Colors.white54, size: 22),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Search Results Dropdown
-                    if (_searchResults.isNotEmpty)
-                      Container(
-                        margin: const EdgeInsets.only(top: 8),
-                        constraints: const BoxConstraints(maxHeight: 280),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E2630),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.white12),
-                        ),
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          padding: EdgeInsets.zero,
-                          itemCount: _searchResults.length,
-                          separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
-                          itemBuilder: (context, index) {
-                            final place = _searchResults[index];
-                            return ListTile(
-                              leading: const Icon(Icons.location_on_rounded, color: Color(0xFF00C2FF)),
-                              title: Text(place.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              subtitle: Text(place.displayName, style: const TextStyle(color: Colors.white54, fontSize: 12), maxLines: 1),
-                              onTap: () => _selectDestination(place.coordinate, place.name),
-                            );
-                          },
-                        ),
-                      ),
+                    _buildModernSearchBar(),
+                    if (_clipboardGoogleMapsText != null && !showDropdown)
+                      _buildClipboardGoogleMapsBanner(),
+                    if (showDropdown)
+                      _buildSearchResultsDropdown(),
+                    if (!showDropdown)
+                      _buildQuickCategoriesRow(),
                   ],
                 ),
               ),
             ),
 
           // -----------------------------------------------------------
-          // 4. Screen 2 & 3: Route Header (Preview & List)
+          // 3. Top Route Config Header (Route Comparison Mode)
           // -----------------------------------------------------------
-          if (!isDriving && _viewMode == 1)
+          if (!isDriving && _viewMode == 2)
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
-                child: _buildWazeRouteSelectorCard(),
+                child: _buildRouteComparisonTopHeader(),
               ),
             ),
 
           // -----------------------------------------------------------
-          // 5. Floating Action Buttons (Compass, Audio, Recenter)
+          // 4. Floating Action Controls (Right side: Theme, Compass, GPS)
           // -----------------------------------------------------------
           Positioned(
-            left: 16,
-            top: isDriving ? 110 : (_viewMode == 0 ? 80 : 160),
-            child: _buildCompassButton(),
-          ),
-
-          if (isDriving)
-            Positioned(
-              right: 16,
-              top: 110,
-              child: Column(
-                children: [
-                  _buildCircleButton(Icons.music_note_rounded, () {}),
-                  const SizedBox(height: 12),
-                  _buildCircleButton(
-                    _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                    () => setState(() => _isMuted = !_isMuted),
+            right: 14,
+            top: isDriving ? 110 : (_viewMode == 0 ? 118 : 170),
+            child: Column(
+              children: [
+                _buildFloatingButton(
+                  icon: Icons.layers_rounded,
+                  tooltip: 'Đổi nền bản đồ',
+                  onTap: _showMapThemePicker,
+                ),
+                const SizedBox(height: 10),
+                _buildFloatingButton(
+                  icon: Icons.explore_rounded,
+                  iconColor: const Color(0xFFFF5252),
+                  tooltip: 'Xoay về hướng Bắc',
+                  onTap: () => _mapController.rotate(0),
+                ),
+                const SizedBox(height: 10),
+                _buildFloatingButton(
+                  icon: Icons.my_location_rounded,
+                  iconColor: const Color(0xFF0084FF),
+                  tooltip: 'Vị trí của tôi',
+                  onTap: () {
+                    final current = navManager.currentLocation ?? _userPosition;
+                    _mapController.move(current, 16.5);
+                  },
+                ),
+                if (isDriving) ...[
+                  const SizedBox(height: 10),
+                  _buildFloatingButton(
+                    icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    tooltip: 'Âm thanh',
+                    onTap: () => setState(() => _isMuted = !_isMuted),
                   ),
                 ],
-              ),
+              ],
             ),
+          ),
 
-          // Bottom Left: Recenter / My Location Crosshair
-          if (!isDriving || _viewMode == 0)
-            Positioned(
-              left: 16,
-              bottom: _viewMode == 0 ? 80 : 320,
-              child: _buildRecenterButton(navManager),
-            ),
+          // BLE Connection Mini Status Pill
+          Positioned(
+            left: 16,
+            top: isDriving ? 110 : (_viewMode == 0 ? 120 : 170),
+            child: _buildBleStatusBadge(bleService),
+          ),
 
-          // Floating Current Street Name above Arrow (Screenshot 4)
+          // -----------------------------------------------------------
+          // 5. Active Driving Top Turn Banner
+          // -----------------------------------------------------------
           if (isDriving)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 130,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(220),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Text(
-                    navManager.currentStep?.streetName ?? 'Nguyễn Cảnh Dị',
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                  ),
-                ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
+                child: _buildActiveDrivingTurnBanner(navManager),
               ),
             ),
 
           // -----------------------------------------------------------
-          // 6. Active Driving Bottom HUD (Screenshot 4)
+          // 6. Bottom Panels
           // -----------------------------------------------------------
-          if (isDriving)
+          // A. Place Inspector Bottom Sheet (Mode 1)
+          if (!isDriving && _viewMode == 1 && _selectedPlace != null)
             Align(
               alignment: Alignment.bottomCenter,
-              child: _buildWazeDrivingBottomHud(navManager, bleService),
+              child: _buildPlaceInspectorBottomSheet(),
             ),
 
-          // -----------------------------------------------------------
-          // 7. Route Summary Bottom Card (Screenshot 2)
-          // -----------------------------------------------------------
-          if (!isDriving && _viewMode == 1)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildWazeRouteSummaryCard(),
-            ),
-
-          // -----------------------------------------------------------
-          // 8. Route List Comparison Bottom Sheet (Screenshot 3)
-          // -----------------------------------------------------------
+          // B. Route Comparison & Alternatives Bottom Sheet (Mode 2)
           if (!isDriving && _viewMode == 2)
             Align(
               alignment: Alignment.bottomCenter,
-              child: _buildWazeAlternativeRoutesList(),
+              child: _buildRouteComparisonBottomSheet(),
+            ),
+
+          // C. Active Driving HUD (Driving Mode)
+          if (isDriving)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: _buildActiveDrivingBottomHud(navManager, bleService),
             ),
         ],
       ),
@@ -626,43 +749,70 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Waze Driving Top Turn Banner (Screenshot 1, 3, 4)
+  // UI Component: Floating Google Maps Clipboard Banner
   // -------------------------------------------------------------
-  Widget _buildWazeDrivingTopBanner(NavigationManager navManager) {
-    final step = navManager.currentStep;
-    final dist = navManager.distanceToNextManeuver.round();
-    final street = step?.streetName ?? 'Nguyễn Cảnh Dị';
-
+  Widget _buildClipboardGoogleMapsBanner() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF000000).withAlpha(240),
-        borderRadius: BorderRadius.circular(20),
+        color: const Color(0xFF1E293B).withAlpha(252),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF0084FF), width: 1.5),
         boxShadow: [
-          BoxShadow(color: Colors.black.withAlpha(150), blurRadius: 15, offset: const Offset(0, 4)),
+          BoxShadow(color: Colors.black.withAlpha(160), blurRadius: 12, offset: const Offset(0, 3)),
         ],
       ),
       child: Row(
         children: [
-          const Icon(Icons.u_turn_left_rounded, color: Colors.white, size: 36),
-          const SizedBox(width: 14),
-          Expanded(
-            child: RichText(
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: '${dist > 1000 ? (dist / 1000).toStringAsFixed(1) : dist} m ',
-                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                  ),
-                  TextSpan(
-                    text: street,
-                    style: const TextStyle(color: Color(0xFF00C2FF), fontSize: 22, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0084FF).withAlpha(35),
+              shape: BoxShape.circle,
             ),
+            child: const Icon(Icons.share_location_rounded, color: Color(0xFF0084FF), size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Link Google Maps trong bộ nhớ tạm',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+                Text(
+                  _clipboardGoogleMapsText ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white60, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _handleGoogleMapsOrSharedInput(_clipboardGoogleMapsText!),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0084FF), Color(0xFF00B4D8)],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'Mở ngay',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => setState(() => _clipboardGoogleMapsText = null),
+            child: const Icon(Icons.close_rounded, color: Colors.white38, size: 18),
           ),
         ],
       ),
@@ -670,223 +820,349 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Route Selection Top Header Card (Screenshot 2)
+  // UI Component: Modern Search Bar
   // -------------------------------------------------------------
-  Widget _buildWazeRouteSelectorCard() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E2630),
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: [BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 15)],
+  Widget _buildModernSearchBar() {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B).withAlpha(245),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: Colors.white12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(160),
+            blurRadius: 18,
+            offset: const Offset(0, 4),
           ),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
-                onPressed: () => setState(() => _viewMode = 0),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.search_rounded, color: Color(0xFF0084FF), size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              onChanged: _onSearchChanged,
+              onSubmitted: _onSearchSubmitted,
+              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+              decoration: const InputDecoration(
+                hintText: 'Nhập số nhà, tên đường, link Google Maps...',
+                hintStyle: TextStyle(color: Colors.white38, fontSize: 13),
+                border: InputBorder.none,
+                isDense: true,
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Column(
+            ),
+          ),
+          if (_isSearching)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF0084FF)),
+            )
+          else if (_searchController.text.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                _searchController.clear();
+                _onSearchChanged('');
+                setState(() => _searchResults = []);
+              },
+              child: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+            )
+          else ...[
+            GestureDetector(
+              onTap: _pasteFromClipboard,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0084FF).withAlpha(30),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF0084FF).withAlpha(80)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.radio_button_checked, color: Colors.white70, size: 18),
-                        SizedBox(width: 10),
-                        Text('Vị trí của bạn', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                    const Divider(color: Colors.white12, height: 16),
-                    Row(
-                      children: [
-                        const Icon(Icons.location_on_rounded, color: Color(0xFF00C2FF), size: 20),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _destinationName,
-                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                            maxLines: 1,
-                          ),
-                        ),
-                      ],
+                    Icon(Icons.content_paste_rounded, color: Color(0xFF0084FF), size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      'Dán',
+                      style: TextStyle(color: Color(0xFF0084FF), fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.swap_vert_rounded, color: Colors.white54, size: 24),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 8),
-
-        // Filter Pill (Tránh ⌄)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E2630),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Tránh', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-              SizedBox(width: 4),
-              Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white, size: 18),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 
   // -------------------------------------------------------------
-  // Active Driving Bottom HUD (Screenshot 4)
+  // UI Component: Quick Category Chips (Horizontal Scroll)
   // -------------------------------------------------------------
-  Widget _buildWazeDrivingBottomHud(NavigationManager navManager, BleService bleService) {
-    final speed = navManager.currentSpeedKmh.round();
-    final etaMins = navManager.remainingEtaMinutes;
-    final now = DateTime.now().add(Duration(minutes: etaMins));
-    final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-    final distKm = (navManager.remainingTotalDistance / 1000).toStringAsFixed(0);
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Floating Row: Speedometer (Left) & Yellow Hazard Alert (Right)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // Speedometer Circle
-              Container(
-                width: 62,
-                height: 62,
+  Widget _buildQuickCategoriesRow() {
+    final categories = QuickSearchCategory.defaultCategories;
+    return Container(
+      height: 40,
+      margin: const EdgeInsets.only(top: 8),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: categories.length + 1,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            // First item: 1-Tap Google Maps Paste Chip
+            return GestureDetector(
+              onTap: _pasteFromClipboard,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF121820),
-                  border: Border.all(color: Colors.white30, width: 2),
-                  boxShadow: [BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 10)],
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0052D4), Color(0xFF4364F7)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white24),
+                  boxShadow: [
+                    BoxShadow(color: const Color(0xFF0052D4).withAlpha(120), blurRadius: 6),
+                  ],
                 ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('$speed', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, height: 1.1)),
-                    const Text('km/h', style: TextStyle(color: Colors.white60, fontSize: 9, fontWeight: FontWeight.bold)),
+                    Icon(Icons.share_location_rounded, size: 16, color: Colors.white),
+                    SizedBox(width: 6),
+                    Text(
+                      'Dán Google Maps',
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
                   ],
                 ),
               ),
+            );
+          }
 
-              // Waze Yellow Hazard Report Button
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFB58E1B),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.black87, width: 2),
-                  boxShadow: [BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 10)],
-                ),
-                child: const Icon(Icons.warning_amber_rounded, color: Colors.black, size: 36),
+          final cat = categories[index - 1];
+          return GestureDetector(
+            onTap: () => _onSelectCategory(cat),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B).withAlpha(230),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white12),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 6),
+                ],
               ),
-            ],
-          ),
-        ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(cat.icon, size: 16, color: cat.color),
+                  const SizedBox(width: 6),
+                  Text(
+                    cat.title,
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
-        const SizedBox(height: 12),
+  // -------------------------------------------------------------
+  // UI Component: Search Results & Recent History Dropdown
+  // -------------------------------------------------------------
+  Widget _buildSearchResultsDropdown() {
+    final query = _searchController.text.trim();
+    final isQueryMode = query.isNotEmpty;
+    final listToShow = isQueryMode ? _searchResults : _searchService.recentSearches;
 
-        // Bottom Stats Bar Container
-        Container(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 26),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E242C),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 20)],
-          ),
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      constraints: const BoxConstraints(maxHeight: 340),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B).withAlpha(252),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white12),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 20),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Top Drag Pill
-                Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 10),
-                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                Text(
+                  !isQueryMode
+                      ? 'ĐÃ TÌM GẦN ĐÂY'
+                      : (_isSearching ? 'ĐANG TÌM KIẾM...' : 'KẾT QUẢ TÌM KIẾM (${listToShow.length})'),
+                  style: const TextStyle(color: Color(0xFF0084FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1),
                 ),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                if (!isQueryMode && listToShow.isNotEmpty)
+                  GestureDetector(
+                    onTap: () => setState(() => _searchService.clearRecentSearches()),
+                    child: const Text('Xóa lịch sử', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                  ),
+              ],
+            ),
+          ),
+          const Divider(color: Colors.white10, height: 1),
+          // 1-Tap Google Maps Paste Action Tile in Dropdown
+          Material(
+            color: const Color(0xFF0084FF).withAlpha(15),
+            child: InkWell(
+              onTap: _pasteFromClipboard,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
                   children: [
-                    // Search / Settings circle
                     Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF2A313C),
-                        shape: BoxShape.circle,
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0084FF).withAlpha(30),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(Icons.search, color: Colors.white70, size: 22),
+                      child: const Icon(Icons.share_location_rounded, color: Color(0xFF0084FF), size: 16),
                     ),
-
-                    // Center Big Arrival Time & Distance
-                    InkWell(
-                      onTap: () => setState(() => _viewMode = 2),
+                    const SizedBox(width: 10),
+                    const Expanded(
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            timeStr,
-                            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                            'Dán liên kết từ Google Maps hoặc tọa độ',
+                            style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                           ),
                           Text(
-                            '${etaMins ~/ 60}:${(etaMins % 60).toString().padLeft(2, '0')} h  •  $distKm km',
-                            style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
+                            'Hỗ trợ maps.app.goo.gl, goo.gl/maps, g.co, tọa độ...',
+                            style: TextStyle(color: Colors.white38, fontSize: 11),
                           ),
                         ],
                       ),
                     ),
-
-                    // Route Overview / Split circle
-                    InkWell(
-                      onTap: () => navManager.stopNavigation(),
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF2A313C),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.alt_route_rounded, color: Colors.white70, size: 22),
-                      ),
-                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFF0084FF), size: 12),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ],
+          const Divider(color: Colors.white10, height: 1),
+          Flexible(
+            child: _isSearching
+                ? Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF0084FF)),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Đang tìm "$query"...',
+                            style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : (listToShow.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Center(
+                          child: Text(
+                            isQueryMode
+                                ? 'Không tìm thấy địa điểm "$query".\nHãy kiểm tra lại chính tả hoặc gõ tên đường, quận huyện.'
+                                : 'Chưa có lịch sử tìm kiếm.',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white54, fontSize: 13),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        itemCount: listToShow.length,
+                        separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
+                        itemBuilder: (context, index) {
+                          final place = listToShow[index];
+                          return Material(
+                            color: Colors.transparent,
+                            child: ListTile(
+                              dense: true,
+                              leading: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F172A),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(place.categoryIcon, color: const Color(0xFF0084FF), size: 18),
+                              ),
+                              title: Text(
+                                place.name,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                place.shortSubtitle,
+                                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: place.formattedDistance.isNotEmpty
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF0084FF).withAlpha(20),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        place.formattedDistance,
+                                        style: const TextStyle(color: Color(0xFF0084FF), fontSize: 11, fontWeight: FontWeight.bold),
+                                      ),
+                                    )
+                                  : null,
+                              onTap: () => _onPlaceClicked(place),
+                            ),
+                          );
+                        },
+                      )),
+          ),
+        ],
+      ),
     );
   }
 
   // -------------------------------------------------------------
-  // Route Summary Bottom Card (Screenshot 2)
+  // UI Component: Place Details Inspector (Mode 1)
   // -------------------------------------------------------------
-  Widget _buildWazeRouteSummaryCard() {
+  Widget _buildPlaceInspectorBottomSheet() {
+    final place = _selectedPlace!;
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 26),
       decoration: BoxDecoration(
-        color: const Color(0xFF151C24),
+        color: const Color(0xFF1E293B),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [BoxShadow(color: Colors.black.withAlpha(160), blurRadius: 20)],
+        border: const Border(top: BorderSide(color: Colors.white12)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withAlpha(200), blurRadius: 25),
+        ],
       ),
       child: SafeArea(
         top: false,
@@ -896,70 +1172,83 @@ class _MapScreenState extends State<MapScreen> {
           children: [
             Center(
               child: Container(
-                width: 36,
+                width: 40,
                 height: 4,
                 margin: const EdgeInsets.only(bottom: 14),
                 decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
               ),
             ),
-
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('1h 11p', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
-                Text('41,4 km', style: TextStyle(color: Colors.white70, fontSize: 16)),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF2E63).withAlpha(25),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFFF2E63).withAlpha(80)),
+                  ),
+                  child: const Icon(Icons.location_on_rounded, color: Color(0xFFFF2E63), size: 28),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        maxLines: 2,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        place.displayName,
+                        style: const TextStyle(color: Colors.white60, fontSize: 13),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                  onPressed: () => setState(() => _viewMode = 0),
+                ),
               ],
             ),
-
-            const SizedBox(height: 6),
-            const Text('Qua CT. Đại lộ Thăng Long Hà Nội', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 3),
-            const Text('Lộ trình tốt nhất, dù đông hơn bình thường', style: TextStyle(color: Colors.white54, fontSize: 13)),
-
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: const Color(0xFF2E2211), borderRadius: BorderRadius.circular(12)),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.circle, color: Color(0xFFFFB800), size: 10),
-                  SizedBox(width: 6),
-                  Text('Nguy hiểm', style: TextStyle(color: Color(0xFFFFB800), fontSize: 12, fontWeight: FontWeight.bold)),
-                ],
-              ),
-            ),
-
             const SizedBox(height: 18),
-
-            // Action Buttons: Lên lịch trình | Bắt đầu
             Row(
               children: [
                 Expanded(
-                  flex: 1,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF222C38),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white24),
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
-                    onPressed: () => setState(() => _viewMode = 2),
-                    child: const Text('Lên lịch trình', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    label: const Text('Đóng', style: TextStyle(fontWeight: FontWeight.bold)),
+                    onPressed: () => setState(() => _viewMode = 0),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  flex: 1,
-                  child: ElevatedButton(
+                  flex: 2,
+                  child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00C2FF),
-                      foregroundColor: Colors.black,
+                      backgroundColor: const Color(0xFF0084FF),
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: 4,
                     ),
-                    onPressed: _startDriving,
-                    child: const Text('Bắt đầu', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    icon: const Icon(Icons.directions_rounded, size: 22),
+                    label: const Text(
+                      'TÌM ĐƯỜNG ĐI',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    ),
+                    onPressed: () => _calculateRoutesForPlace(place),
                   ),
                 ),
               ],
@@ -971,166 +1260,467 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Route List Comparison Bottom Sheet (Screenshot 3)
+  // UI Component: Route Comparison Top Header (Mode 2)
   // -------------------------------------------------------------
-  Widget _buildWazeAlternativeRoutesList() {
+  Widget _buildRouteComparisonTopHeader() {
     return Container(
-      height: 520,
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF151C24),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 25)],
+        color: const Color(0xFF1E293B).withAlpha(245),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white12),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha(160), blurRadius: 18)],
       ),
       child: Column(
         children: [
-          // Top Turn Banner inside list view (Screenshot 3)
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
+                onPressed: () => setState(() => _viewMode = 0),
+              ),
+              Expanded(
+                child: Column(
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.radio_button_checked, color: Color(0xFF0084FF), size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Vị trí của bạn',
+                          style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    const Divider(color: Colors.white12, height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on, color: Color(0xFFFF2E63), size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _selectedPlace?.name ?? 'Điểm đến',
+                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Transport Mode Selector: 🚗 Ô tô | 🏍️ Xe máy | 🚶 Đi bộ
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: Colors.black,
+              color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: const Row(
-              children: [
-                Icon(Icons.u_turn_left_rounded, color: Colors.white, size: 28),
-                SizedBox(width: 10),
-                Text('10 m ', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                Text('Nguyễn Cảnh Dị', style: TextStyle(color: Color(0xFF00C2FF), fontSize: 20, fontWeight: FontWeight.bold)),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // Segmented Toggle: [ B.đồ | D.sách ]
-          Container(
-            width: 220,
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(color: const Color(0xFF222C38), borderRadius: BorderRadius.circular(20)),
             child: Row(
               children: [
-                Expanded(
-                  child: InkWell(
-                    onTap: () => setState(() => _viewMode = 1),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      alignment: Alignment.center,
-                      child: const Text('B.đồ', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(color: const Color(0xFF0077B6), borderRadius: BorderRadius.circular(16)),
-                    child: const Text('D.sách', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                ),
+                _buildTransportTab(icon: Icons.directions_car_rounded, label: 'Ô tô', mode: 'driving'),
+                _buildTransportTab(icon: Icons.two_wheeler_rounded, label: 'Xe máy', mode: 'bike'),
+                _buildTransportTab(icon: Icons.directions_walk_rounded, label: 'Đi bộ', mode: 'foot'),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-          const SizedBox(height: 14),
+  Widget _buildTransportTab({required IconData icon, required String label, required String mode}) {
+    final isSelected = _transportMode == mode;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          if (_transportMode != mode) {
+            setState(() => _transportMode = mode);
+            if (_selectedPlace != null) {
+              _calculateRoutesForPlace(_selectedPlace!);
+            }
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFF0084FF) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: isSelected ? Colors.white : Colors.white60),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.white60,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-          // Route Cards List
-          Expanded(
-            child: ListView.separated(
-              itemCount: _alternativeRoutes.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final r = _alternativeRoutes[index];
-                final isSelected = _selectedRouteIndex == index;
-                final mins = (r.totalDurationSeconds / 60).round();
-                final hours = mins ~/ 60;
-                final remMins = mins % 60;
-                final durStr = '$hours giờ $remMins phút';
-                final distKm = (r.totalDistanceMeters / 1000).toStringAsFixed(0);
-                final etaTime = '21:${(35 + index * 3).toString().padLeft(2, '0')}';
+  // -------------------------------------------------------------
+  // UI Component: Route Comparison & Alternatives Bottom Sheet (Mode 2)
+  // -------------------------------------------------------------
+  Widget _buildRouteComparisonBottomSheet() {
+    if (_isLoadingRoutes) {
+      return Container(
+        height: 220,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          boxShadow: [BoxShadow(color: Colors.black.withAlpha(200), blurRadius: 25)],
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF0084FF)),
+            SizedBox(height: 16),
+            Text(
+              'Đang tính toán các lựa chọn đường đi...',
+              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 4),
+            Text('Tìm đường ngắn nhất, nhanh nhất & tránh tắc', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
+        ),
+      );
+    }
 
-                return Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E2630),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: isSelected ? const Color(0xFF00C2FF) : Colors.transparent, width: 1.5),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
+    if (_routes.isEmpty) {
+      return Container(
+        height: 200,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline_rounded, color: Colors.amber, size: 36),
+            const SizedBox(height: 10),
+            const Text('Không tìm thấy đường đi tới vị trí này', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => setState(() => _viewMode = 0),
+              child: const Text('Quay lại bản đồ'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final selectedRoute = _routes[_selectedRouteIndex];
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: const Border(top: BorderSide(color: Colors.white12)),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha(200), blurRadius: 25)],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+
+            // Horizontal Route Selection Cards Carousel
+            SizedBox(
+              height: 105,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _routes.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  final r = _routes[index];
+                  final isSelected = _selectedRouteIndex == index;
+
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() => _selectedRouteIndex = index);
+                      _fitRouteBounds(r.polylinePoints);
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 220,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF161E28),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF0084FF) : Colors.white12,
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: isSelected
+                            ? [BoxShadow(color: const Color(0xFF0084FF).withAlpha(60), blurRadius: 10)]
+                            : [],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(durStr, style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 3),
-                              Text('$etaTime  •  $distKm km', style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                              const SizedBox(height: 4),
-                              Text(r.summary, style: const TextStyle(color: Colors.white54, fontSize: 13), maxLines: 1),
+                              Text(
+                                r.title,
+                                style: TextStyle(
+                                  color: isSelected ? const Color(0xFF0084FF) : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              if (r.formattedDiffTag.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: (r.isFastest ? const Color(0xFF0084FF) : const Color(0xFF10B981)).withAlpha(30),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    r.formattedDiffTag,
+                                    style: TextStyle(
+                                      color: r.isFastest ? const Color(0xFF0084FF) : const Color(0xFF10B981),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
                             ],
                           ),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF00C2FF),
-                              foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                            ),
-                            icon: const Icon(Icons.navigation, size: 14),
-                            label: Text(index == 0 ? 'Tiếp tục' : 'Xuất phát', style: const TextStyle(fontWeight: FontWeight.bold)),
-                            onPressed: () {
-                              setState(() => _selectedRouteIndex = index);
-                              _startDriving();
-                            },
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                r.formattedDuration,
+                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                r.formattedDistance,
+                                style: const TextStyle(color: Colors.white60, fontSize: 13),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            r.subtitle,
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
+                    ),
+                  );
+                },
+              ),
+            ),
 
-                      const SizedBox(height: 12),
+            const SizedBox(height: 14),
 
-                      // Route Timeline / Traffic Bar with Helmet
-                      Stack(
-                        alignment: Alignment.centerLeft,
+            // Selected Route Summary & Action Buttons
+            Row(
+              children: [
+                // Step preview button
+                IconButton(
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF0F172A),
+                    padding: const EdgeInsets.all(12),
+                  ),
+                  icon: const Icon(Icons.format_list_bulleted_rounded, color: Colors.white, size: 22),
+                  tooltip: 'Xem danh sách bước rẽ',
+                  onPressed: () => _showTurnStepsModal(selectedRoute),
+                ),
+                const SizedBox(width: 8),
+                // Simulation Test Button
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF0084FF),
+                    side: const BorderSide(color: Color(0xFF0084FF), width: 1.2),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                  label: const Text('Mô phỏng', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  onPressed: () => _startDriving(isSimulation: true),
+                ),
+                const SizedBox(width: 8),
+                // Real Start Driving Button
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0084FF),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: 4,
+                    ),
+                    icon: const Icon(Icons.navigation_rounded, size: 20),
+                    label: const Text(
+                      'BẮT ĐẦU',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    ),
+                    onPressed: () => _startDriving(isSimulation: false),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // UI Component: Turn-by-Turn Preview List Modal
+  // -------------------------------------------------------------
+  void _showTurnStepsModal(NavRoute route) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          maxChildSize: 0.85,
+          minChildSize: 0.4,
+          expand: false,
+          builder: (_, scrollController) {
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF333E4D),
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                          ),
-                          // Yellow traffic segment
-                          Positioned(
-                            left: 40,
-                            width: 60,
-                            child: Container(
-                              height: 6,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFB800),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                            ),
-                          ),
-                          // Helmet icon on progress bar
-                          Positioned(
-                            left: 80,
-                            child: Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFFFB800),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.engineering_rounded, color: Colors.black, size: 12),
-                            ),
-                          ),
+                          Text(route.title, style: const TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 16)),
+                          Text('${route.formattedDuration} • ${route.formattedDistance}', style: const TextStyle(color: Colors.white70, fontSize: 13)),
                         ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, color: Colors.white),
+                        onPressed: () => Navigator.pop(context),
                       ),
                     ],
                   ),
-                );
-              },
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                Expanded(
+                  child: ListView.separated(
+                    controller: scrollController,
+                    itemCount: route.steps.length,
+                    separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
+                    itemBuilder: (context, idx) {
+                      final step = route.steps[idx];
+                      final distStr = step.distanceMeters >= 1000
+                          ? '${(step.distanceMeters / 1000).toStringAsFixed(1)} km'
+                          : '${step.distanceMeters.round()} m';
+
+                      return Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(step.icon, color: const Color(0xFF0084FF), size: 22),
+                          ),
+                          title: Text(step.instruction, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                          subtitle: Text(step.streetName, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                          trailing: Text(distStr, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // -------------------------------------------------------------
+  // UI Component: Active Driving Turn Banner
+  // -------------------------------------------------------------
+  Widget _buildActiveDrivingTurnBanner(NavigationManager navManager) {
+    final step = navManager.currentStep;
+    final dist = navManager.distanceToNextManeuver.round();
+    final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)} km' : '$dist m';
+    final street = step?.streetName ?? 'Tiếp tục đi thẳng';
+    final icon = step?.icon ?? Icons.straight_rounded;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A).withAlpha(245),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF0084FF).withAlpha(120), width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 20, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0084FF).withAlpha(30),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: const Color(0xFF0084FF), size: 36),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Trong $distStr',
+                  style: const TextStyle(color: Color(0xFF0084FF), fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  street,
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
           ),
         ],
@@ -1139,96 +1729,228 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Custom Helper Widgets
+  // UI Component: Active Driving Bottom HUD
   // -------------------------------------------------------------
-  Marker _buildTextPoiMarker(LatLng point, String text) {
-    return Marker(
-      point: point,
-      width: 140,
-      height: 38,
-      child: Center(
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: Color(0xFF9AB2CC),
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            shadows: [
-              Shadow(color: Color(0xFF101720), blurRadius: 4),
-            ],
-          ),
+  Widget _buildActiveDrivingBottomHud(NavigationManager navManager, BleService bleService) {
+    final speed = navManager.currentSpeedKmh.round();
+    final etaMins = navManager.remainingEtaMinutes;
+    final now = DateTime.now().add(Duration(minutes: etaMins));
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final distKm = (navManager.remainingTotalDistance / 1000).toStringAsFixed(1);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 26),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        border: const Border(top: BorderSide(color: Colors.white12)),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha(200), blurRadius: 25)],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Speedometer Circle
+            Container(
+              width: 58,
+              height: 58,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF0F172A),
+                border: Border.all(color: const Color(0xFF0084FF).withAlpha(120), width: 2),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('$speed', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, height: 1)),
+                  const Text('km/h', style: TextStyle(color: Colors.white60, fontSize: 9, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+
+            // Arrival ETA & Remaining Dist
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  timeStr,
+                  style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  '$etaMins phút  •  $distKm km',
+                  style: const TextStyle(color: Color(0xFF0084FF), fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+
+            // Stop Navigation Button
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444),
+                foregroundColor: Colors.white,
+                shape: const CircleBorder(),
+                padding: const EdgeInsets.all(14),
+                elevation: 4,
+              ),
+              onPressed: () => navManager.stopNavigation(),
+              child: const Icon(Icons.close_rounded, size: 24),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildHighwayBadge(String code) {
-    return Container(
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFD700),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.black, width: 1.5),
-      ),
-      child: Text(
-        code,
-        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11),
+  // -------------------------------------------------------------
+  // Map Theme Picker Dialog
+  // -------------------------------------------------------------
+  void _showMapThemePicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('CHỌN GIAO DIỆN BẢN ĐỒ', style: TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1)),
+              const SizedBox(height: 14),
+              _buildThemeOption(
+                title: 'Google Maps Chuẩn',
+                subtitle: 'Giao diện quen thuộc, chi tiết đường đi chính xác, không watermark',
+                mode: MapThemeMode.googleRoad,
+                icon: Icons.map_rounded,
+              ),
+              _buildThemeOption(
+                title: 'Vệ tinh Google (Satellite Hybrid)',
+                subtitle: 'Ảnh chụp vệ tinh thực tế độ nét cao kèm tên đường',
+                mode: MapThemeMode.googleSatellite,
+                icon: Icons.satellite_alt_rounded,
+              ),
+              _buildThemeOption(
+                title: 'Chế độ Ban Đêm (Dark Cyber)',
+                subtitle: 'Theme tối độ tương phản cao, dịu mắt khi lái xe đêm',
+                mode: MapThemeMode.darkCyber,
+                icon: Icons.dark_mode_rounded,
+              ),
+              _buildThemeOption(
+                title: 'OpenStreetMap',
+                subtitle: 'Bản đồ mở thế giới',
+                mode: MapThemeMode.osmStandard,
+                icon: Icons.public_rounded,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeOption({
+    required String title,
+    required String subtitle,
+    required MapThemeMode mode,
+    required IconData icon,
+  }) {
+    final isSelected = _currentTheme == mode;
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        leading: Icon(icon, color: isSelected ? const Color(0xFF0084FF) : Colors.white60),
+        title: Text(title, style: TextStyle(color: isSelected ? const Color(0xFF0084FF) : Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+        subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        trailing: isSelected ? const Icon(Icons.check_circle_rounded, color: Color(0xFF0084FF)) : null,
+        onTap: () {
+          setState(() => _currentTheme = mode);
+          Navigator.pop(context);
+        },
       ),
     );
   }
 
-  Widget _buildCompassButton() {
+  // -------------------------------------------------------------
+  // Helper Floating Action Button
+  // -------------------------------------------------------------
+  Widget _buildFloatingButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    String? tooltip,
+    Color iconColor = Colors.white,
+  }) {
     return Container(
       width: 44,
       height: 44,
       decoration: BoxDecoration(
-        color: const Color(0xFF1E2630),
+        color: const Color(0xFF1E293B).withAlpha(240),
         shape: BoxShape.circle,
+        border: Border.all(color: Colors.white12),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 10)],
+      ),
+      child: IconButton(
+        icon: Icon(icon, color: iconColor, size: 22),
+        tooltip: tooltip,
+        onPressed: onTap,
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+
+  Widget _buildBleStatusBadge(BleService bleService) {
+    final isConnected = bleService.isConnected;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B).withAlpha(230),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isConnected ? const Color(0xFF05FFA1) : Colors.white12),
         boxShadow: [BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 8)],
       ),
-      child: const Icon(Icons.explore_rounded, color: Colors.redAccent, size: 24),
-    );
-  }
-
-  Widget _buildCircleButton(IconData icon, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(22),
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E2630),
-          shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 8)],
-        ),
-        child: Icon(icon, color: Colors.white, size: 22),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isConnected ? Icons.bluetooth_connected_rounded : Icons.bluetooth_disabled_rounded,
+            size: 14,
+            color: isConnected ? const Color(0xFF05FFA1) : Colors.white38,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            isConnected ? 'ESP32 Live' : 'ESP32 Off',
+            style: TextStyle(
+              color: isConnected ? const Color(0xFF05FFA1) : Colors.white54,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  Widget _buildRecenterButton(NavigationManager navManager) {
-    return InkWell(
-      onTap: () {
-        if (navManager.currentLocation != null) {
-          _mapController.move(navManager.currentLocation!, 17.0);
-        } else {
-          _mapController.move(_userPosition, 17.0);
-        }
-      },
-      borderRadius: BorderRadius.circular(26),
-      child: Container(
-        width: 50,
-        height: 50,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E2630),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white12),
-          boxShadow: [BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 10)],
-        ),
-        child: const Icon(Icons.my_location_rounded, color: Color(0xFF00C2FF), size: 24),
-      ),
-    );
+class _TrianglePainter extends CustomPainter {
+  final Color color;
+  _TrianglePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final path = Path();
+    path.moveTo(0, 0);
+    path.lineTo(size.width, 0);
+    path.lineTo(size.width / 2, size.height);
+    path.close();
+
+    canvas.drawPath(path, paint);
   }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

@@ -41,7 +41,7 @@ class NavStep {
     this.maneuverModifier,
   });
 
-  /// Convert OSRM maneuver type & modifier to ManeuverType enum
+  /// Convert OSRM / Valhalla maneuver type & modifier to ManeuverType enum
   ManeuverType get maneuverType {
     if (maneuverTypeStr == 'arrive') return ManeuverType.arrive;
     if (maneuverTypeStr == 'depart') return ManeuverType.depart;
@@ -141,6 +141,16 @@ class NavRoute {
   final List<LatLng> polylinePoints;
   final List<NavStep> steps;
   final String summary;
+  
+  // Alternative route classification tags
+  final String title;
+  final String subtitle;
+  final bool isFastest;
+  final bool isShortest;
+  final bool isTollFree;
+  final Color themeColor;
+  final int durationDiffMinutes;
+  final double distanceDiffKm;
 
   NavRoute({
     required this.totalDistanceMeters,
@@ -148,6 +158,14 @@ class NavRoute {
     required this.polylinePoints,
     required this.steps,
     required this.summary,
+    this.title = 'Lộ trình đề xuất',
+    this.subtitle = 'Lộ trình tối ưu',
+    this.isFastest = false,
+    this.isShortest = false,
+    this.isTollFree = true,
+    this.themeColor = const Color(0xFF00F0FF),
+    this.durationDiffMinutes = 0,
+    this.distanceDiffKm = 0.0,
   });
 
   String get formattedDistance {
@@ -162,9 +180,61 @@ class NavRoute {
     if (minutes >= 60) {
       final hours = minutes ~/ 60;
       final remainingMins = minutes % 60;
+      if (remainingMins == 0) return '$hours giờ';
       return '$hours giờ $remainingMins phút';
     }
     return '$minutes phút';
+  }
+
+  String get formattedDiffTag {
+    if (durationDiffMinutes == 0 && distanceDiffKm == 0) {
+      return isFastest ? '⚡ Nhanh nhất' : (isShortest ? '📏 Ngắn nhất' : '⭐ Tốt nhất');
+    }
+    final parts = <String>[];
+    if (durationDiffMinutes > 0) {
+      parts.add('+$durationDiffMinutes phút');
+    } else if (durationDiffMinutes < 0) {
+      parts.add('${durationDiffMinutes.abs()} phút nhanh hơn');
+    }
+
+    if (distanceDiffKm > 0) {
+      parts.add('+${distanceDiffKm.toStringAsFixed(1)} km');
+    } else if (distanceDiffKm < 0) {
+      parts.add('-${distanceDiffKm.abs().toStringAsFixed(1)} km');
+    }
+    return parts.join(' • ');
+  }
+
+  NavRoute copyWith({
+    double? totalDistanceMeters,
+    double? totalDurationSeconds,
+    List<LatLng>? polylinePoints,
+    List<NavStep>? steps,
+    String? summary,
+    String? title,
+    String? subtitle,
+    bool? isFastest,
+    bool? isShortest,
+    bool? isTollFree,
+    Color? themeColor,
+    int? durationDiffMinutes,
+    double? distanceDiffKm,
+  }) {
+    return NavRoute(
+      totalDistanceMeters: totalDistanceMeters ?? this.totalDistanceMeters,
+      totalDurationSeconds: totalDurationSeconds ?? this.totalDurationSeconds,
+      polylinePoints: polylinePoints ?? this.polylinePoints,
+      steps: steps ?? this.steps,
+      summary: summary ?? this.summary,
+      title: title ?? this.title,
+      subtitle: subtitle ?? this.subtitle,
+      isFastest: isFastest ?? this.isFastest,
+      isShortest: isShortest ?? this.isShortest,
+      isTollFree: isTollFree ?? this.isTollFree,
+      themeColor: themeColor ?? this.themeColor,
+      durationDiffMinutes: durationDiffMinutes ?? this.durationDiffMinutes,
+      distanceDiffKm: distanceDiffKm ?? this.distanceDiffKm,
+    );
   }
 }
 
@@ -173,25 +243,142 @@ class MapPlace {
   final String name;
   final LatLng coordinate;
   final String? type;
+  final String? category;
+  final double? distanceMeters;
 
   MapPlace({
     required this.displayName,
     required this.name,
     required this.coordinate,
     this.type,
+    this.category,
+    this.distanceMeters,
   });
 
-  factory MapPlace.fromJson(Map<String, dynamic> json) {
+  factory MapPlace.fromJson(Map<String, dynamic> json, {LatLng? userLocation}) {
     final lat = double.tryParse(json['lat']?.toString() ?? '0') ?? 0.0;
     final lon = double.tryParse(json['lon']?.toString() ?? '0') ?? 0.0;
     final displayName = json['display_name'] as String? ?? 'Địa điểm';
     final name = json['name'] as String? ?? displayName.split(',').first;
+    final coord = LatLng(lat, lon);
+
+    double? dist;
+    if (userLocation != null) {
+      const distanceCalculator = Distance();
+      dist = distanceCalculator.as(LengthUnit.Meter, userLocation, coord);
+    }
 
     return MapPlace(
       displayName: displayName,
       name: name,
-      coordinate: LatLng(lat, lon),
+      coordinate: coord,
       type: json['type'] as String?,
+      category: json['class'] as String? ?? json['category'] as String?,
+      distanceMeters: dist,
     );
   }
+
+  String get formattedDistance {
+    if (distanceMeters == null) return '';
+    if (distanceMeters! >= 1000) {
+      return '${(distanceMeters! / 1000).toStringAsFixed(1)} km';
+    }
+    return '${distanceMeters!.round()} m';
+  }
+
+  String get shortSubtitle {
+    final parts = displayName.split(',');
+    if (parts.length > 1) {
+      return parts.sublist(1).take(3).map((e) => e.trim()).join(', ');
+    }
+    return displayName;
+  }
+
+  IconData get categoryIcon {
+    final t = (type ?? category ?? '').toLowerCase();
+    if (t.contains('fuel') || t.contains('gas') || t.contains('petrol')) {
+      return Icons.local_gas_station_rounded;
+    }
+    if (t.contains('restaurant') || t.contains('food') || t.contains('cafe') || t.contains('fast_food')) {
+      return Icons.restaurant_rounded;
+    }
+    if (t.contains('hospital') || t.contains('clinic') || t.contains('pharmacy') || t.contains('doctors')) {
+      return Icons.local_hospital_rounded;
+    }
+    if (t.contains('parking')) {
+      return Icons.local_parking_rounded;
+    }
+    if (t.contains('supermarket') || t.contains('convenience') || t.contains('mall') || t.contains('shop')) {
+      return Icons.shopping_cart_rounded;
+    }
+    if (t.contains('hotel') || t.contains('motel') || t.contains('lodging')) {
+      return Icons.hotel_rounded;
+    }
+    if (t.contains('bank') || t.contains('atm')) {
+      return Icons.account_balance_rounded;
+    }
+    if (t.contains('school') || t.contains('university') || t.contains('college')) {
+      return Icons.school_rounded;
+    }
+    return Icons.location_on_rounded;
+  }
+}
+
+class QuickSearchCategory {
+  final String title;
+  final String query;
+  final IconData icon;
+  final Color color;
+
+  const QuickSearchCategory({
+    required this.title,
+    required this.query,
+    required this.icon,
+    required this.color,
+  });
+
+  static const List<QuickSearchCategory> defaultCategories = [
+    QuickSearchCategory(
+      title: 'Cây xăng',
+      query: 'cây xăng, trạm xăng petrolimex',
+      icon: Icons.local_gas_station_rounded,
+      color: Color(0xFFFF9F1C),
+    ),
+    QuickSearchCategory(
+      title: 'Quán ăn',
+      query: 'quán ăn, nhà hàng',
+      icon: Icons.restaurant_rounded,
+      color: Color(0xFFFF4081),
+    ),
+    QuickSearchCategory(
+      title: 'Cà phê',
+      query: 'quán cafe, cà phê',
+      icon: Icons.local_cafe_rounded,
+      color: Color(0xFF8D6E63),
+    ),
+    QuickSearchCategory(
+      title: 'Bệnh viện',
+      query: 'bệnh viện, phòng khám, nhà thuốc',
+      icon: Icons.local_hospital_rounded,
+      color: Color(0xFFEF4444),
+    ),
+    QuickSearchCategory(
+      title: 'Bãi đỗ xe',
+      query: 'bãi gửi xe, đỗ xe',
+      icon: Icons.local_parking_rounded,
+      color: Color(0xFF3B82F6),
+    ),
+    QuickSearchCategory(
+      title: 'Siêu thị',
+      query: 'siêu thị, winmart, bách hóa xanh',
+      icon: Icons.shopping_cart_rounded,
+      color: Color(0xFF10B981),
+    ),
+    QuickSearchCategory(
+      title: 'ATM / Ngân hàng',
+      query: 'cây atm, ngân hàng',
+      icon: Icons.account_balance_rounded,
+      color: Color(0xFF00C2FF),
+    ),
+  ];
 }
