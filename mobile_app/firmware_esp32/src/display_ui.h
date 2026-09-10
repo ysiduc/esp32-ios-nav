@@ -42,8 +42,10 @@ struct AncsPopupData {
 class DisplayManager {
 private:
   DisplayState _currentState = STATE_PAIRING_WAIT;
+  DisplayState _lastRenderedState = (DisplayState)-1;
   NavStateData _navData;
   AncsPopupData _popupData;
+  bool _needsRedraw = true;
 
 public:
   void init() {
@@ -58,6 +60,14 @@ public:
 #endif
   }
 
+  bool isPopupActive() const {
+    return (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS);
+  }
+
+  DisplayState getState() const {
+    return _currentState;
+  }
+
   void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street) {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
@@ -69,6 +79,7 @@ public:
 
     if (_currentState != STATE_POPUP_CALL && _currentState != STATE_POPUP_SMS) {
       _currentState = STATE_NAVIGATION;
+      _needsRedraw = true;
     }
   }
 
@@ -76,32 +87,46 @@ public:
     _navData.isConnected = connected;
     if (!connected && _currentState == STATE_NAVIGATION) {
       _currentState = STATE_PAIRING_WAIT;
+      _needsRedraw = true;
     }
   }
 
   void showCallAlert(const char* callerName) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
-    _popupData.expireMillis = millis() + 8000; // 8 seconds timeout
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
+    _popupData.expireMillis = millis() + 10000; // 10 seconds timeout
     _currentState = STATE_POPUP_CALL;
+    _needsRedraw = true;
   }
 
   void showSmsAlert(const char* sender, const char* msg) {
     strncpy(_popupData.title, sender, sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
-    _popupData.expireMillis = millis() + 6000; // 6 seconds timeout
+    _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+    _popupData.expireMillis = millis() + 8000; // 8 seconds timeout
     _currentState = STATE_POPUP_SMS;
+    _needsRedraw = true;
   }
 
   void update() {
     // Check if popup expired -> return to navigation or pairing
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _needsRedraw = true;
+#if defined(DISPLAY_TFT_ST7789)
+      tft.fillScreen(TFT_BLACK);
+#endif
     }
 
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
-    _renderTft();
+    if (_needsRedraw || _currentState != _lastRenderedState) {
+      _renderTft();
+      _lastRenderedState = _currentState;
+      _needsRedraw = false;
+    }
 #endif
   }
 
@@ -191,16 +216,42 @@ private:
 
 #if defined(DISPLAY_TFT_ST7789)
   void _renderTft() {
-    tft.fillScreen(TFT_BLACK);
-    // ST7789 Color Rendering implementation
     if (_currentState == STATE_POPUP_CALL) {
-      tft.fillRoundRect(10, 10, 220, 220, 16, TFT_DARKGREEN);
-      tft.setTextColor(TFT_GREEN, TFT_DARKGREEN);
-      tft.drawString("CUOC GOI DEN", 40, 30, 4);
-      tft.setTextColor(TFT_WHITE, TFT_DARKGREEN);
-      tft.drawString(_popupData.title, 30, 100, 4);
-    } else if (_currentState == STATE_NAVIGATION) {
+      // Landscape 320x240 Modal Box for Incoming Call
+      tft.fillRoundRect(15, 15, 290, 210, 14, 0x01E0); // Forest Green bg
+      tft.drawRoundRect(15, 15, 290, 210, 14, 0x07E0); // Bright Green border
+      tft.drawRoundRect(16, 16, 288, 208, 13, 0x07E0);
+
+      tft.setTextColor(TFT_GREEN, 0x01E0);
+      tft.setTextDatum(TC_DATUM);
+      tft.drawString("=== CUOC GOI DEN ===", 160, 30, 4);
+
+      tft.setTextColor(TFT_WHITE, 0x01E0);
+      tft.drawString(_popupData.title, 160, 85, 4);
+
+      tft.setTextColor(0x07FF, 0x01E0); // Cyan
+      tft.drawString("Nhan hoac tu choi tren iPhone", 160, 155, 2);
+    }
+    else if (_currentState == STATE_POPUP_SMS) {
+      // Landscape 320x240 Modal Box for SMS / Messages
+      tft.fillRoundRect(15, 15, 290, 210, 14, 0x39E0); // Dark Amber bg
+      tft.drawRoundRect(15, 15, 290, 210, 14, TFT_YELLOW); // Gold border
+      tft.drawRoundRect(16, 16, 288, 208, 13, TFT_YELLOW);
+
+      tft.setTextColor(TFT_YELLOW, 0x39E0);
+      tft.setTextDatum(TC_DATUM);
+      tft.drawString("=== TIN NHAN / SMS ===", 160, 30, 4);
+
+      tft.setTextColor(TFT_WHITE, 0x39E0);
+      tft.drawString(_popupData.title, 160, 85, 4);
+
+      tft.setTextColor(TFT_GOLD, 0x39E0);
+      tft.drawString(_popupData.message, 160, 145, 2);
+    }
+    else if (_currentState == STATE_NAVIGATION) {
+      tft.fillScreen(TFT_BLACK);
       tft.setTextColor(TFT_CYAN, TFT_BLACK);
+      tft.setTextDatum(TL_DATUM);
       char distStr[16];
       snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
       tft.drawString(distStr, 30, 30, 7);
@@ -212,8 +263,11 @@ private:
       char spd[16];
       snprintf(spd, sizeof(spd), "%d km/h", _navData.speedKmh);
       tft.drawString(spd, 20, 190, 4);
-    } else {
+    }
+    else {
+      tft.fillScreen(TFT_BLACK);
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextDatum(TL_DATUM);
       tft.drawString("ESP32 NAV - BLE PAIR", 20, 50, 4);
     }
   }

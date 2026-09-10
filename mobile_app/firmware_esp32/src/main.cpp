@@ -846,7 +846,9 @@ void handlePostFrame() {
       jpegFrameLen = readBytes;
       lastFrameTime = millis();
       #if defined(DISPLAY_TFT_ST7789)
-      TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+      if (!display.isPopupActive()) {
+        TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+      }
       #endif
     }
   }
@@ -972,7 +974,9 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         jpegFrameLen = bleJpegBytesReceived;
         lastFrameTime = millis();
         #if defined(DISPLAY_TFT_ST7789)
-        TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+        if (!display.isPopupActive()) {
+          TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+        }
         #endif
       }
       return;
@@ -984,22 +988,26 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
     if (!error) {
       String typeStr = String(doc["type"] | "");
+      typeStr.toUpperCase();
       if (typeStr == "CALL") {
-        const char* name = doc["title"] | "Cuoc goi den";
+        const char* name = doc["title"] | doc["caller"] | doc["name"] | "Cuoc goi den";
+        const char* msg = doc["msg"] | doc["message"] | "Cuoc goi den tu iPhone";
         popupTitle = name;
-        popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
+        popupMsg = msg;
         popupType = "CALL";
         popupExpire = millis() + 10000;
         display.showCallAlert(name);
+        Serial.printf("[NOTIF] >>> CALL Alert: %s (%s) <<<\n", name, msg);
         return;
-      } else if (typeStr == "SMS") {
-        const char* sender = doc["title"] | "Tin nhan";
-        const char* content = doc["msg"] | "Thong bao moi";
+      } else if (typeStr == "SMS" || typeStr == "NOTIF" || typeStr == "MSG" || typeStr == "ZALO") {
+        const char* sender = doc["title"] | doc["sender"] | doc["name"] | "Tin nhan";
+        const char* content = doc["msg"] | doc["message"] | doc["content"] | "Thong bao moi";
         popupTitle = sender;
         popupMsg = content;
         popupType = "SMS";
         popupExpire = millis() + 8000;
         display.showSmsAlert(sender, content);
+        Serial.printf("[NOTIF] >>> SMS Alert from %s: %s <<<\n", sender, content);
         return;
       }
 
@@ -1058,6 +1066,8 @@ void setup() {
   NimBLEDevice::setMTU(517);
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -1072,6 +1082,7 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(navServiceUUID);
+  pAdvertising->addServiceUUID(NimBLEUUID("7905F431-B5CE-4E99-A40F-4B1E122D00D0"));
   pAdvertising->setMinInterval(16); // 10ms fast advertising
   pAdvertising->setMaxInterval(32); // 20ms
   pAdvertising->setMinPreferred(6); // 7.5ms min interval
@@ -1079,7 +1090,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS qua Bluetooth BLE (MTU 517)!");
+  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS & Thong bao Cuoc goi/SMS qua Bluetooth BLE!");
 }
 
 void loop() {
