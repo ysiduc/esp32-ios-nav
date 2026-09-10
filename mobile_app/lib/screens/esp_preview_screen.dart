@@ -166,7 +166,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                       Switch.adaptive(
                         value: streamService.isStreaming,
-                        activeColor: const Color(0xFF00F0FF),
+                        activeThumbColor: const Color(0xFF00F0FF),
                         onChanged: (val) {
                           if (val) {
                             streamService.startStreaming();

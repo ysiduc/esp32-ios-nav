@@ -984,6 +984,10 @@ void ancsNotificationCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData,
   }
 }
 
+static NimBLEAddress connectedPeerAddr;
+static bool ancsPending = false;
+static unsigned long ancsPendingTime = 0;
+
 void setupAncsClient(NimBLEAddress peerAddr) {
   Serial.printf("[ANCS] DANG DANG KY ANCS CHO IPHONE: %s...\n", peerAddr.toString().c_str());
   NimBLEClient* pClient = NimBLEDevice::getClientByPeerAddress(peerAddr);
@@ -1020,14 +1024,25 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     display.setBleConnected(true);
     Serial.println("[BLE] iPhone da ket noi!");
     if (desc != nullptr) {
+      connectedPeerAddr = NimBLEAddress(desc->peer_id_addr);
+      ancsPending = true;
+      ancsPendingTime = millis() + 1500; // 1.5s delay to allow initial bonding
+    }
+  }
+
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) {
+    if (desc->sec_state.encrypted) {
+      Serial.println("[BLE] Da ma hoa va ghep doi bao mat thanh cong voi iPhone!");
       NimBLEAddress addr(desc->peer_id_addr);
       setupAncsClient(addr);
+      ancsPending = false;
     }
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     display.setBleConnected(false);
+    ancsPending = false;
     Serial.println("[BLE] Da ngat ket noi. Phat quang ba lai...");
     NimBLEDevice::startAdvertising();
   }
@@ -1171,7 +1186,8 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+    NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();
@@ -1192,5 +1208,10 @@ void setup() {
 void loop() {
   server.handleClient();
   display.update();
+  if (ancsPending && millis() > ancsPendingTime) {
+    ancsPending = false;
+    setupAncsClient(connectedPeerAddr);
+  }
   delay(2);
 }
+

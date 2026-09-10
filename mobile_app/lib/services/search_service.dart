@@ -509,68 +509,63 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 3: Run Parallel Multi-Engine Queries (Photon + Nominatim)
+    // Step 3: Run Fast Photon Query (Fastest OSM Geocoder, ~150ms)
     // -------------------------------------------------------------
-    final futures = <Future<List<MapPlace>>>[];
+    List<MapPlace> photonList = await _executePhotonQuery(
+      strippedCity.isNotEmpty ? strippedCity : cleanQuery,
+      nearLocation: nearLocation,
+    );
 
-    // Photon queries
-    for (final q in querySet) {
-      futures.add(_executePhotonQuery(q, nearLocation: nearLocation));
+    // If fewer than 3 results, try unaccented query
+    if (photonList.length < 3 && strippedCityUnaccented != strippedCity) {
+      final unaccentedList = await _executePhotonQuery(
+        strippedCityUnaccented,
+        nearLocation: nearLocation,
+      );
+      photonList.addAll(unaccentedList);
     }
-
-    // Nominatim query for primary keywords
-    futures.add(_executeNominatimQuery(cleanQuery, nearLocation: nearLocation));
-    if (strippedCity != cleanQuery) {
-      futures.add(_executeNominatimQuery(strippedCity, nearLocation: nearLocation));
-    }
-
-    final nestedResults = await Future.wait(futures);
 
     // If query had a house number, synthesize top-ranked house number places
     if (houseNumber != null) {
-      for (final list in nestedResults) {
-        for (final p in list) {
-          final isStreet = p.type == 'street' ||
-              p.type == 'residential' ||
-              p.type == 'secondary' ||
-              p.type == 'primary' ||
-              p.type == 'tertiary' ||
-              p.type == 'trunk' ||
-              p.name.toLowerCase().contains('phố') ||
-              p.name.toLowerCase().contains('đường') ||
-              p.name.toLowerCase().contains('ngõ') ||
-              p.name.toLowerCase().contains('hẻm');
+      for (final p in photonList) {
+        final isStreet = p.type == 'street' ||
+            p.type == 'residential' ||
+            p.type == 'secondary' ||
+            p.type == 'primary' ||
+            p.type == 'tertiary' ||
+            p.type == 'trunk' ||
+            p.name.toLowerCase().contains('phố') ||
+            p.name.toLowerCase().contains('đường') ||
+            p.name.toLowerCase().contains('ngõ') ||
+            p.name.toLowerCase().contains('hẻm');
 
-          if (isStreet) {
-            final customName = 'Số $houseNumber ${p.name}';
-            final customDisplay = p.displayName.contains(p.name)
-                ? p.displayName.replaceFirst(p.name, customName)
-                : '$customName, ${p.displayName}';
+        if (isStreet) {
+          final customName = 'Số $houseNumber ${p.name}';
+          final customDisplay = p.displayName.contains(p.name)
+              ? p.displayName.replaceFirst(p.name, customName)
+              : '$customName, ${p.displayName}';
 
-            addPlace(MapPlace(
-              name: customName,
-              displayName: customDisplay,
-              coordinate: p.coordinate,
-              type: 'house',
-              category: 'building',
-              distanceMeters: p.distanceMeters,
-            ));
-          }
+          addPlace(MapPlace(
+            name: customName,
+            displayName: customDisplay,
+            coordinate: p.coordinate,
+            type: 'house',
+            category: 'building',
+            distanceMeters: p.distanceMeters,
+          ));
         }
       }
     }
 
-    // Add all direct search results
-    for (final list in nestedResults) {
-      for (final p in list) {
-        addPlace(p);
-      }
+    // Add direct Photon search results
+    for (final p in photonList) {
+      addPlace(p);
     }
 
-    // Fallback: If still 0 results, search globally
+    // Fallback to Nominatim only if still 0 results found
     if (mergedResults.isEmpty) {
-      final globalList = await _executePhotonQuery(strippedCityUnaccented, nearLocation: nearLocation, useBbox: false);
-      for (final p in globalList) {
+      final nominatimList = await _executeNominatimQuery(cleanQuery, nearLocation: nearLocation);
+      for (final p in nominatimList) {
         addPlace(p);
       }
     }
@@ -593,7 +588,7 @@ class SearchService {
     bool useBbox = true,
   }) async {
     try {
-      var urlStr = '$_photonBaseUrl/api?q=${Uri.encodeComponent(query)}&limit=15';
+      var urlStr = '$_photonBaseUrl/api?q=${Uri.encodeComponent(query)}&limit=12';
       if (useBbox) {
         urlStr += '&bbox=102.14,8.18,109.46,23.39';
       }
@@ -604,7 +599,7 @@ class SearchService {
       final response = await http.get(
         Uri.parse(urlStr),
         headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0'},
-      ).timeout(const Duration(seconds: 4));
+      ).timeout(const Duration(milliseconds: 1800));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -621,13 +616,13 @@ class SearchService {
   }) async {
     try {
       final url = Uri.parse(
-        '$_nominatimBaseUrl/search?format=json&q=${Uri.encodeComponent(query)}&countrycodes=vn&addressdetails=1&limit=10&accept-language=vi',
+        '$_nominatimBaseUrl/search?format=json&q=${Uri.encodeComponent(query)}&countrycodes=vn&addressdetails=1&limit=8&accept-language=vi',
       );
 
       final response = await http.get(
         url,
         headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)'},
-      ).timeout(const Duration(seconds: 4));
+      ).timeout(const Duration(milliseconds: 2000));
 
       if (response.statusCode == 200) {
         final list = jsonDecode(utf8.decode(response.bodyBytes)) as List? ?? [];

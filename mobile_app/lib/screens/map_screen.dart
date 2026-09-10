@@ -45,6 +45,9 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingRoutes = false;
   bool _isSearching = false;
 
+  // ESP32 Live Stream Map Zoom Level (Default 15.0x, adjustable 12x - 18x)
+  double _espStreamZoom = 15.0;
+
   // Auto-follow Camera Centering State
   bool _isAutoCentering = true;
   Timer? _recenterTimer;
@@ -71,7 +74,7 @@ class _MapScreenState extends State<MapScreen> {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
         try {
-          _streamMapController.moveAndRotate(_userPosition, 15.0, -navManager.currentHeading);
+          _streamMapController.moveAndRotate(_userPosition, _espStreamZoom, -navManager.currentHeading);
         } catch (_) {}
       }
 
@@ -81,7 +84,7 @@ class _MapScreenState extends State<MapScreen> {
           _mapController.move(loc, 17.5);
         }
         try {
-          _streamMapController.moveAndRotate(loc, 15.0, -heading);
+          _streamMapController.moveAndRotate(loc, _espStreamZoom, -heading);
         } catch (_) {}
       };
 
@@ -228,14 +231,14 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     if (GoogleMapsParser.isGoogleMapsOrCoordInput(query)) {
-      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _debounceTimer = Timer(const Duration(milliseconds: 100), () {
         _handleGoogleMapsOrSharedInput(query);
       });
       return;
     }
 
     setState(() => _isSearching = true);
-    _debounceTimer = Timer(const Duration(milliseconds: 250), () async {
+    _debounceTimer = Timer(const Duration(milliseconds: 150), () async {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       final currentPos = navManager.currentLocation ?? _userPosition;
       final results = await _searchService.searchPlaces(query, nearLocation: currentPos);
@@ -816,11 +819,19 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
 
-          // BLE Connection Mini Status Pill
+          // BLE Connection Mini Status Pill & ESP32 Zoom Control Bar
           Positioned(
             left: 16,
             top: isDriving ? 110 : (_viewMode == 0 ? 120 : 170),
-            child: _buildBleStatusBadge(bleService),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildBleStatusBadge(bleService),
+                const SizedBox(height: 8),
+                _buildEspZoomControl(userPos, navManager),
+              ],
+            ),
           ),
 
           // -----------------------------------------------------------
@@ -2079,6 +2090,73 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildEspZoomControl(LatLng userPos, NavigationManager navManager) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22).withAlpha(235),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF00F0FF).withAlpha(140), width: 1.2),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.zoom_in_map_rounded, color: Color(0xFF00F0FF), size: 15),
+          const SizedBox(width: 5),
+          Text(
+            'Zoom ESP: ${_espStreamZoom.toStringAsFixed(1)}x',
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 8),
+          // Zoom out (-)
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _espStreamZoom = (_espStreamZoom - 0.5).clamp(12.0, 18.0);
+              });
+              try {
+                _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
+              } catch (_) {}
+            },
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: const Color(0xFF21262D),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white24),
+              ),
+              child: const Icon(Icons.remove, color: Colors.white, size: 13),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Zoom in (+)
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _espStreamZoom = (_espStreamZoom + 0.5).clamp(12.0, 18.0);
+              });
+              try {
+                _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
+              } catch (_) {}
+            },
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: const Color(0xFF21262D),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white24),
+              ),
+              child: const Icon(Icons.add, color: Colors.white, size: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
@@ -2092,8 +2170,8 @@ class _MapScreenState extends State<MapScreen> {
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: 15.0,
-              initialRotation: -navManager.currentHeading,
+              initialZoom: _espStreamZoom,
+              initialRotation: -navManager.currentHeading, // Map rotates with vehicle heading
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),
             children: [
@@ -2122,33 +2200,41 @@ class _MapScreenState extends State<MapScreen> {
                 markers: [
                   Marker(
                     point: userPos,
-                    width: 36,
-                    height: 36,
+                    width: 40,
+                    height: 40,
                     alignment: Alignment.center,
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
+                        // Pulsing outer halo
                         Container(
-                          width: 32,
-                          height: 32,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: const Color(0xFF0084FF).withAlpha(45),
-                            border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
+                            color: const Color(0xFF00F0FF).withAlpha(45),
+                            border: Border.all(color: const Color(0xFF00F0FF).withAlpha(160), width: 1.5),
                           ),
                         ),
+                        // GPS Puck: Blue circle with crisp forward-pointing triangle arrow (Heading-Up)
                         Container(
-                          width: 22,
-                          height: 22,
+                          width: 24,
+                          height: 24,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: const Color(0xFF0084FF),
-                            border: Border.all(color: Colors.white, width: 2),
+                            border: Border.all(color: Colors.white, width: 2.2),
                             boxShadow: [
-                              BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
+                              BoxShadow(color: const Color(0xFF0084FF).withAlpha(220), blurRadius: 10),
                             ],
                           ),
-                          child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
+                          child: const Center(
+                            child: Icon(
+                              Icons.navigation_rounded, // Always points straight UP forward
+                              color: Colors.white,
+                              size: 15,
+                            ),
+                          ),
                         ),
                       ],
                     ),

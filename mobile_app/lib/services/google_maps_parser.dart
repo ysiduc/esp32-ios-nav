@@ -113,7 +113,13 @@ class GoogleMapsParser {
         final lon = double.tryParse(match.group(2)!);
         if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
           final coord = LatLng(lat, lon);
-          return await _searchService.reverseGeocode(coord);
+          return MapPlace(
+            name: 'Tọa độ (${coord.latitude.toStringAsFixed(4)}, ${coord.longitude.toStringAsFixed(4)})',
+            displayName: 'Tọa độ GPS: ${coord.latitude.toStringAsFixed(6)}, ${coord.longitude.toStringAsFixed(6)}',
+            coordinate: coord,
+            type: 'coordinate',
+            category: 'place',
+          );
         }
       }
     }
@@ -130,7 +136,26 @@ class GoogleMapsParser {
     String urlStr = urlMatch.group(0)!;
     String userPrefixName = trimmed.replaceFirst(urlStr, '').trim();
 
-    // 3. Resolve Shortlinks & Redirects
+    // 3. Fast Coordinate Extraction BEFORE redirect if URL already contains coordinates (0 ms!)
+    final fastCoord = _extractCoordinateFromUrl(urlStr);
+    if (fastCoord != null) {
+      final urlPlaceName = _extractPlaceNameFromUrl(urlStr);
+      final placeName = userPrefixName.isNotEmpty
+          ? userPrefixName
+          : (urlPlaceName != null && urlPlaceName.isNotEmpty
+              ? urlPlaceName
+              : 'Điểm Google Maps (${fastCoord.latitude.toStringAsFixed(4)}, ${fastCoord.longitude.toStringAsFixed(4)})');
+
+      return MapPlace(
+        name: placeName,
+        displayName: '$placeName (${fastCoord.latitude.toStringAsFixed(4)}, ${fastCoord.longitude.toStringAsFixed(4)})',
+        coordinate: fastCoord,
+        type: 'destination',
+        category: 'place',
+      );
+    }
+
+    // 4. Resolve Shortlinks & Redirects if it's a short URL
     final isShortLink = urlStr.contains('maps.app.goo.gl') ||
         urlStr.contains('goo.gl') ||
         urlStr.contains('bit.ly') ||
@@ -146,29 +171,26 @@ class GoogleMapsParser {
       } catch (_) {}
     }
 
-    // 4. Extract Coordinates from Google Maps URL
+    // 5. Extract Coordinates from resolved Google Maps URL
     final extractedCoord = _extractCoordinateFromUrl(urlStr);
     if (extractedCoord != null) {
       final urlPlaceName = _extractPlaceNameFromUrl(urlStr);
       final placeName = userPrefixName.isNotEmpty
           ? userPrefixName
-          : (urlPlaceName != null && urlPlaceName.isNotEmpty ? urlPlaceName : null);
+          : (urlPlaceName != null && urlPlaceName.isNotEmpty
+              ? urlPlaceName
+              : 'Điểm Google Maps (${extractedCoord.latitude.toStringAsFixed(4)}, ${extractedCoord.longitude.toStringAsFixed(4)})');
 
-      final reversePlace = await _searchService.reverseGeocode(extractedCoord);
-
-      if (placeName != null && placeName.isNotEmpty) {
-        return MapPlace(
-          name: placeName,
-          displayName: '$placeName, ${reversePlace.displayName}',
-          coordinate: extractedCoord,
-          type: reversePlace.type,
-          category: reversePlace.category,
-        );
-      }
-      return reversePlace;
+      return MapPlace(
+        name: placeName,
+        displayName: '$placeName (${extractedCoord.latitude.toStringAsFixed(4)}, ${extractedCoord.longitude.toStringAsFixed(4)})',
+        coordinate: extractedCoord,
+        type: 'destination',
+        category: 'place',
+      );
     }
 
-    // 5. If only a query exists in the URL (e.g. ?q=Landmark+72)
+    // 6. If only a query exists in the URL (e.g. ?q=Landmark+72)
     final queryName = _extractQueryFromUrl(urlStr) ?? (userPrefixName.isNotEmpty ? userPrefixName : null);
     if (queryName != null && queryName.isNotEmpty) {
       final list = await _searchService.searchPlaces(queryName, nearLocation: userLocation);
@@ -315,37 +337,41 @@ class GoogleMapsParser {
     return null;
   }
 
-  /// Resolve HTTP redirects for shortlinks
+  /// Resolve HTTP redirects for shortlinks (fast 1200ms timeout)
   Future<String> _resolveRedirects(String urlStr) async {
-    final client = HttpClient();
-    client.userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15';
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(milliseconds: 1200);
+      client.userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15';
 
-    String currentUrl = urlStr;
-    for (int redirectCount = 0; redirectCount < 6; redirectCount++) {
-      final uri = Uri.tryParse(currentUrl);
-      if (uri == null) break;
+      String currentUrl = urlStr;
+      for (int redirectCount = 0; redirectCount < 4; redirectCount++) {
+        final uri = Uri.tryParse(currentUrl);
+        if (uri == null) break;
 
-      final request = await client.getUrl(uri);
-      request.followRedirects = false;
-      final response = await request.close();
+        final request = await client.getUrl(uri).timeout(const Duration(milliseconds: 1200));
+        request.followRedirects = false;
+        final response = await request.close().timeout(const Duration(milliseconds: 1200));
 
-      if (response.isRedirect) {
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        if (location != null && location.isNotEmpty) {
-          if (location.startsWith('http')) {
-            currentUrl = location;
+        if (response.isRedirect) {
+          final location = response.headers.value(HttpHeaders.locationHeader);
+          if (location != null && location.isNotEmpty) {
+            if (location.startsWith('http')) {
+              currentUrl = location;
+            } else {
+              currentUrl = uri.resolve(location).toString();
+            }
           } else {
-            currentUrl = uri.resolve(location).toString();
+            break;
           }
         } else {
           break;
         }
-      } else {
-        break;
       }
+      client.close();
+      return currentUrl;
+    } catch (_) {
+      return urlStr;
     }
-    client.close();
-    return currentUrl;
   }
 
   /// Extract LatLng from various Google Maps URL formats

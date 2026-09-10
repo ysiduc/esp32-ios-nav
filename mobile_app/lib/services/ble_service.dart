@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/esp_payload.dart';
 
@@ -30,6 +31,8 @@ class BleLogItem {
 }
 
 class BleService extends ChangeNotifier {
+  static const MethodChannel _nativeCallChannel = MethodChannel('com.esp32nav.app/native_call');
+
   // Custom Navigation Service & Characteristic UUIDs (Standard 16-bit UUID / Custom)
   static final Guid navServiceUuid = Guid('0000FFE0-0000-1000-8000-00805F9B34FB');
   static final Guid navCharUuid = Guid('0000FFE1-0000-1000-8000-00805F9B34FB');
@@ -63,6 +66,24 @@ class BleService extends ChangeNotifier {
 
   BleService() {
     _initBle();
+    _initNativeCallListener();
+  }
+
+  void _initNativeCallListener() {
+    try {
+      _nativeCallChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onIncomingCall') {
+          _addLog('📞 [iOS] Phát hiện cuộc gọi đến từ iPhone!', isTx: false);
+          await sendAlertNotification(
+            type: 'CALL',
+            title: 'CUỘC GỌI ĐẾN',
+            message: 'Cuộc gọi đến từ iPhone',
+          );
+        } else if (call.method == 'onCallEnded') {
+          _addLog('📞 [iOS] Cuộc gọi đã kết thúc', isTx: false);
+        }
+      });
+    } catch (_) {}
   }
 
   void _initBle() {
