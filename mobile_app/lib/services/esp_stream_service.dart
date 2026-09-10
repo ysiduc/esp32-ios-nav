@@ -106,8 +106,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Adaptive scaling: target ~160px width for low latency & high 20 FPS BLE stream
-      final double targetRatio = (160.0 / boundary.size.width).clamp(0.2, 0.85);
+      // Adaptive scaling: target ~165px width for ultra-crisp HD 20 FPS BLE stream
+      final double targetRatio = (165.0 / boundary.size.width).clamp(0.2, 1.0);
       final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
@@ -126,7 +126,7 @@ class EspStreamService extends ChangeNotifier {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 35,
+        'quality': 40,
       });
 
       _latestJpegBytes = jpegBytes;
