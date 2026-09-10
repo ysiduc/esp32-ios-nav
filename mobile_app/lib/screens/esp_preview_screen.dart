@@ -15,7 +15,6 @@ class EspPreviewScreen extends StatefulWidget {
 }
 
 class _EspPreviewScreenState extends State<EspPreviewScreen> {
-  final GlobalKey _streamBoundaryKey = GlobalKey();
   final MapController _miniMapController = MapController();
 
   // Notification Simulation State
@@ -25,7 +24,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   final String _smsSender = 'Mẹ';
   final String _smsContent = 'Con ve nha an com nhe!';
   Timer? _popupDismissTimer;
-  Timer? _autoStartTimer;
 
   @override
   void initState() {
@@ -36,16 +34,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       try {
         _miniMapController.moveAndRotate(loc, 17.5, -navManager.currentHeading);
       } catch (_) {}
-
-      // Auto-start 20 FPS JPEG streaming immediately on screen open
-      _autoStartTimer = Timer(const Duration(milliseconds: 500), () {
-        if (mounted) {
-          final streamService = Provider.of<EspStreamService>(context, listen: false);
-          if (!streamService.isStreaming) {
-            streamService.startStreaming(boundaryKey: _streamBoundaryKey);
-          }
-        }
-      });
     });
   }
 
@@ -85,7 +73,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
   @override
   void dispose() {
-    _autoStartTimer?.cancel();
     _popupDismissTimer?.cancel();
     super.dispose();
   }
@@ -168,7 +155,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         activeColor: const Color(0xFF00F0FF),
                         onChanged: (val) {
                           if (val) {
-                            streamService.startStreaming(boundaryKey: _streamBoundaryKey);
+                            streamService.startStreaming();
                           } else {
                             streamService.stopStreaming();
                           }
@@ -470,103 +457,83 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           // -----------------------------------------------------------
           Expanded(
             flex: 1,
-            child: RepaintBoundary(
-              key: _streamBoundaryKey,
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(6, 4, 3, 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80), width: 1.2),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      // Mini Map Layer
-                      FlutterMap(
-                        mapController: _miniMapController,
-                        options: MapOptions(
-                          initialCenter: userLoc,
-                          initialZoom: 17.5,
-                          initialRotation: -navManager.currentHeading,
-                          interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(6, 4, 3, 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80), width: 1.2),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(9),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Mini Map Layer
+                    FlutterMap(
+                      mapController: _miniMapController,
+                      options: MapOptions(
+                        initialCenter: userLoc,
+                        initialZoom: 17.5,
+                        initialRotation: -navManager.currentHeading,
+                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                          userAgentPackageName: 'com.esp32nav.app',
+                          maxZoom: 20,
                         ),
-                        children: [
-                          TileLayer(
-                            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
-                            userAgentPackageName: 'com.esp32nav.app',
-                            maxZoom: 20,
-                          ),
-                          if (activeRoute != null)
-                            PolylineLayer(
-                              polylines: [
-                                Polyline(
-                                  points: activeRoute.polylinePoints,
-                                  strokeWidth: 6.0,
-                                  color: const Color(0xFF00F0FF),
-                                ),
-                              ],
-                            ),
-                          MarkerLayer(
-                            markers: [
-                              Marker(
-                                point: userLoc,
-                                width: 36,
-                                height: 36,
-                                alignment: Alignment.center,
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    Container(
-                                      width: 32,
-                                      height: 32,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: const Color(0xFF0084FF).withAlpha(45),
-                                        border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
-                                      ),
-                                    ),
-                                    Container(
-                                      width: 22,
-                                      height: 22,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: const Color(0xFF0084FF),
-                                        border: Border.all(color: Colors.white, width: 2),
-                                        boxShadow: [
-                                          BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
-                                        ],
-                                      ),
-                                      child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
-                                    ),
-                                  ],
-                                ),
+                        if (activeRoute != null)
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: activeRoute.polylinePoints,
+                                strokeWidth: 6.0,
+                                color: const Color(0xFF00F0FF),
                               ),
                             ],
                           ),
-                        ],
-                      ),
-
-                      // Mini Map Overlay Badge
-                      Positioned(
-                        bottom: 4,
-                        left: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withAlpha(200),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'MAP LIVE',
-                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 8, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-                          ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: userLoc,
+                              width: 36,
+                              height: 36,
+                              alignment: Alignment.center,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: const Color(0xFF0084FF).withAlpha(45),
+                                      border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
+                                    ),
+                                  ),
+                                  Container(
+                                    width: 22,
+                                    height: 22,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: const Color(0xFF0084FF),
+                                      border: Border.all(color: Colors.white, width: 2),
+                                      boxShadow: [
+                                        BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
+                                      ],
+                                    ),
+                                    child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),

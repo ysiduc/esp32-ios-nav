@@ -2084,21 +2084,6 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ],
           ),
-          Positioned(
-            bottom: 4,
-            left: 4,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.black.withAlpha(200),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Text(
-                'MAP LIVE',
-                style: TextStyle(color: Color(0xFF00F0FF), fontSize: 8, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-              ),
-            ),
-          ),
         ],
       ),
     );
