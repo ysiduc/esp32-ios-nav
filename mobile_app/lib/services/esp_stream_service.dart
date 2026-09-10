@@ -106,8 +106,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Capture at 0.75 pixel ratio (optimal 260x165 resolution for fast 20-30 FPS)
-      final ui.Image image = await boundary.toImage(pixelRatio: 0.75);
+      // Capture at optimal 0.55 pixel ratio (192x121 resolution for lightning-fast 20 FPS BLE stream)
+      final ui.Image image = await boundary.toImage(pixelRatio: 0.55);
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       image.dispose();
 
@@ -116,8 +116,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      final width = (boundary.size.width * 0.75).toInt();
-      final height = (boundary.size.height * 0.75).toInt();
+      final width = (boundary.size.width * 0.55).toInt();
+      final height = (boundary.size.height * 0.55).toInt();
       final rawBytes = byteData.buffer.asUint8List();
 
       // Run pure JPEG encoding on background isolate worker to keep iPhone cool & 60 FPS UI
@@ -125,7 +125,7 @@ class EspStreamService extends ChangeNotifier {
         'width': width,
         'height': height,
         'rawBytes': rawBytes,
-        'quality': 40,
+        'quality': 30,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -160,7 +160,7 @@ class EspStreamService extends ChangeNotifier {
     _isSendingBle = true;
 
     try {
-      const chunkSize = 240; // Fit in 256 MTU
+      const chunkSize = 480; // Fit in 512 MTU for ultra-fast transfer (3-4 packets/frame)
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);

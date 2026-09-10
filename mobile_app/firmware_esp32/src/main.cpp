@@ -480,7 +480,10 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
   <div class="control-box">
     <div class="ctrl-title">
       <span>Thử Nghiệm Tính Năng (Test Controls)</span>
-      <span id="streamIndicator" style="font-size: 0.72rem; color: #00F0FF;">Live Vector Map Active</span>
+      <span id="streamIndicator" style="font-size: 0.72rem; color: #00F0FF; font-weight: bold;">⏳ Chờ iPhone phát luồng 20 FPS...</span>
+    </div>
+    <div style="background: rgba(0,240,255,0.06); border: 1px dashed rgba(0,240,255,0.25); border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; font-size: 0.68rem; color: #94a3b8; line-height: 1.3;">
+      💡 <strong style="color:#00F0FF;">Lưu ý:</strong> Khi mở tab <em>"Màn hình ESP32"</em> trên app iPhone (bản .ipa mới nhất), luồng video JPEG 20 FPS từ iPhone sẽ tự động bắn sang và đè lên khung hình này.
     </div>
     <div class="grid-btns">
       <button class="btn" onclick="testNav(2, 595, 0, 'Phó Đại Từ', 1, '11:25')">➡️ Rẽ phải 595m (Mặc định)</button>
@@ -507,7 +510,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         realAppImg.style.display = 'block';
         splitLayout.style.opacity = '0';
         if (!streamActive) {
-          streamIndicator.innerText = 'STREAMING 20 FPS ⚡';
+          streamIndicator.innerText = '🔴 LIVE: Đang nhận JPEG 20 FPS ⚡';
           streamIndicator.style.color = '#05FFA1';
           streamActive = true;
         }
@@ -516,13 +519,13 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         if (streamActive) {
           realAppImg.style.display = 'none';
           splitLayout.style.opacity = '1';
-          streamIndicator.innerText = 'Live Vector Map Active';
+          streamIndicator.innerText = '⏳ Chờ iPhone phát luồng 20 FPS...';
           streamIndicator.style.color = '#00F0FF';
           streamActive = false;
         }
       };
     }
-    setInterval(refreshLiveStream, 60);
+    setInterval(refreshLiveStream, 50);
 
     // 2. OpenStreetMap Authentic Vector Map Engine (100% Identical to Image 2)
     const canvas = document.getElementById('mapCanvas');
@@ -1072,8 +1075,9 @@ void setup() {
   TJpgDec.setCallback(tft_output);
   #endif
 
-  // 4. Start NimBLE Server
+  // 4. Start NimBLE Server (with Max MTU 517 for High-Speed 20 FPS BLE Stream)
   NimBLEDevice::init("ESP32_NAV_ANCS");
+  NimBLEDevice::setMTU(517);
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
@@ -1090,10 +1094,14 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(navServiceUUID);
+  pAdvertising->setMinInterval(16); // 10ms fast advertising
+  pAdvertising->setMaxInterval(32); // 20ms
+  pAdvertising->setMinPreferred(6); // 7.5ms min interval
+  pAdvertising->setMaxPreferred(12); // 15ms max interval
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang!");
+  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS qua Bluetooth BLE (MTU 517)!");
 }
 
 void loop() {

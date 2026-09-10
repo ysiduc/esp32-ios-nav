@@ -169,9 +169,9 @@ class BleService extends ChangeNotifier {
         }
       });
 
-      // Request higher MTU for faster data transfer
+      // Request maximum MTU (512) for high-speed BLE JPEG stream
       try {
-        await device.requestMtu(256);
+        await device.requestMtu(512);
       } catch (_) {}
 
       // Discover GATT Services
