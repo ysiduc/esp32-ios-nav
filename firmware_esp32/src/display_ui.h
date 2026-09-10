@@ -9,6 +9,14 @@ extern volatile unsigned long lastFrameTime;
 #if defined(DISPLAY_OLED_SSD1306)
 #include <U8g2lib.h>
 #include <Wire.h>
+
+#ifndef OLED_SDA_PIN
+#define OLED_SDA_PIN 8
+#endif
+#ifndef OLED_SCL_PIN
+#define OLED_SCL_PIN 9
+#endif
+
 extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
 #elif defined(DISPLAY_TFT_ST7789)
@@ -42,7 +50,7 @@ struct AncsPopupData {
 };
 
 // =========================================================================
-// Design Color Palette (Exact Match to Retina HD App & Web UI)
+// Design Color Palette for TFT ST7789 (Exact Match to Retina HD App & Web UI)
 // =========================================================================
 #define COLOR_BG          0x0000 // Deep Obsidian Black
 #define COLOR_CARD_BG     0x08A5 // Dark Slate Card (#0F172A)
@@ -67,6 +75,7 @@ private:
 public:
   void init() {
 #if defined(DISPLAY_OLED_SSD1306)
+    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
     u8g2.begin();
     u8g2.enableUTF8Print();
     u8g2.setFontMode(0);
@@ -135,28 +144,35 @@ private:
   void _renderOled() {
     u8g2.clearBuffer();
     if (_currentState == STATE_POPUP_CALL) {
+      // Call Popup (128x64)
       u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 6, 16, 16, icon_phone_16x16);
+      u8g2.drawXBMP(6, 5, 16, 16, icon_phone_16x16);
       u8g2.setFont(u8g2_font_6x10_tf);
       u8g2.drawStr(28, 16, "CUOC GOI DEN");
-      u8g2.drawLine(0, 24, 128, 24);
+      u8g2.drawLine(0, 22, 128, 22);
+
       u8g2.setFont(u8g2_font_7x14B_tf);
-      u8g2.drawStr(8, 44, _popupData.title);
+      u8g2.drawStr(6, 42, _popupData.title);
+
       u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(8, 56, "ANCS Apple Notification");
+      u8g2.drawStr(6, 56, "ANCS Apple Notification");
     }
     else if (_currentState == STATE_POPUP_SMS) {
+      // SMS Popup (128x64)
       u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 6, 16, 16, icon_msg_16x16);
+      u8g2.drawXBMP(6, 5, 16, 16, icon_msg_16x16);
       u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 16, "TIN NHAN SMS");
-      u8g2.drawLine(0, 24, 128, 24);
+      u8g2.drawStr(28, 16, "TIN NHAN MOI");
+      u8g2.drawLine(0, 22, 128, 22);
+
       u8g2.setFont(u8g2_font_6x12_tf);
-      u8g2.drawStr(6, 38, _popupData.title);
+      u8g2.drawStr(6, 36, _popupData.title);
+
       u8g2.setFont(u8g2_font_5x8_tf);
       u8g2.drawStr(6, 52, _popupData.message);
     }
     else if (_currentState == STATE_NAVIGATION) {
+      // 1. Maneuver Turn Icon (32x32 at x=2, y=2)
       const uint8_t* icon = icon_straight_32x32;
       switch (_navData.turnCode) {
         case 1: case 2: case 3: icon = icon_turn_right_32x32; break;
@@ -166,8 +182,9 @@ private:
         case 9: icon = icon_arrive_32x32; break;
         default: icon = icon_straight_32x32; break;
       }
-      u8g2.drawXBMP(4, 4, 32, 32, icon);
+      u8g2.drawXBMP(2, 4, 32, 32, icon);
 
+      // 2. Distance Text (Large)
       u8g2.setFont(u8g2_font_logisoso16_tr);
       char distStr[16];
       if (_navData.distMeters >= 1000) {
@@ -175,28 +192,35 @@ private:
       } else {
         snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
       }
-      u8g2.drawStr(44, 22, distStr);
+      u8g2.drawStr(38, 20, distStr);
 
+      // 3. Speed & ETA Metrics
       u8g2.setFont(u8g2_font_6x10_tf);
       char metaStr[24];
-      snprintf(metaStr, sizeof(metaStr), "%d km/h  %d m", _navData.speedKmh, _navData.etaMinutes);
-      u8g2.drawStr(44, 36, metaStr);
+      snprintf(metaStr, sizeof(metaStr), "%d km/h  %d ph", _navData.speedKmh, _navData.etaMinutes);
+      u8g2.drawStr(38, 34, metaStr);
 
-      u8g2.drawBox(0, 44, 128, 20);
-      u8g2.setDrawColor(0);
+      // 4. Street Name Banner (Bottom Inverted Bar)
+      u8g2.drawBox(0, 42, 128, 22);
+      u8g2.setDrawColor(0); // White text on dark box
       u8g2.setFont(u8g2_font_6x12_tf);
-      u8g2.drawStr(4, 58, _navData.streetName);
+      char cleanStreet[24];
+      strncpy(cleanStreet, _navData.streetName, sizeof(cleanStreet) - 1);
+      cleanStreet[sizeof(cleanStreet) - 1] = '\0';
+      u8g2.drawStr(4, 57, cleanStreet);
       u8g2.setDrawColor(1);
     }
     else {
-      u8g2.drawXBMP(8, 6, 16, 16, icon_ble_16x16);
+      // Standby / Pairing Wait Screen
+      u8g2.drawXBMP(6, 4, 16, 16, icon_ble_16x16);
       u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(30, 16, "ESP32 NAV");
-      u8g2.drawLine(0, 24, 128, 24);
+      u8g2.drawStr(28, 15, "ESP32 NAV BLE");
+      u8g2.drawLine(0, 22, 128, 22);
+
       u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 38, "1. Vao Cai dat iPhone");
-      u8g2.drawStr(6, 48, "2. Ket noi Bluetooth");
-      u8g2.drawStr(6, 58, "3. Mo App bat dieu huong");
+      u8g2.drawStr(6, 34, "1. Vao Cai dat iPhone");
+      u8g2.drawStr(6, 44, "2. Ket noi ESP32_NAV");
+      u8g2.drawStr(6, 56, "3. Mo App bat dan duong");
     }
     u8g2.sendBuffer();
   }
@@ -209,12 +233,9 @@ private:
   }
 
   void _renderTft() {
-    // -------------------------------------------------------------
-    // 1. Popup Handling (Cuộc gọi / SMS đè toàn màn hình)
-    // -------------------------------------------------------------
     if (_currentState == STATE_POPUP_CALL) {
       _wasPopupActive = true;
-      tft.fillRoundRect(15, 25, 290, 190, 14, 0x01E0); // Emerald Green Box
+      tft.fillRoundRect(15, 25, 290, 190, 14, 0x01E0);
       tft.drawRoundRect(15, 25, 290, 190, 14, COLOR_GREEN);
       tft.drawRoundRect(17, 27, 286, 186, 12, COLOR_GREEN);
 
@@ -230,7 +251,7 @@ private:
       return;
     } else if (_currentState == STATE_POPUP_SMS) {
       _wasPopupActive = true;
-      tft.fillRoundRect(15, 25, 290, 190, 14, 0x0841); // Deep Slate Navy Box
+      tft.fillRoundRect(15, 25, 290, 190, 14, 0x0841);
       tft.drawRoundRect(15, 25, 290, 190, 14, COLOR_CYAN);
       tft.drawRoundRect(17, 27, 286, 186, 12, COLOR_CYAN);
 
@@ -247,7 +268,6 @@ private:
       return;
     }
 
-    // If popup just closed, clear screen once and restore layout
     if (_wasPopupActive) {
       _wasPopupActive = false;
       tft.fillScreen(COLOR_BG);
@@ -255,22 +275,16 @@ private:
       _leftStandbyDrawn = false;
     }
 
-    // -------------------------------------------------------------
-    // 2. Left 160x240 Viewport: Live Map vs Premium Standby Screen
-    // -------------------------------------------------------------
     bool isStreamActive = (lastFrameTime > 0 && (millis() - lastFrameTime < 3500));
 
     if (isStreamActive) {
-      // Live Stream active -> Left half is drawn exclusively by TJpgDec.
       _leftStandbyDrawn = false;
     } else if (!_leftStandbyDrawn || (millis() - _lastRightRender > 1500)) {
-      // Draw High-End Standby Card when stream is waiting
       _leftStandbyDrawn = true;
       tft.fillRect(0, 0, 159, 240, COLOR_BG);
       tft.fillRoundRect(6, 8, 147, 224, 10, COLOR_CARD_BG);
       tft.drawRoundRect(6, 8, 147, 224, 10, COLOR_CARD_FRAME);
 
-      // Mini map icon placeholder
       tft.fillRoundRect(54, 45, 52, 52, 10, COLOR_CYAN_TINT);
       tft.drawRoundRect(54, 45, 52, 52, 10, COLOR_CYAN);
       tft.drawXBitmap(64, 55, icon_straight_32x32, 32, 32, COLOR_CYAN);
@@ -289,33 +303,24 @@ private:
       _drawBaseDivider();
     }
 
-    // -------------------------------------------------------------
-    // 3. Right 160x240 HUD Render (Throttled to 4-5 Hz for Max SPI Bus Speed)
-    // -------------------------------------------------------------
     if (millis() - _lastRightRender < 220) return;
     _lastRightRender = millis();
 
-    // Clear ONLY the Right Half
     tft.fillRect(161, 0, 159, 240, COLOR_BG);
     _drawBaseDivider();
 
-    // =============================================================
-    // A. Top Hardware Status Bar (y: 2..22)
-    // =============================================================
+    // A. Status Bar
     tft.fillRoundRect(164, 4, 150, 20, 4, COLOR_CARD_INNER);
     tft.fillCircle(172, 14, 3, _navData.isConnected ? COLOR_GREEN : 0xF800);
     tft.setTextColor(_navData.isConnected ? COLOR_CYAN : 0xF800, COLOR_CARD_INNER);
     tft.drawString(_navData.isConnected ? "BLE ON" : "NO BLE", 180, 8, 2);
 
-    // Battery percentage
     tft.setTextColor(COLOR_GREEN, COLOR_CARD_INNER);
     char batStr[8];
     snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
     tft.drawString(batStr, 275, 8, 2);
 
-    // =============================================================
-    // B. Maneuver Row: Turn Arrow Box + Big Distance (y: 28..74)
-    // =============================================================
+    // B. Maneuver Box
     tft.fillRoundRect(164, 28, 44, 44, 8, COLOR_CYAN_TINT);
     tft.drawRoundRect(164, 28, 44, 44, 8, COLOR_CYAN);
 
@@ -330,7 +335,6 @@ private:
     }
     tft.drawXBitmap(170, 34, iconData, 32, 32, 0xFFFF);
 
-    // Distance Value
     char distStr[16];
     if (_navData.distMeters >= 1000) {
       snprintf(distStr, sizeof(distStr), "%.1fkm", (float)_navData.distMeters / 1000.0);
@@ -340,15 +344,12 @@ private:
     tft.setTextColor(0xFFFF, COLOR_BG);
     tft.drawString(distStr, 214, 28, 4);
 
-    // Current Speed below Distance
     char spdStr[16];
     snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
     tft.setTextColor(COLOR_GREEN, COLOR_BG);
     tft.drawString(spdStr, 214, 54, 2);
 
-    // =============================================================
-    // C. Next Street Name Banner (y: 78..124)
-    // =============================================================
+    // C. Street Banner
     tft.fillRoundRect(164, 78, 150, 44, 6, COLOR_CARD_BG);
     tft.drawRoundRect(164, 78, 150, 44, 6, COLOR_CARD_FRAME);
 
@@ -364,13 +365,10 @@ private:
     }
     tft.drawString(cleanStreet, 170, 96, 2);
 
-    // =============================================================
-    // D. Trip ETA & Arrival Time Metrics Card (y: 128..180)
-    // =============================================================
+    // D. ETA & Total Distance
     tft.fillRoundRect(164, 128, 150, 50, 6, COLOR_CARD_INNER);
     tft.drawRoundRect(164, 128, 150, 50, 6, COLOR_CARD_FRAME);
 
-    // Left Column: ETA Arrival Clock
     tft.setTextColor(COLOR_TEXT_DARK, COLOR_CARD_INNER);
     tft.drawString("DU KIEN", 172, 134, 1);
     char etaClock[16];
@@ -378,7 +376,6 @@ private:
     tft.setTextColor(COLOR_CYAN, COLOR_CARD_INNER);
     tft.drawString(etaClock, 172, 148, 4);
 
-    // Right Column: Remaining Distance in KM
     tft.setTextColor(COLOR_TEXT_DARK, COLOR_CARD_INNER);
     tft.drawString("QUANG DUONG", 236, 134, 1);
     char totDistStr[16];
@@ -386,9 +383,7 @@ private:
     tft.setTextColor(COLOR_GREEN, COLOR_CARD_INNER);
     tft.drawString(totDistStr, 236, 148, 2);
 
-    // =============================================================
-    // E. Navigation Mode Status Pill (y: 184..234)
-    // =============================================================
+    // E. Mode Status Pill
     tft.fillRoundRect(164, 184, 150, 48, 6, COLOR_CARD_BG);
     tft.drawRoundRect(164, 184, 150, 48, 6, COLOR_CARD_FRAME);
 

@@ -25,7 +25,7 @@ static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
 static NimBLEUUID navCharUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
 
 #if defined(DISPLAY_OLED_SSD1306)
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 22, /* data=*/ 21);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 #elif defined(DISPLAY_TFT_ST7789)
 TFT_eSPI tft = TFT_eSPI();
 #include <TJpg_Decoder.h>
@@ -311,7 +311,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     </div>
     <div class="status-row">
       <div class="pill" id="blePill"><span class="dot"></span>BLE: Đang đợi</div>
-      <div class="pill active"><span class="dot"></span>LCD: ST7789 HD</div>
+      <div class="pill active"><span class="dot"></span>LCD: SẴN SÀNG</div>
     </div>
   </header>
 
@@ -534,7 +534,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 // =========================================================================
-// 2. Custom Navigation Characteristic Callback (Receives 20 FPS JPEG & JSON)
+// 2. Custom Navigation Characteristic Callback
 // =========================================================================
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
@@ -542,7 +542,6 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
     if (value.length() == 0) return;
 
     // 1. Check for 9-byte Robust Chunked JPEG Packet
-    // [0xAA, 0xBB, frameId, totalChunks, chunkIdx, offsetMSB, offsetLSB, totalLenMSB, totalLenLSB, ...payload]
     if (value.length() >= 9 && (uint8_t)value[0] == 0xAA && (uint8_t)value[1] == 0xBB) {
       uint8_t frameId = (uint8_t)value[2];
       uint8_t totalChunks = (uint8_t)value[3];
@@ -573,7 +572,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       return;
     }
 
-    // Fallback: 5-byte legacy packet [0xAA, 0xBB, frameId, totalChunks, chunkIdx, ...payload]
+    // Fallback: 5-byte legacy packet
     if (value.length() >= 5 && (uint8_t)value[0] == 0xAA && (uint8_t)value[1] == 0xBB) {
       uint8_t frameId = (uint8_t)value[2];
       uint8_t totalChunks = (uint8_t)value[3];
@@ -647,7 +646,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (IMAGE 2 EXACT MATCH) ===");
+  Serial.println("\n=== ESP32 SMART NAVIGATOR ===");
 
   // 1. Start Wi-Fi SoftAP
   WiFi.mode(WIFI_AP);
@@ -669,7 +668,7 @@ void setup() {
   server.on("/api/test_sms", HTTP_GET, handleTestSms);
   server.begin();
 
-  // 3. Start Display (if hardware attached)
+  // 3. Start Display Hardware
   display.init();
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
@@ -677,7 +676,7 @@ void setup() {
   TJpgDec.setCallback(tft_output);
   #endif
 
-  // 4. Start NimBLE Server (with Max MTU 517 for High-Speed 20 FPS BLE Stream)
+  // 4. Start NimBLE Server
   NimBLEDevice::init("ESP32_NAV_ANCS");
   NimBLEDevice::setMTU(517);
   NimBLEDevice::setSecurityAuth(true, true, true);
@@ -703,7 +702,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS qua Bluetooth BLE (MTU 517)!");
+  Serial.println("[BLE] ESP32 San sang ket noi!");
 }
 
 void loop() {
