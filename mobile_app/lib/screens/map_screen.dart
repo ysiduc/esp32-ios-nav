@@ -527,11 +527,11 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (160x200 Ultra-Low Latency)
+          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (160x240 1:1 LCD Pixel Match)
           // -----------------------------------------------------------
           SizedBox(
             width: 160,
-            height: 200,
+            height: 240,
             child: RepaintBoundary(
               key: _mapStreamBoundaryKey,
               child: _buildDedicatedStreamMap(userPos, navManager),
@@ -2165,15 +2165,15 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
-      key: ValueKey('stream_container_${_currentTheme.name}_${_espStreamZoom.toStringAsFixed(1)}'),
+      key: ValueKey('stream_container_${_currentTheme.name}'),
       width: 160,
-      height: 200,
+      height: 240,
       color: const Color(0xFF0F172A),
       child: Stack(
         alignment: Alignment.center,
         children: [
           FlutterMap(
-            key: ValueKey('stream_flutter_map_${_currentTheme.name}_${_espStreamZoom.toStringAsFixed(1)}'),
+            key: ValueKey('stream_flutter_map_${_currentTheme.name}'),
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,

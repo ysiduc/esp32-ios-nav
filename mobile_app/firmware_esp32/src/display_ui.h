@@ -268,26 +268,88 @@ private:
       tft.drawString(_popupData.message, 160, 145, 2);
     }
     else if (_currentState == STATE_NAVIGATION) {
-      tft.fillScreen(TFT_BLACK);
-      tft.setTextColor(TFT_CYAN, TFT_BLACK);
+      // -----------------------------------------------------------------
+      // Split Screen Layout (320x240 Landscape):
+      // Left Half (0..160): Reserved for Real-time JPEG Map Stream!
+      // Right Half (160..320): Navigation HUD & Telemetry Data!
+      // -----------------------------------------------------------------
+      // Only clear the RIGHT half (160..320) to NEVER erase live JPEG map
+      tft.fillRect(160, 0, 160, 240, 0x0821); // Sleek dark slate bg
+      tft.drawFastVLine(160, 0, 240, 0x07FF); // Bright Cyan Divider Line
+
+      // 1. Top Mini Status Bar (BLE + Battery)
+      tft.setTextColor(TFT_CYAN, 0x0821);
       tft.setTextDatum(TL_DATUM);
+      tft.drawString("ESP32 NAV", 168, 6, 2);
+
+      tft.setTextColor(0x07E0, 0x0821); // Bright Green
+      tft.setTextDatum(TR_DATUM);
+      char batStr[16];
+      snprintf(batStr, sizeof(batStr), "PIN %d%%", _batteryLevel);
+      tft.drawString(batStr, 314, 6, 2);
+
+      tft.drawFastHLine(164, 24, 152, 0x31A6); // Subtle divider
+
+      // 2. Maneuver & Distance Text
+      const char* turnName = "DI THANG";
+      switch (_navData.turnCode) {
+        case 1: case 2: case 3: turnName = "RE PHAI"; break;
+        case 5: case 6: case 7: turnName = "RE TRAI"; break;
+        case 4: turnName = "QUAY DAU"; break;
+        case 8: turnName = "BUNG BINH"; break;
+        case 9: turnName = "DEN NOI"; break;
+        default: turnName = "DI THANG"; break;
+      }
+      tft.setTextColor(0x07FF, 0x0821); // Cyan
+      tft.setTextDatum(TL_DATUM);
+      tft.drawString(turnName, 168, 30, 2);
+
+      // Large Distance in Meters or Km
+      tft.setTextColor(TFT_YELLOW, 0x0821);
       char distStr[16];
-      snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
-      tft.drawString(distStr, 30, 30, 7);
+      if (_navData.distMeters >= 1000) {
+        snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
+      } else {
+        snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
+      }
+      tft.drawString(distStr, 168, 48, 6);
 
-      tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-      tft.drawString(_navData.streetName, 20, 140, 4);
+      // 3. Street Name Banner
+      tft.fillRoundRect(164, 116, 152, 44, 4, 0x18C3);
+      tft.drawRoundRect(164, 116, 152, 44, 4, 0x07FF);
+      tft.setTextColor(TFT_WHITE, 0x18C3);
+      tft.setTextDatum(MC_DATUM);
+      tft.drawString(_navData.streetName, 240, 138, 2);
 
-      tft.setTextColor(TFT_GREEN, TFT_BLACK);
-      char spd[32];
-      snprintf(spd, sizeof(spd), "%d km/h | Pin %d%%", _navData.speedKmh, _batteryLevel);
-      tft.drawString(spd, 20, 190, 4);
+      // 4. Speed & ETA Metrics (Bottom)
+      tft.setTextColor(0x07E0, 0x0821); // Green
+      tft.setTextDatum(TL_DATUM);
+      char spdStr[24];
+      snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+      tft.drawString(spdStr, 168, 172, 4);
+
+      tft.setTextColor(TFT_WHITE, 0x0821);
+      char etaStr[24];
+      snprintf(etaStr, sizeof(etaStr), "ETA: %dp", _navData.etaMinutes);
+      tft.drawString(etaStr, 168, 204, 2);
     }
     else {
+      // Initial Pairing wait screen
       tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(0x07FF, TFT_BLACK);
+      tft.setTextDatum(TC_DATUM);
+      tft.drawString("ESP32 SMART NAV", 160, 20, 4);
+
+      tft.drawFastHLine(30, 52, 260, 0x07FF);
+
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
       tft.setTextDatum(TL_DATUM);
-      tft.drawString("ESP32 NAV - BLE PAIR", 20, 50, 4);
+      tft.drawString("1. Vao Cai dat iPhone -> Bluetooth", 30, 75, 2);
+      tft.drawString("2. Ket noi: ESP32_NAV_ANCS", 30, 110, 2);
+      tft.drawString("3. Mo App bat luong ban do", 30, 145, 2);
+
+      tft.setTextColor(0x07E0, TFT_BLACK);
+      tft.drawString("Trang thai: Dang cho ket noi BLE...", 30, 190, 2);
     }
   }
 #endif

@@ -481,30 +481,25 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(9),
-                child: liveJpeg != null
-                    ? Image.memory(
-                        liveJpeg,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                      )
-                    : Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          FlutterMap(
-                            mapController: _miniMapController,
-                            options: MapOptions(
-                              initialCenter: userLoc,
-                              initialZoom: 17.5,
-                              initialRotation: -navManager.currentHeading,
-                              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
-                            ),
-                            children: [
-                              TileLayer(
-                                key: const ValueKey('preview_tile_layer'),
-                                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
-                                userAgentPackageName: 'com.esp32nav.app',
-                                maxZoom: 20,
-                              ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Mini Map Layer (Ultra-Sharp Retina HD)
+                    FlutterMap(
+                      mapController: _miniMapController,
+                      options: MapOptions(
+                        initialCenter: userLoc,
+                        initialZoom: 17.5,
+                        initialRotation: -navManager.currentHeading,
+                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                      ),
+                      children: [
+                        TileLayer(
+                          key: const ValueKey('preview_tile_layer'),
+                          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                          userAgentPackageName: 'com.esp32nav.app',
+                          maxZoom: 20,
+                        ),
                         if (activeRoute != null)
                           PolylineLayer(
                             polylines: [

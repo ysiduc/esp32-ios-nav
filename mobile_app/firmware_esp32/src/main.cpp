@@ -19,6 +19,7 @@ static volatile size_t jpegFrameLen = 0;
 static volatile unsigned long lastFrameTime = 0;
 static uint8_t currentBleFrameId = 255;
 static size_t bleJpegBytesReceived = 0;
+static uint32_t bleReceivedChunkMask = 0;
 
 // UUIDs for Custom Navigation Service
 static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
@@ -1065,20 +1066,32 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       if (frameId != currentBleFrameId) {
         currentBleFrameId = frameId;
         bleJpegBytesReceived = 0;
+        bleReceivedChunkMask = 0;
       }
 
+      size_t offset = (size_t)chunkIdx * 480;
       size_t payloadLen = value.length() - 5;
-      if (bleJpegBytesReceived + payloadLen < sizeof(jpegFrameBuf)) {
-        memcpy(jpegFrameBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+
+      if (offset + payloadLen <= sizeof(jpegFrameBuf)) {
+        memcpy(jpegFrameBuf + offset, value.data() + 5, payloadLen);
         bleJpegBytesReceived += payloadLen;
+        if (chunkIdx < 32) {
+          bleReceivedChunkMask |= (1UL << chunkIdx);
+        }
       }
 
-      if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
-        jpegFrameLen = bleJpegBytesReceived;
+      uint32_t expectedMask = (totalChunks >= 32) ? 0xFFFFFFFF : ((1UL << totalChunks) - 1);
+      if ((bleReceivedChunkMask == expectedMask || chunkIdx == totalChunks - 1) &&
+          (offset + payloadLen > 100) &&
+          jpegFrameBuf[0] == 0xFF && jpegFrameBuf[1] == 0xD8) {
+        jpegFrameLen = offset + payloadLen;
         lastFrameTime = millis();
         #if defined(DISPLAY_TFT_ST7789)
         if (!display.isPopupActive()) {
-          TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+          JRESULT res = TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+          if (res != JDR_OK) {
+            Serial.printf("[TJpgDec] Frame %d decode err: %d\n", frameId, res);
+          }
         }
         #endif
       }

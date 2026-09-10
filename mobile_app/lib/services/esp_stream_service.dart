@@ -105,9 +105,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Ultra-low latency scaling: target ~135px width (~1.5 - 2.0 KB/frame for instant BLE delivery)
-      final double targetRatio = (135.0 / boundary.size.width).clamp(0.4, 0.95);
-      final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
+      // Exact 1:1 ST7789 TFT display pixel match (160x240 left viewport, crystal clear)
+      final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
@@ -120,12 +119,12 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker with optimal 32 quality for zero-lag BLE
+      // Run pure JPEG encoding on background isolate worker with optimal 42 quality
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 32,
+        'quality': 42,
       });
 
       _latestJpegBytes = jpegBytes;
