@@ -45,9 +45,6 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingRoutes = false;
   bool _isSearching = false;
 
-  // ESP32 Live Stream Map Zoom Level (Default 15.0x, adjustable 12x - 18x)
-  double _espStreamZoom = 15.0;
-
   // Auto-follow Camera Centering State
   bool _isAutoCentering = true;
   Timer? _recenterTimer;
@@ -74,7 +71,7 @@ class _MapScreenState extends State<MapScreen> {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
         try {
-          _streamMapController.moveAndRotate(_userPosition, _espStreamZoom, -navManager.currentHeading);
+          _streamMapController.moveAndRotate(_userPosition, 17.8, -navManager.currentHeading);
         } catch (_) {}
       }
 
@@ -84,7 +81,7 @@ class _MapScreenState extends State<MapScreen> {
           _mapController.move(loc, 17.5);
         }
         try {
-          _streamMapController.moveAndRotate(loc, _espStreamZoom, -heading);
+          _streamMapController.moveAndRotate(loc, 17.8, -heading);
         } catch (_) {}
       };
 
@@ -148,38 +145,13 @@ class _MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
-    final parsedResult = await _googleMapsParser.parseInputOrRoute(clean, userLocation: currentPos);
+    final place = await _googleMapsParser.parseInput(clean, userLocation: currentPos);
 
     if (mounted) {
       setState(() => _isSearching = false);
-      if (parsedResult is ParsedGoogleRoute) {
-        _searchController.text = parsedResult.destinationName;
-        await _calculateRoutesForParsedRoute(parsedResult);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF0084FF),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: Row(
-              children: [
-                const Icon(Icons.alt_route_rounded, color: Colors.white, size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Đã tải trọn vẹn lộ trình Google Maps (${parsedResult.allStops.length} điểm: ${parsedResult.destinationName})',
-                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      } else if (parsedResult is MapPlace) {
-        _searchController.text = parsedResult.name;
-        _onPlaceClicked(parsedResult);
+      if (place != null) {
+        _searchController.text = place.name;
+        _onPlaceClicked(place);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF0084FF),
@@ -191,7 +163,7 @@ class _MapScreenState extends State<MapScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Đã nhận điểm đến từ Google Maps: ${parsedResult.name}',
+                    'Đã nhận điểm đến từ Google Maps: ${place.name}',
                     style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -231,14 +203,14 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     if (GoogleMapsParser.isGoogleMapsOrCoordInput(query)) {
-      _debounceTimer = Timer(const Duration(milliseconds: 100), () {
+      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
         _handleGoogleMapsOrSharedInput(query);
       });
       return;
     }
 
     setState(() => _isSearching = true);
-    _debounceTimer = Timer(const Duration(milliseconds: 150), () async {
+    _debounceTimer = Timer(const Duration(milliseconds: 250), () async {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       final currentPos = navManager.currentLocation ?? _userPosition;
       final results = await _searchService.searchPlaces(query, nearLocation: currentPos);
@@ -355,54 +327,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  /// Calculate full multi-stop route from a shared Google Maps URL
-  Future<void> _calculateRoutesForParsedRoute(ParsedGoogleRoute parsedRoute) async {
-    final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final currentPos = navManager.currentLocation ?? _userPosition;
-
-    final List<LatLng> stops = [];
-    if (parsedRoute.origin != null) {
-      stops.add(parsedRoute.origin!);
-    } else {
-      stops.add(currentPos);
-    }
-    stops.addAll(parsedRoute.waypoints);
-    stops.add(parsedRoute.destination);
-
-    final destPlace = MapPlace(
-      name: parsedRoute.destinationName,
-      displayName: parsedRoute.summary ?? parsedRoute.destinationName,
-      coordinate: parsedRoute.destination,
-      type: 'destination',
-      category: 'route',
-    );
-
-    setState(() {
-      _isLoadingRoutes = true;
-      _selectedPlace = destPlace;
-      _viewMode = 2; // Open Route Comparison
-      _selectedRouteIndex = 0;
-      _routes = [];
-    });
-
-    final routes = await _osrmService.calculateRouteWithWaypoints(
-      stops,
-      mode: _transportMode,
-    );
-
-    if (mounted) {
-      setState(() {
-        _routes = routes;
-        _isLoadingRoutes = false;
-        _selectedRouteIndex = 0;
-      });
-
-      if (routes.isNotEmpty) {
-        _fitRouteBounds(routes.first.polylinePoints);
-      }
-    }
-  }
-
   void _fitRouteBounds(List<LatLng> points) {
     if (points.isEmpty) return;
 
@@ -464,21 +388,18 @@ class _MapScreenState extends State<MapScreen> {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
-          key: const ValueKey('tile_layer_google_road'),
           urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
-          key: const ValueKey('tile_layer_google_satellite'),
           urlTemplate: 'https://mt1.google.com/vt/lyrs=y&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.darkCyber:
         return ColorFiltered(
-          key: const ValueKey('tile_layer_dark_cyber_filtered'),
           colorFilter: const ColorFilter.matrix(<double>[
             -0.85, 0, 0, 0, 230,
             0, -0.85, 0, 0, 230,
@@ -486,7 +407,6 @@ class _MapScreenState extends State<MapScreen> {
             0, 0, 0, 1, 0,
           ]),
           child: TileLayer(
-            key: const ValueKey('tile_layer_dark_cyber'),
             urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
             userAgentPackageName: 'com.esp32nav.app',
             maxZoom: 20,
@@ -494,7 +414,6 @@ class _MapScreenState extends State<MapScreen> {
         );
       case MapThemeMode.osmStandard:
         return TileLayer(
-          key: const ValueKey('tile_layer_osm_standard'),
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 19,
@@ -514,10 +433,10 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults.isNotEmpty ||
         _isSearching;
 
-    // Keep Stream Mini Map synced with vehicle using dynamic _espStreamZoom
+    // Keep Stream Mini Map synced with vehicle
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
+        _streamMapController.moveAndRotate(userPos, 17.8, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -527,11 +446,11 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (160x240 1:1 LCD Pixel Match)
+          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (165x185 Retina)
           // -----------------------------------------------------------
           SizedBox(
-            width: 160,
-            height: 240,
+            width: 165,
+            height: 185,
             child: RepaintBoundary(
               key: _mapStreamBoundaryKey,
               child: _buildDedicatedStreamMap(userPos, navManager),
@@ -824,19 +743,11 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
 
-          // BLE Connection Mini Status Pill & ESP32 Zoom Control Bar
+          // BLE Connection Mini Status Pill
           Positioned(
             left: 16,
             top: isDriving ? 110 : (_viewMode == 0 ? 120 : 170),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildBleStatusBadge(bleService),
-                const SizedBox(height: 8),
-                _buildEspZoomControl(userPos, navManager),
-              ],
-            ),
+            child: _buildBleStatusBadge(bleService),
           ),
 
           // -----------------------------------------------------------
@@ -2095,97 +2006,31 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildEspZoomControl(LatLng userPos, NavigationManager navManager) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: const Color(0xFF161B22).withAlpha(235),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF00F0FF).withAlpha(140), width: 1.2),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withAlpha(180), blurRadius: 10, offset: const Offset(0, 3)),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.zoom_in_map_rounded, color: Color(0xFF00F0FF), size: 15),
-          const SizedBox(width: 5),
-          Text(
-            'Zoom ESP: ${_espStreamZoom.toStringAsFixed(1)}x',
-            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 8),
-          // Zoom out (-)
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                _espStreamZoom = (_espStreamZoom - 1.0).clamp(10.0, 19.0);
-              });
-              try {
-                _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
-              } catch (_) {}
-            },
-            child: Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF21262D),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white24),
-              ),
-              child: const Icon(Icons.remove, color: Colors.white, size: 13),
-            ),
-          ),
-          const SizedBox(width: 6),
-          // Zoom in (+)
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                _espStreamZoom = (_espStreamZoom + 1.0).clamp(10.0, 19.0);
-              });
-              try {
-                _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
-              } catch (_) {}
-            },
-            child: Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF21262D),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white24),
-              ),
-              child: const Icon(Icons.add, color: Colors.white, size: 13),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
-      key: ValueKey('stream_container_${_currentTheme.name}'),
-      width: 160,
-      height: 240,
+      width: 165,
+      height: 185,
       color: const Color(0xFF0F172A),
       child: Stack(
         alignment: Alignment.center,
         children: [
           FlutterMap(
-            key: ValueKey('stream_flutter_map_${_currentTheme.name}'),
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: _espStreamZoom,
-              initialRotation: -navManager.currentHeading, // Map rotates with vehicle heading
+              initialZoom: 17.8,
+              initialRotation: -navManager.currentHeading,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),
             children: [
-              _buildMapTiles(),
+              TileLayer(
+                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                userAgentPackageName: 'com.esp32nav.app',
+                maxZoom: 20,
+              ),
               if (activeRoute != null) ...[
                 PolylineLayer(
-                  key: ValueKey('stream_route_poly_${activeRoute.polylinePoints.length}'),
                   polylines: [
                     Polyline(
                       points: activeRoute.polylinePoints,
@@ -2204,41 +2049,33 @@ class _MapScreenState extends State<MapScreen> {
                 markers: [
                   Marker(
                     point: userPos,
-                    width: 40,
-                    height: 40,
+                    width: 36,
+                    height: 36,
                     alignment: Alignment.center,
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
-                        // Pulsing outer halo
                         Container(
-                          width: 36,
-                          height: 36,
+                          width: 32,
+                          height: 32,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: const Color(0xFF00F0FF).withAlpha(45),
-                            border: Border.all(color: const Color(0xFF00F0FF).withAlpha(160), width: 1.5),
+                            color: const Color(0xFF0084FF).withAlpha(45),
+                            border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
                           ),
                         ),
-                        // GPS Puck: Blue circle with crisp forward-pointing triangle arrow (Heading-Up)
                         Container(
-                          width: 24,
-                          height: 24,
+                          width: 22,
+                          height: 22,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: const Color(0xFF0084FF),
-                            border: Border.all(color: Colors.white, width: 2.2),
+                            border: Border.all(color: Colors.white, width: 2),
                             boxShadow: [
-                              BoxShadow(color: const Color(0xFF0084FF).withAlpha(220), blurRadius: 10),
+                              BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
                             ],
                           ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.navigation_rounded, // Always points straight UP forward
-                              color: Colors.white,
-                              size: 15,
-                            ),
-                          ),
+                          child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
                         ),
                       ],
                     ),
@@ -2246,6 +2083,21 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ],
+          ),
+          Positioned(
+            bottom: 4,
+            left: 4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.black.withAlpha(200),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'MAP LIVE',
+                style: TextStyle(color: Color(0xFF00F0FF), fontSize: 8, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+              ),
+            ),
           ),
         ],
       ),

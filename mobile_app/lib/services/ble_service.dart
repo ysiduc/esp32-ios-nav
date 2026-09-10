@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/esp_payload.dart';
 
@@ -31,8 +30,6 @@ class BleLogItem {
 }
 
 class BleService extends ChangeNotifier {
-  static const MethodChannel _nativeCallChannel = MethodChannel('com.esp32nav.app/native_call');
-
   // Custom Navigation Service & Characteristic UUIDs (Standard 16-bit UUID / Custom)
   static final Guid navServiceUuid = Guid('0000FFE0-0000-1000-8000-00805F9B34FB');
   static final Guid navCharUuid = Guid('0000FFE1-0000-1000-8000-00805F9B34FB');
@@ -66,24 +63,6 @@ class BleService extends ChangeNotifier {
 
   BleService() {
     _initBle();
-    _initNativeCallListener();
-  }
-
-  void _initNativeCallListener() {
-    try {
-      _nativeCallChannel.setMethodCallHandler((call) async {
-        if (call.method == 'onIncomingCall') {
-          _addLog('📞 [iOS] Phát hiện cuộc gọi đến từ iPhone!', isTx: false);
-          await sendAlertNotification(
-            type: 'CALL',
-            title: 'CUỘC GỌI ĐẾN',
-            message: 'Cuộc gọi đến từ iPhone',
-          );
-        } else if (call.method == 'onCallEnded') {
-          _addLog('📞 [iOS] Cuộc gọi đã kết thúc', isTx: false);
-        }
-      });
-    } catch (_) {}
   }
 
   void _initBle() {
@@ -262,7 +241,7 @@ class BleService extends ChangeNotifier {
   }
 
   /// Send custom raw JSON or string
-  Future<bool> sendRawString(String text, {bool highPriority = false}) async {
+  Future<bool> sendRawString(String text) async {
     if (!_isConnected || _writeCharacteristic == null) {
       _addLog('Chưa kết nối ESP32', isError: true);
       return false;
@@ -270,49 +249,14 @@ class BleService extends ChangeNotifier {
 
     try {
       final bytes = utf8.encode(text);
-      final bool useWriteWithResp = highPriority && _writeCharacteristic!.properties.write;
       await _writeCharacteristic!.write(
         bytes,
-        withoutResponse: !useWriteWithResp,
+        withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
       );
-      _addLog('TX: $text');
+      _addLog('TX RAW: $text');
       return true;
     } catch (e) {
-      _addLog('Lỗi gửi BLE: $e', isError: true);
-      return false;
-    }
-  }
-
-  /// Send High-Priority Call / SMS / Zalo Alert with guaranteed delivery
-  Future<bool> sendAlertNotification({
-    required String type, // 'CALL', 'SMS', 'ZALO'
-    required String title,
-    required String message,
-  }) async {
-    if (!_isConnected || _writeCharacteristic == null) {
-      _addLog('Chưa kết nối ESP32 để gửi thông báo!', isError: true);
-      return false;
-    }
-
-    try {
-      final payload = {
-        'type': type.toUpperCase(),
-        'title': title,
-        'msg': message,
-      };
-      final jsonStr = jsonEncode(payload);
-      final bytes = utf8.encode(jsonStr);
-
-      final bool canWriteWithResp = _writeCharacteristic!.properties.write;
-      await _writeCharacteristic!.write(
-        bytes,
-        withoutResponse: !canWriteWithResp,
-      );
-
-      _addLog('🔔 TX THÔNG BÁO [$type]: $title - $message', isTx: true);
-      return true;
-    } catch (e) {
-      _addLog('Lỗi gửi thông báo $type: $e', isError: true);
+      _addLog('Lỗi gửi RAW: $e', isError: true);
       return false;
     }
   }

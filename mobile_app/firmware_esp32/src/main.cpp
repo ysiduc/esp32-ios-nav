@@ -19,7 +19,6 @@ static volatile size_t jpegFrameLen = 0;
 static volatile unsigned long lastFrameTime = 0;
 static uint8_t currentBleFrameId = 255;
 static size_t bleJpegBytesReceived = 0;
-static uint32_t bleReceivedChunkMask = 0;
 
 // UUIDs for Custom Navigation Service
 static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
@@ -49,7 +48,6 @@ volatile uint16_t curTotalDist = 700;
 volatile uint8_t curSpeed = 0;
 volatile uint8_t curEta = 1;
 volatile int curHeading = 0;
-volatile uint8_t curBattery = 100;
 String curStreet = "PHO DAI TU";
 String curArrival = "11:25";
 
@@ -422,7 +420,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         <span>ESP32 BLE</span>
       </div>
       <div id="clockTxt">11:24</div>
-      <div class="battery" id="batTxt">100% 🔋</div>
+      <div class="battery">100% 🔋</div>
     </div>
 
     <div class="screen-area">
@@ -734,10 +732,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[2];
       targetTurn = data.turn;
 
-      if (data.bat !== undefined) {
-        document.getElementById('batTxt').innerText = data.bat + '% 🔋';
-      }
-
       const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
         popup.style.display = 'flex';
@@ -852,9 +846,7 @@ void handlePostFrame() {
       jpegFrameLen = readBytes;
       lastFrameTime = millis();
       #if defined(DISPLAY_TFT_ST7789)
-      if (!display.isPopupActive()) {
-        TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
-      }
+      TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
       #endif
     }
   }
@@ -892,7 +884,6 @@ void handleStatusApi() {
   doc["popup"] = popupType;
   doc["title"] = popupTitle;
   doc["msg"] = popupMsg;
-  doc["bat"] = curBattery;
 
   String output;
   serializeJson(doc, output);
@@ -935,109 +926,18 @@ void handleTestSms() {
 }
 
 // =========================================================================
-// 1. Apple Notification Center Service (ANCS) UUIDs & Callbacks
-// =========================================================================
-static NimBLEUUID ancsServiceUUID("7905F431-B5CE-4E99-A40F-4B1E122D00D0");
-static NimBLEUUID ancsNotifSourceUUID("9FBF120D-6301-42D9-8C58-25E699A21DBD");
-
-void ancsNotificationCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
-  if (length < 8) return;
-  uint8_t eventId = pData[0];     // 0: Added, 1: Modified, 2: Removed
-  uint8_t eventFlags = pData[1];  // Bit 2 (0x04): PreExisting historical notification
-  uint8_t categoryId = pData[2];  // 1: Call, 2: Missed Call, 4: Social, 0/12: SMS
-
-  // IGNORE pre-existing historical notifications sent during connection sync!
-  if (eventFlags & 0x04) {
-    return;
-  }
-
-  Serial.printf("[ANCS] Live Event=%d, Flags=0x%02X, Category=%d\n", eventId, eventFlags, categoryId);
-
-  // Only trigger on genuine newly added notifications
-  if (eventId == 0) {
-    if (categoryId == 1) {
-      // Incoming Live Phone Call
-      popupTitle = "CUOC GOI DEN";
-      popupMsg = "Cuoc goi den tu iPhone";
-      popupType = "CALL";
-      popupExpire = millis() + 10000;
-      display.showCallAlert("CUOC GOI DEN");
-    } else if (categoryId == 4 || categoryId == 0 || categoryId == 12) {
-      // New Live SMS / Social Message
-      popupTitle = "TIN NHAN MOI";
-      popupMsg = "Tin nhan tu iPhone";
-      popupType = "SMS";
-      popupExpire = millis() + 6000;
-      display.showSmsAlert("TIN NHAN MOI", "Thong bao moi");
-    }
-  } else if (eventId == 2) { // Removed / Dismissed
-    if (categoryId == 1 && popupType == "CALL") {
-      popupType = "NONE";
-      popupExpire = 0;
-      display.dismissPopup();
-    }
-  }
-}
-
-static NimBLEAddress connectedPeerAddr;
-static bool ancsPending = false;
-static unsigned long ancsPendingTime = 0;
-
-void setupAncsClient(NimBLEAddress peerAddr) {
-  Serial.printf("[ANCS] DANG DANG KY ANCS CHO IPHONE: %s...\n", peerAddr.toString().c_str());
-  NimBLEClient* pClient = NimBLEDevice::getClientByPeerAddress(peerAddr);
-  if (!pClient) {
-    pClient = NimBLEDevice::createClient();
-  }
-  if (pClient) {
-    if (!pClient->isConnected()) {
-      if (!pClient->connect(peerAddr)) {
-        Serial.println("[ANCS] Ket noi GATT Client toi iPhone tam thoi chua san sang");
-        return;
-      }
-    }
-    NimBLERemoteService* pAncsSvc = pClient->getService(ancsServiceUUID);
-    if (pAncsSvc) {
-      Serial.println("[ANCS] Tim thay Apple Notification Service tren iPhone!");
-      NimBLERemoteCharacteristic* pNotifChar = pAncsSvc->getCharacteristic(ancsNotifSourceUUID);
-      if (pNotifChar && pNotifChar->canNotify()) {
-        pNotifChar->subscribe(true, ancsNotificationCallback);
-        Serial.println("[ANCS] >>> DA DANG KY THANH CONG NHAN CUOC GOI & TIN NHAN TU IPHONE! <<<");
-      }
-    } else {
-      Serial.println("[ANCS] Khong tim thay ANCS tren thiet bi (vui long chap nhan Ghep Doi/Pairing trong Cai dat Bluetooth)");
-    }
-  }
-}
-
-// =========================================================================
-// 2. BLE Server Callbacks
+// 1. BLE Server Callbacks
 // =========================================================================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
+  void onConnect(NimBLEServer* pServer) {
     bleConnected = true;
     display.setBleConnected(true);
     Serial.println("[BLE] iPhone da ket noi!");
-    if (desc != nullptr) {
-      connectedPeerAddr = NimBLEAddress(desc->peer_id_addr);
-      ancsPending = true;
-      ancsPendingTime = millis() + 1500; // 1.5s delay to allow initial bonding
-    }
-  }
-
-  void onAuthenticationComplete(ble_gap_conn_desc* desc) {
-    if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Da ma hoa va ghep doi bao mat thanh cong voi iPhone!");
-      NimBLEAddress addr(desc->peer_id_addr);
-      setupAncsClient(addr);
-      ancsPending = false;
-    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     display.setBleConnected(false);
-    ancsPending = false;
     Serial.println("[BLE] Da ngat ket noi. Phat quang ba lai...");
     NimBLEDevice::startAdvertising();
   }
@@ -1060,33 +960,19 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       if (frameId != currentBleFrameId) {
         currentBleFrameId = frameId;
         bleJpegBytesReceived = 0;
-        bleReceivedChunkMask = 0;
       }
 
-      size_t offset = (size_t)chunkIdx * 480;
       size_t payloadLen = value.length() - 5;
-
-      if (offset + payloadLen <= sizeof(jpegFrameBuf)) {
-        memcpy(jpegFrameBuf + offset, value.data() + 5, payloadLen);
+      if (bleJpegBytesReceived + payloadLen < sizeof(jpegFrameBuf)) {
+        memcpy(jpegFrameBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
         bleJpegBytesReceived += payloadLen;
-        if (chunkIdx < 32) {
-          bleReceivedChunkMask |= (1UL << chunkIdx);
-        }
       }
 
-      uint32_t expectedMask = (totalChunks >= 32) ? 0xFFFFFFFF : ((1UL << totalChunks) - 1);
-      if ((bleReceivedChunkMask == expectedMask || chunkIdx == totalChunks - 1) &&
-          (offset + payloadLen > 100) &&
-          jpegFrameBuf[0] == 0xFF && jpegFrameBuf[1] == 0xD8) {
-        jpegFrameLen = offset + payloadLen;
+      if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
+        jpegFrameLen = bleJpegBytesReceived;
         lastFrameTime = millis();
         #if defined(DISPLAY_TFT_ST7789)
-        if (!display.isPopupActive()) {
-          JRESULT res = TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
-          if (res != JDR_OK) {
-            Serial.printf("[TJpgDec] Frame %d decode err: %d\n", frameId, res);
-          }
-        }
+        TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
         #endif
       }
       return;
@@ -1098,35 +984,23 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
     if (!error) {
       String typeStr = String(doc["type"] | "");
-      typeStr.toUpperCase();
       if (typeStr == "CALL") {
-        const char* name = doc["title"] | doc["caller"] | doc["name"] | "Cuoc goi den";
-        const char* msg = doc["msg"] | doc["message"] | "Cuoc goi den tu iPhone";
+        const char* name = doc["title"] | "Cuoc goi den";
         popupTitle = name;
-        popupMsg = msg;
+        popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
         popupType = "CALL";
         popupExpire = millis() + 10000;
         display.showCallAlert(name);
-        Serial.printf("[NOTIF] >>> CALL Alert: %s (%s) <<<\n", name, msg);
         return;
-      } else if (typeStr == "SMS" || typeStr == "NOTIF" || typeStr == "MSG" || typeStr == "ZALO") {
-        const char* sender = doc["title"] | doc["sender"] | doc["name"] | "Tin nhan";
-        const char* content = doc["msg"] | doc["message"] | doc["content"] | "Thong bao moi";
+      } else if (typeStr == "SMS") {
+        const char* sender = doc["title"] | "Tin nhan";
+        const char* content = doc["msg"] | "Thong bao moi";
         popupTitle = sender;
         popupMsg = content;
         popupType = "SMS";
         popupExpire = millis() + 8000;
         display.showSmsAlert(sender, content);
-        Serial.printf("[NOTIF] >>> SMS Alert from %s: %s <<<\n", sender, content);
         return;
-      }
-
-      if (doc["bat"].is<int>()) {
-        curBattery = doc["bat"];
-        display.setBattery(curBattery);
-      } else if (doc["battery"].is<int>()) {
-        curBattery = doc["battery"];
-        display.setBattery(curBattery);
       }
 
       curTurn = doc["turn"] | 0;
@@ -1184,8 +1058,6 @@ void setup() {
   NimBLEDevice::setMTU(517);
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
-  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -1193,15 +1065,13 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
-    NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(navServiceUUID);
-  pAdvertising->addServiceUUID(NimBLEUUID("7905F431-B5CE-4E99-A40F-4B1E122D00D0"));
   pAdvertising->setMinInterval(16); // 10ms fast advertising
   pAdvertising->setMaxInterval(32); // 20ms
   pAdvertising->setMinPreferred(6); // 7.5ms min interval
@@ -1209,16 +1079,11 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS & Thong bao Cuoc goi/SMS qua Bluetooth BLE!");
+  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS qua Bluetooth BLE (MTU 517)!");
 }
 
 void loop() {
   server.handleClient();
   display.update();
-  if (ancsPending && millis() > ancsPendingTime) {
-    ancsPending = false;
-    setupAncsClient(connectedPeerAddr);
-  }
   delay(2);
 }
-
