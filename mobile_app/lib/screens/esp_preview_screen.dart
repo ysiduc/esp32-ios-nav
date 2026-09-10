@@ -34,6 +34,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       if (navManager.currentLocation != null) {
         _miniMapController.move(navManager.currentLocation!, 17.0);
       }
+
+      // Auto-start 20 FPS JPEG streaming immediately on screen open
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          final streamService = Provider.of<EspStreamService>(context, listen: false);
+          if (!streamService.isStreaming) {
+            streamService.startStreaming(boundaryKey: _streamBoundaryKey);
+          }
+        }
+      });
     });
   }
 
