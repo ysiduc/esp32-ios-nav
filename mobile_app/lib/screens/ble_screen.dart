@@ -359,6 +359,38 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   ],
                 ),
               ),
+              const SizedBox(height: 10),
+              // Notification Alert Test Row
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildTestButton('📞 Test Cuộc gọi', () {
+                      bleService.sendAlertNotification(
+                        type: 'CALL',
+                        title: 'Nguyễn Văn A',
+                        message: 'Cuộc gọi đến từ iPhone',
+                      );
+                    }, bleService.isConnected),
+                    const SizedBox(width: 8),
+                    _buildTestButton('💬 Test Tin nhắn SMS', () {
+                      bleService.sendAlertNotification(
+                        type: 'SMS',
+                        title: 'Mẹ',
+                        message: 'Con về ăn cơm nhé!',
+                      );
+                    }, bleService.isConnected),
+                    const SizedBox(width: 8),
+                    _buildTestButton('💬 Test Zalo', () {
+                      bleService.sendAlertNotification(
+                        type: 'ZALO',
+                        title: 'Zalo Bạn Thân',
+                        message: 'Đang ở đâu thế em?',
+                      );
+                    }, bleService.isConnected),
+                  ],
+                ),
+              ),
             ],
           ),
         ),

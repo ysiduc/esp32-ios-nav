@@ -255,6 +255,109 @@ class OsrmService {
     }
   }
 
+  /// Calculate Route traversing all multi-point waypoints in sequence (Google Maps shared route)
+  Future<List<NavRoute>> calculateRouteWithWaypoints(
+    List<LatLng> stops, {
+    String mode = 'bike',
+  }) async {
+    if (stops.isEmpty) return [];
+    if (stops.length == 1) return [];
+    if (stops.length == 2) {
+      return await calculateMultipleRoutes(stops.first, stops.last, mode: mode);
+    }
+
+    try {
+      String profile = (mode == 'foot') ? 'foot' : 'driving';
+      final coordStr = stops.map((p) => '${p.longitude.toStringAsFixed(6)},${p.latitude.toStringAsFixed(6)}').join(';');
+      final urlStr = '$_primaryOsrmBaseUrl/route/v1/$profile/$coordStr?overview=full&geometries=geojson&steps=true&annotations=false';
+
+      final response = await http.get(Uri.parse(urlStr), headers: {
+        'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)',
+      }).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (data['code'] == 'Ok' && (data['routes'] as List).isNotEmpty) {
+          final rawRoutes = data['routes'] as List;
+          final parsedRoutes = <NavRoute>[];
+
+          for (int rIdx = 0; rIdx < rawRoutes.length; rIdx++) {
+            final routeJson = rawRoutes[rIdx] as Map<String, dynamic>;
+            final totalDistance = (routeJson['distance'] as num).toDouble();
+            var totalDuration = (routeJson['duration'] as num).toDouble();
+
+            if (mode == 'bike') {
+              final avgSpeedKmh = totalDistance > 10000 ? 42.0 : 32.0;
+              totalDuration = (totalDistance / 1000.0) / avgSpeedKmh * 3600.0;
+            }
+
+            final geometry = routeJson['geometry'] as Map<String, dynamic>;
+            final coordsList = geometry['coordinates'] as List;
+            final polylinePoints = coordsList.map<LatLng>((coord) {
+              final lon = (coord[0] as num).toDouble();
+              final lat = (coord[1] as num).toDouble();
+              return LatLng(lat, lon);
+            }).toList();
+
+            final steps = <NavStep>[];
+            final legs = routeJson['legs'] as List;
+            int globalStepIndex = 0;
+
+            for (final leg in legs) {
+              final legSteps = leg['steps'] as List;
+              for (final step in legSteps) {
+                final maneuver = step['maneuver'] as Map<String, dynamic>;
+                final manType = maneuver['type'] as String? ?? 'straight';
+                final manModifier = maneuver['modifier'] as String?;
+                final manLocation = maneuver['location'] as List;
+                final stepCoord = LatLng(
+                  (manLocation[1] as num).toDouble(),
+                  (manLocation[0] as num).toDouble(),
+                );
+
+                final distance = (step['distance'] as num).toDouble();
+                final duration = (step['duration'] as num).toDouble();
+                final name = (step['name'] as String? ?? '').trim();
+                final streetName = name.isEmpty ? 'Đường không tên' : name;
+                final instruction = _buildInstruction(manType, manModifier, streetName, maneuver);
+
+                steps.add(NavStep(
+                  stepIndex: globalStepIndex++,
+                  instruction: instruction,
+                  streetName: streetName,
+                  distanceMeters: distance,
+                  durationSeconds: duration,
+                  coordinate: stepCoord,
+                  maneuverTypeStr: manType,
+                  maneuverModifier: manModifier,
+                ));
+              }
+            }
+
+            parsedRoutes.add(NavRoute(
+              title: '🗺️ Lộ trình Google Maps (${stops.length} điểm)',
+              subtitle: 'Đi qua toàn bộ các điểm & ngã rẽ đã chỉ định',
+              themeColor: const Color(0xFF00F0FF),
+              isFastest: true,
+              totalDistanceMeters: totalDistance,
+              totalDurationSeconds: totalDuration,
+              polylinePoints: polylinePoints,
+              steps: steps,
+              summary: 'Google Maps Route (${stops.length} stops)',
+            ));
+          }
+
+          if (parsedRoutes.isNotEmpty) {
+            return parsedRoutes;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: 2-point routing between start and destination
+    return await calculateMultipleRoutes(stops.first, stops.last, mode: mode);
+  }
+
   /// Single route calculation (legacy support)
   Future<NavRoute?> calculateRoute(
     LatLng start,

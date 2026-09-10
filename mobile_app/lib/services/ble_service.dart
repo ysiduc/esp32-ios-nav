@@ -241,7 +241,7 @@ class BleService extends ChangeNotifier {
   }
 
   /// Send custom raw JSON or string
-  Future<bool> sendRawString(String text) async {
+  Future<bool> sendRawString(String text, {bool highPriority = false}) async {
     if (!_isConnected || _writeCharacteristic == null) {
       _addLog('Chưa kết nối ESP32', isError: true);
       return false;
@@ -249,14 +249,49 @@ class BleService extends ChangeNotifier {
 
     try {
       final bytes = utf8.encode(text);
+      final bool useWriteWithResp = highPriority && _writeCharacteristic!.properties.write;
       await _writeCharacteristic!.write(
         bytes,
-        withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
+        withoutResponse: !useWriteWithResp,
       );
-      _addLog('TX RAW: $text');
+      _addLog('TX: $text');
       return true;
     } catch (e) {
-      _addLog('Lỗi gửi RAW: $e', isError: true);
+      _addLog('Lỗi gửi BLE: $e', isError: true);
+      return false;
+    }
+  }
+
+  /// Send High-Priority Call / SMS / Zalo Alert with guaranteed delivery
+  Future<bool> sendAlertNotification({
+    required String type, // 'CALL', 'SMS', 'ZALO'
+    required String title,
+    required String message,
+  }) async {
+    if (!_isConnected || _writeCharacteristic == null) {
+      _addLog('Chưa kết nối ESP32 để gửi thông báo!', isError: true);
+      return false;
+    }
+
+    try {
+      final payload = {
+        'type': type.toUpperCase(),
+        'title': title,
+        'msg': message,
+      };
+      final jsonStr = jsonEncode(payload);
+      final bytes = utf8.encode(jsonStr);
+
+      final bool canWriteWithResp = _writeCharacteristic!.properties.write;
+      await _writeCharacteristic!.write(
+        bytes,
+        withoutResponse: !canWriteWithResp,
+      );
+
+      _addLog('🔔 TX THÔNG BÁO [$type]: $title - $message', isTx: true);
+      return true;
+    } catch (e) {
+      _addLog('Lỗi gửi thông báo $type: $e', isError: true);
       return false;
     }
   }

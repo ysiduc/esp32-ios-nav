@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -23,7 +22,7 @@ class EspStreamService extends ChangeNotifier {
 
   Timer? _streamTimer;
   HttpServer? _mjpegServer;
-  int _serverPort = 8080;
+  final int _serverPort = 8080;
   final List<HttpResponse> _mjpegClients = [];
 
   Uint8List? _latestJpegBytes;
@@ -106,8 +105,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Adaptive scaling: target ~165px width for ultra-crisp HD 20 FPS BLE stream
-      final double targetRatio = (165.0 / boundary.size.width).clamp(0.2, 1.0);
+      // High-definition scaling for ultra-crisp Retina map stream
+      final double targetRatio = (200.0 / boundary.size.width).clamp(0.4, 1.0);
       final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
@@ -121,12 +120,12 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker
+      // Run pure JPEG encoding on background isolate worker with high-clarity quality
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 40,
+        'quality': 65,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -192,7 +191,7 @@ class EspStreamService extends ChangeNotifier {
     }
   }
 
-  /// Start HTTP MJPEG Stream Server (Accessible at http://<phone_ip>:8080/stream.mjpg)
+  /// Start HTTP MJPEG Stream Server (Accessible at `http://<phone_ip>:8080/stream.mjpg`)
   Future<void> _startMjpegServer() async {
     if (_mjpegServer != null) return;
 

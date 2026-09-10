@@ -60,7 +60,28 @@ void main() {
       final place = await parser.parseInput(sharedText);
       expect(place, isNotNull);
       expect((place!.coordinate.latitude - 21.016922).abs() < 0.001, isTrue);
-      print('Parsed shared text -> ${place.name}, coord: ${place.coordinate}');
+    });
+
+    test('Parses Google Maps directions route with path coordinates', () async {
+      final dirUrl = 'https://www.google.com/maps/dir/21.028511,105.854212/21.016922,105.783688/20.971522,105.782533/@21.000,105.800,13z';
+      final result = await parser.parseInputOrRoute(dirUrl);
+      expect(result, isA<ParsedGoogleRoute>());
+      final route = result as ParsedGoogleRoute;
+      expect(route.allStops.length, equals(3));
+      expect((route.origin!.latitude - 21.028511).abs() < 0.001, isTrue);
+      expect((route.waypoints.first.latitude - 21.016922).abs() < 0.001, isTrue);
+      expect((route.destination.latitude - 20.971522).abs() < 0.001, isTrue);
+    });
+
+    test('Parses Google Maps directions route with query params', () async {
+      final queryUrl = 'https://www.google.com/maps/dir/?api=1&origin=21.0285,105.8542&destination=20.9715,105.7825&waypoints=21.0100,105.8300%7C21.0050,105.8100';
+      final result = await parser.parseInputOrRoute(queryUrl);
+      expect(result, isA<ParsedGoogleRoute>());
+      final route = result as ParsedGoogleRoute;
+      expect(route.allStops.length, equals(4));
+      expect((route.origin!.latitude - 21.0285).abs() < 0.001, isTrue);
+      expect(route.waypoints.length, equals(2));
+      expect((route.destination.latitude - 20.9715).abs() < 0.001, isTrue);
     });
   });
 }

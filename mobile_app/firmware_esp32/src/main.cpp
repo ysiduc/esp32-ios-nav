@@ -934,13 +934,95 @@ void handleTestSms() {
 }
 
 // =========================================================================
-// 1. BLE Server Callbacks
+// 1. Apple Notification Center Service (ANCS) UUIDs & Callbacks
+// =========================================================================
+static NimBLEUUID ancsServiceUUID("7905F431-B5CE-4E99-A40F-4B1E122D00D0");
+static NimBLEUUID ancsNotifSourceUUID("9FBF120D-6301-42D9-8C58-25E699A21DBD");
+
+void ancsNotificationCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  if (length < 8) return;
+  uint8_t eventId = pData[0];     // 0: Added, 1: Modified, 2: Removed
+  uint8_t categoryId = pData[2];  // 1: Call, 2: Missed Call, 4: Social (Zalo/Messenger), 0/12: SMS
+
+  Serial.printf("[ANCS] Nhan thong bao iOS: Event=%d, Category=%d\n", eventId, categoryId);
+
+  if (eventId == 0 || eventId == 1) { // New or modified notification
+    if (categoryId == 1) {
+      // Incoming Phone Call
+      popupTitle = "CUOC GOI DEN";
+      popupMsg = "Cuoc goi den tu iPhone";
+      popupType = "CALL";
+      popupExpire = millis() + 12000;
+      display.showCallAlert("CUOC GOI DEN");
+    } else if (categoryId == 2) {
+      // Missed Call
+      popupTitle = "CUOC GOI NHO";
+      popupMsg = "Ban co cuoc goi nho";
+      popupType = "CALL";
+      popupExpire = millis() + 6000;
+      display.showCallAlert("CUOC GOI NHO");
+    } else if (categoryId == 4) {
+      // Social (Zalo, Messenger, WhatsApp, Telegram, etc.)
+      popupTitle = "ZALO / MESSENGER";
+      popupMsg = "Ban co tin nhan moi";
+      popupType = "SMS";
+      popupExpire = millis() + 8000;
+      display.showSmsAlert("ZALO / MSG", "Tin nhan moi");
+    } else if (categoryId == 0 || categoryId == 12 || categoryId == 5 || categoryId == 6) {
+      // SMS / iMessage / Email / Other
+      popupTitle = "TIN NHAN / THONG BAO";
+      popupMsg = "Thong bao moi tu iPhone";
+      popupType = "SMS";
+      popupExpire = millis() + 8000;
+      display.showSmsAlert("THONG BAO MOI", "Tin nhan SMS");
+    }
+  } else if (eventId == 2) { // Removed / Dismissed
+    if (categoryId == 1 && popupType == "CALL") {
+      popupType = "NONE";
+      popupExpire = 0;
+    }
+  }
+}
+
+void setupAncsClient(NimBLEAddress peerAddr) {
+  Serial.printf("[ANCS] DANG DANG KY ANCS CHO IPHONE: %s...\n", peerAddr.toString().c_str());
+  NimBLEClient* pClient = NimBLEDevice::getClientByPeerAddress(peerAddr);
+  if (!pClient) {
+    pClient = NimBLEDevice::createClient();
+  }
+  if (pClient) {
+    if (!pClient->isConnected()) {
+      if (!pClient->connect(peerAddr)) {
+        Serial.println("[ANCS] Ket noi GATT Client toi iPhone tam thoi chua san sang");
+        return;
+      }
+    }
+    NimBLERemoteService* pAncsSvc = pClient->getService(ancsServiceUUID);
+    if (pAncsSvc) {
+      Serial.println("[ANCS] Tim thay Apple Notification Service tren iPhone!");
+      NimBLERemoteCharacteristic* pNotifChar = pAncsSvc->getCharacteristic(ancsNotifSourceUUID);
+      if (pNotifChar && pNotifChar->canNotify()) {
+        pNotifChar->subscribe(true, ancsNotificationCallback);
+        Serial.println("[ANCS] >>> DA DANG KY THANH CONG NHAN CUOC GOI & TIN NHAN TU IPHONE! <<<");
+      }
+    } else {
+      Serial.println("[ANCS] Khong tim thay ANCS tren thiet bi (vui long chap nhan Ghep Doi/Pairing trong Cai dat Bluetooth)");
+    }
+  }
+}
+
+// =========================================================================
+// 2. BLE Server Callbacks
 // =========================================================================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* pServer) {
+  void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
     Serial.println("[BLE] iPhone da ket noi!");
+    if (desc != nullptr) {
+      NimBLEAddress addr(desc->peer_id_addr);
+      setupAncsClient(addr);
+    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {

@@ -71,7 +71,7 @@ class _MapScreenState extends State<MapScreen> {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
         try {
-          _streamMapController.moveAndRotate(_userPosition, 16.4, -navManager.currentHeading);
+          _streamMapController.moveAndRotate(_userPosition, 15.0, -navManager.currentHeading);
         } catch (_) {}
       }
 
@@ -81,7 +81,7 @@ class _MapScreenState extends State<MapScreen> {
           _mapController.move(loc, 17.5);
         }
         try {
-          _streamMapController.moveAndRotate(loc, 16.4, -heading);
+          _streamMapController.moveAndRotate(loc, 15.0, -heading);
         } catch (_) {}
       };
 
@@ -145,13 +145,38 @@ class _MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
-    final place = await _googleMapsParser.parseInput(clean, userLocation: currentPos);
+    final parsedResult = await _googleMapsParser.parseInputOrRoute(clean, userLocation: currentPos);
 
     if (mounted) {
       setState(() => _isSearching = false);
-      if (place != null) {
-        _searchController.text = place.name;
-        _onPlaceClicked(place);
+      if (parsedResult is ParsedGoogleRoute) {
+        _searchController.text = parsedResult.destinationName;
+        await _calculateRoutesForParsedRoute(parsedResult);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF0084FF),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            content: Row(
+              children: [
+                const Icon(Icons.alt_route_rounded, color: Colors.white, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Đã tải trọn vẹn lộ trình Google Maps (${parsedResult.allStops.length} điểm: ${parsedResult.destinationName})',
+                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      } else if (parsedResult is MapPlace) {
+        _searchController.text = parsedResult.name;
+        _onPlaceClicked(parsedResult);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF0084FF),
@@ -163,7 +188,7 @@ class _MapScreenState extends State<MapScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Đã nhận điểm đến từ Google Maps: ${place.name}',
+                    'Đã nhận điểm đến từ Google Maps: ${parsedResult.name}',
                     style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -327,6 +352,54 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// Calculate full multi-stop route from a shared Google Maps URL
+  Future<void> _calculateRoutesForParsedRoute(ParsedGoogleRoute parsedRoute) async {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+
+    final List<LatLng> stops = [];
+    if (parsedRoute.origin != null) {
+      stops.add(parsedRoute.origin!);
+    } else {
+      stops.add(currentPos);
+    }
+    stops.addAll(parsedRoute.waypoints);
+    stops.add(parsedRoute.destination);
+
+    final destPlace = MapPlace(
+      name: parsedRoute.destinationName,
+      displayName: parsedRoute.summary ?? parsedRoute.destinationName,
+      coordinate: parsedRoute.destination,
+      type: 'destination',
+      category: 'route',
+    );
+
+    setState(() {
+      _isLoadingRoutes = true;
+      _selectedPlace = destPlace;
+      _viewMode = 2; // Open Route Comparison
+      _selectedRouteIndex = 0;
+      _routes = [];
+    });
+
+    final routes = await _osrmService.calculateRouteWithWaypoints(
+      stops,
+      mode: _transportMode,
+    );
+
+    if (mounted) {
+      setState(() {
+        _routes = routes;
+        _isLoadingRoutes = false;
+        _selectedRouteIndex = 0;
+      });
+
+      if (routes.isNotEmpty) {
+        _fitRouteBounds(routes.first.polylinePoints);
+      }
+    }
+  }
+
   void _fitRouteBounds(List<LatLng> points) {
     if (points.isEmpty) return;
 
@@ -436,7 +509,7 @@ class _MapScreenState extends State<MapScreen> {
     // Keep Stream Mini Map synced with vehicle
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _streamMapController.moveAndRotate(userPos, 16.4, -navManager.currentHeading);
+        _streamMapController.moveAndRotate(userPos, 15.0, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -446,11 +519,11 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (165x185 Retina)
+          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (200x220 Retina HD)
           // -----------------------------------------------------------
           SizedBox(
-            width: 165,
-            height: 185,
+            width: 200,
+            height: 220,
             child: RepaintBoundary(
               key: _mapStreamBoundaryKey,
               child: _buildDedicatedStreamMap(userPos, navManager),
@@ -2009,8 +2082,8 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
-      width: 165,
-      height: 185,
+      width: 200,
+      height: 220,
       color: const Color(0xFF0F172A),
       child: Stack(
         alignment: Alignment.center,
@@ -2019,7 +2092,7 @@ class _MapScreenState extends State<MapScreen> {
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: 16.4,
+              initialZoom: 15.0,
               initialRotation: -navManager.currentHeading,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),
