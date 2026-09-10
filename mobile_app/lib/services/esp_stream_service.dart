@@ -108,6 +108,8 @@ class EspStreamService extends ChangeNotifier {
 
       // Capture map at optimal 0.85 pixel ratio for ultra-sharp map streaming
       final ui.Image image = await boundary.toImage(pixelRatio: 0.85);
+      final int actualWidth = image.width;
+      final int actualHeight = image.height;
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       image.dispose();
 
@@ -116,14 +118,12 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      final width = (boundary.size.width * 0.85).toInt();
-      final height = (boundary.size.height * 0.85).toInt();
       final rawBytes = byteData.buffer.asUint8List();
 
       // Run pure JPEG encoding on background isolate worker to keep iPhone cool & 60 FPS UI
       final jpegBytes = await compute(_encodeJpegWorker, {
-        'width': width,
-        'height': height,
+        'width': actualWidth,
+        'height': actualHeight,
         'rawBytes': rawBytes,
         'quality': 35,
       });
