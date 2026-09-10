@@ -173,17 +173,16 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       display: flex;
     }
 
-    /* Direct Camera / App Image Stream (Overlaid when active) */
+    /* Direct Map Image Stream (Only placed inside left 50% map box) */
     #realAppImg {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      object-fit: fill;
+      object-fit: cover;
       display: none;
-      z-index: 50;
-      border-radius: 8px;
+      z-index: 5;
     }
 
     /* Split 50/50 Screen Layout (Exact match to iOS App Simulation) */
@@ -196,7 +195,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       transition: opacity 0.2s ease;
     }
 
-    /* LEFT 50%: OpenStreetMap Real Navigation Map */
+    /* LEFT 50%: Real Google Maps Stream from iOS OR Vector Map */
     .map-box {
       flex: 1;
       height: 100%;
@@ -425,14 +424,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="screen-area">
-      <!-- 1. Real Google Maps Stream from iOS App -->
-      <img id="realAppImg" alt="Live App Stream" />
-
-      <!-- 2. Split 50/50 Screen Layout (OpenStreetMap Authentic Vector Engine) -->
+      <!-- Split 50/50 Screen Layout (Image 2 Exact Layout) -->
       <div class="split-layout" id="splitLayout">
-        <!-- LEFT 50%: Authentic Vector Map (Matches Image 2) -->
+        <!-- LEFT 50%: Real Google Maps Stream from iOS OR Vector Map -->
         <div class="map-box">
           <canvas id="mapCanvas"></canvas>
+          <img id="realAppImg" alt="Live Map Stream" />
           <div class="map-live-tag">MAP LIVE</div>
         </div>
 
@@ -460,33 +457,35 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
               <div class="eta-clock" id="arrivalTxt">11:25</div>
             </div>
             <div style="text-align: right;">
-              <div class="eta-left" id="totalDistTxt">0.7 km</div>
+              <div class="eta-left">THỜI GIAN</div>
               <div class="eta-mins" id="etaTxt">1 ph</div>
             </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; font-size: 0.62rem; color: #64748b; font-family: monospace; font-weight: bold; padding: 0 2px;">
+            <span>QUÃNG ĐƯỜNG</span>
+            <span id="totalDistTxt" style="color: var(--accent);">0.7 km</span>
           </div>
         </div>
       </div>
 
-      <!-- ANCS Call / SMS Alert Popup -->
-      <div id="ancsPopup" class="ancs-popup">
+      <!-- ANCS Incoming Call / SMS Notification Popup -->
+      <div class="ancs-popup" id="ancsPopup">
         <div class="popup-hdr" id="popupHdr">CUỘC GỌI ĐẾN</div>
-        <div class="popup-title" id="popupTitle">NGUYỄN VĂN A</div>
+        <div class="popup-title" id="popupTitle">Nguyễn Văn A</div>
         <div class="popup-sub" id="popupSub">iPhone Notification</div>
       </div>
     </div>
   </div>
 
-  <!-- Interactive Controls Dashboard -->
+  <!-- Test Controls Dashboard -->
   <div class="control-box">
     <div class="ctrl-title">
-      <span>Thử Nghiệm Tính Năng (Test Controls)</span>
-      <span id="streamIndicator" style="font-size: 0.72rem; color: #00F0FF; font-weight: bold;">⏳ Chờ iPhone phát luồng 20 FPS...</span>
-    </div>
-    <div style="background: rgba(0,240,255,0.06); border: 1px dashed rgba(0,240,255,0.25); border-radius: 8px; padding: 6px 8px; margin-bottom: 8px; font-size: 0.68rem; color: #94a3b8; line-height: 1.3;">
-      💡 <strong style="color:#00F0FF;">Lưu ý:</strong> Khi mở tab <em>"Màn hình ESP32"</em> trên app iPhone (bản .ipa mới nhất), luồng video JPEG 20 FPS từ iPhone sẽ tự động bắn sang và đè lên khung hình này.
+      <span>⚙️ Trạng Thái Luồng Map & Thử Nghiệm</span>
+      <span id="streamIndicator" style="color: #00F0FF; font-size: 0.72rem;">Chế độ: Bản đồ Vector & HUD BLE</span>
     </div>
     <div class="grid-btns">
-      <button class="btn" onclick="testNav(2, 595, 0, 'Phó Đại Từ', 1, '11:25')">➡️ Rẽ phải 595m (Mặc định)</button>
+      <button class="btn" onclick="testNav(2, 595, 0, 'Phố Đại Từ', 1, '11:25')">➡️ Rẽ phải 595m (Mặc định)</button>
       <button class="btn" onclick="testNav(6, 410, 38, 'Phố Đại Từ', 1, '11:25')">⬅️ Rẽ trái 410m</button>
       <button class="btn" onclick="testNav(0, 1200, 50, 'Đường Giải Phóng', 5, '11:30')">⬆️ Đi thẳng 1.2km</button>
       <button class="btn" onclick="testNav(8, 80, 25, 'Bán Đảo Linh Đàm', 1, '11:26')">🔄 Vòng xuyến 80m</button>
@@ -496,11 +495,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    // 1. High-Speed Live Stream Receiver
+    // 1. High-Speed Live Map Stream Receiver (Only displays on Left 50% map-box)
     const realAppImg = document.getElementById('realAppImg');
-    const splitLayout = document.getElementById('splitLayout');
     const streamIndicator = document.getElementById('streamIndicator');
     let streamActive = false;
+    let lastFrameReceived = 0;
 
     function refreshLiveStream() {
       const testImg = new Image();
@@ -508,18 +507,17 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       testImg.onload = function() {
         realAppImg.src = testImg.src;
         realAppImg.style.display = 'block';
-        splitLayout.style.opacity = '0';
+        lastFrameReceived = Date.now();
         if (!streamActive) {
-          streamIndicator.innerText = '🔴 LIVE: Đang nhận JPEG 20 FPS ⚡';
+          streamIndicator.innerText = '🔴 LIVE: Đang nhận JPEG Map 20 FPS ⚡';
           streamIndicator.style.color = '#05FFA1';
           streamActive = true;
         }
       };
       testImg.onerror = function() {
-        if (streamActive) {
+        if (streamActive && (Date.now() - lastFrameReceived > 2500)) {
           realAppImg.style.display = 'none';
-          splitLayout.style.opacity = '1';
-          streamIndicator.innerText = '⏳ Chờ iPhone phát luồng 20 FPS...';
+          streamIndicator.innerText = '🗺️ Chế độ: Bản đồ Vector & HUD BLE (Tiết kiệm pin / Khóa màn hình)';
           streamIndicator.style.color = '#00F0FF';
           streamActive = false;
         }

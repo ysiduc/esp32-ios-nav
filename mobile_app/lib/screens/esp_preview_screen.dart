@@ -239,12 +239,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
             // 1. ESP32 Physical Device Enclosure Mockup (350x220 TFT LCD / OLED)
             Center(
-              child: RepaintBoundary(
-                key: _streamBoundaryKey,
-                child: Container(
-                  width: 350,
-                  height: 220,
-                  decoration: BoxDecoration(
+              child: Container(
+                width: 350,
+                height: 220,
+                decoration: BoxDecoration(
                     color: const Color(0xFF1E242C),
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(color: const Color(0xFF30363D), width: 6),
@@ -458,14 +456,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           // -----------------------------------------------------------
           Expanded(
             flex: 1,
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(6, 4, 3, 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F172A),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80), width: 1.2),
-              ),
-              child: ClipRRect(
+            child: RepaintBoundary(
+              key: _streamBoundaryKey,
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(6, 4, 3, 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80), width: 1.2),
+                ),
+                child: ClipRRect(
                 borderRadius: BorderRadius.circular(9),
                 child: Stack(
                   alignment: Alignment.center,
