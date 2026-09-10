@@ -45,6 +45,7 @@ private:
   DisplayState _lastRenderedState = (DisplayState)-1;
   NavStateData _navData;
   AncsPopupData _popupData;
+  uint8_t _batteryLevel = 100;
   bool _needsRedraw = true;
 
 public:
@@ -66,6 +67,10 @@ public:
 
   DisplayState getState() const {
     return _currentState;
+  }
+
+  void setBattery(uint8_t bat) {
+    _batteryLevel = bat;
   }
 
   void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street) {
@@ -97,6 +102,11 @@ public:
     _popupData.expireMillis = millis() + 10000; // 10 seconds timeout
     _currentState = STATE_POPUP_CALL;
     _needsRedraw = true;
+#if defined(DISPLAY_OLED_SSD1306)
+    _renderOled();
+#elif defined(DISPLAY_TFT_ST7789)
+    _renderTft();
+#endif
   }
 
   void showSmsAlert(const char* sender, const char* msg) {
@@ -107,6 +117,11 @@ public:
     _popupData.expireMillis = millis() + 8000; // 8 seconds timeout
     _currentState = STATE_POPUP_SMS;
     _needsRedraw = true;
+#if defined(DISPLAY_OLED_SSD1306)
+    _renderOled();
+#elif defined(DISPLAY_TFT_ST7789)
+    _renderTft();
+#endif
   }
 
   void update() {
@@ -184,10 +199,10 @@ private:
       }
       u8g2.drawStr(44, 22, distStr);
 
-      // 3. Speedometer & ETA
+      // 3. Speedometer, ETA & Battery
       u8g2.setFont(u8g2_font_6x10_tf);
       char metaStr[24];
-      snprintf(metaStr, sizeof(metaStr), "%d km/h  %d m", _navData.speedKmh, _navData.etaMinutes);
+      snprintf(metaStr, sizeof(metaStr), "%dkm/h %dm %d%%", _navData.speedKmh, _navData.etaMinutes, _batteryLevel);
       u8g2.drawStr(44, 36, metaStr);
 
       // 4. Street Name Banner (Bottom)
@@ -260,8 +275,8 @@ private:
       tft.drawString(_navData.streetName, 20, 140, 4);
 
       tft.setTextColor(TFT_GREEN, TFT_BLACK);
-      char spd[16];
-      snprintf(spd, sizeof(spd), "%d km/h", _navData.speedKmh);
+      char spd[32];
+      snprintf(spd, sizeof(spd), "%d km/h | Pin %d%%", _navData.speedKmh, _batteryLevel);
       tft.drawString(spd, 20, 190, 4);
     }
     else {

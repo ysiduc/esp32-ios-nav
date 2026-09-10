@@ -71,7 +71,7 @@ class _MapScreenState extends State<MapScreen> {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
         try {
-          _streamMapController.moveAndRotate(_userPosition, 17.8, -navManager.currentHeading);
+          _streamMapController.moveAndRotate(_userPosition, 16.4, -navManager.currentHeading);
         } catch (_) {}
       }
 
@@ -81,7 +81,7 @@ class _MapScreenState extends State<MapScreen> {
           _mapController.move(loc, 17.5);
         }
         try {
-          _streamMapController.moveAndRotate(loc, 17.8, -heading);
+          _streamMapController.moveAndRotate(loc, 16.4, -heading);
         } catch (_) {}
       };
 
@@ -436,7 +436,7 @@ class _MapScreenState extends State<MapScreen> {
     // Keep Stream Mini Map synced with vehicle
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _streamMapController.moveAndRotate(userPos, 17.8, -navManager.currentHeading);
+        _streamMapController.moveAndRotate(userPos, 16.4, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -2019,7 +2019,7 @@ class _MapScreenState extends State<MapScreen> {
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: 17.8,
+              initialZoom: 16.4,
               initialRotation: -navManager.currentHeading,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),

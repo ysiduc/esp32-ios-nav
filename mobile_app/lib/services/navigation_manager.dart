@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,6 +11,8 @@ import 'osrm_service.dart';
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
   final OsrmService _osrmService = OsrmService();
+  final Battery _battery = Battery();
+  int _batteryLevel = 100;
 
   // Active navigation state
   bool _isNavigating = false;
@@ -45,6 +48,7 @@ class NavigationManager extends ChangeNotifier {
   double get distanceToNextManeuver => _distanceToNextManeuver;
   double get remainingTotalDistance => _remainingTotalDistance;
   int get remainingEtaMinutes => _remainingEtaMinutes;
+  int get batteryLevel => _batteryLevel;
 
   NavStep? get currentStep {
     if (_activeRoute == null || _currentStepIndex >= _activeRoute!.steps.length) {
@@ -266,6 +270,8 @@ class NavigationManager extends ChangeNotifier {
     final step = currentStep;
     if (step == null) return;
 
+    _updateBattery();
+
     final payload = EspNavPayload(
       turnCode: step.turnCode,
       distanceToTurn: _distanceToNextManeuver.round(),
@@ -278,9 +284,20 @@ class NavigationManager extends ChangeNotifier {
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
       heading: _currentHeading.round(),
+      batteryLevel: _batteryLevel,
     );
 
     bleService.sendNavPayload(payload);
+  }
+
+  Future<void> _updateBattery() async {
+    try {
+      final level = await _battery.batteryLevel;
+      if (level != _batteryLevel) {
+        _batteryLevel = level;
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   /// Stop active navigation or simulation

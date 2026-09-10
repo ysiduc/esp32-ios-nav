@@ -47,6 +47,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final bleService = Provider.of<BleService>(context, listen: false);
     if (bleService.isConnected) {
       bleService.sendRawString('{"type":"CALL","title":"Nguyen Van A","msg":"Cuoc goi den tu iPhone"}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã gửi lệnh CUỘC GỌI ĐẾN sang ESP32!'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Color(0xFF0084FF),
+        ),
+      );
     }
 
     _popupDismissTimer = Timer(const Duration(seconds: 6), () {
@@ -64,6 +71,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final bleService = Provider.of<BleService>(context, listen: false);
     if (bleService.isConnected) {
       bleService.sendRawString('{"type":"SMS","title":"Me","msg":"Con ve nha an com nhe!"}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Đã gửi lệnh TIN NHẮN SMS sang ESP32!'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Color(0xFFFFB800),
+        ),
+      );
     }
 
     _popupDismissTimer = Timer(const Duration(seconds: 5), () {
@@ -308,13 +322,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                   _getCurrentClock(),
                                   style: const TextStyle(color: Colors.white70, fontSize: 9, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                                 ),
-                                const Row(
-                                  children: [
-                                    Text('100%', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 9, fontFamily: 'monospace')),
-                                    SizedBox(width: 2),
-                                    Icon(Icons.battery_full, color: Color(0xFF05FFA1), size: 12),
-                                  ],
-                                ),
+                                Row(
+                                   children: [
+                                     Text('${navManager.batteryLevel}%', style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 9, fontFamily: 'monospace')),
+                                     const SizedBox(width: 2),
+                                     const Icon(Icons.battery_full, color: Color(0xFF05FFA1), size: 12),
+                                   ],
+                                 ),
                               ],
                             ),
                           ),

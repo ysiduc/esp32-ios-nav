@@ -48,6 +48,7 @@ volatile uint16_t curTotalDist = 700;
 volatile uint8_t curSpeed = 0;
 volatile uint8_t curEta = 1;
 volatile int curHeading = 0;
+volatile uint8_t curBattery = 100;
 String curStreet = "PHO DAI TU";
 String curArrival = "11:25";
 
@@ -420,7 +421,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         <span>ESP32 BLE</span>
       </div>
       <div id="clockTxt">11:24</div>
-      <div class="battery">100% 🔋</div>
+      <div class="battery" id="batTxt">100% 🔋</div>
     </div>
 
     <div class="screen-area">
@@ -732,6 +733,10 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[2];
       targetTurn = data.turn;
 
+      if (data.bat !== undefined) {
+        document.getElementById('batTxt').innerText = data.bat + '% 🔋';
+      }
+
       const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
         popup.style.display = 'flex';
@@ -886,6 +891,7 @@ void handleStatusApi() {
   doc["popup"] = popupType;
   doc["title"] = popupTitle;
   doc["msg"] = popupMsg;
+  doc["bat"] = curBattery;
 
   String output;
   serializeJson(doc, output);
@@ -1009,6 +1015,14 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         display.showSmsAlert(sender, content);
         Serial.printf("[NOTIF] >>> SMS Alert from %s: %s <<<\n", sender, content);
         return;
+      }
+
+      if (doc["bat"].is<int>()) {
+        curBattery = doc["bat"];
+        display.setBattery(curBattery);
+      } else if (doc["battery"].is<int>()) {
+        curBattery = doc["battery"];
+        display.setBattery(curBattery);
       }
 
       curTurn = doc["turn"] | 0;
