@@ -77,6 +77,7 @@ public:
   void init() {
 #if defined(DISPLAY_OLED_SSD1306)
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+    Wire.setClock(400000);
     u8g2.begin();
     u8g2.enableUTF8Print();
     u8g2.setFontMode(0);
