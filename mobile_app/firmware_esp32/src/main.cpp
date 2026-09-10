@@ -6,15 +6,14 @@
 #include "display_ui.h"
 
 // =========================================================================
-// Wi-Fi SoftAP Configuration
+// Wi-Fi SoftAP Configuration (100% Offline Standalone Web Server)
 // =========================================================================
 const char* AP_SSID = "ESP32-Navigator-Screen";
 const char* AP_PASS = "12345678";
 
 WebServer server(80);
 
-// UUIDs for Apple Notification Center Service (ANCS)
-static NimBLEUUID ancsServiceUUID("7905F431-B5CE-4E99-A40F-4B1E122D00D0");
+// UUIDs for Custom Navigation Service
 static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
 static NimBLEUUID navCharUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
 
@@ -30,25 +29,23 @@ NimBLECharacteristic* pNavChar = nullptr;
 
 // Navigation & Telemetry State
 volatile bool bleConnected = false;
-volatile uint8_t curTurn = 0;
-volatile uint16_t curDist = 0;
-volatile uint16_t curTotalDist = 0;
-volatile uint8_t curSpeed = 0;
-volatile uint8_t curEta = 0;
-volatile double curLat = 20.9785;  // Default: Ha Noi (Pho Nguyen Canh Di)
-volatile double curLng = 105.8322;
-volatile int curHeading = 0;
-String curStreet = "San sang dan duong";
-String curArrival = "--:--";
+volatile uint8_t curTurn = 6; // Default to Left turn for preview
+volatile uint16_t curDist = 410;
+volatile uint16_t curTotalDist = 1200;
+volatile uint8_t curSpeed = 38;
+volatile uint8_t curEta = 2;
+volatile int curHeading = 180;
+String curStreet = "P. NGUYEN CANH DI";
+String curArrival = "11:09";
 
-// ANCS State
+// ANCS / Notification State
 String popupTitle = "";
 String popupMsg = "";
 String popupType = "NONE"; // "CALL", "SMS", "NONE"
 unsigned long popupExpire = 0;
 
 // =========================================================================
-// High-Fidelity Web Page: Real HD Google Maps / OSM Mini Map + 50/50 HUD
+// 100% OFFLINE HTML5 CANVAS MAP & DUAL HUD SCREEN (NO EXTERNAL INTERNET NEEDED)
 // =========================================================================
 const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -57,66 +54,65 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>ESP32 Smart Navigator Screen</title>
-  <!-- Google Fonts & Leaflet Map CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: #0b0f17;
+      background: #080C14;
       color: #fff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       min-height: 100vh;
-      padding: 12px;
+      padding: 10px;
+      user-select: none;
+      -webkit-user-select: none;
     }
     header {
       text-align: center;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
       width: 100%;
-      max-width: 480px;
+      max-width: 440px;
     }
     .header-title {
-      font-size: 1.1rem;
+      font-size: 1.05rem;
       font-weight: 800;
       color: #00F0FF;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 6px;
     }
     .status-row {
       display: flex;
       justify-content: center;
       gap: 8px;
-      margin-top: 6px;
+      margin-top: 4px;
     }
     .pill {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 3px 10px;
+      padding: 2px 10px;
       border-radius: 99px;
-      font-size: 0.72rem;
+      font-size: 0.7rem;
       font-weight: 700;
-      background: #161e28;
-      border: 1px solid #233044;
+      background: #151D2A;
+      border: 1px solid #222F42;
     }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; }
     .dot.active { background: #05FFA1; box-shadow: 0 0 6px #05FFA1; }
 
-    /* Realistic ESP32 Device Frame (Matching iOS Screen 2) */
+    /* Physical Screen Shell Matching Exact iOS App Mockup */
     .device-shell {
       position: relative;
       width: 100%;
       max-width: 420px;
-      height: 250px;
-      background: #1E242C;
-      border-radius: 26px;
-      border: 6px solid #30363D;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+      height: 255px;
+      background: #1C232D;
+      border-radius: 24px;
+      border: 6px solid #2B3545;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.9);
       overflow: hidden;
       padding: 4px;
       display: flex;
@@ -125,8 +121,8 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 
     /* Top Hardware Bar */
     .hw-bar {
-      height: 22px;
-      background: rgba(0,0,0,0.7);
+      height: 20px;
+      background: rgba(0,0,0,0.8);
       border-radius: 6px;
       display: flex;
       align-items: center;
@@ -138,11 +134,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       margin-bottom: 4px;
       z-index: 100;
     }
-    .ble-status { color: #ff5555; }
-    .ble-status.connected { color: #00F0FF; }
+    .ble-tag { color: #ff5555; }
+    .ble-tag.connected { color: #00F0FF; }
     .battery { color: #05FFA1; }
 
-    /* 50/50 Screen Area */
+    /* 50/50 Split Area */
     .screen-area {
       flex: 1;
       display: flex;
@@ -154,7 +150,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       padding: 4px;
     }
 
-    /* LEFT 50%: Live HD Map */
+    /* LEFT 50%: Pure Offline Vector Map Canvas */
     .map-box {
       flex: 1;
       height: 100%;
@@ -162,54 +158,32 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       overflow: hidden;
       border: 1.2px solid rgba(0, 240, 255, 0.4);
       position: relative;
-      background: #0f172a;
+      background: #E8ECEF;
     }
-    #map {
+    #mapCanvas {
       width: 100%;
       height: 100%;
-      background: #0f172a;
+      display: block;
     }
     .map-live-tag {
       position: absolute;
       bottom: 4px;
       left: 4px;
-      background: rgba(0,0,0,0.8);
+      background: rgba(0,0,0,0.75);
       color: #00F0FF;
       font-size: 0.55rem;
       font-family: monospace;
       font-weight: 800;
-      padding: 1px 5px;
+      padding: 2px 5px;
       border-radius: 4px;
-      z-index: 1000;
+      z-index: 10;
     }
 
-    /* Custom Centered Car/Vehicle Icon on Leaflet */
-    .vehicle-marker {
-      width: 28px;
-      height: 28px;
-      background: #0084FF;
-      border: 2px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 0 10px #0084FF;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.2s linear;
-    }
-    .vehicle-arrow {
-      width: 0;
-      height: 0;
-      border-left: 5px solid transparent;
-      border-right: 5px solid transparent;
-      border-bottom: 8px solid #ffffff;
-      margin-bottom: 2px;
-    }
-
-    /* RIGHT 50%: HUD Display */
+    /* RIGHT 50%: HUD Box */
     .hud-box {
       flex: 1;
       height: 100%;
-      background: #161E28;
+      background: #141B26;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.08);
       padding: 8px;
@@ -218,11 +192,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       justify-content: space-between;
     }
 
-    /* Turn Header */
+    /* Turn Direction & Distance */
     .turn-row {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
     .turn-badge {
       width: 44px;
@@ -244,7 +218,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       flex-direction: column;
     }
     .dist-val {
-      font-size: 1.25rem;
+      font-size: 1.3rem;
       font-weight: 900;
       font-family: monospace;
       color: #ffffff;
@@ -255,15 +229,15 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       font-weight: 800;
       font-family: monospace;
       color: #05FFA1;
-      margin-top: 2px;
+      margin-top: 3px;
     }
 
     /* Street Banner */
     .street-card {
-      background: #0F172A;
+      background: #0D131C;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 6px;
-      padding: 4px 6px;
+      padding: 5px 6px;
       text-align: center;
     }
     .street-name {
@@ -277,9 +251,9 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       text-transform: uppercase;
     }
 
-    /* Arrival / ETA footer */
+    /* ETA Footer */
     .eta-card {
-      background: #0A0E14;
+      background: #080C12;
       border-radius: 6px;
       padding: 4px 8px;
       display: flex;
@@ -287,28 +261,17 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       align-items: center;
       font-family: monospace;
     }
-    .eta-left {
-      font-size: 0.65rem;
-      color: #94a3b8;
-    }
-    .eta-clock {
-      color: #00F0FF;
-      font-weight: bold;
-      font-size: 0.8rem;
-    }
-    .eta-mins {
-      color: #05FFA1;
-      font-weight: bold;
-      font-size: 0.8rem;
-    }
+    .eta-left { font-size: 0.65rem; color: #94a3b8; }
+    .eta-clock { color: #00F0FF; font-weight: bold; font-size: 0.8rem; }
+    .eta-mins { color: #05FFA1; font-weight: bold; font-size: 0.8rem; }
 
     /* ANCS Popup (Incoming Call & SMS) */
     .ancs-popup {
       position: absolute;
-      inset: 6px;
-      background: rgba(0, 43, 27, 0.96);
+      inset: 4px;
+      background: rgba(0, 43, 27, 0.98);
       border-radius: 12px;
-      border: 2px solid #05FFA1;
+      border: 2.5px solid #05FFA1;
       display: none;
       flex-direction: column;
       align-items: center;
@@ -316,21 +279,25 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       text-align: center;
       padding: 12px;
       z-index: 2000;
-      backdrop-filter: blur(8px);
+      animation: pulsePop 0.8s infinite alternate;
     }
     .ancs-popup.sms {
-      background: rgba(43, 31, 0, 0.96);
+      background: rgba(43, 31, 0, 0.98);
       border-color: #FFB800;
     }
+    @keyframes pulsePop {
+      from { box-shadow: 0 0 10px rgba(5,255,161,0.5); }
+      to { box-shadow: 0 0 25px rgba(5,255,161,0.9); }
+    }
     .popup-hdr {
-      font-size: 0.9rem;
-      font-weight: 800;
+      font-size: 0.85rem;
+      font-weight: 900;
       color: #05FFA1;
       letter-spacing: 1px;
     }
     .ancs-popup.sms .popup-hdr { color: #FFB800; }
     .popup-title {
-      font-size: 1.2rem;
+      font-size: 1.25rem;
       font-weight: 900;
       color: #fff;
       margin: 6px 0;
@@ -342,21 +309,19 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 
     /* Test Controls */
     .control-box {
-      margin-top: 14px;
+      margin-top: 10px;
       width: 100%;
       max-width: 420px;
-      background: #161E28;
-      border: 1px solid #233044;
+      background: #141B26;
+      border: 1px solid #222F42;
       border-radius: 14px;
-      padding: 12px;
+      padding: 10px;
     }
     .ctrl-title {
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       font-weight: 700;
       color: #94a3b8;
-      margin-bottom: 8px;
-      display: flex;
-      justify-content: space-between;
+      margin-bottom: 6px;
     }
     .grid-btns {
       display: grid;
@@ -364,8 +329,8 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       gap: 6px;
     }
     .btn {
-      background: #212B38;
-      border: 1px solid #303E50;
+      background: #1C2636;
+      border: 1px solid #2E3E56;
       color: #fff;
       padding: 8px;
       border-radius: 8px;
@@ -373,7 +338,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       font-weight: 600;
       cursor: pointer;
     }
-    .btn:active { transform: scale(0.97); }
+    .btn:active { transform: scale(0.97); background: #2A3B54; }
     .btn.call { border-color: #05FFA1; color: #05FFA1; }
     .btn.sms { border-color: #FFB800; color: #FFB800; }
   </style>
@@ -398,22 +363,20 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 
   <!-- Physical Enclosure Mockup -->
   <div class="device-shell">
-    <!-- Status Line -->
     <div class="hw-bar">
-      <div id="hwBle" class="ble-status">NO BLE</div>
-      <div id="clockTxt">10:52</div>
+      <div id="hwBle" class="ble-tag">NO BLE</div>
+      <div id="clockTxt">11:09</div>
       <div class="battery">100% 🔋</div>
     </div>
 
-    <!-- 50/50 Screen Area -->
     <div class="screen-area">
-      <!-- LEFT 50%: Live Mini Map Canvas -->
+      <!-- LEFT 50%: Pure Offline Map Canvas (Identical to Google Maps) -->
       <div class="map-box">
-        <div id="map"></div>
+        <canvas id="mapCanvas"></canvas>
         <div class="map-live-tag">MAP LIVE</div>
       </div>
 
-      <!-- RIGHT 50%: Turn Directions, Speed & ETA -->
+      <!-- RIGHT 50%: Navigation HUD -->
       <div class="hud-box">
         <div class="turn-row">
           <div class="turn-badge" id="turnIconBox">
@@ -422,28 +385,28 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
             </svg>
           </div>
           <div class="turn-dist-col">
-            <div class="dist-val" id="distTxt">0m</div>
-            <div class="speed-val" id="speedTxt">0 km/h</div>
+            <div class="dist-val" id="distTxt">410m</div>
+            <div class="speed-val" id="speedTxt">38 km/h</div>
           </div>
         </div>
 
         <div class="street-card">
-          <div class="street-name" id="streetTxt">SAN SANG DAN DUONG</div>
+          <div class="street-name" id="streetTxt">P. NGUYEN CANH DI</div>
         </div>
 
         <div class="eta-card">
           <div>
             <div class="eta-left">DỰ KIẾN</div>
-            <div class="eta-clock" id="arrivalTxt">10:52</div>
+            <div class="eta-clock" id="arrivalTxt">11:09</div>
           </div>
           <div style="text-align: right;">
-            <div class="eta-left" id="totalDistTxt">0.0 km</div>
-            <div class="eta-mins" id="etaTxt">0 ph</div>
+            <div class="eta-left" id="totalDistTxt">1.2 km</div>
+            <div class="eta-mins" id="etaTxt">2 ph</div>
           </div>
         </div>
       </div>
 
-      <!-- ANCS Popup -->
+      <!-- ANCS Call / SMS Alert Popup -->
       <div id="ancsPopup" class="ancs-popup">
         <div class="popup-hdr" id="popupHdr">CUOC GOI DEN</div>
         <div class="popup-title" id="popupTitle">NGUYEN VAN A</div>
@@ -454,56 +417,152 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 
   <!-- Interactive Controls -->
   <div class="control-box">
-    <div class="ctrl-title">
-      <span>Thử Nghiệm Tính Năng (Test Controls)</span>
-    </div>
+    <div class="ctrl-title">Thử Nghiệm Tính Năng (Test Controls)</div>
     <div class="grid-btns">
-      <button class="btn" onclick="testNav(6, 410, 38, 'P. Nguyen Canh Di', 1, '10:53', 20.9785, 105.8322, 180)">⬅️ Rẽ trái 410m (P. Nguyễn Cảnh Dị)</button>
-      <button class="btn" onclick="testNav(2, 250, 42, 'Pho Dinh Cong', 3, '10:55', 20.9820, 105.8390, 90)">➡️ Rẽ phải 250m (Phố Định Công)</button>
-      <button class="btn" onclick="testNav(0, 1200, 50, 'Duong Giai Phong', 10, '11:02', 20.9890, 105.8420, 0)">⬆️ Đi thẳng 1.2km (Đường Giải Phóng)</button>
-      <button class="btn" onclick="testNav(8, 80, 25, 'Vong Xuyen Big C', 2, '10:54', 21.0040, 105.7920, 270)">🔄 Vòng xuyến 80m</button>
+      <button class="btn" onclick="testNav(6, 410, 38, 'P. Nguyen Canh Di', 2, '11:09')">⬅️ Rẽ trái 410m</button>
+      <button class="btn" onclick="testNav(2, 659, 42, 'Pho Nguyen Huu Tho', 2, '11:09')">➡️ Rẽ phải 659m</button>
+      <button class="btn" onclick="testNav(0, 1200, 50, 'Duong Giai Phong', 10, '11:18')">⬆️ Đi thẳng 1.2km</button>
+      <button class="btn" onclick="testNav(8, 80, 25, 'Vong Xuyen Big C', 1, '11:10')">🔄 Vòng xuyến 80m</button>
       <button class="btn call" onclick="testCall('Nguyen Van A')">📞 Test Cuộc Gọi Đến</button>
       <button class="btn sms" onclick="testSms('Me', 'Con ve nha an com nhe!')">💬 Test Tin Nhắn SMS</button>
     </div>
   </div>
 
   <script>
-    // 1. Initialize Real Leaflet Map with Google Retina Vector Tiles
-    let map = null;
-    let vehicleMarker = null;
-    let currentLatLng = [20.9785, 105.8322];
+    // =========================================================================
+    // 1. PURE OFFLINE HTML5 CANVAS REALISTIC MAP ENGINE (Zero CDN / No Internet)
+    // =========================================================================
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    let mapOffset = 0;
+    let turnAngle = -35; // Default left bend
 
-    try {
-      map = L.map('map', {
-        center: currentLatLng,
-        zoom: 17,
-        zoomControl: false,
-        attributionControl: false
-      });
-
-      // Google HD Retina Maps vector tile layer
-      L.tileLayer('https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}', {
-        maxZoom: 20,
-        subdomains:['mt0','mt1','mt2','mt3']
-      }).addTo(map);
-
-      // Custom Vehicle Icon
-      const vehicleHtml = `
-        <div id="vIcon" class="vehicle-marker">
-          <div class="vehicle-arrow"></div>
-        </div>`;
-      const customIcon = L.divIcon({
-        className: 'custom-vehicle-icon',
-        html: vehicleHtml,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
-      });
-
-      vehicleMarker = L.marker(currentLatLng, { icon: customIcon }).addTo(map);
-    } catch(e) {
-      console.log('Leaflet tile fallback:', e);
+    function resizeCanvas() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * window.devicePixelRatio;
+      canvas.height = rect.height * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
     }
+    window.addEventListener('resize', resizeCanvas);
+    setTimeout(resizeCanvas, 50);
 
+    function drawRealisticMap() {
+      const w = canvas.width / window.devicePixelRatio;
+      const h = canvas.height / window.devicePixelRatio;
+      if (!w || !h) return;
+
+      // 1. Background Landcover (Google Maps light slate style)
+      ctx.fillStyle = '#E8ECEF';
+      ctx.fillRect(0, 0, w, h);
+
+      // 2. Realistic Building Blocks
+      ctx.fillStyle = '#D9E0E6';
+      ctx.fillRect(10, 15, w * 0.35, 45);
+      ctx.fillRect(10, 70, w * 0.35, 55);
+      ctx.fillRect(10, 135, w * 0.35, 60);
+
+      ctx.fillRect(w * 0.65, 10, w * 0.3, 50);
+      ctx.fillRect(w * 0.65, 70, w * 0.3, 60);
+      ctx.fillRect(w * 0.65, 140, w * 0.3, 50);
+
+      // 3. Minor Cross Streets
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.moveTo(0, 65);
+      ctx.lineTo(w, 65);
+      ctx.moveTo(0, 130);
+      ctx.lineTo(w, 130);
+      ctx.stroke();
+
+      // 4. Main Arterial Road (Center)
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 32;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.5, h);
+      ctx.lineTo(w * 0.5, 0);
+      ctx.stroke();
+
+      // 5. Active Cyan Navigation Route (With Glow)
+      ctx.save();
+      ctx.strokeStyle = '#0084FF';
+      ctx.lineWidth = 10;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = 'rgba(0, 132, 255, 0.6)';
+      ctx.shadowBlur = 8;
+
+      ctx.beginPath();
+      ctx.moveTo(w * 0.5, h + 20);
+      ctx.lineTo(w * 0.5, h * 0.5);
+
+      // Bend route line according to turn code
+      const rad = (turnAngle * Math.PI) / 180;
+      const targetX = (w * 0.5) + Math.sin(rad) * 90;
+      const targetY = (h * 0.5) - Math.cos(rad) * 90;
+      ctx.lineTo(targetX, targetY);
+      ctx.stroke();
+      ctx.restore();
+
+      // 6. Street Name Labels on Map
+      ctx.save();
+      ctx.fillStyle = '#64748B';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.translate(w * 0.5 - 6, h * 0.85);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(currentStreetDisplay, 0, 0);
+      ctx.restore();
+
+      // 7. Landmark Icons (Bus Stop / POI)
+      ctx.fillStyle = '#3B82F6';
+      ctx.beginPath();
+      ctx.arc(20, h - 20, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('B', 17, h - 17);
+
+      // 8. Vehicle Position Marker (Always Strictly Centered)
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+
+      // Outer Pulse Ring
+      ctx.fillStyle = 'rgba(0, 132, 255, 0.2)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, 18, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner Blue Circle
+      ctx.fillStyle = '#0084FF';
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Directional Heading Arrow
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rad);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(-4, 3);
+      ctx.lineTo(4, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      requestAnimationFrame(drawRealisticMap);
+    }
+    requestAnimationFrame(drawRealisticMap);
+
+    let currentStreetDisplay = 'P. NGUYEN CANH DI';
+
+    // =========================================================================
+    // 2. HUD & Turn Icon SVGs
+    // =========================================================================
     const turnIcons = {
       0: `<path d="M12 2L4 10h5v10h6V10h5L12 2z"/>`,
       1: `<path d="M14 4l-1.4 1.4 2.6 2.6H8c-2.2 0-4 1.8-4 4v6h2v-6c0-1.1.9-2 2-2h7.2l-2.6 2.6L14 18l6-7-6-7z"/>`,
@@ -518,7 +577,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     };
 
     function updateUi(data) {
-      // 1. BLE Header
+      // 1. BLE Status
       const bleDot = document.getElementById('bleDot');
       const bleText = document.getElementById('bleText');
       const hwBle = document.getElementById('hwBle');
@@ -527,24 +586,23 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         bleDot.className = 'dot active';
         bleText.innerText = 'iPhone Đã Kết Nối';
         hwBle.innerText = 'ESP32 BLE';
-        hwBle.className = 'ble-status connected';
+        hwBle.className = 'ble-tag connected';
       } else {
         bleDot.className = 'dot';
         bleText.innerText = 'BLE: Đang chờ iPhone...';
         hwBle.innerText = 'NO BLE';
-        hwBle.className = 'ble-status';
+        hwBle.className = 'ble-tag';
       }
 
-      // 2. HUD Metrics
+      // 2. Metrics
       const distTxt = document.getElementById('distTxt');
-      if (data.dist >= 1000) {
-        distTxt.innerText = (data.dist / 1000).toFixed(1) + 'km';
-      } else {
-        distTxt.innerText = data.dist + 'm';
-      }
-
+      distTxt.innerText = data.dist >= 1000 ? (data.dist / 1000).toFixed(1) + 'km' : data.dist + 'm';
       document.getElementById('speedTxt').innerText = data.speed + ' km/h';
-      document.getElementById('streetTxt').innerText = data.street || 'SAN SANG DAN DUONG';
+      
+      const st = data.street || 'SAN SANG DAN DUONG';
+      document.getElementById('streetTxt').innerText = st.toUpperCase();
+      currentStreetDisplay = st;
+
       document.getElementById('arrivalTxt').innerText = data.arrival || '--:--';
       document.getElementById('etaTxt').innerText = data.eta + ' ph';
       
@@ -552,23 +610,13 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         document.getElementById('totalDistTxt').innerText = (data.tot_dist / 1000).toFixed(1) + ' km';
       }
 
-      // 3. Turn Arrow SVG
+      // 3. Turn Arrow & Map Angle
       document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[0];
+      if (data.turn === 2 || data.turn === 1 || data.turn === 3) turnAngle = 40;
+      else if (data.turn === 6 || data.turn === 5 || data.turn === 7) turnAngle = -40;
+      else turnAngle = 0;
 
-      // 4. Update Leaflet Map Position & Heading
-      if (data.lat && data.lng && map) {
-        const newPos = [data.lat, data.lng];
-        map.panTo(newPos, { animate: true, duration: 0.5 });
-        if (vehicleMarker) {
-          vehicleMarker.setLatLng(newPos);
-          const vIcon = document.getElementById('vIcon');
-          if (vIcon && data.head !== undefined) {
-            vIcon.style.transform = `rotate(${data.head}deg)`;
-          }
-        }
-      }
-
-      // 5. ANCS Popup
+      // 4. ANCS Popup
       const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
         popup.style.display = 'flex';
@@ -602,9 +650,9 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     }
     pollStatus();
 
-    // Test handlers
-    function testNav(turn, dist, speed, street, eta, arrival, lat, lng, head) {
-      fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}&lat=${lat}&lng=${lng}&head=${head}`);
+    // Handlers
+    function testNav(turn, dist, speed, street, eta, arrival) {
+      fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}`);
     }
     function testCall(name) {
       fetch(`/api/test_call?name=${encodeURIComponent(name)}`);
@@ -638,8 +686,6 @@ void handleStatusApi() {
   doc["eta"] = curEta;
   doc["street"] = curStreet;
   doc["arrival"] = curArrival;
-  doc["lat"] = curLat;
-  doc["lng"] = curLng;
   doc["head"] = curHeading;
   doc["popup"] = popupType;
   doc["title"] = popupTitle;
@@ -657,32 +703,29 @@ void handleTestNav() {
   if (server.hasArg("street")) curStreet = server.arg("street");
   if (server.hasArg("eta")) curEta = server.arg("eta").toInt();
   if (server.hasArg("arrival")) curArrival = server.arg("arrival");
-  if (server.hasArg("lat")) curLat = server.arg("lat").toDouble();
-  if (server.hasArg("lng")) curLng = server.arg("lng").toDouble();
-  if (server.hasArg("head")) curHeading = server.arg("head").toInt();
 
   display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str());
   server.send(200, "text/plain", "OK");
 }
 
 void handleTestCall() {
-  String name = server.hasArg("name") ? server.arg("name") : "Cuoc goi den";
+  String name = server.hasArg("name") ? server.arg("name") : "Nguyen Van A";
   popupTitle = name;
   popupMsg = "Cuoc goi den tu iPhone";
   popupType = "CALL";
-  popupExpire = millis() + 8000;
+  popupExpire = millis() + 10000;
 
   display.showCallAlert(name.c_str());
   server.send(200, "text/plain", "OK");
 }
 
 void handleTestSms() {
-  String sender = server.hasArg("sender") ? server.arg("sender") : "Tin nhan";
-  String msg = server.hasArg("msg") ? server.arg("msg") : "Ban co thong bao moi";
+  String sender = server.hasArg("sender") ? server.arg("sender") : "Me";
+  String msg = server.hasArg("msg") ? server.arg("msg") : "Con ve nha an com nhe!";
   popupTitle = sender;
   popupMsg = msg;
   popupType = "SMS";
-  popupExpire = millis() + 6000;
+  popupExpire = millis() + 8000;
 
   display.showSmsAlert(sender.c_str(), msg.c_str());
   server.send(200, "text/plain", "OK");
@@ -707,7 +750,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 // =========================================================================
-// 2. Custom Navigation Characteristic Callback (Receives Navigation & Popups)
+// 2. Custom Navigation Characteristic Callback
 // =========================================================================
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
@@ -720,27 +763,28 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
     DeserializationError error = deserializeJson(doc, value.c_str());
 
     if (!error) {
-      // Check for Direct Notification Packets from iOS App
-      if (doc["type"] == "CALL") {
+      // 1. Check for Direct Notification Packets from App
+      String typeStr = String(doc["type"] | "");
+      if (typeStr == "CALL") {
         const char* name = doc["title"] | "Cuoc goi den";
         popupTitle = name;
         popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
         popupType = "CALL";
-        popupExpire = millis() + 8000;
+        popupExpire = millis() + 10000;
         display.showCallAlert(name);
         return;
-      } else if (doc["type"] == "SMS") {
+      } else if (typeStr == "SMS") {
         const char* sender = doc["title"] | "Tin nhan";
         const char* content = doc["msg"] | "Thong bao moi";
         popupTitle = sender;
         popupMsg = content;
         popupType = "SMS";
-        popupExpire = millis() + 6000;
+        popupExpire = millis() + 8000;
         display.showSmsAlert(sender, content);
         return;
       }
 
-      // Navigation Telemetry Payload
+      // 2. Navigation Telemetry Payload
       curTurn = doc["turn"] | 0;
       curDist = doc["dist"] | 0;
       curTotalDist = doc["tot_dist"] | 0;
@@ -748,9 +792,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       curEta = doc["eta"] | 0;
       curStreet = String(doc["street"] | "Tiep tuc");
       curArrival = String(doc["arrival"] | "--:--");
-      if (doc.containsKey("lat")) curLat = doc["lat"];
-      if (doc.containsKey("lng")) curLng = doc["lng"];
-      if (doc.containsKey("head")) curHeading = doc["head"];
+      if (doc["head"].is<int>()) curHeading = doc["head"];
 
       display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str());
     } else {
@@ -785,12 +827,10 @@ void setup() {
   // 3. Start Display (if hardware attached)
   display.init();
 
-  // 4. Start NimBLE Server with Bonding for iOS ANCS
+  // 4. Start NimBLE Server
   NimBLEDevice::init("ESP32_NAV_ANCS");
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
-  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -805,11 +845,10 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(navServiceUUID);
-  pAdvertising->addServiceUUID(ancsServiceUUID);
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] Da phat Bluetooth (ANCS + Navigation)!");
+  Serial.println("[BLE] ESP32 da san sang!");
 }
 
 void loop() {
