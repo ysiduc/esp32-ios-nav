@@ -101,19 +101,23 @@ public:
   }
 
   void showCallAlert(const char* callerName) {
+    if (_currentState == STATE_POPUP_CALL && strcmp(_popupData.title, callerName) == 0) {
+      // Already showing same alert, just extend timeout
+      _popupData.expireMillis = millis() + 10000;
+      return;
+    }
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
     _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     _popupData.expireMillis = millis() + 10000; // 10 seconds timeout
     _currentState = STATE_POPUP_CALL;
     _needsRedraw = true;
-#if defined(DISPLAY_OLED_SSD1306)
-    _renderOled();
-#elif defined(DISPLAY_TFT_ST7789)
-    _renderTft();
-#endif
   }
 
   void showSmsAlert(const char* sender, const char* msg) {
+    if (_currentState == STATE_POPUP_SMS && strcmp(_popupData.title, sender) == 0) {
+      _popupData.expireMillis = millis() + 8000;
+      return;
+    }
     strncpy(_popupData.title, sender, sizeof(_popupData.title) - 1);
     _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
@@ -121,21 +125,22 @@ public:
     _popupData.expireMillis = millis() + 8000; // 8 seconds timeout
     _currentState = STATE_POPUP_SMS;
     _needsRedraw = true;
-#if defined(DISPLAY_OLED_SSD1306)
-    _renderOled();
-#elif defined(DISPLAY_TFT_ST7789)
-    _renderTft();
-#endif
   }
 
-  void update() {
-    // Check if popup expired -> return to navigation or pairing
-    if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
+  void dismissPopup() {
+    if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
       _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       _needsRedraw = true;
 #if defined(DISPLAY_TFT_ST7789)
       tft.fillScreen(TFT_BLACK);
 #endif
+    }
+  }
+
+  void update() {
+    // Check if popup expired -> return to navigation or pairing
+    if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
+      dismissPopup();
     }
 
 #if defined(DISPLAY_OLED_SSD1306)

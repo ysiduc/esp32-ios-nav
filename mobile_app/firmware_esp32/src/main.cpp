@@ -943,44 +943,38 @@ static NimBLEUUID ancsNotifSourceUUID("9FBF120D-6301-42D9-8C58-25E699A21DBD");
 void ancsNotificationCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
   if (length < 8) return;
   uint8_t eventId = pData[0];     // 0: Added, 1: Modified, 2: Removed
-  uint8_t categoryId = pData[2];  // 1: Call, 2: Missed Call, 4: Social (Zalo/Messenger), 0/12: SMS
+  uint8_t eventFlags = pData[1];  // Bit 2 (0x04): PreExisting historical notification
+  uint8_t categoryId = pData[2];  // 1: Call, 2: Missed Call, 4: Social, 0/12: SMS
 
-  Serial.printf("[ANCS] Nhan thong bao iOS: Event=%d, Category=%d\n", eventId, categoryId);
+  // IGNORE pre-existing historical notifications sent during connection sync!
+  if (eventFlags & 0x04) {
+    return;
+  }
 
-  if (eventId == 0 || eventId == 1) { // New or modified notification
+  Serial.printf("[ANCS] Live Event=%d, Flags=0x%02X, Category=%d\n", eventId, eventFlags, categoryId);
+
+  // Only trigger on genuine newly added notifications
+  if (eventId == 0) {
     if (categoryId == 1) {
-      // Incoming Phone Call
+      // Incoming Live Phone Call
       popupTitle = "CUOC GOI DEN";
       popupMsg = "Cuoc goi den tu iPhone";
       popupType = "CALL";
-      popupExpire = millis() + 12000;
+      popupExpire = millis() + 10000;
       display.showCallAlert("CUOC GOI DEN");
-    } else if (categoryId == 2) {
-      // Missed Call
-      popupTitle = "CUOC GOI NHO";
-      popupMsg = "Ban co cuoc goi nho";
-      popupType = "CALL";
+    } else if (categoryId == 4 || categoryId == 0 || categoryId == 12) {
+      // New Live SMS / Social Message
+      popupTitle = "TIN NHAN MOI";
+      popupMsg = "Tin nhan tu iPhone";
+      popupType = "SMS";
       popupExpire = millis() + 6000;
-      display.showCallAlert("CUOC GOI NHO");
-    } else if (categoryId == 4) {
-      // Social (Zalo, Messenger, WhatsApp, Telegram, etc.)
-      popupTitle = "ZALO / MESSENGER";
-      popupMsg = "Ban co tin nhan moi";
-      popupType = "SMS";
-      popupExpire = millis() + 8000;
-      display.showSmsAlert("ZALO / MSG", "Tin nhan moi");
-    } else if (categoryId == 0 || categoryId == 12 || categoryId == 5 || categoryId == 6) {
-      // SMS / iMessage / Email / Other
-      popupTitle = "TIN NHAN / THONG BAO";
-      popupMsg = "Thong bao moi tu iPhone";
-      popupType = "SMS";
-      popupExpire = millis() + 8000;
-      display.showSmsAlert("THONG BAO MOI", "Tin nhan SMS");
+      display.showSmsAlert("TIN NHAN MOI", "Thong bao moi");
     }
   } else if (eventId == 2) { // Removed / Dismissed
     if (categoryId == 1 && popupType == "CALL") {
       popupType = "NONE";
       popupExpire = 0;
+      display.dismissPopup();
     }
   }
 }
