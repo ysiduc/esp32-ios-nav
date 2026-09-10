@@ -32,13 +32,14 @@ enum DisplayState {
 };
 
 struct NavStateData {
-  uint8_t turnCode = 0;       // 0: straight, 1: sl_right, 2: right, 3: sh_right, 4: uturn, 5: sh_left, 6: left, 7: sl_left, 8: roundabout, 9: arrive
-  uint16_t distMeters = 595;
-  uint16_t totalDistMeters = 7200;
+  uint8_t turnCode = 6;       // Default Left Turn (matching user image)
+  uint16_t distMeters = 208;  // Default 208m (matching user image)
+  uint16_t totalDistMeters = 5900; // 5.9km
   uint8_t speedKmh = 0;
-  uint8_t etaMinutes = 12;
-  char streetName[32] = "PHO DAI TU";
-  bool isConnected = false;
+  uint8_t etaMinutes = 11;    // 11 ph
+  char streetName[32] = "CAU SONG LU";
+  char arrivalTime[8] = "12:05";
+  bool isConnected = true;
   int heading = 0;
   uint8_t batteryLevel = 100;
 };
@@ -65,7 +66,7 @@ struct AncsPopupData {
 
 class DisplayManager {
 private:
-  DisplayState _currentState = STATE_PAIRING_WAIT;
+  DisplayState _currentState = STATE_NAVIGATION;
   NavStateData _navData;
   AncsPopupData _popupData;
   unsigned long _lastRightRender = 0;
@@ -106,9 +107,6 @@ public:
 
   void setBleConnected(bool connected) {
     _navData.isConnected = connected;
-    if (!connected && _currentState == STATE_NAVIGATION) {
-      _currentState = STATE_PAIRING_WAIT;
-    }
   }
 
   void showCallAlert(const char* callerName) {
@@ -129,7 +127,7 @@ public:
 
   void update() {
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
-      _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _currentState = STATE_NAVIGATION;
     }
 
 #if defined(DISPLAY_OLED_SSD1306)
@@ -143,85 +141,145 @@ private:
 #if defined(DISPLAY_OLED_SSD1306)
   void _renderOled() {
     u8g2.clearBuffer();
+
+    // -------------------------------------------------------------
+    // POPUP OVERLAY: CUOC GOI DEN / TIN NHAN SMS
+    // -------------------------------------------------------------
     if (_currentState == STATE_POPUP_CALL) {
-      // Call Popup (128x64)
-      u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 5, 16, 16, icon_phone_16x16);
+      u8g2.drawRFrame(0, 0, 128, 64, 4);
+      u8g2.drawXBMP(8, 6, 16, 16, icon_phone_16x16);
       u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 16, "CUOC GOI DEN");
-      u8g2.drawLine(0, 22, 128, 22);
+      u8g2.drawStr(30, 18, "CUOC GOI DEN");
+      u8g2.drawHLine(0, 24, 128);
 
       u8g2.setFont(u8g2_font_7x14B_tf);
-      u8g2.drawStr(6, 42, _popupData.title);
+      u8g2.drawStr(8, 44, _popupData.title);
 
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 56, "ANCS Apple Notification");
-    }
-    else if (_currentState == STATE_POPUP_SMS) {
-      // SMS Popup (128x64)
-      u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 5, 16, 16, icon_msg_16x16);
+      u8g2.setFont(u8g2_font_4x6_tf);
+      u8g2.drawStr(8, 58, "ANCS Apple Notification");
+      u8g2.sendBuffer();
+      return;
+    } else if (_currentState == STATE_POPUP_SMS) {
+      u8g2.drawRFrame(0, 0, 128, 64, 4);
+      u8g2.drawXBMP(8, 6, 16, 16, icon_msg_16x16);
       u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 16, "TIN NHAN MOI");
-      u8g2.drawLine(0, 22, 128, 22);
+      u8g2.drawStr(30, 18, "TIN NHAN MOI");
+      u8g2.drawHLine(0, 24, 128);
 
       u8g2.setFont(u8g2_font_6x12_tf);
-      u8g2.drawStr(6, 36, _popupData.title);
+      u8g2.drawStr(8, 40, _popupData.title);
 
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 52, _popupData.message);
+      u8g2.setFont(u8g2_font_4x6_tf);
+      u8g2.drawStr(8, 56, _popupData.message);
+      u8g2.sendBuffer();
+      return;
     }
-    else if (_currentState == STATE_NAVIGATION) {
-      // 1. Maneuver Turn Icon (32x32 at x=2, y=2)
-      const uint8_t* icon = icon_straight_32x32;
-      switch (_navData.turnCode) {
-        case 1: case 2: case 3: icon = icon_turn_right_32x32; break;
-        case 4: icon = icon_uturn_32x32; break;
-        case 5: case 6: case 7: icon = icon_turn_left_32x32; break;
-        case 8: icon = icon_roundabout_32x32; break;
-        case 9: icon = icon_arrive_32x32; break;
-        default: icon = icon_straight_32x32; break;
-      }
-      u8g2.drawXBMP(2, 4, 32, 32, icon);
 
-      // 2. Distance Text (Large)
-      u8g2.setFont(u8g2_font_logisoso16_tr);
-      char distStr[16];
-      if (_navData.distMeters >= 1000) {
-        snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
-      } else {
-        snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
-      }
-      u8g2.drawStr(38, 20, distStr);
+    // =============================================================
+    // 1. TOP HARDWARE STATUS BAR (y: 0..9) - 100% Match to Image
+    // =============================================================
+    // BLE Icon & Text
+    u8g2.drawXBMP(1, 1, 8, 8, icon_ble_8x8);
+    u8g2.setFont(u8g2_font_4x6_tf);
+    u8g2.drawStr(11, 7, "ESP32 BLE");
 
-      // 3. Speed & ETA Metrics
-      u8g2.setFont(u8g2_font_6x10_tf);
-      char metaStr[24];
-      snprintf(metaStr, sizeof(metaStr), "%d km/h  %d ph", _navData.speedKmh, _navData.etaMinutes);
-      u8g2.drawStr(38, 34, metaStr);
+    // Center Clock
+    u8g2.setFont(u8g2_font_4x6_tf);
+    u8g2.drawStr(56, 7, "11:54");
 
-      // 4. Street Name Banner (Bottom Inverted Bar)
-      u8g2.drawBox(0, 42, 128, 22);
-      u8g2.setDrawColor(0); // White text on dark box
-      u8g2.setFont(u8g2_font_6x12_tf);
-      char cleanStreet[24];
-      strncpy(cleanStreet, _navData.streetName, sizeof(cleanStreet) - 1);
-      cleanStreet[sizeof(cleanStreet) - 1] = '\0';
-      u8g2.drawStr(4, 57, cleanStreet);
-      u8g2.setDrawColor(1);
+    // Battery percentage & icon
+    u8g2.drawStr(98, 7, "100%");
+    u8g2.drawFrame(117, 2, 9, 5);
+    u8g2.drawBox(118, 3, 7, 3);
+    u8g2.drawVLine(126, 3, 3);
+
+    // =============================================================
+    // 2. LEFT 50% (x: 0..61, y: 10..63): LIVE MAP VIEWPORT
+    // =============================================================
+    u8g2.drawRFrame(0, 10, 62, 54, 4); // Left Map Container Frame
+
+    // Road Grid Lines
+    u8g2.drawLine(44, 11, 44, 63);     // Main road
+    u8g2.drawLine(2, 28, 44, 28);      // Left street 1
+    u8g2.drawLine(2, 18, 30, 18);      // Left street 2
+    u8g2.drawLine(44, 46, 60, 46);     // Right side street
+
+    // Active Navigation Route Polyline (Thick Path)
+    u8g2.drawVLine(43, 11, 52);
+    u8g2.drawVLine(44, 11, 52);
+
+    // Vehicle Navigation Cursor (Centered at x: 36, y: 36)
+    u8g2.drawCircle(36, 36, 6);        // Pulsing radar halo
+    u8g2.drawDisc(36, 36, 3);          // Solid vehicle dot
+    u8g2.setDrawColor(0);
+    u8g2.drawPixel(36, 35);            // Direction tip
+    u8g2.setDrawColor(1);
+
+    // "MAP LIVE" Badge (Bottom Left)
+    u8g2.drawBox(3, 53, 27, 9);
+    u8g2.setDrawColor(0);
+    u8g2.setFont(u8g2_font_4x6_tf);
+    u8g2.drawStr(5, 60, "MAP LIVE");
+    u8g2.setDrawColor(1);
+
+    // =============================================================
+    // 3. RIGHT 50% (x: 65..127, y: 10..63): NAVIGATION HUD
+    // =============================================================
+    u8g2.drawRFrame(64, 10, 64, 54, 4); // Right HUD Container Frame
+
+    // Row 1: Maneuver Turn Box + Distance & Speed
+    u8g2.drawRFrame(66, 12, 16, 16, 2);
+    const uint8_t* icon16 = icon_straight_16x16;
+    switch (_navData.turnCode) {
+      case 1: case 2: case 3: icon16 = icon_turn_right_16x16; break;
+      case 4: icon16 = icon_uturn_16x16; break;
+      case 5: case 6: case 7: icon16 = icon_turn_left_16x16; break;
+      case 8: icon16 = icon_roundabout_16x16; break;
+      case 9: icon16 = icon_arrive_16x16; break;
+      default: icon16 = icon_straight_16x16; break;
     }
-    else {
-      // Standby / Pairing Wait Screen
-      u8g2.drawXBMP(6, 4, 16, 16, icon_ble_16x16);
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 15, "ESP32 NAV BLE");
-      u8g2.drawLine(0, 22, 128, 22);
+    u8g2.drawXBMP(66, 12, 16, 16, icon16);
 
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 34, "1. Vao Cai dat iPhone");
-      u8g2.drawStr(6, 44, "2. Ket noi ESP32_NAV");
-      u8g2.drawStr(6, 56, "3. Mo App bat dan duong");
+    // Distance Text (Large)
+    u8g2.setFont(u8g2_font_7x14B_tf);
+    char distStr[16];
+    if (_navData.distMeters >= 1000) {
+      snprintf(distStr, sizeof(distStr), "%.1fkm", (float)_navData.distMeters / 1000.0);
+    } else {
+      snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
     }
+    u8g2.drawStr(85, 22, distStr);
+
+    // Speed Text below Distance
+    u8g2.setFont(u8g2_font_4x6_tf);
+    char spdStr[16];
+    snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+    u8g2.drawStr(85, 29, spdStr);
+
+    // Row 2: Street Name Pill (Rounded Badge)
+    u8g2.drawRFrame(66, 31, 60, 11, 2);
+    u8g2.setFont(u8g2_font_5x7_tf);
+    char cleanStreet[18];
+    strncpy(cleanStreet, _navData.streetName, sizeof(cleanStreet) - 1);
+    cleanStreet[sizeof(cleanStreet) - 1] = '\0';
+    u8g2.drawStr(69, 39, cleanStreet);
+
+    // Row 3: ETA Arrival & Remaining Distance
+    u8g2.setFont(u8g2_font_4x6_tf);
+    u8g2.drawStr(67, 50, "DU KIEN");
+    u8g2.setFont(u8g2_font_5x8_tf);
+    u8g2.drawStr(67, 60, "12:05");
+
+    u8g2.setFont(u8g2_font_4x6_tf);
+    char totDistStr[16];
+    snprintf(totDistStr, sizeof(totDistStr), "%.1fkm", (float)_navData.totalDistMeters / 1000.0);
+    u8g2.drawStr(103, 50, totDistStr);
+
+    u8g2.setFont(u8g2_font_5x7_tf);
+    char etaMinStr[16];
+    snprintf(etaMinStr, sizeof(etaMinStr), "%d ph", _navData.etaMinutes);
+    u8g2.drawStr(103, 60, etaMinStr);
+
     u8g2.sendBuffer();
   }
 #endif
