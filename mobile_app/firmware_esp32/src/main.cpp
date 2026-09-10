@@ -6,12 +6,17 @@
 #include "display_ui.h"
 
 // =========================================================================
-// Wi-Fi SoftAP Configuration (100% Offline Standalone Web Server)
+// Wi-Fi SoftAP Configuration
 // =========================================================================
 const char* AP_SSID = "ESP32-Navigator-Screen";
 const char* AP_PASS = "12345678";
 
 WebServer server(80);
+
+// Frame Buffer for Direct High-Fidelity JPEG Image from iPhone App
+static uint8_t jpegFrameBuf[40960];
+static volatile size_t jpegFrameLen = 0;
+static volatile unsigned long lastFrameTime = 0;
 
 // UUIDs for Custom Navigation Service
 static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
@@ -29,7 +34,7 @@ NimBLECharacteristic* pNavChar = nullptr;
 
 // Navigation & Telemetry State
 volatile bool bleConnected = false;
-volatile uint8_t curTurn = 6; // Default to Left turn for preview
+volatile uint8_t curTurn = 6;
 volatile uint16_t curDist = 410;
 volatile uint16_t curTotalDist = 1200;
 volatile uint8_t curSpeed = 38;
@@ -45,7 +50,7 @@ String popupType = "NONE"; // "CALL", "SMS", "NONE"
 unsigned long popupExpire = 0;
 
 // =========================================================================
-// 100% OFFLINE HTML5 CANVAS MAP & DUAL HUD SCREEN (NO EXTERNAL INTERNET NEEDED)
+// Web Page with Dual-Engine: Real App JPEG Stream + Offline HUD Fallback
 // =========================================================================
 const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -65,8 +70,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       align-items: center;
       min-height: 100vh;
       padding: 10px;
-      user-select: none;
-      -webkit-user-select: none;
     }
     header {
       text-align: center;
@@ -138,19 +141,38 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     .ble-tag.connected { color: #00F0FF; }
     .battery { color: #05FFA1; }
 
-    /* 50/50 Split Area */
+    /* Screen Area */
     .screen-area {
       flex: 1;
-      display: flex;
-      gap: 6px;
       position: relative;
       background: #000;
       border-radius: 12px;
       overflow: hidden;
+      display: flex;
+    }
+
+    /* Direct Real App Image Stream (Pixel-Perfect from iOS App) */
+    #realAppImg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+      display: none;
+      z-index: 50;
+    }
+
+    /* Built-in 50/50 Screen Layout (Fallback when stream is off) */
+    .split-layout {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      gap: 6px;
       padding: 4px;
     }
 
-    /* LEFT 50%: Pure Offline Vector Map Canvas */
+    /* LEFT 50%: Live Vector Map Canvas */
     .map-box {
       flex: 1;
       height: 100%;
@@ -192,7 +214,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       justify-content: space-between;
     }
 
-    /* Turn Direction & Distance */
     .turn-row {
       display: flex;
       align-items: center;
@@ -232,7 +253,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       margin-top: 3px;
     }
 
-    /* Street Banner */
     .street-card {
       background: #0D131C;
       border: 1px solid rgba(255,255,255,0.08);
@@ -251,7 +271,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       text-transform: uppercase;
     }
 
-    /* ETA Footer */
     .eta-card {
       background: #080C12;
       border-radius: 6px;
@@ -265,7 +284,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     .eta-clock { color: #00F0FF; font-weight: bold; font-size: 0.8rem; }
     .eta-mins { color: #05FFA1; font-weight: bold; font-size: 0.8rem; }
 
-    /* ANCS Popup (Incoming Call & SMS) */
+    /* ANCS Popup Overlay */
     .ancs-popup {
       position: absolute;
       inset: 4px;
@@ -279,15 +298,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       text-align: center;
       padding: 12px;
       z-index: 2000;
-      animation: pulsePop 0.8s infinite alternate;
+      box-shadow: 0 0 25px rgba(5,255,161,0.9);
     }
     .ancs-popup.sms {
       background: rgba(43, 31, 0, 0.98);
       border-color: #FFB800;
-    }
-    @keyframes pulsePop {
-      from { box-shadow: 0 0 10px rgba(5,255,161,0.5); }
-      to { box-shadow: 0 0 25px rgba(5,255,161,0.9); }
+      box-shadow: 0 0 25px rgba(255,184,0,0.9);
     }
     .popup-hdr {
       font-size: 0.85rem;
@@ -370,38 +386,44 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="screen-area">
-      <!-- LEFT 50%: Pure Offline Map Canvas (Identical to Google Maps) -->
-      <div class="map-box">
-        <canvas id="mapCanvas"></canvas>
-        <div class="map-live-tag">MAP LIVE</div>
-      </div>
+      <!-- 1. Real App Stream Layer (Shown whenever app is streaming) -->
+      <img id="realAppImg" alt="Live App Stream" />
 
-      <!-- RIGHT 50%: Navigation HUD -->
-      <div class="hud-box">
-        <div class="turn-row">
-          <div class="turn-badge" id="turnIconBox">
-            <svg viewBox="0 0 24 24" id="turnSvg">
-              <path d="M12 2L4 10h5v10h6V10h5L12 2z"/>
-            </svg>
-          </div>
-          <div class="turn-dist-col">
-            <div class="dist-val" id="distTxt">410m</div>
-            <div class="speed-val" id="speedTxt">38 km/h</div>
-          </div>
+      <!-- 2. Standalone 50/50 Layout (Shown when stream is idle) -->
+      <div class="split-layout" id="splitLayout">
+        <!-- LEFT 50%: Live Vector Map Canvas -->
+        <div class="map-box">
+          <canvas id="mapCanvas"></canvas>
+          <div class="map-live-tag">MAP LIVE</div>
         </div>
 
-        <div class="street-card">
-          <div class="street-name" id="streetTxt">P. NGUYEN CANH DI</div>
-        </div>
-
-        <div class="eta-card">
-          <div>
-            <div class="eta-left">DỰ KIẾN</div>
-            <div class="eta-clock" id="arrivalTxt">11:09</div>
+        <!-- RIGHT 50%: Navigation HUD -->
+        <div class="hud-box">
+          <div class="turn-row">
+            <div class="turn-badge" id="turnIconBox">
+              <svg viewBox="0 0 24 24" id="turnSvg">
+                <path d="M12 2L4 10h5v10h6V10h5L12 2z"/>
+              </svg>
+            </div>
+            <div class="turn-dist-col">
+              <div class="dist-val" id="distTxt">410m</div>
+              <div class="speed-val" id="speedTxt">38 km/h</div>
+            </div>
           </div>
-          <div style="text-align: right;">
-            <div class="eta-left" id="totalDistTxt">1.2 km</div>
-            <div class="eta-mins" id="etaTxt">2 ph</div>
+
+          <div class="street-card">
+            <div class="street-name" id="streetTxt">P. NGUYEN CANH DI</div>
+          </div>
+
+          <div class="eta-card">
+            <div>
+              <div class="eta-left">DỰ KIẾN</div>
+              <div class="eta-clock" id="arrivalTxt">11:09</div>
+            </div>
+            <div style="text-align: right;">
+              <div class="eta-left" id="totalDistTxt">1.2 km</div>
+              <div class="eta-mins" id="etaTxt">2 ph</div>
+            </div>
           </div>
         </div>
       </div>
@@ -429,127 +451,128 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    // =========================================================================
-    // 1. PURE OFFLINE HTML5 CANVAS REALISTIC MAP ENGINE (Zero CDN / No Internet)
-    // =========================================================================
+    // 1. Direct Image Stream Receiver from iPhone
+    const realAppImg = document.getElementById('realAppImg');
+    const splitLayout = document.getElementById('splitLayout');
+
+    function refreshLiveStream() {
+      const testImg = new Image();
+      testImg.src = '/api/frame.jpg?t=' + Date.now();
+      testImg.onload = function() {
+        realAppImg.src = testImg.src;
+        realAppImg.style.display = 'block';
+        splitLayout.style.opacity = '0';
+      };
+      testImg.onerror = function() {
+        realAppImg.style.display = 'none';
+        splitLayout.style.opacity = '1';
+      };
+    }
+    setInterval(refreshLiveStream, 250); // 4 FPS live stream check
+
+    // 2. Pure Offline Vector Map Canvas
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
-    let mapOffset = 0;
-    let turnAngle = -35; // Default left bend
+    let turnAngle = -35;
+    let currentStreetDisplay = 'P. NGUYEN CANH DI';
 
     function resizeCanvas() {
       const rect = canvas.parentElement.getBoundingClientRect();
-      canvas.width = rect.width * window.devicePixelRatio;
-      canvas.height = rect.height * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      canvas.width = rect.width * (window.devicePixelRatio || 1);
+      canvas.height = rect.height * (window.devicePixelRatio || 1);
+      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
     }
     window.addEventListener('resize', resizeCanvas);
     setTimeout(resizeCanvas, 50);
 
     function drawRealisticMap() {
-      const w = canvas.width / window.devicePixelRatio;
-      const h = canvas.height / window.devicePixelRatio;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.width / dpr;
+      const h = canvas.height / dpr;
       if (!w || !h) return;
 
-      // 1. Background Landcover (Google Maps light slate style)
+      // Background
       ctx.fillStyle = '#E8ECEF';
       ctx.fillRect(0, 0, w, h);
 
-      // 2. Realistic Building Blocks
+      // Buildings
       ctx.fillStyle = '#D9E0E6';
-      ctx.fillRect(10, 15, w * 0.35, 45);
-      ctx.fillRect(10, 70, w * 0.35, 55);
-      ctx.fillRect(10, 135, w * 0.35, 60);
+      ctx.fillRect(8, 12, w * 0.35, 40);
+      ctx.fillRect(8, 65, w * 0.35, 50);
+      ctx.fillRect(8, 125, w * 0.35, 55);
 
-      ctx.fillRect(w * 0.65, 10, w * 0.3, 50);
-      ctx.fillRect(w * 0.65, 70, w * 0.3, 60);
-      ctx.fillRect(w * 0.65, 140, w * 0.3, 50);
+      ctx.fillRect(w * 0.65, 8, w * 0.3, 45);
+      ctx.fillRect(w * 0.65, 65, w * 0.3, 50);
+      ctx.fillRect(w * 0.65, 125, w * 0.3, 50);
 
-      // 3. Minor Cross Streets
+      // Cross Streets
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 14;
       ctx.beginPath();
-      ctx.moveTo(0, 65);
-      ctx.lineTo(w, 65);
-      ctx.moveTo(0, 130);
-      ctx.lineTo(w, 130);
+      ctx.moveTo(0, 60); ctx.lineTo(w, 60);
+      ctx.moveTo(0, 120); ctx.lineTo(w, 120);
       ctx.stroke();
 
-      // 4. Main Arterial Road (Center)
+      // Main Road
       ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 32;
+      ctx.lineWidth = 30;
       ctx.beginPath();
       ctx.moveTo(w * 0.5, h);
       ctx.lineTo(w * 0.5, 0);
       ctx.stroke();
 
-      // 5. Active Cyan Navigation Route (With Glow)
+      // Active Route Polyline
       ctx.save();
       ctx.strokeStyle = '#0084FF';
-      ctx.lineWidth = 10;
+      ctx.lineWidth = 8;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.shadowColor = 'rgba(0, 132, 255, 0.6)';
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 6;
 
       ctx.beginPath();
-      ctx.moveTo(w * 0.5, h + 20);
+      ctx.moveTo(w * 0.5, h + 10);
       ctx.lineTo(w * 0.5, h * 0.5);
 
-      // Bend route line according to turn code
       const rad = (turnAngle * Math.PI) / 180;
-      const targetX = (w * 0.5) + Math.sin(rad) * 90;
-      const targetY = (h * 0.5) - Math.cos(rad) * 90;
+      const targetX = (w * 0.5) + Math.sin(rad) * 80;
+      const targetY = (h * 0.5) - Math.cos(rad) * 80;
       ctx.lineTo(targetX, targetY);
       ctx.stroke();
       ctx.restore();
 
-      // 6. Street Name Labels on Map
+      // Street Name
       ctx.save();
       ctx.fillStyle = '#64748B';
-      ctx.font = 'bold 9px sans-serif';
-      ctx.translate(w * 0.5 - 6, h * 0.85);
+      ctx.font = 'bold 8px sans-serif';
+      ctx.translate(w * 0.5 - 5, h * 0.85);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText(currentStreetDisplay, 0, 0);
       ctx.restore();
 
-      // 7. Landmark Icons (Bus Stop / POI)
-      ctx.fillStyle = '#3B82F6';
-      ctx.beginPath();
-      ctx.arc(20, h - 20, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 8px sans-serif';
-      ctx.fillText('B', 17, h - 17);
-
-      // 8. Vehicle Position Marker (Always Strictly Centered)
+      // Centered Vehicle Marker
       const cx = w * 0.5;
       const cy = h * 0.5;
 
-      // Outer Pulse Ring
       ctx.fillStyle = 'rgba(0, 132, 255, 0.2)';
       ctx.beginPath();
-      ctx.arc(cx, cy, 18, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 16, 0, Math.PI * 2);
       ctx.fill();
 
-      // Inner Blue Circle
       ctx.fillStyle = '#0084FF';
       ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Directional Heading Arrow
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(rad);
       ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
-      ctx.moveTo(0, -6);
-      ctx.lineTo(-4, 3);
-      ctx.lineTo(4, 3);
+      ctx.moveTo(0, -5); ctx.lineTo(-3.5, 3); ctx.lineTo(3.5, 3);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -558,11 +581,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     }
     requestAnimationFrame(drawRealisticMap);
 
-    let currentStreetDisplay = 'P. NGUYEN CANH DI';
-
-    // =========================================================================
-    // 2. HUD & Turn Icon SVGs
-    // =========================================================================
     const turnIcons = {
       0: `<path d="M12 2L4 10h5v10h6V10h5L12 2z"/>`,
       1: `<path d="M14 4l-1.4 1.4 2.6 2.6H8c-2.2 0-4 1.8-4 4v6h2v-6c0-1.1.9-2 2-2h7.2l-2.6 2.6L14 18l6-7-6-7z"/>`,
@@ -577,7 +595,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     };
 
     function updateUi(data) {
-      // 1. BLE Status
       const bleDot = document.getElementById('bleDot');
       const bleText = document.getElementById('bleText');
       const hwBle = document.getElementById('hwBle');
@@ -594,7 +611,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         hwBle.className = 'ble-tag';
       }
 
-      // 2. Metrics
       const distTxt = document.getElementById('distTxt');
       distTxt.innerText = data.dist >= 1000 ? (data.dist / 1000).toFixed(1) + 'km' : data.dist + 'm';
       document.getElementById('speedTxt').innerText = data.speed + ' km/h';
@@ -610,13 +626,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         document.getElementById('totalDistTxt').innerText = (data.tot_dist / 1000).toFixed(1) + ' km';
       }
 
-      // 3. Turn Arrow & Map Angle
       document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[0];
       if (data.turn === 2 || data.turn === 1 || data.turn === 3) turnAngle = 40;
       else if (data.turn === 6 || data.turn === 5 || data.turn === 7) turnAngle = -40;
       else turnAngle = 0;
 
-      // 4. ANCS Popup
       const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
         popup.style.display = 'flex';
@@ -629,15 +643,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       }
     }
 
-    // Clock
     setInterval(() => {
       const d = new Date();
-      const h = String(d.getHours()).padStart(2, '0');
-      const m = String(d.getMinutes()).padStart(2, '0');
-      document.getElementById('clockTxt').innerText = `${h}:${m}`;
+      document.getElementById('clockTxt').innerText = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     }, 1000);
 
-    // Live Polling
     async function pollStatus() {
       try {
         const res = await fetch('/api/status');
@@ -650,7 +660,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     }
     pollStatus();
 
-    // Handlers
     function testNav(turn, dist, speed, street, eta, arrival) {
       fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}`);
     }
@@ -670,6 +679,40 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 // =========================================================================
 void handleRoot() {
   server.send_P(200, "text/html", PAGE_INDEX);
+}
+
+// Receive Real High-Fidelity JPEG Image from iPhone App
+void handlePostFrame() {
+  WiFiClient client = server.client();
+  int contentLength = server.header("Content-Length").toInt();
+  if (contentLength > 0 && contentLength < (int)sizeof(jpegFrameBuf)) {
+    size_t readBytes = 0;
+    unsigned long t0 = millis();
+    while (readBytes < (size_t)contentLength && (millis() - t0 < 400)) {
+      while (client.available() && readBytes < (size_t)contentLength) {
+        jpegFrameBuf[readBytes++] = client.read();
+      }
+    }
+    if (readBytes > 100) {
+      jpegFrameLen = readBytes;
+      lastFrameTime = millis();
+    }
+  }
+  server.send(200, "text/plain", "OK");
+}
+
+// Serve Real App JPEG Image to Web Preview
+void handleGetFrame() {
+  if (jpegFrameLen > 100 && (millis() - lastFrameTime < 8000)) {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.setContentLength(jpegFrameLen);
+    server.send(200, "image/jpeg", "");
+    WiFiClient client = server.client();
+    client.write((const uint8_t*)jpegFrameBuf, jpegFrameLen);
+  } else {
+    server.send(404, "text/plain", "No active frame");
+  }
 }
 
 void handleStatusApi() {
@@ -763,7 +806,6 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
     DeserializationError error = deserializeJson(doc, value.c_str());
 
     if (!error) {
-      // 1. Check for Direct Notification Packets from App
       String typeStr = String(doc["type"] | "");
       if (typeStr == "CALL") {
         const char* name = doc["title"] | "Cuoc goi den";
@@ -784,7 +826,6 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         return;
       }
 
-      // 2. Navigation Telemetry Payload
       curTurn = doc["turn"] | 0;
       curDist = doc["dist"] | 0;
       curTotalDist = doc["tot_dist"] | 0;
@@ -807,7 +848,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR INITIALIZING ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR WITH DUAL-ENGINE ===");
 
   // 1. Start Wi-Fi SoftAP
   WiFi.mode(WIFI_AP);
@@ -817,7 +858,12 @@ void setup() {
   Serial.printf("[WiFi AP] Live URL: http://%s\n", IP.toString().c_str());
 
   // 2. Start Web Server
+  const char* headerkeys[] = {"Content-Length", "Content-Type"};
+  server.collectHeaders(headerkeys, 2);
+
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/frame", HTTP_POST, handlePostFrame);
+  server.on("/api/frame.jpg", HTTP_GET, handleGetFrame);
   server.on("/api/status", HTTP_GET, handleStatusApi);
   server.on("/api/test", HTTP_GET, handleTestNav);
   server.on("/api/test_call", HTTP_GET, handleTestCall);
@@ -854,5 +900,5 @@ void setup() {
 void loop() {
   server.handleClient();
   display.update();
-  delay(10);
+  delay(5);
 }

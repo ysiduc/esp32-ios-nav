@@ -64,13 +64,24 @@ class EspStreamService extends ChangeNotifier {
 
     final intervalMs = (1000 / _targetFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) async {
-      // Only capture if clients are actively watching to keep iPhone completely cool
-      if (_mjpegClients.isNotEmpty) {
-        await _captureAndStreamFrame(_lastBoundaryKey!);
-      }
+      await _captureAndStreamFrame(_lastBoundaryKey!);
     });
 
     notifyListeners();
+  }
+
+  HttpClient? _httpClient;
+
+  Future<void> _postFrameToEsp32(Uint8List jpegBytes) async {
+    try {
+      _httpClient ??= HttpClient()..connectionTimeout = const Duration(milliseconds: 350);
+      final request = await _httpClient!.postUrl(Uri.parse('http://192.168.4.1/api/frame'));
+      request.headers.set('Content-Type', 'image/jpeg');
+      request.headers.set('Content-Length', jpegBytes.length.toString());
+      request.add(jpegBytes);
+      final response = await request.close();
+      await response.drain();
+    } catch (_) {}
   }
 
   /// Lightweight Frame Capture and Fast JPEG Encoding
@@ -123,6 +134,9 @@ class EspStreamService extends ChangeNotifier {
 
       // Broadcast frame to connected Wi-Fi / MJPEG clients
       _broadcastMjpegFrame(jpegBytes);
+
+      // Push real frame directly to ESP32 SoftAP Web Server
+      _postFrameToEsp32(jpegBytes);
     } catch (_) {
     } finally {
       _isCapturing = false;
