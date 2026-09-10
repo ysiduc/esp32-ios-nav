@@ -551,106 +551,86 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 
       pulseVal = (pulseVal + 0.04) % 1.0;
 
-      // 1. Map Base Land Background (Clean OpenStreetMap/CartoDB Tone)
-      ctx.fillStyle = '#EBF0F5';
+      // 1. Map Base Background (Clean 2D Google Maps Tone)
+      ctx.fillStyle = '#E5ECEF';
       ctx.fillRect(0, 0, w, h);
 
-      // 2. City Blocks & Building Footprints (Ivory / Soft Cream with subtle borders)
-      function drawBuilding(bx, by, bw, bh, radius) {
-        ctx.fillStyle = '#FAF6EC';
-        ctx.strokeStyle = '#E2DCD0';
-        ctx.lineWidth = 1;
+      const roadW = 28;
+      const mainX = w * 0.50;
+      const crossY1 = h * 0.32;
+      const crossY2 = h * 0.78;
+
+      // 2. Square City Blocks / Buildings (Orthogonal Grid Form)
+      function drawBlock(bx, by, bw, bh) {
+        if (bw <= 0 || bh <= 0) return;
+        ctx.fillStyle = '#F8F9FA';
+        ctx.strokeStyle = '#CBD5E1';
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, radius || 3);
+        if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 4);
         else ctx.rect(bx, by, bw, bh);
         ctx.fill();
         ctx.stroke();
       }
 
-      // Left Side Buildings
-      drawBuilding(6, 6, w * 0.38, h * 0.22, 3);
-      drawBuilding(6, h * 0.35, w * 0.36, h * 0.32, 3);
-      drawBuilding(6, h * 0.74, w * 0.36, h * 0.22, 3);
+      const leftW = mainX - roadW/2 - 8;
+      const rightX = mainX + roadW/2 + 8;
+      const rightW = w - rightX - 8;
 
-      // Right Side Buildings
-      drawBuilding(w * 0.62, 6, w * 0.34, h * 0.28, 3);
-      drawBuilding(w * 0.62, h * 0.40, w * 0.34, h * 0.28, 3);
-      drawBuilding(w * 0.62, h * 0.74, w * 0.34, h * 0.22, 3);
+      // Top Blocks
+      drawBlock(6, 6, leftW, crossY1 - roadW/2 - 10);
+      drawBlock(rightX, 6, rightW, crossY1 - roadW/2 - 10);
 
-      // 3. Road Network
-      // Diagonal Cross Street ("P. Hồng...")
-      ctx.save();
-      ctx.strokeStyle = '#D8DEE4';
-      ctx.lineWidth = 26;
-      ctx.beginPath();
-      ctx.moveTo(-10, h * 0.12);
-      ctx.lineTo(w + 10, h * 0.36);
-      ctx.stroke();
+      // Middle Blocks
+      drawBlock(6, crossY1 + roadW/2 + 6, leftW, crossY2 - crossY1 - roadW - 12);
+      drawBlock(rightX, crossY1 + roadW/2 + 6, rightW, crossY2 - crossY1 - roadW - 12);
 
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 22;
-      ctx.beginPath();
-      ctx.moveTo(-10, h * 0.12);
-      ctx.lineTo(w + 10, h * 0.36);
-      ctx.stroke();
-      ctx.restore();
+      // Bottom Blocks
+      drawBlock(6, crossY2 + roadW/2 + 6, leftW, h - crossY2 - roadW/2 - 10);
+      drawBlock(rightX, crossY2 + roadW/2 + 6, rightW, h - crossY2 - roadW/2 - 10);
 
-      // Lower Secondary Cross Street
-      ctx.save();
-      ctx.strokeStyle = '#D8DEE4';
-      ctx.lineWidth = 20;
-      ctx.beginPath();
-      ctx.moveTo(-10, h * 0.70);
-      ctx.lineTo(w + 10, h * 0.70);
-      ctx.stroke();
+      // 3. Orthogonal Roads (Clean Right-Angle Grid)
+      function drawRoad(x1, y1, x2, y2, width) {
+        ctx.strokeStyle = '#CBD5E1';
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
 
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 16;
-      ctx.beginPath();
-      ctx.moveTo(-10, h * 0.70);
-      ctx.lineTo(w + 10, h * 0.70);
-      ctx.stroke();
-      ctx.restore();
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = width - 4;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
 
-      // Main Vertical Avenue ("Đ. Nguyễn Cảnh Dị")
-      const mainX = w * 0.48;
-      ctx.save();
-      ctx.strokeStyle = '#D8DEE4';
-      ctx.lineWidth = 30;
-      ctx.beginPath();
-      ctx.moveTo(mainX, h + 10);
-      ctx.lineTo(mainX, -10);
-      ctx.stroke();
+      // Horizontal Cross Streets (100% Straight Horizontal)
+      drawRoad(-5, crossY1, w + 5, crossY1, roadW - 4);
+      drawRoad(-5, crossY2, w + 5, crossY2, roadW - 6);
 
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 26;
-      ctx.beginPath();
-      ctx.moveTo(mainX, h + 10);
-      ctx.lineTo(mainX, -10);
-      ctx.stroke();
-      ctx.restore();
+      // Vertical Main Avenue (100% Straight Vertical Center)
+      drawRoad(mainX, h + 5, mainX, -5, roadW);
 
-      // 4. Street Labels on Map (Exact font & placement from Image 2)
-      ctx.save();
+      // 4. Clean Street Labels
       ctx.fillStyle = '#64748B';
       ctx.font = 'bold 8.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      
+      // Horizontal Street Name
+      ctx.fillText('PHỐ ĐẠI TỪ', 10, crossY1 - 6);
 
-      // Diagonal label "P. Hồng..."
+      // Vertical Street Name
       ctx.save();
-      ctx.translate(w * 0.16, h * 0.18);
-      ctx.rotate(0.24);
-      ctx.fillText('P. Hồng...', 0, 0);
-      ctx.restore();
-
-      // Vertical label "Đ. Nguyễn Cảnh Dị"
-      ctx.save();
-      ctx.translate(mainX - 5, h * 0.76);
+      ctx.translate(mainX - 6, h * 0.74);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText('Đ. Nguyễn Cảnh Dị', 0, 0);
-      ctx.restore();
+      ctx.fillText('Đ. NGUYỄN CẢNH DỊ', 0, 0);
       ctx.restore();
 
-      // 5. Active Navigation Route Polyline (Vibrant Solid Cyan/Blue from Image 2)
+      // 5. Active Navigation Route Polyline (Vibrant Cyan Polyline)
+      const turnY = crossY1;
+      const puckY = h * 0.58;
+
       ctx.save();
       ctx.strokeStyle = '#00B4D8';
       ctx.lineWidth = 6;
@@ -658,37 +638,37 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       ctx.lineJoin = 'round';
       ctx.beginPath();
       ctx.moveTo(mainX, h);
-      ctx.lineTo(mainX, h * 0.52);
+      ctx.lineTo(mainX, turnY);
 
       if (targetTurn === 2 || targetTurn === 1 || targetTurn === 3) {
-        // Right turn path into upper diagonal street
-        ctx.lineTo(w * 0.9, h * 0.28);
+        // Right turn path at intersection
+        ctx.lineTo(w + 5, turnY);
       } else if (targetTurn === 6 || targetTurn === 5 || targetTurn === 7) {
-        // Left turn path
-        ctx.lineTo(w * 0.1, h * 0.18);
+        // Left turn path at intersection
+        ctx.lineTo(-5, turnY);
       } else {
         // Straight
-        ctx.lineTo(mainX, 0);
+        ctx.lineTo(mainX, -5);
       }
       ctx.stroke();
       ctx.restore();
 
-      // 6. Navigation Vehicle Puck (GPS Beacon from Image 2)
+      // 6. Navigation Vehicle Puck (Centered 2D GPS Puck)
       const cx = mainX;
-      const cy = h * 0.52;
+      const cy = puckY;
 
-      // Pulsing Translucent Halo
-      ctx.fillStyle = 'rgba(0, 168, 255, ' + (0.28 * (1 - pulseVal)) + ')';
+      // Pulsing Halo
+      ctx.fillStyle = 'rgba(0, 180, 216, ' + (0.35 * (1 - pulseVal)) + ')';
       ctx.beginPath();
       ctx.arc(cx, cy, 12 + pulseVal * 10, 0, Math.PI * 2);
       ctx.fill();
 
-      // Solid Cyan/Blue Disc
+      // Vehicle Puck Disc
       ctx.fillStyle = '#0084FF';
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 2.2;
       ctx.beginPath();
-      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 9.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
