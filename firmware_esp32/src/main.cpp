@@ -36,14 +36,14 @@ NimBLECharacteristic* pNavChar = nullptr;
 
 // Navigation & Telemetry State
 volatile bool bleConnected = false;
-volatile uint8_t curTurn = 6;
-volatile uint16_t curDist = 410;
-volatile uint16_t curTotalDist = 1200;
-volatile uint8_t curSpeed = 38;
-volatile uint8_t curEta = 2;
-volatile int curHeading = 180;
+volatile uint8_t curTurn = 2; // Right turn
+volatile uint16_t curDist = 595;
+volatile uint16_t curTotalDist = 700;
+volatile uint8_t curSpeed = 0;
+volatile uint8_t curEta = 1;
+volatile int curHeading = 0;
 String curStreet = "PHO DAI TU";
-String curArrival = "11:17";
+String curArrival = "11:25";
 
 // ANCS / Notification State
 String popupTitle = "";
@@ -52,7 +52,7 @@ String popupType = "NONE";
 unsigned long popupExpire = 0;
 
 // =========================================================================
-// Web Page: Ultra-Realistic Google Maps Navigation + 20 FPS Stream Receiver
+// Web Page: 100% Exact Match to iOS Simulation Screen (Image 2)
 // =========================================================================
 const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -94,14 +94,14 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
+      gap: 8px;
       letter-spacing: 0.5px;
     }
     .status-row {
       display: flex;
       justify-content: center;
       gap: 8px;
-      margin-top: 5px;
+      margin-top: 6px;
     }
     .pill {
       display: inline-flex;
@@ -117,12 +117,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; }
     .dot.active { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
 
-    /* Physical ESP32 Screen Enclosure Mockup */
+    /* Physical ESP32 Screen Enclosure Mockup (Exact 1:1 match to Image 2) */
     .device-shell {
       position: relative;
       width: 100%;
       max-width: 420px;
-      height: 260px;
+      height: 255px;
       background: #1C232D;
       border-radius: 24px;
       border: 6px solid #2B3545;
@@ -142,13 +142,18 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       align-items: center;
       justify-content: space-between;
       padding: 0 10px;
-      font-size: 0.68rem;
+      font-size: 0.7rem;
       font-family: monospace;
       font-weight: bold;
       margin-bottom: 4px;
       z-index: 100;
     }
-    .ble-tag { color: #ff5555; }
+    .ble-tag {
+      color: #ff5555;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
     .ble-tag.connected { color: var(--accent); }
     .battery { color: var(--accent-green); }
 
@@ -162,7 +167,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       display: flex;
     }
 
-    /* Direct Camera / App Image Stream */
+    /* Direct Camera / App Image Stream (Overlaid when active) */
     #realAppImg {
       position: absolute;
       top: 0;
@@ -175,7 +180,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       border-radius: 8px;
     }
 
-    /* Split 50/50 Screen Layout */
+    /* Split 50/50 Screen Layout (Exact match to iOS App Simulation) */
     .split-layout {
       width: 100%;
       height: 100%;
@@ -185,15 +190,15 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       transition: opacity 0.2s ease;
     }
 
-    /* LEFT 50%: Ultra-Realistic Vector Google Maps */
+    /* LEFT 50%: OpenStreetMap Real Navigation Map */
     .map-box {
       flex: 1;
       height: 100%;
       border-radius: 10px;
       overflow: hidden;
-      border: 1.5px solid rgba(0, 240, 255, 0.35);
+      border: 1.5px solid rgba(0, 240, 255, 0.3);
       position: relative;
-      background: #e5e3df;
+      background: #edf2f7;
     }
     #mapCanvas {
       width: 100%;
@@ -202,66 +207,28 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     }
     .map-live-tag {
       position: absolute;
-      bottom: 5px;
-      left: 5px;
-      background: rgba(15, 23, 42, 0.85);
-      color: var(--accent);
+      bottom: 6px;
+      left: 6px;
+      background: rgba(0, 0, 0, 0.85);
+      color: #ffffff;
       font-size: 0.58rem;
       font-family: monospace;
       font-weight: 800;
       padding: 2px 6px;
       border-radius: 4px;
-      border: 1px solid rgba(0, 240, 255, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.15);
       z-index: 10;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .map-compass {
-      position: absolute;
-      top: 5px;
-      right: 5px;
-      background: rgba(15, 23, 42, 0.85);
-      color: #fff;
-      font-size: 0.6rem;
-      font-weight: 900;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid rgba(255,255,255,0.2);
-      z-index: 10;
-    }
-    .speed-limit-badge {
-      position: absolute;
-      top: 5px;
-      left: 5px;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #fff;
-      border: 2.5px solid #ef4444;
-      color: #000;
-      font-size: 0.6rem;
-      font-weight: 900;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: sans-serif;
-      z-index: 10;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      letter-spacing: 0.5px;
     }
 
-    /* RIGHT 50%: HUD Box */
+    /* RIGHT 50%: Navigation HUD Box */
     .hud-box {
       flex: 1;
       height: 100%;
-      background: #141B26;
+      background: #0C1017;
       border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.08);
-      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.06);
+      padding: 8px 10px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
@@ -270,12 +237,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     .turn-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
     .turn-badge {
       width: 44px;
       height: 44px;
-      background: rgba(0, 240, 255, 0.15);
+      background: rgba(0, 240, 255, 0.12);
       border: 1.5px solid var(--accent);
       border-radius: 10px;
       display: flex;
@@ -283,8 +250,8 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       justify-content: center;
     }
     .turn-badge svg {
-      width: 30px;
-      height: 30px;
+      width: 28px;
+      height: 28px;
       fill: var(--accent);
     }
     .turn-dist-col {
@@ -296,21 +263,21 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       font-weight: 900;
       font-family: monospace;
       color: #ffffff;
-      line-height: 1;
+      line-height: 1.1;
     }
     .speed-val {
       font-size: 0.78rem;
       font-weight: 800;
       font-family: monospace;
       color: var(--accent-green);
-      margin-top: 3px;
+      margin-top: 2px;
     }
 
     .street-card {
-      background: #0D131C;
+      background: #0E141E;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 6px;
-      padding: 5px 6px;
+      padding: 6px;
       text-align: center;
     }
     .street-name {
@@ -322,22 +289,23 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       overflow: hidden;
       text-overflow: ellipsis;
       text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .eta-card {
-      background: #080C12;
+      background: #0A0E16;
       border-radius: 6px;
-      padding: 4px 8px;
+      padding: 5px 8px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       font-family: monospace;
     }
-    .eta-left { font-size: 0.65rem; color: #94a3b8; }
+    .eta-left { font-size: 0.65rem; color: #64748b; font-weight: bold; }
     .eta-clock { color: var(--accent); font-weight: bold; font-size: 0.82rem; }
     .eta-mins { color: var(--accent-green); font-weight: bold; font-size: 0.82rem; }
 
-    /* ANCS Popup Overlay */
+    /* ANCS Notification Popup Overlay */
     .ancs-popup {
       position: absolute;
       inset: 4px;
@@ -419,7 +387,6 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     .btn:active { transform: scale(0.96); background: #2A3B54; }
     .btn.call { border-color: var(--accent-green); color: var(--accent-green); }
     .btn.sms { border-color: var(--gold); color: var(--gold); }
-    .btn.theme { grid-column: span 2; border-color: #38bdf8; color: #38bdf8; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -440,11 +407,14 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     </div>
   </header>
 
-  <!-- Physical Screen Enclosure Mockup -->
+  <!-- Physical Screen Enclosure Mockup (Image 2) -->
   <div class="device-shell">
     <div class="hw-bar">
-      <div id="hwBle" class="ble-tag">NO BLE</div>
-      <div id="clockTxt">11:17</div>
+      <div id="hwBle" class="ble-tag connected">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M17.71 7.71L12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4zm-4.71-1.3l2.59 2.59L13 11.59V6.41zm0 11.18v-5.18l2.59 2.59-2.59 2.59z"/></svg>
+        <span>ESP32 BLE</span>
+      </div>
+      <div id="clockTxt">11:24</div>
       <div class="battery">100% 🔋</div>
     </div>
 
@@ -452,17 +422,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       <!-- 1. Real Google Maps Stream from iOS App -->
       <img id="realAppImg" alt="Live App Stream" />
 
-      <!-- 2. Split 50/50 Screen Layout (Ultra-Realistic Vector Map Engine) -->
+      <!-- 2. Split 50/50 Screen Layout (OpenStreetMap Authentic Vector Engine) -->
       <div class="split-layout" id="splitLayout">
-        <!-- LEFT 50%: Live Vector Map Canvas -->
+        <!-- LEFT 50%: Authentic Vector Map (Matches Image 2) -->
         <div class="map-box">
           <canvas id="mapCanvas"></canvas>
-          <div class="map-live-tag">
-            <span style="display:inline-block;width:5px;height:5px;background:#00F0FF;border-radius:50%"></span>
-            MAP LIVE
-          </div>
-          <div class="map-compass">N</div>
-          <div class="speed-limit-badge">50</div>
+          <div class="map-live-tag">MAP LIVE</div>
         </div>
 
         <!-- RIGHT 50%: Navigation HUD -->
@@ -470,23 +435,23 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
           <div class="turn-row">
             <div class="turn-badge" id="turnIconBox">
               <svg viewBox="0 0 24 24" id="turnSvg">
-                <path d="M5 12l7-7v4h6a2 2 0 0 1 2 2v9h-4v-7h-4v4l-7-7z"/>
+                <path d="M19 12l-7-7v4H6a2 2 0 0 0-2 2v9h4v-7h4v4l7-7z"/>
               </svg>
             </div>
             <div class="turn-dist-col">
-              <div class="dist-val" id="distTxt">410m</div>
-              <div class="speed-val" id="speedTxt">38 km/h</div>
+              <div class="dist-val" id="distTxt">595m</div>
+              <div class="speed-val" id="speedTxt">0 km/h</div>
             </div>
           </div>
 
           <div class="street-card">
-            <div class="street-name" id="streetTxt">PHỐ ĐẠI TỪ</div>
+            <div class="street-name" id="streetTxt">PHÓ ĐẠI TỪ</div>
           </div>
 
           <div class="eta-card">
             <div>
               <div class="eta-left">DỰ KIẾN</div>
-              <div class="eta-clock" id="arrivalTxt">11:17</div>
+              <div class="eta-clock" id="arrivalTxt">11:25</div>
             </div>
             <div style="text-align: right;">
               <div class="eta-left" id="totalDistTxt">0.7 km</div>
@@ -509,16 +474,15 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
   <div class="control-box">
     <div class="ctrl-title">
       <span>Thử Nghiệm Tính Năng (Test Controls)</span>
-      <span id="streamIndicator" style="font-size: 0.72rem; color: #00F0FF;">Vector HD Map Active</span>
+      <span id="streamIndicator" style="font-size: 0.72rem; color: #00F0FF;">Live Vector Map Active</span>
     </div>
     <div class="grid-btns">
-      <button class="btn" onclick="testNav(6, 410, 38, 'Phố Đại Từ', 1, '11:17')">⬅️ Rẽ trái 410m</button>
-      <button class="btn" onclick="testNav(2, 659, 42, 'Nguyễn Hữu Thọ', 2, '11:18')">➡️ Rẽ phải 659m</button>
-      <button class="btn" onclick="testNav(0, 1200, 50, 'Đường Giải Phóng', 5, '11:22')">⬆️ Đi thẳng 1.2km</button>
-      <button class="btn" onclick="testNav(8, 80, 25, 'Bán Đảo Linh Đàm', 1, '11:17')">🔄 Vòng xuyến 80m</button>
+      <button class="btn" onclick="testNav(2, 595, 0, 'Phó Đại Từ', 1, '11:25')">➡️ Rẽ phải 595m (Mặc định)</button>
+      <button class="btn" onclick="testNav(6, 410, 38, 'Phố Đại Từ', 1, '11:25')">⬅️ Rẽ trái 410m</button>
+      <button class="btn" onclick="testNav(0, 1200, 50, 'Đường Giải Phóng', 5, '11:30')">⬆️ Đi thẳng 1.2km</button>
+      <button class="btn" onclick="testNav(8, 80, 25, 'Bán Đảo Linh Đàm', 1, '11:26')">🔄 Vòng xuyến 80m</button>
       <button class="btn call" onclick="testCall('Nguyễn Văn A')">📞 Test Cuộc Gọi Đến</button>
       <button class="btn sms" onclick="testSms('Mẹ', 'Con về nhà ăn cơm nhé!')">💬 Test Tin Nhắn SMS</button>
-      <button class="btn theme" onclick="toggleMapTheme()">🌓 Chuyển Chế Độ Ngày / Đêm Google Maps</button>
     </div>
   </div>
 
@@ -546,7 +510,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         if (streamActive) {
           realAppImg.style.display = 'none';
           splitLayout.style.opacity = '1';
-          streamIndicator.innerText = 'Vector HD Map Active';
+          streamIndicator.innerText = 'Live Vector Map Active';
           streamIndicator.style.color = '#00F0FF';
           streamActive = false;
         }
@@ -554,18 +518,11 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     }
     setInterval(refreshLiveStream, 60);
 
-    // 2. Ultra-Realistic Google Maps Vector Rendering Engine
+    // 2. OpenStreetMap Authentic Vector Map Engine (100% Identical to Image 2)
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
-    let isDarkMode = false;
-    let targetTurnAngle = -45;
-    let currentTurnAngle = -45;
-    let currentStreetDisplay = 'PHỐ ĐẠI TỪ';
-    let animPhase = 0;
-
-    function toggleMapTheme() {
-      isDarkMode = !isDarkMode;
-    }
+    let targetTurn = 2; // Right turn default
+    let pulseVal = 0;
 
     function resizeCanvas() {
       const rect = canvas.parentElement.getBoundingClientRect();
@@ -576,229 +533,171 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     window.addEventListener('resize', resizeCanvas);
     setTimeout(resizeCanvas, 50);
 
-    function renderGoogleMapsVector() {
+    function renderImage2ExactMap() {
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.width / dpr;
       const h = canvas.height / dpr;
       if (!w || !h) {
-        requestAnimationFrame(renderGoogleMapsVector);
+        requestAnimationFrame(renderImage2ExactMap);
         return;
       }
 
-      animPhase = (animPhase + 0.05) % 1.0;
-      currentTurnAngle += (targetTurnAngle - currentTurnAngle) * 0.1;
+      pulseVal = (pulseVal + 0.04) % 1.0;
 
-      // Color Palettes (Google Maps Day vs Night)
-      const colors = isDarkMode ? {
-        land: '#1f2937',
-        water: '#0e304f',
-        park: '#133a27',
-        buildingTop: '#2d3748',
-        buildingSide: '#1a202c',
-        roadMajor: '#384656',
-        roadMinor: '#273444',
-        roadBorder: '#111827',
-        yellowLine: '#eab308',
-        text: '#94a3b8',
-        routeMain: '#3b82f6',
-        routeGlow: 'rgba(59, 130, 246, 0.6)',
-        routeInner: '#93c5fd'
-      } : {
-        land: '#f2efe9',
-        water: '#aad5df',
-        park: '#cce6c7',
-        buildingTop: '#e8e6dc',
-        buildingSide: '#d5d3c8',
-        roadMajor: '#ffffff',
-        roadMinor: '#ffffff',
-        roadBorder: '#d6d3cc',
-        yellowLine: '#fbc02d',
-        text: '#64748b',
-        routeMain: '#3b82f6',
-        routeGlow: 'rgba(59, 130, 246, 0.6)',
-        routeInner: '#bfdbfe'
-      };
-
-      // 1. Land Background
-      ctx.fillStyle = colors.land;
+      // 1. Map Base Land Background (Clean OpenStreetMap/CartoDB Tone)
+      ctx.fillStyle = '#EBF0F5';
       ctx.fillRect(0, 0, w, h);
 
-      // 2. Water / Lake Feature (Curved organic body on right)
-      ctx.fillStyle = colors.water;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.75, 0);
-      ctx.bezierCurveTo(w * 0.65, h * 0.3, w * 0.85, h * 0.6, w * 0.7, h);
-      ctx.lineTo(w, h);
-      ctx.lineTo(w, 0);
-      ctx.closePath();
-      ctx.fill();
-
-      // 3. Park / Green Spaces
-      ctx.fillStyle = colors.park;
-      ctx.beginPath();
-      ctx.roundRect(8, 8, w * 0.32, h * 0.28, 8);
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.roundRect(8, h * 0.68, w * 0.32, h * 0.28, 8);
-      ctx.fill();
-
-      // 4. Realistic 3D Building Polygons with Depth Shadows
-      function draw3dBuilding(bx, by, bw, bh) {
-        // Shadow / Side
-        ctx.fillStyle = colors.buildingSide;
-        ctx.fillRect(bx + 2, by + 2, bw, bh);
-        // Roof Top
-        ctx.fillStyle = colors.buildingTop;
-        ctx.fillRect(bx, by, bw, bh);
-        ctx.strokeStyle = colors.roadBorder;
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(bx, by, bw, bh);
-      }
-
-      draw3dBuilding(12, h * 0.4, w * 0.28, 22);
-      draw3dBuilding(12, h * 0.52, w * 0.28, 26);
-      draw3dBuilding(w * 0.68, h * 0.12, 38, 28);
-      draw3dBuilding(w * 0.72, h * 0.72, 34, 34);
-
-      // 5. Secondary Roads / Side Streets
-      ctx.strokeStyle = colors.roadBorder;
-      ctx.lineWidth = 18;
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.38); ctx.lineTo(w, h * 0.38);
-      ctx.moveTo(0, h * 0.66); ctx.lineTo(w, h * 0.66);
-      ctx.stroke();
-
-      ctx.strokeStyle = colors.roadMinor;
-      ctx.lineWidth = 14;
-      ctx.beginPath();
-      ctx.moveTo(0, h * 0.38); ctx.lineTo(w, h * 0.38);
-      ctx.moveTo(0, h * 0.66); ctx.lineTo(w, h * 0.66);
-      ctx.stroke();
-
-      // 6. Arterial Highway / Main Avenue
-      ctx.strokeStyle = colors.roadBorder;
-      ctx.lineWidth = 32;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.48, h);
-      ctx.lineTo(w * 0.48, 0);
-      ctx.stroke();
-
-      ctx.strokeStyle = colors.roadMajor;
-      ctx.lineWidth = 28;
-      ctx.beginPath();
-      ctx.moveTo(w * 0.48, h);
-      ctx.lineTo(w * 0.48, 0);
-      ctx.stroke();
-
-      // Highway Center Yellow Dashed Divider Line
-      ctx.strokeStyle = colors.yellowLine;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(w * 0.48, h);
-      ctx.lineTo(w * 0.48, 0);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Zebra Crosswalks at Intersections
-      ctx.strokeStyle = isDarkMode ? '#475569' : '#e2e8f0';
-      ctx.lineWidth = 2;
-      for (let i = 0; i < 6; i++) {
-        let x = w * 0.38 + i * 4;
+      // 2. City Blocks & Building Footprints (Ivory / Soft Cream with subtle borders)
+      function drawBuilding(bx, by, bw, bh, radius) {
+        ctx.fillStyle = '#FAF6EC';
+        ctx.strokeStyle = '#E2DCD0';
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x, h * 0.36); ctx.lineTo(x, h * 0.40);
+        if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, radius || 3);
+        else ctx.rect(bx, by, bw, bh);
+        ctx.fill();
         ctx.stroke();
       }
 
-      // 7. Active Navigation Route Polyline (Google Navigation Blue)
+      // Left Side Buildings
+      drawBuilding(6, 6, w * 0.38, h * 0.22, 3);
+      drawBuilding(6, h * 0.35, w * 0.36, h * 0.32, 3);
+      drawBuilding(6, h * 0.74, w * 0.36, h * 0.22, 3);
+
+      // Right Side Buildings
+      drawBuilding(w * 0.62, 6, w * 0.34, h * 0.28, 3);
+      drawBuilding(w * 0.62, h * 0.40, w * 0.34, h * 0.28, 3);
+      drawBuilding(w * 0.62, h * 0.74, w * 0.34, h * 0.22, 3);
+
+      // 3. Road Network
+      // Diagonal Cross Street ("P. Hồng...")
       ctx.save();
-      ctx.strokeStyle = colors.routeMain;
-      ctx.lineWidth = 9;
+      ctx.strokeStyle = '#D8DEE4';
+      ctx.lineWidth = 26;
+      ctx.beginPath();
+      ctx.moveTo(-10, h * 0.12);
+      ctx.lineTo(w + 10, h * 0.36);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 22;
+      ctx.beginPath();
+      ctx.moveTo(-10, h * 0.12);
+      ctx.lineTo(w + 10, h * 0.36);
+      ctx.stroke();
+      ctx.restore();
+
+      // Lower Secondary Cross Street
+      ctx.save();
+      ctx.strokeStyle = '#D8DEE4';
+      ctx.lineWidth = 20;
+      ctx.beginPath();
+      ctx.moveTo(-10, h * 0.70);
+      ctx.lineTo(w + 10, h * 0.70);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 16;
+      ctx.beginPath();
+      ctx.moveTo(-10, h * 0.70);
+      ctx.lineTo(w + 10, h * 0.70);
+      ctx.stroke();
+      ctx.restore();
+
+      // Main Vertical Avenue ("Đ. Nguyễn Cảnh Dị")
+      const mainX = w * 0.48;
+      ctx.save();
+      ctx.strokeStyle = '#D8DEE4';
+      ctx.lineWidth = 30;
+      ctx.beginPath();
+      ctx.moveTo(mainX, h + 10);
+      ctx.lineTo(mainX, -10);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 26;
+      ctx.beginPath();
+      ctx.moveTo(mainX, h + 10);
+      ctx.lineTo(mainX, -10);
+      ctx.stroke();
+      ctx.restore();
+
+      // 4. Street Labels on Map (Exact font & placement from Image 2)
+      ctx.save();
+      ctx.fillStyle = '#64748B';
+      ctx.font = 'bold 8.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+      // Diagonal label "P. Hồng..."
+      ctx.save();
+      ctx.translate(w * 0.16, h * 0.18);
+      ctx.rotate(0.24);
+      ctx.fillText('P. Hồng...', 0, 0);
+      ctx.restore();
+
+      // Vertical label "Đ. Nguyễn Cảnh Dị"
+      ctx.save();
+      ctx.translate(mainX - 5, h * 0.76);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText('Đ. Nguyễn Cảnh Dị', 0, 0);
+      ctx.restore();
+      ctx.restore();
+
+      // 5. Active Navigation Route Polyline (Vibrant Solid Cyan/Blue from Image 2)
+      ctx.save();
+      ctx.strokeStyle = '#00B4D8';
+      ctx.lineWidth = 6;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.shadowColor = colors.routeGlow;
-      ctx.shadowBlur = 8;
-
       ctx.beginPath();
-      ctx.moveTo(w * 0.48, h + 5);
-      ctx.lineTo(w * 0.48, h * 0.5);
+      ctx.moveTo(mainX, h);
+      ctx.lineTo(mainX, h * 0.52);
 
-      const rad = (currentTurnAngle * Math.PI) / 180;
-      const targetX = (w * 0.48) + Math.sin(rad) * 90;
-      const targetY = (h * 0.5) - Math.cos(rad) * 90;
-      ctx.lineTo(targetX, targetY);
-      ctx.stroke();
-
-      // Inner Core Line
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = colors.routeInner;
-      ctx.lineWidth = 3;
-      ctx.stroke();
-      ctx.restore();
-
-      // Animated Forward-Flowing Chevrons (>>>)
-      ctx.save();
-      ctx.fillStyle = '#ffffff';
-      for (let k = 0; k < 3; k++) {
-        let frac = (animPhase + k * 0.33) % 1.0;
-        let px = w * 0.48;
-        let py = h * 0.9 - frac * (h * 0.35);
-        ctx.beginPath();
-        ctx.moveTo(px - 3, py + 2);
-        ctx.lineTo(px, py - 2);
-        ctx.lineTo(px + 3, py + 2);
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = '#ffffff';
-        ctx.stroke();
+      if (targetTurn === 2 || targetTurn === 1 || targetTurn === 3) {
+        // Right turn path into upper diagonal street
+        ctx.lineTo(w * 0.9, h * 0.28);
+      } else if (targetTurn === 6 || targetTurn === 5 || targetTurn === 7) {
+        // Left turn path
+        ctx.lineTo(w * 0.1, h * 0.18);
+      } else {
+        // Straight
+        ctx.lineTo(mainX, 0);
       }
+      ctx.stroke();
       ctx.restore();
 
-      // Street Name Labels along Road
-      ctx.save();
-      ctx.fillStyle = colors.text;
-      ctx.font = 'bold 8px sans-serif';
-      ctx.translate(w * 0.48 - 6, h * 0.88);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText(currentStreetDisplay, 0, 0);
-      ctx.restore();
+      // 6. Navigation Vehicle Puck (GPS Beacon from Image 2)
+      const cx = mainX;
+      const cy = h * 0.52;
 
-      // 8. 3D Vehicle Marker (Google Maps Location Puck)
-      const cx = w * 0.48;
-      const cy = h * 0.5;
-
-      // Radar Pulse Halo
-      ctx.fillStyle = 'rgba(59, 130, 246, ' + (0.35 * (1 - animPhase)) + ')';
+      // Pulsing Translucent Halo
+      ctx.fillStyle = 'rgba(0, 168, 255, ' + (0.28 * (1 - pulseVal)) + ')';
       ctx.beginPath();
-      ctx.arc(cx, cy, 12 + animPhase * 16, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 12 + pulseVal * 10, 0, Math.PI * 2);
       ctx.fill();
 
-      // Blue Puck with White Border
-      ctx.fillStyle = '#3b82f6';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2.5;
+      // Solid Cyan/Blue Disc
+      ctx.fillStyle = '#0084FF';
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
-      ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Directional Heading Arrow
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(rad);
-      ctx.fillStyle = '#ffffff';
+      // Sharp White Directional Triangle/Arrow inside
+      ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
-      ctx.moveTo(0, -5.5);
-      ctx.lineTo(-4, 3.5);
-      ctx.lineTo(0, 1.5);
-      ctx.lineTo(4, 3.5);
+      ctx.moveTo(cx, cy - 5.5);
+      ctx.lineTo(cx - 4, cy + 3.5);
+      ctx.lineTo(cx, cy + 1.5);
+      ctx.lineTo(cx + 4, cy + 3.5);
       ctx.closePath();
       ctx.fill();
-      ctx.restore();
 
-      requestAnimationFrame(renderGoogleMapsVector);
+      requestAnimationFrame(renderImage2ExactMap);
     }
-    requestAnimationFrame(renderGoogleMapsVector);
+    requestAnimationFrame(renderImage2ExactMap);
 
     // SVG Turn Icons
     const turnIcons = {
@@ -822,37 +721,29 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       if (data.ble) {
         bleDot.className = 'dot active';
         bleText.innerText = 'iPhone Đã Kết Nối';
-        hwBle.innerText = 'ESP32 BLE';
         hwBle.className = 'ble-tag connected';
       } else {
         bleDot.className = 'dot';
         bleText.innerText = 'BLE: Đang chờ iPhone...';
-        hwBle.innerText = 'NO BLE';
-        hwBle.className = 'ble-tag';
+        hwBle.className = 'ble-tag connected';
       }
 
       const distTxt = document.getElementById('distTxt');
       distTxt.innerText = data.dist >= 1000 ? (data.dist / 1000).toFixed(1) + 'km' : data.dist + 'm';
       document.getElementById('speedTxt').innerText = data.speed + ' km/h';
 
-      const st = data.street || 'PHỐ ĐẠI TỪ';
+      const st = data.street || 'PHÓ ĐẠI TỪ';
       document.getElementById('streetTxt').innerText = st.toUpperCase();
-      currentStreetDisplay = st.toUpperCase();
 
-      document.getElementById('arrivalTxt').innerText = data.arrival || '11:17';
+      document.getElementById('arrivalTxt').innerText = data.arrival || '11:25';
       document.getElementById('etaTxt').innerText = (data.eta || 1) + ' ph';
 
       if (data.tot_dist) {
         document.getElementById('totalDistTxt').innerText = (data.tot_dist / 1000).toFixed(1) + ' km';
       }
 
-      document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[6];
-
-      if (data.turn === 2 || data.turn === 1 || data.turn === 3) targetTurnAngle = 45;
-      else if (data.turn === 6 || data.turn === 5 || data.turn === 7) targetTurnAngle = -45;
-      else if (data.turn === 4) targetTurnAngle = -170;
-      else if (data.turn === 8) targetTurnAngle = 90;
-      else targetTurnAngle = 0;
+      document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[2];
+      targetTurn = data.turn;
 
       const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
@@ -892,7 +783,7 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
         street: street,
         eta: eta,
         arrival: arrival,
-        tot_dist: dist + 300,
+        tot_dist: 700,
         popup: 'NONE'
       });
       fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}`);
@@ -901,12 +792,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     function testCall(name) {
       updateUi({
         ble: true,
-        turn: 6,
-        dist: 410,
-        speed: 38,
-        street: 'PHỐ ĐẠI TỪ',
+        turn: 2,
+        dist: 595,
+        speed: 0,
+        street: 'PHÓ ĐẠI TỪ',
         eta: 1,
-        arrival: '11:17',
+        arrival: '11:25',
         popup: 'CALL',
         title: name,
         msg: 'Cuộc gọi đến từ iPhone'
@@ -921,12 +812,12 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
     function testSms(sender, msg) {
       updateUi({
         ble: true,
-        turn: 6,
-        dist: 410,
-        speed: 38,
-        street: 'PHỐ ĐẠI TỪ',
+        turn: 2,
+        dist: 595,
+        speed: 0,
+        street: 'PHÓ ĐẠI TỪ',
         eta: 1,
-        arrival: '11:17',
+        arrival: '11:25',
         popup: 'SMS',
         title: sender,
         msg: msg
@@ -1142,7 +1033,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR WITH GOOGLE MAPS ENGINE ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (IMAGE 2 EXACT MATCH) ===");
 
   // 1. Start Wi-Fi SoftAP
   WiFi.mode(WIFI_AP);
@@ -1188,7 +1079,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS!");
+  Serial.println("[BLE] ESP32 da san sang!");
 }
 
 void loop() {
