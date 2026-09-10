@@ -106,8 +106,9 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Capture map at optimal 0.85 pixel ratio for ultra-sharp map streaming
-      final ui.Image image = await boundary.toImage(pixelRatio: 0.85);
+      // Adaptive scaling: target ~160px width for low latency & high 20 FPS BLE stream
+      final double targetRatio = (160.0 / boundary.size.width).clamp(0.2, 0.85);
+      final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
@@ -120,7 +121,7 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker to keep iPhone cool & 60 FPS UI
+      // Run pure JPEG encoding on background isolate worker
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
@@ -142,10 +143,10 @@ class EspStreamService extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Broadcast frame to MJPEG clients, post to ESP32 Wi-Fi & send over BLE
+      // Broadcast frame to MJPEG clients, non-blocking post to Wi-Fi & instant BLE stream
       _broadcastMjpegFrame(jpegBytes);
-      _postFrameToEsp32(jpegBytes);
-      _sendJpegOverBle(jpegBytes);
+      unawaited(_postFrameToEsp32(jpegBytes));
+      await _sendJpegOverBle(jpegBytes);
     } catch (_) {
     } finally {
       _isCapturing = false;
@@ -182,8 +183,8 @@ class EspStreamService extends ChangeNotifier {
         packet.setRange(5, packet.length, slice);
 
         await bleService.sendRawBytes(packet);
-        // Small 2ms delay between packets to prevent BLE hardware buffer overflow
-        await Future.delayed(const Duration(milliseconds: 2));
+        // Minimal 1ms delay between packets to prevent BLE hardware buffer overflow
+        await Future.delayed(const Duration(milliseconds: 1));
       }
     } catch (_) {
     } finally {

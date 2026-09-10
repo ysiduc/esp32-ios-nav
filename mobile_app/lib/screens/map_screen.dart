@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
 import '../models/route_model.dart';
 import '../services/ble_service.dart';
+import '../services/esp_stream_service.dart';
 import '../services/google_maps_parser.dart';
 import '../services/navigation_manager.dart';
 import '../services/osrm_service.dart';
@@ -26,6 +27,7 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  final GlobalKey _mapStreamBoundaryKey = GlobalKey();
   final MapController _mapController = MapController();
   final SearchService _searchService = SearchService();
   final OsrmService _osrmService = OsrmService();
@@ -75,6 +77,10 @@ class _MapScreenState extends State<MapScreen> {
           _mapController.move(loc, 17.5);
         }
       };
+
+      // Auto-start streaming live map directly from main MapScreen
+      final streamService = Provider.of<EspStreamService>(context, listen: false);
+      streamService.startStreaming(boundaryKey: _mapStreamBoundaryKey);
 
       _checkClipboardForGoogleMaps();
     });
@@ -428,8 +434,10 @@ class _MapScreenState extends State<MapScreen> {
           // -----------------------------------------------------------
           // 1. Crystal-Clear FlutterMap Layer (Retina HD!)
           // -----------------------------------------------------------
-          FlutterMap(
-            mapController: _mapController,
+          RepaintBoundary(
+            key: _mapStreamBoundaryKey,
+            child: FlutterMap(
+              mapController: _mapController,
             options: MapOptions(
               initialCenter: userPos,
               initialZoom: 16.5,
@@ -628,6 +636,7 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ],
           ),
+        ),
 
           // -----------------------------------------------------------
           // 2. Top Bar: Search Bar, Clipboard Banner & Quick Categories (Browse Mode)
