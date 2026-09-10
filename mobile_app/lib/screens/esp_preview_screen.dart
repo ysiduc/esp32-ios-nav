@@ -32,9 +32,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
-      if (navManager.currentLocation != null) {
-        _miniMapController.move(navManager.currentLocation!, 17.0);
-      }
+      final loc = navManager.currentLocation ?? (navManager.activeRoute?.polylinePoints.isNotEmpty == true ? navManager.activeRoute!.polylinePoints.first : const LatLng(21.0285, 105.8542));
+      try {
+        _miniMapController.moveAndRotate(loc, 17.5, -navManager.currentHeading);
+      } catch (_) {}
 
       // Auto-start 20 FPS JPEG streaming immediately on screen open
       _autoStartTimer = Timer(const Duration(milliseconds: 500), () {
@@ -95,12 +96,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final bleService = context.watch<BleService>();
     final streamService = context.watch<EspStreamService>();
 
-    final userLoc = navManager.currentLocation ?? const LatLng(21.0285, 105.8542);
+    final userLoc = navManager.currentLocation ?? (navManager.activeRoute?.polylinePoints.isNotEmpty == true ? navManager.activeRoute!.polylinePoints.first : const LatLng(21.0285, 105.8542));
 
-    // Keep Mini Map ALWAYS centered on vehicle location
+    // Keep Mini Map ALWAYS centered on vehicle and rotated Course-Up
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _miniMapController.move(userLoc, 17.0);
+        _miniMapController.moveAndRotate(userLoc, 17.5, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -488,7 +489,8 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         mapController: _miniMapController,
                         options: MapOptions(
                           initialCenter: userLoc,
-                          initialZoom: 17.0,
+                          initialZoom: 17.5,
+                          initialRotation: -navManager.currentHeading,
                           interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
                         ),
                         children: [
@@ -511,36 +513,33 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                             markers: [
                               Marker(
                                 point: userLoc,
-                                width: 32,
-                                height: 32,
+                                width: 36,
+                                height: 36,
                                 alignment: Alignment.center,
                                 child: Stack(
                                   alignment: Alignment.center,
                                   children: [
                                     Container(
-                                      width: 30,
-                                      height: 30,
+                                      width: 32,
+                                      height: 32,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        color: const Color(0xFF0084FF).withAlpha(40),
-                                        border: Border.all(color: const Color(0xFF0084FF).withAlpha(120), width: 1.5),
+                                        color: const Color(0xFF0084FF).withAlpha(45),
+                                        border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
                                       ),
                                     ),
-                                    Transform.rotate(
-                                      angle: (navManager.currentHeading * (3.1415926535 / 180.0)),
-                                      child: Container(
-                                        width: 22,
-                                        height: 22,
-                                        decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: const Color(0xFF0084FF),
-                                          border: Border.all(color: Colors.white, width: 2),
-                                          boxShadow: [
-                                            BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
-                                          ],
-                                        ),
-                                        child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
+                                    Container(
+                                      width: 22,
+                                      height: 22,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: const Color(0xFF0084FF),
+                                        border: Border.all(color: Colors.white, width: 2),
+                                        boxShadow: [
+                                          BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
+                                        ],
                                       ),
+                                      child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
                                     ),
                                   ],
                                 ),
