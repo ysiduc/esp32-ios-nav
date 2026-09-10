@@ -37,6 +37,36 @@ class EspNavPayload {
 
   String get sanitizedStreet => removeDiacritics(streetName);
 
+  String get formattedDist {
+    if (distanceToTurn >= 1000) {
+      return '${(distanceToTurn / 1000).toStringAsFixed(1)} km';
+    }
+    return '$distanceToTurn m';
+  }
+
+  String get formattedTotalDist {
+    if (totalDistance >= 1000) {
+      return '${(totalDistance / 1000).toStringAsFixed(1)} km';
+    }
+    return '$totalDistance m';
+  }
+
+  String get arrivalTimeClock {
+    final target = DateTime.now().add(Duration(minutes: etaMinutes));
+    final hourStr = target.hour.toString().padLeft(2, '0');
+    final minStr = target.minute.toString().padLeft(2, '0');
+    return '$hourStr:$minStr';
+  }
+
+  String get formattedRemainingTime {
+    if (etaMinutes >= 60) {
+      final h = etaMinutes ~/ 60;
+      final m = etaMinutes % 60;
+      return m > 0 ? '$h giờ $m phút' : '$h giờ';
+    }
+    return '$etaMinutes phút';
+  }
+
   /// JSON payload format for easy parsing with ArduinoJson on ESP32
   String toJsonString() {
     final map = {
@@ -48,6 +78,7 @@ class EspNavPayload {
       'speed': currentSpeed,
       'step': stepIndex + 1,
       'tot_steps': totalSteps,
+      'arrival': arrivalTimeClock,
     };
     return jsonEncode(map);
   }

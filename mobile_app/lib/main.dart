@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'services/ble_service.dart';
+import 'services/esp_stream_service.dart';
 import 'services/navigation_manager.dart';
 
 void main() {
@@ -25,6 +26,13 @@ class Esp32NavApp extends StatelessWidget {
           ),
           update: (ctx, bleService, previousNavManager) =>
               previousNavManager ?? NavigationManager(bleService: bleService),
+        ),
+        ChangeNotifierProxyProvider<BleService, EspStreamService>(
+          create: (ctx) => EspStreamService(
+            bleService: Provider.of<BleService>(ctx, listen: false),
+          ),
+          update: (ctx, bleService, previousStream) =>
+              previousStream ?? EspStreamService(bleService: bleService),
         ),
       ],
       child: MaterialApp(

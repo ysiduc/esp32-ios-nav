@@ -5,13 +5,16 @@ import 'package:latlong2/latlong.dart';
 import '../models/esp_payload.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
+import 'osrm_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
+  final OsrmService _osrmService = OsrmService();
 
   // Active navigation state
   bool _isNavigating = false;
   bool _isSimulating = false;
+  bool _isRerouting = false;
   NavRoute? _activeRoute;
   int _currentStepIndex = 0;
   LatLng? _currentLocation;
@@ -20,15 +23,20 @@ class NavigationManager extends ChangeNotifier {
   double _distanceToNextManeuver = 0.0;
   double _remainingTotalDistance = 0.0;
   int _remainingEtaMinutes = 0;
+  int _consecutiveOffRouteCount = 0;
 
   StreamSubscription<Position>? _positionStream;
   Timer? _blePushTimer;
   Timer? _simulationTimer;
   int _simulatedPolylineIndex = 0;
 
+  // Callback for MapScreen when location updates to center vehicle
+  void Function(LatLng location, double heading)? onLocationChanged;
+
   // Getters
   bool get isNavigating => _isNavigating;
   bool get isSimulating => _isSimulating;
+  bool get isRerouting => _isRerouting;
   NavRoute? get activeRoute => _activeRoute;
   int get currentStepIndex => _currentStepIndex;
   LatLng? get currentLocation => _currentLocation;
@@ -69,8 +77,8 @@ class NavigationManager extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {
-      // Default fallback
-      _currentLocation ??= const LatLng(10.7769, 106.7009); // Ben Thanh Market, HCMC
+      // Default fallback (Hanoi)
+      _currentLocation ??= const LatLng(21.0285, 105.8542);
       notifyListeners();
     }
   }
@@ -81,22 +89,24 @@ class NavigationManager extends ChangeNotifier {
     _activeRoute = route;
     _isNavigating = true;
     _isSimulating = false;
+    _isRerouting = false;
     _currentStepIndex = 0;
+    _consecutiveOffRouteCount = 0;
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
 
     // Start location tracking
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 3, // meters
+      distanceFilter: 2, // 2 meters
     );
 
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
       _updateUserPosition(LatLng(pos.latitude, pos.longitude), pos.speed * 3.6, pos.heading);
     });
 
-    // Start periodic BLE push timer (every 1.5 seconds)
-    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+    // Start periodic BLE push timer (every 1.2 seconds)
+    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
       _sendCurrentPayloadToEsp32();
     });
 
@@ -110,9 +120,11 @@ class NavigationManager extends ChangeNotifier {
     _activeRoute = route;
     _isNavigating = true;
     _isSimulating = true;
+    _isRerouting = false;
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
     _currentSpeedKmh = 38.0; // 38 km/h mock speed
+    _consecutiveOffRouteCount = 0;
 
     final polyline = route.polylinePoints;
     if (polyline.isEmpty) return;
@@ -120,7 +132,7 @@ class NavigationManager extends ChangeNotifier {
     _currentLocation = polyline.first;
     _updateRemainingMetrics();
 
-    _simulationTimer = Timer.periodic(const Duration(milliseconds: 600), (timer) {
+    _simulationTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
       if (_simulatedPolylineIndex < polyline.length - 1) {
         _simulatedPolylineIndex++;
         final nextCoord = polyline[_simulatedPolylineIndex];
@@ -130,7 +142,7 @@ class NavigationManager extends ChangeNotifier {
         const distanceCalculator = Distance();
         final dist = distanceCalculator.as(LengthUnit.Meter, prevCoord, nextCoord);
 
-        double heading = 0.0;
+        double heading = _currentHeading;
         if (dist > 1.0) {
           heading = distanceCalculator.bearing(prevCoord, nextCoord);
         }
@@ -149,7 +161,7 @@ class NavigationManager extends ChangeNotifier {
       }
     });
 
-    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
+    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       _sendCurrentPayloadToEsp32();
     });
 
@@ -160,6 +172,8 @@ class NavigationManager extends ChangeNotifier {
     _currentLocation = newLocation;
     _currentSpeedKmh = speedKmh.clamp(0.0, 160.0);
     _currentHeading = heading;
+
+    onLocationChanged?.call(newLocation, heading);
 
     if (_activeRoute == null || _activeRoute!.steps.isEmpty) return;
 
@@ -183,8 +197,51 @@ class NavigationManager extends ChangeNotifier {
       );
     }
 
+    // Check for off-route condition (Auto-Rerouting)
+    if (!_isSimulating && !_isRerouting) {
+      _checkOffRouteAndReroute(newLocation);
+    }
+
     _updateRemainingMetrics();
     notifyListeners();
+  }
+
+  /// Automatically recalculate route if user deviates more than 45m from polyline
+  void _checkOffRouteAndReroute(LatLng location) async {
+    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty) return;
+
+    const distanceCalculator = Distance();
+    double minDistanceToPolyline = double.infinity;
+
+    for (final point in _activeRoute!.polylinePoints) {
+      final d = distanceCalculator.as(LengthUnit.Meter, location, point);
+      if (d < minDistanceToPolyline) {
+        minDistanceToPolyline = d;
+      }
+    }
+
+    if (minDistanceToPolyline > 45.0) {
+      _consecutiveOffRouteCount++;
+      if (_consecutiveOffRouteCount >= 2) {
+        _isRerouting = true;
+        notifyListeners();
+
+        final destination = _activeRoute!.polylinePoints.last;
+        final newRoute = await _osrmService.calculateRoute(location, destination, profile: 'bike');
+
+        if (newRoute != null && _isNavigating) {
+          _activeRoute = newRoute;
+          _currentStepIndex = 0;
+          _consecutiveOffRouteCount = 0;
+          _updateRemainingMetrics();
+          _sendCurrentPayloadToEsp32();
+        }
+        _isRerouting = false;
+        notifyListeners();
+      }
+    } else {
+      _consecutiveOffRouteCount = 0;
+    }
   }
 
   void _updateRemainingMetrics() {
@@ -198,7 +255,7 @@ class NavigationManager extends ChangeNotifier {
       endCoord,
     );
 
-    final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 30.0;
+    final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 32.0;
     _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
   }
 
@@ -227,13 +284,14 @@ class NavigationManager extends ChangeNotifier {
   void stopNavigation() {
     _isNavigating = false;
     _isSimulating = false;
+    _isRerouting = false;
     _positionStream?.cancel();
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();
 
-    // Optionally send stop packet to ESP32 (turn code 9 / clear screen)
+    // Send stop / idle packet to ESP32
     if (bleService.isConnected) {
-      bleService.sendRawString('{"turn":0,"dist":0,"street":"Idle","speed":0,"eta":0}');
+      bleService.sendRawString('{"turn":0,"dist":0,"street":"San sang","speed":0,"eta":0}');
     }
 
     notifyListeners();

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:mobile_app/models/esp_payload.dart';
 import 'package:mobile_app/models/route_model.dart';
 import 'package:mobile_app/services/search_service.dart';
 
@@ -74,6 +75,30 @@ void main() {
     test('QuickSearchCategory definitions', () {
       expect(QuickSearchCategory.defaultCategories.isNotEmpty, isTrue);
       expect(QuickSearchCategory.defaultCategories.first.title, 'Cây xăng');
+    });
+
+    test('EspNavPayload formatting and JSON serialization', () {
+      final payload = EspNavPayload(
+        turnCode: 2, // right turn
+        distanceToTurn: 150,
+        totalDistance: 5400,
+        etaMinutes: 18,
+        streetName: 'Đường Nguyễn Trãi',
+        currentSpeed: 42,
+        stepIndex: 1,
+        totalSteps: 5,
+      );
+
+      expect(payload.formattedDist, '150 m');
+      expect(payload.formattedTotalDist, '5.4 km');
+      expect(payload.formattedRemainingTime, '18 phút');
+      expect(payload.sanitizedStreet, 'Duong Nguyen Trai');
+      expect(payload.arrivalTimeClock.contains(':'), isTrue);
+
+      final jsonStr = payload.toJsonString();
+      expect(jsonStr.contains('"turn":2'), isTrue);
+      expect(jsonStr.contains('"dist":150'), isTrue);
+      expect(jsonStr.contains('"street":"Duong Nguyen Trai"'), isTrue);
     });
   });
 }

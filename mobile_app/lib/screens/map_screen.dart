@@ -12,9 +12,9 @@ import '../services/osrm_service.dart';
 import '../services/search_service.dart';
 
 enum MapThemeMode {
-  googleRoad,      // Google Maps Standard (Crisp, familiar, zero watermark)
-  googleSatellite, // Google Maps Hybrid Satellite (High-res satellite with roads/names)
-  darkCyber,       // Midnight Dark Mode (High contrast dark, zero watermark)
+  googleRoad,      // Google Maps Standard HD Retina (Crisp, familiar, zero watermark)
+  googleSatellite, // Google Maps Hybrid Satellite HD Retina
+  darkCyber,       // Midnight Dark Mode HD Retina
   osmStandard,     // OpenStreetMap Standard
 }
 
@@ -33,14 +33,18 @@ class _MapScreenState extends State<MapScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
-  // Coordinates default
-  LatLng _userPosition = const LatLng(21.0285, 105.8542); // Hanoi default
+  // Coordinates default (Hanoi)
+  LatLng _userPosition = const LatLng(21.0285, 105.8542);
   MapPlace? _selectedPlace;
   List<NavRoute> _routes = [];
   int _selectedRouteIndex = 0;
-  String _transportMode = 'driving'; // 'driving', 'bike', 'foot'
+  String _transportMode = 'bike'; // Default to Motorcycle in Vietnam
   bool _isLoadingRoutes = false;
   bool _isSearching = false;
+
+  // Auto-follow Camera Centering State
+  bool _isAutoCentering = true;
+  Timer? _recenterTimer;
 
   // View state:
   // 0: Browse Map / Search
@@ -48,7 +52,7 @@ class _MapScreenState extends State<MapScreen> {
   // 2: Route Comparison & Alternatives
   int _viewMode = 0;
   bool _isMuted = false;
-  MapThemeMode _currentTheme = MapThemeMode.googleRoad; // Default to Google Maps (No watermark!)
+  MapThemeMode _currentTheme = MapThemeMode.googleRoad; // Google Maps Retina HD (Zero blurriness!)
 
   List<MapPlace> _searchResults = [];
   Timer? _debounceTimer;
@@ -64,6 +68,14 @@ class _MapScreenState extends State<MapScreen> {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
       }
+
+      // Hook navigation position update callback to continuously center vehicle
+      navManager.onLocationChanged = (loc, heading) {
+        if (mounted && navManager.isNavigating && _isAutoCentering) {
+          _mapController.move(loc, 17.5);
+        }
+      };
+
       _checkClipboardForGoogleMaps();
     });
 
@@ -158,6 +170,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _recenterTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -319,7 +332,7 @@ class _MapScreenState extends State<MapScreen> {
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
-        padding: const EdgeInsets.only(top: 130, bottom: 330, left: 35, right: 35),
+        padding: const EdgeInsets.only(top: 140, bottom: 320, left: 40, right: 40),
       ),
     );
   }
@@ -328,6 +341,8 @@ class _MapScreenState extends State<MapScreen> {
     if (_routes.isEmpty) return;
     final chosenRoute = _routes[_selectedRouteIndex];
     final navManager = Provider.of<NavigationManager>(context, listen: false);
+
+    _isAutoCentering = true;
 
     if (isSimulation) {
       navManager.startSimulation(chosenRoute);
@@ -339,24 +354,34 @@ class _MapScreenState extends State<MapScreen> {
       _viewMode = 0;
     });
 
+    // Always center vehicle at the exact center of map at start
     final startPos = navManager.currentLocation ?? _userPosition;
     _mapController.move(startPos, 17.5);
   }
 
+  void _recenterToVehicle() {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final current = navManager.currentLocation ?? _userPosition;
+    setState(() {
+      _isAutoCentering = true;
+    });
+    _mapController.move(current, 17.5);
+  }
+
   // -------------------------------------------------------------
-  // Map Tiles Layer (Watermark-Free Google & OSM)
+  // Map Tiles Layer (Ultra-Sharp HD Retina Vector Tiles, Zero Watermark)
   // -------------------------------------------------------------
   Widget _buildMapTiles() {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
@@ -369,7 +394,7 @@ class _MapScreenState extends State<MapScreen> {
             0, 0, 0, 1, 0,
           ]),
           child: TileLayer(
-            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
             userAgentPackageName: 'com.esp32nav.app',
             maxZoom: 20,
           ),
@@ -401,14 +426,26 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 1. Crystal-Clear FlutterMap Layer (No Watermark!)
+          // 1. Crystal-Clear FlutterMap Layer (Retina HD!)
           // -----------------------------------------------------------
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: 16.0,
+              initialZoom: 16.5,
               onTap: (_, point) => _onMapTapped(point),
+              onPositionChanged: (pos, hasGesture) {
+                // If user dragged map during active driving, pause auto-centering
+                if (hasGesture && isDriving && _isAutoCentering) {
+                  setState(() => _isAutoCentering = false);
+                  _recenterTimer?.cancel();
+                  _recenterTimer = Timer(const Duration(seconds: 5), () {
+                    if (mounted && isDriving) {
+                      _recenterToVehicle();
+                    }
+                  });
+                }
+              },
             ),
             children: [
               _buildMapTiles(),
@@ -428,20 +465,20 @@ class _MapScreenState extends State<MapScreen> {
                       ],
                     ),
 
-                // Render Selected Active Route on Top (Vibrant Blue/Cyan Glow)
+                // Render Selected Active Route on Top (Vibrant Cyan/Green Glow)
                 if (_selectedRouteIndex < _routes.length)
                   PolylineLayer(
                     polylines: [
                       // Outer glow layer
                       Polyline(
                         points: _routes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 11.0,
+                        strokeWidth: 12.0,
                         color: _routes[_selectedRouteIndex].themeColor.withAlpha(90),
                       ),
                       // Core bright polyline
                       Polyline(
                         points: _routes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 7.0,
+                        strokeWidth: 7.5,
                         color: _routes[_selectedRouteIndex].themeColor,
                       ),
                     ],
@@ -454,12 +491,12 @@ class _MapScreenState extends State<MapScreen> {
                   polylines: [
                     Polyline(
                       points: navManager.activeRoute!.polylinePoints,
-                      strokeWidth: 12.0,
+                      strokeWidth: 13.0,
                       color: const Color(0xFF0077B6).withAlpha(120),
                     ),
                     Polyline(
                       points: navManager.activeRoute!.polylinePoints,
-                      strokeWidth: 7.5,
+                      strokeWidth: 8.0,
                       color: const Color(0xFF00F0FF),
                     ),
                   ],
@@ -471,14 +508,14 @@ class _MapScreenState extends State<MapScreen> {
                   // A. User GPS Navigation Puck with heading arrow & pulsing aura
                   Marker(
                     point: userPos,
-                    width: 54,
-                    height: 54,
+                    width: 56,
+                    height: 56,
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
                         Container(
-                          width: 46,
-                          height: 46,
+                          width: 48,
+                          height: 48,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             color: const Color(0xFF0084FF).withAlpha(35),
@@ -488,8 +525,8 @@ class _MapScreenState extends State<MapScreen> {
                         Transform.rotate(
                           angle: (navManager.currentHeading * (3.1415926535 / 180.0)),
                           child: Container(
-                            width: 34,
-                            height: 34,
+                            width: 36,
+                            height: 36,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: const Color(0xFF0084FF),
@@ -549,8 +586,8 @@ class _MapScreenState extends State<MapScreen> {
                       if (_routes[i].polylinePoints.isNotEmpty)
                         Marker(
                           point: _routes[i].polylinePoints[_routes[i].polylinePoints.length ~/ 2],
-                          width: 86,
-                          height: 34,
+                          width: 90,
+                          height: 36,
                           child: GestureDetector(
                             onTap: () => setState(() => _selectedRouteIndex = i),
                             child: AnimatedContainer(
@@ -560,7 +597,7 @@ class _MapScreenState extends State<MapScreen> {
                                 color: _selectedRouteIndex == i
                                     ? const Color(0xFF0077B6)
                                     : const Color(0xFF1E293B).withAlpha(240),
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(18),
                                 border: Border.all(
                                   color: _selectedRouteIndex == i ? const Color(0xFF00F0FF) : Colors.white24,
                                   width: 1.5,
@@ -592,7 +629,6 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
 
-          // -----------------------------------------------------------
           // -----------------------------------------------------------
           // 2. Top Bar: Search Bar, Clipboard Banner & Quick Categories (Browse Mode)
           // -----------------------------------------------------------
@@ -627,7 +663,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
-          // 4. Floating Action Controls (Right side: Theme, Compass, GPS)
+          // 4. Floating Action Controls (Right side: Theme, Compass, GPS / Recenter)
           // -----------------------------------------------------------
           Positioned(
             right: 14,
@@ -647,13 +683,20 @@ class _MapScreenState extends State<MapScreen> {
                   onTap: () => _mapController.rotate(0),
                 ),
                 const SizedBox(height: 10),
+                // Recenter / GPS Button
                 _buildFloatingButton(
-                  icon: Icons.my_location_rounded,
-                  iconColor: const Color(0xFF0084FF),
-                  tooltip: 'Vị trí của tôi',
+                  icon: isDriving && !_isAutoCentering
+                      ? Icons.center_focus_strong_rounded
+                      : Icons.my_location_rounded,
+                  iconColor: isDriving && !_isAutoCentering ? const Color(0xFF00F0FF) : const Color(0xFF0084FF),
+                  tooltip: isDriving ? 'Khóa tâm về xe' : 'Vị trí của tôi',
                   onTap: () {
-                    final current = navManager.currentLocation ?? _userPosition;
-                    _mapController.move(current, 16.5);
+                    if (isDriving) {
+                      _recenterToVehicle();
+                    } else {
+                      final current = navManager.currentLocation ?? _userPosition;
+                      _mapController.move(current, 16.5);
+                    }
                   },
                 ),
                 if (isDriving) ...[
@@ -683,6 +726,40 @@ class _MapScreenState extends State<MapScreen> {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
                 child: _buildActiveDrivingTurnBanner(navManager),
+              ),
+            ),
+
+          // Floating "Khóa về vị trí" Banner when user manually pans map while driving
+          if (isDriving && !_isAutoCentering)
+            Positioned(
+              bottom: 120,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: GestureDetector(
+                  onTap: _recenterToVehicle,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0084FF),
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(color: const Color(0xFF0084FF).withAlpha(140), blurRadius: 12, offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.center_focus_strong_rounded, color: Colors.white, size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          'Khóa tâm về vị trí xe',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
 
@@ -816,7 +893,7 @@ class _MapScreenState extends State<MapScreen> {
               onSubmitted: _onSearchSubmitted,
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
               decoration: const InputDecoration(
-                hintText: 'Nhập số nhà, tên đường, link Google Maps...',
+                hintText: 'Nhập địa danh, số nhà, link Google Maps...',
                 hintStyle: TextStyle(color: Colors.white38, fontSize: 13),
                 border: InputBorder.none,
                 isDense: true,
@@ -1012,7 +1089,7 @@ class _MapScreenState extends State<MapScreen> {
                             style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                           ),
                           Text(
-                            'Hỗ trợ maps.app.goo.gl, goo.gl/maps, g.co, tọa độ...',
+                            'Hỗ trợ maps.app.goo.gl, goo.gl/maps, tọa độ...',
                             style: TextStyle(color: Colors.white38, fontSize: 11),
                           ),
                         ],
@@ -1279,7 +1356,7 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          // Transport Mode Selector: 🚗 Ô tô | 🏍️ Xe máy | 🚶 Đi bộ
+          // Transport Mode Selector: 🏍️ Xe máy (Default) | 🚗 Ô tô | 🚶 Đi bộ
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
@@ -1288,8 +1365,8 @@ class _MapScreenState extends State<MapScreen> {
             ),
             child: Row(
               children: [
-                _buildTransportTab(icon: Icons.directions_car_rounded, label: 'Ô tô', mode: 'driving'),
                 _buildTransportTab(icon: Icons.two_wheeler_rounded, label: 'Xe máy', mode: 'bike'),
+                _buildTransportTab(icon: Icons.directions_car_rounded, label: 'Ô tô', mode: 'driving'),
                 _buildTransportTab(icon: Icons.directions_walk_rounded, label: 'Đi bộ', mode: 'foot'),
               ],
             ),
@@ -1357,7 +1434,7 @@ class _MapScreenState extends State<MapScreen> {
             CircularProgressIndicator(color: Color(0xFF0084FF)),
             SizedBox(height: 16),
             Text(
-              'Đang tính toán các lựa chọn đường đi...',
+              'Đang tính toán các lựa chọn đường đi tối ưu...',
               style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 4),
@@ -1434,7 +1511,7 @@ class _MapScreenState extends State<MapScreen> {
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      width: 220,
+                      width: 225,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF161E28),
@@ -1786,14 +1863,14 @@ class _MapScreenState extends State<MapScreen> {
               const Text('CHỌN GIAO DIỆN BẢN ĐỒ', style: TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1)),
               const SizedBox(height: 14),
               _buildThemeOption(
-                title: 'Google Maps Chuẩn',
-                subtitle: 'Giao diện quen thuộc, chi tiết đường đi chính xác, không watermark',
+                title: 'Google Maps Chuẩn (HD Retina)',
+                subtitle: 'Giao diện quen thuộc, độ phân giải cao sắc nét, không mờ',
                 mode: MapThemeMode.googleRoad,
                 icon: Icons.map_rounded,
               ),
               _buildThemeOption(
-                title: 'Vệ tinh Google (Satellite Hybrid)',
-                subtitle: 'Ảnh chụp vệ tinh thực tế độ nét cao kèm tên đường',
+                title: 'Vệ tinh Google (Satellite Hybrid HD)',
+                subtitle: 'Ảnh chụp vệ tinh thực tế độ nét cao kèm tên đường tiếng Việt',
                 mode: MapThemeMode.googleSatellite,
                 icon: Icons.satellite_alt_rounded,
               ),
