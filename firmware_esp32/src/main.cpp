@@ -28,6 +28,12 @@ static NimBLEUUID navCharUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 22, /* data=*/ 21);
 #elif defined(DISPLAY_TFT_ST7789)
 TFT_eSPI tft = TFT_eSPI();
+#include <TJpg_Decoder.h>
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (y >= tft.height()) return 0;
+  tft.pushImage(x, y, w, h, bitmap);
+  return 1;
+}
 #endif
 
 DisplayManager display;
@@ -842,14 +848,17 @@ void handleRoot() {
 
 // Receive Direct 20-30 FPS High-Speed JPEG Image from iPhone
 void handlePostFrame() {
-  WiFiClient client = server.client();
   int contentLength = server.header("Content-Length").toInt();
   if (contentLength > 0 && contentLength < (int)sizeof(jpegFrameBuf)) {
+    WiFiClient client = server.client();
     size_t readBytes = 0;
     unsigned long t0 = millis();
-    while (readBytes < (size_t)contentLength && (millis() - t0 < 300)) {
-      while (client.available() && readBytes < (size_t)contentLength) {
-        jpegFrameBuf[readBytes++] = client.read();
+    while (readBytes < (size_t)contentLength && (millis() - t0 < 350)) {
+      if (client.available()) {
+        size_t chunk = client.readBytes((char*)(jpegFrameBuf + readBytes), contentLength - readBytes);
+        readBytes += chunk;
+      } else {
+        delay(1);
       }
     }
     if (readBytes > 100) {
@@ -1057,6 +1066,11 @@ void setup() {
 
   // 3. Start Display (if hardware attached)
   display.init();
+  #if defined(DISPLAY_TFT_ST7789)
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(tft_output);
+  #endif
 
   // 4. Start NimBLE Server
   NimBLEDevice::init("ESP32_NAV_ANCS");
