@@ -467,14 +467,19 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 1: Check Built-in Vietnamese Landmark / POI Database
+    // Step 1: Check Built-in Vietnamese Landmark / POI Database (0 ms Instant Match)
     // -------------------------------------------------------------
+    final queryWords = unaccented.split(RegExp(r'\s+')).where((w) => w.length > 1).toList();
     for (final landmark in _vietnameseLandmarks) {
       final lName = landmark.name.toLowerCase();
       final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
       final lDisplayUnaccented = removeDiacritics(landmark.displayName).toLowerCase();
 
-      if (lName.contains(cleanQuery.toLowerCase()) ||
+      final allWordsMatch = queryWords.isNotEmpty &&
+          queryWords.every((w) => lNameUnaccented.contains(w) || lDisplayUnaccented.contains(w));
+
+      if (allWordsMatch ||
+          lName.contains(cleanQuery.toLowerCase()) ||
           lNameUnaccented.contains(unaccented) ||
           lNameUnaccented.contains(strippedCityUnaccented) ||
           lDisplayUnaccented.contains(unaccented) ||

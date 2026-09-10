@@ -4,6 +4,10 @@
 #include <Arduino.h>
 #include "icons.h"
 
+#if !defined(DISPLAY_OLED_SSD1306) && !defined(DISPLAY_TFT_ST7789)
+#define DISPLAY_TFT_ST7789 1
+#endif
+
 #if defined(DISPLAY_OLED_SSD1306)
 #include <U8g2lib.h>
 #include <Wire.h>

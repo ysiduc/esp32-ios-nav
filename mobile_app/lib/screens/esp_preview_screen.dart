@@ -283,7 +283,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         else if (_showSmsPopup)
                           _buildSmsPopup()
                         else
-                          _buildEspSplitNavView(navManager, userLoc),
+                          _buildEspSplitNavView(navManager, streamService, userLoc),
 
                         // Top Hardware Status Line (BLE, Clock, Battery)
                         Positioned(
@@ -357,7 +357,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'KẾT NỐI STREAM BẢN ĐỒ SANG ESP32 (20 FPS)',
+                        'KẾT NỐI STREAM BẢN ĐỒ SANG ESP32 (14-20 FPS)',
                         style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                       ),
                       Icon(Icons.wifi_tethering_rounded, color: Color(0xFF00F0FF), size: 18),
@@ -448,7 +448,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   }
 
   /// Split Screen 50/50 Navigation View on ESP32 Display
-  Widget _buildEspSplitNavView(NavigationManager navManager, LatLng userLoc) {
+  Widget _buildEspSplitNavView(NavigationManager navManager, EspStreamService streamService, LatLng userLoc) {
     final step = navManager.currentStep;
     final dist = navManager.distanceToNextManeuver.round();
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)}km' : '${dist}m';
@@ -461,13 +461,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final arrivalClock = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
     final activeRoute = navManager.activeRoute;
+    final liveJpeg = streamService.latestJpegBytes;
 
     return Padding(
       padding: const EdgeInsets.only(top: 24.0),
       child: Row(
         children: [
           // -----------------------------------------------------------
-          // LEFT 50%: Live Mini Map Canvas (Strictly Centered on Vehicle)
+          // LEFT 50%: Live Streamed JPEG or Mini Map Canvas
           // -----------------------------------------------------------
           Expanded(
             flex: 1,
@@ -480,24 +481,30 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(9),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Mini Map Layer
-                    FlutterMap(
-                      mapController: _miniMapController,
-                      options: MapOptions(
-                        initialCenter: userLoc,
-                        initialZoom: 17.5,
-                        initialRotation: -navManager.currentHeading,
-                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
-                      ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
-                          userAgentPackageName: 'com.esp32nav.app',
-                          maxZoom: 20,
-                        ),
+                child: liveJpeg != null
+                    ? Image.memory(
+                        liveJpeg,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                      )
+                    : Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          FlutterMap(
+                            mapController: _miniMapController,
+                            options: MapOptions(
+                              initialCenter: userLoc,
+                              initialZoom: 17.5,
+                              initialRotation: -navManager.currentHeading,
+                              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                            ),
+                            children: [
+                              TileLayer(
+                                key: const ValueKey('preview_tile_layer'),
+                                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                                userAgentPackageName: 'com.esp32nav.app',
+                                maxZoom: 20,
+                              ),
                         if (activeRoute != null)
                           PolylineLayer(
                             polylines: [

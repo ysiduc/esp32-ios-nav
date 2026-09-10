@@ -464,18 +464,21 @@ class _MapScreenState extends State<MapScreen> {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
+          key: const ValueKey('tile_layer_google_road'),
           urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
+          key: const ValueKey('tile_layer_google_satellite'),
           urlTemplate: 'https://mt1.google.com/vt/lyrs=y&scale=2&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.darkCyber:
         return ColorFiltered(
+          key: const ValueKey('tile_layer_dark_cyber_filtered'),
           colorFilter: const ColorFilter.matrix(<double>[
             -0.85, 0, 0, 0, 230,
             0, -0.85, 0, 0, 230,
@@ -483,6 +486,7 @@ class _MapScreenState extends State<MapScreen> {
             0, 0, 0, 1, 0,
           ]),
           child: TileLayer(
+            key: const ValueKey('tile_layer_dark_cyber'),
             urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
             userAgentPackageName: 'com.esp32nav.app',
             maxZoom: 20,
@@ -490,6 +494,7 @@ class _MapScreenState extends State<MapScreen> {
         );
       case MapThemeMode.osmStandard:
         return TileLayer(
+          key: const ValueKey('tile_layer_osm_standard'),
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 19,
@@ -509,10 +514,10 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults.isNotEmpty ||
         _isSearching;
 
-    // Keep Stream Mini Map synced with vehicle
+    // Keep Stream Mini Map synced with vehicle using dynamic _espStreamZoom
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _streamMapController.moveAndRotate(userPos, 15.0, -navManager.currentHeading);
+        _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -522,11 +527,11 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (200x220 Retina HD)
+          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (160x200 Ultra-Low Latency)
           // -----------------------------------------------------------
           SizedBox(
-            width: 200,
-            height: 220,
+            width: 160,
+            height: 200,
             child: RepaintBoundary(
               key: _mapStreamBoundaryKey,
               child: _buildDedicatedStreamMap(userPos, navManager),
@@ -2115,7 +2120,7 @@ class _MapScreenState extends State<MapScreen> {
           GestureDetector(
             onTap: () {
               setState(() {
-                _espStreamZoom = (_espStreamZoom - 0.5).clamp(12.0, 18.0);
+                _espStreamZoom = (_espStreamZoom - 1.0).clamp(10.0, 19.0);
               });
               try {
                 _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
@@ -2136,7 +2141,7 @@ class _MapScreenState extends State<MapScreen> {
           GestureDetector(
             onTap: () {
               setState(() {
-                _espStreamZoom = (_espStreamZoom + 0.5).clamp(12.0, 18.0);
+                _espStreamZoom = (_espStreamZoom + 1.0).clamp(10.0, 19.0);
               });
               try {
                 _streamMapController.moveAndRotate(userPos, _espStreamZoom, -navManager.currentHeading);
@@ -2160,13 +2165,15 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
-      width: 200,
-      height: 220,
+      key: ValueKey('stream_container_${_currentTheme.name}_${_espStreamZoom.toStringAsFixed(1)}'),
+      width: 160,
+      height: 200,
       color: const Color(0xFF0F172A),
       child: Stack(
         alignment: Alignment.center,
         children: [
           FlutterMap(
+            key: ValueKey('stream_flutter_map_${_currentTheme.name}_${_espStreamZoom.toStringAsFixed(1)}'),
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
@@ -2175,13 +2182,10 @@ class _MapScreenState extends State<MapScreen> {
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
-                userAgentPackageName: 'com.esp32nav.app',
-                maxZoom: 20,
-              ),
+              _buildMapTiles(),
               if (activeRoute != null) ...[
                 PolylineLayer(
+                  key: ValueKey('stream_route_poly_${activeRoute.polylinePoints.length}'),
                   polylines: [
                     Polyline(
                       points: activeRoute.polylinePoints,

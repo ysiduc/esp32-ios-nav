@@ -13,7 +13,7 @@ class EspStreamService extends ChangeNotifier {
 
   bool _isStreaming = false;
   bool _isCapturing = false;
-  int _targetFps = 20; // 20 FPS default high-speed stream
+  int _targetFps = 14; // 14 FPS optimal for zero-lag BLE CoreBluetooth GATT delivery
   double _actualFps = 0.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -37,7 +37,7 @@ class EspStreamService extends ChangeNotifier {
 
   EspStreamService({required this.bleService});
 
-  /// Set target FPS (12, 15, 20, 25, 30)
+  /// Set target FPS (10, 12, 14, 18, 24)
   void setTargetFps(int fps) {
     _targetFps = fps.clamp(5, 30);
     if (_isStreaming) {
@@ -48,7 +48,7 @@ class EspStreamService extends ChangeNotifier {
 
   GlobalKey? _lastBoundaryKey;
 
-  /// Start 20-30 FPS JPEG Streaming from a RepaintBoundary widget
+  /// Start High-Speed Real-Time JPEG Streaming from a RepaintBoundary widget
   Future<void> startStreaming({GlobalKey? boundaryKey}) async {
     _lastBoundaryKey = boundaryKey ?? _lastBoundaryKey;
     if (_lastBoundaryKey == null) return;
@@ -78,7 +78,7 @@ class EspStreamService extends ChangeNotifier {
     _isPostingHttp = true;
     try {
       _httpClient ??= HttpClient()
-        ..connectionTimeout = const Duration(milliseconds: 300)
+        ..connectionTimeout = const Duration(milliseconds: 250)
         ..idleTimeout = const Duration(seconds: 30);
       final request = await _httpClient!.postUrl(Uri.parse('http://192.168.4.1/api/frame'));
       request.persistentConnection = true;
@@ -93,9 +93,9 @@ class EspStreamService extends ChangeNotifier {
     }
   }
 
-  /// High-Speed Frame Capture with Isolate Multithreading (20-30 FPS)
+  /// High-Speed Frame Capture with Isolate Multithreading (Zero-Lag Delivery)
   Future<void> _captureAndStreamFrame(GlobalKey boundaryKey) async {
-    if (!_isStreaming || _isCapturing) return;
+    if (!_isStreaming || _isCapturing || _isSendingBle) return;
     _isCapturing = true;
 
     try {
@@ -105,8 +105,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // High-definition scaling for ultra-crisp Retina map stream
-      final double targetRatio = (200.0 / boundary.size.width).clamp(0.4, 1.0);
+      // Ultra-low latency scaling: target ~135px width (~1.5 - 2.0 KB/frame for instant BLE delivery)
+      final double targetRatio = (135.0 / boundary.size.width).clamp(0.4, 0.95);
       final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
@@ -120,12 +120,12 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker with high-clarity quality
+      // Run pure JPEG encoding on background isolate worker with optimal 32 quality for zero-lag BLE
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 65,
+        'quality': 32,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -181,9 +181,8 @@ class EspStreamService extends ChangeNotifier {
         packet[4] = i;
         packet.setRange(5, packet.length, slice);
 
-        await bleService.sendRawBytes(packet);
-        // Minimal 1ms delay between packets to prevent BLE hardware buffer overflow
-        await Future.delayed(const Duration(milliseconds: 1));
+        final ok = await bleService.sendRawBytes(packet);
+        if (!ok) break;
       }
     } catch (_) {
     } finally {
