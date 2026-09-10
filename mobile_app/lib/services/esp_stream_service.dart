@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
@@ -13,7 +14,7 @@ class EspStreamService extends ChangeNotifier {
 
   bool _isStreaming = false;
   bool _isCapturing = false;
-  int _targetFps = 8; // Default 8 FPS for ultra-cool battery-friendly operation
+  int _targetFps = 20; // 20 FPS default high-speed stream
   double _actualFps = 0.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -37,9 +38,9 @@ class EspStreamService extends ChangeNotifier {
 
   EspStreamService({required this.bleService});
 
-  /// Set target FPS (e.g. 5, 8, 12, 15, 20)
+  /// Set target FPS (12, 15, 20, 25, 30)
   void setTargetFps(int fps) {
-    _targetFps = fps.clamp(1, 25);
+    _targetFps = fps.clamp(5, 30);
     if (_isStreaming) {
       startStreaming(boundaryKey: _lastBoundaryKey);
     }
@@ -48,7 +49,7 @@ class EspStreamService extends ChangeNotifier {
 
   GlobalKey? _lastBoundaryKey;
 
-  /// Start JPEG Streaming from a RepaintBoundary widget
+  /// Start 20-30 FPS JPEG Streaming from a RepaintBoundary widget
   Future<void> startStreaming({GlobalKey? boundaryKey}) async {
     _lastBoundaryKey = boundaryKey ?? _lastBoundaryKey;
     if (_lastBoundaryKey == null) return;
@@ -59,7 +60,7 @@ class EspStreamService extends ChangeNotifier {
     _framesInCurrentSec = 0;
     _lastFpsUpdate = DateTime.now();
 
-    // Start local MJPEG HTTP Server on port 8080 for Wi-Fi streaming
+    // Start local MJPEG HTTP Server on port 8080
     await _startMjpegServer();
 
     final intervalMs = (1000 / _targetFps).round();
@@ -74,7 +75,7 @@ class EspStreamService extends ChangeNotifier {
 
   Future<void> _postFrameToEsp32(Uint8List jpegBytes) async {
     try {
-      _httpClient ??= HttpClient()..connectionTimeout = const Duration(milliseconds: 350);
+      _httpClient ??= HttpClient()..connectionTimeout = const Duration(milliseconds: 250);
       final request = await _httpClient!.postUrl(Uri.parse('http://192.168.4.1/api/frame'));
       request.headers.set('Content-Type', 'image/jpeg');
       request.headers.set('Content-Length', jpegBytes.length.toString());
@@ -84,7 +85,7 @@ class EspStreamService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Lightweight Frame Capture and Fast JPEG Encoding
+  /// High-Speed Frame Capture with Isolate Multithreading (20-30 FPS)
   Future<void> _captureAndStreamFrame(GlobalKey boundaryKey) async {
     if (!_isStreaming || _isCapturing) return;
     _isCapturing = true;
@@ -96,8 +97,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Capture at 0.8 pixel ratio for ultra-fast, low CPU encoding
-      final ui.Image image = await boundary.toImage(pixelRatio: 0.8);
+      // Capture at 0.75 pixel ratio (optimal 260x165 resolution for fast 20-30 FPS)
+      final ui.Image image = await boundary.toImage(pixelRatio: 0.75);
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       image.dispose();
 
@@ -106,18 +107,18 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      final width = (boundary.size.width * 0.8).toInt();
-      final height = (boundary.size.height * 0.8).toInt();
+      final width = (boundary.size.width * 0.75).toInt();
+      final height = (boundary.size.height * 0.75).toInt();
       final rawBytes = byteData.buffer.asUint8List();
 
-      final imgImage = img.Image.fromBytes(
-        width: width,
-        height: height,
-        bytes: rawBytes.buffer,
-        order: img.ChannelOrder.rgba,
-      );
+      // Run pure JPEG encoding on background isolate worker to keep iPhone cool & 60 FPS UI
+      final jpegBytes = await compute(_encodeJpegWorker, {
+        'width': width,
+        'height': height,
+        'rawBytes': rawBytes,
+        'quality': 45,
+      });
 
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 40));
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
       _frameCount++;
@@ -132,10 +133,8 @@ class EspStreamService extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Broadcast frame to connected Wi-Fi / MJPEG clients
+      // Broadcast frame to MJPEG clients & post to ESP32
       _broadcastMjpegFrame(jpegBytes);
-
-      // Push real frame directly to ESP32 SoftAP Web Server
       _postFrameToEsp32(jpegBytes);
     } catch (_) {
     } finally {
@@ -249,6 +248,24 @@ class EspStreamService extends ChangeNotifier {
   @override
   void dispose() {
     stopStreaming();
+    _httpClient?.close();
     super.dispose();
   }
+}
+
+/// Top-level worker function running in background isolate for zero UI stutter
+Uint8List _encodeJpegWorker(Map<String, dynamic> params) {
+  final int width = params['width'] as int;
+  final int height = params['height'] as int;
+  final Uint8List rawBytes = params['rawBytes'] as Uint8List;
+  final int quality = params['quality'] as int;
+
+  final imgImage = img.Image.fromBytes(
+    width: width,
+    height: height,
+    bytes: rawBytes.buffer,
+    order: img.ChannelOrder.rgba,
+  );
+
+  return Uint8List.fromList(img.encodeJpg(imgImage, quality: quality));
 }
