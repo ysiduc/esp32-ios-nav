@@ -261,6 +261,20 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  /// Send binary byte array over BLE (e.g. JPEG frames)
+  Future<bool> sendRawBytes(Uint8List bytes) async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    try {
+      await _writeCharacteristic!.write(
+        bytes,
+        withoutResponse: true,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Disconnect current device
   Future<void> disconnect() async {
     if (_connectedDevice != null) {

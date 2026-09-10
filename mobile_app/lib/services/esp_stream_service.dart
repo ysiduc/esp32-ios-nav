@@ -133,9 +133,10 @@ class EspStreamService extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Broadcast frame to MJPEG clients & post to ESP32
+      // Broadcast frame to MJPEG clients, post to ESP32 Wi-Fi & send over BLE
       _broadcastMjpegFrame(jpegBytes);
       _postFrameToEsp32(jpegBytes);
+      _sendJpegOverBle(jpegBytes);
     } catch (_) {
     } finally {
       _isCapturing = false;
@@ -165,9 +166,7 @@ class EspStreamService extends ChangeNotifier {
       packet[4] = i;
       packet.setRange(5, packet.length, slice);
 
-      try {
-        await bleService.connectedDevice?.requestMtu(256);
-      } catch (_) {}
+      await bleService.sendRawBytes(packet);
     }
   }
 
