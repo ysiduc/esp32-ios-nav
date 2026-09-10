@@ -275,6 +275,9 @@ class NavigationManager extends ChangeNotifier {
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _currentStepIndex,
       totalSteps: _activeRoute!.steps.length,
+      latitude: _currentLocation?.latitude,
+      longitude: _currentLocation?.longitude,
+      heading: _currentHeading.round(),
     );
 
     bleService.sendNavPayload(payload);

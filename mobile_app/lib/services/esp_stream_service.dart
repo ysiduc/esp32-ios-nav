@@ -13,7 +13,7 @@ class EspStreamService extends ChangeNotifier {
 
   bool _isStreaming = false;
   bool _isCapturing = false;
-  int _targetFps = 20; // 20 FPS target (smooth & high speed)
+  int _targetFps = 8; // Default 8 FPS for ultra-cool battery-friendly operation
   double _actualFps = 0.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -37,9 +37,9 @@ class EspStreamService extends ChangeNotifier {
 
   EspStreamService({required this.bleService});
 
-  /// Set target FPS (e.g. 12, 15, 20, 24, 30)
+  /// Set target FPS (e.g. 5, 8, 12, 15, 20)
   void setTargetFps(int fps) {
-    _targetFps = fps.clamp(1, 30);
+    _targetFps = fps.clamp(1, 25);
     if (_isStreaming) {
       startStreaming(boundaryKey: _lastBoundaryKey);
     }
@@ -48,7 +48,7 @@ class EspStreamService extends ChangeNotifier {
 
   GlobalKey? _lastBoundaryKey;
 
-  /// Start 20 FPS JPEG Streaming from a RepaintBoundary widget
+  /// Start JPEG Streaming from a RepaintBoundary widget
   Future<void> startStreaming({GlobalKey? boundaryKey}) async {
     _lastBoundaryKey = boundaryKey ?? _lastBoundaryKey;
     if (_lastBoundaryKey == null) return;
@@ -60,17 +60,20 @@ class EspStreamService extends ChangeNotifier {
     _lastFpsUpdate = DateTime.now();
 
     // Start local MJPEG HTTP Server on port 8080 for Wi-Fi streaming
-    _startMjpegServer();
+    await _startMjpegServer();
 
     final intervalMs = (1000 / _targetFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) async {
-      await _captureAndStreamFrame(_lastBoundaryKey!);
+      // Only capture if clients are actively watching to keep iPhone completely cool
+      if (_mjpegClients.isNotEmpty) {
+        await _captureAndStreamFrame(_lastBoundaryKey!);
+      }
     });
 
     notifyListeners();
   }
 
-  /// High-Speed Frame Capture and Fast JPEG Encoding (50ms pipeline for 20 FPS)
+  /// Lightweight Frame Capture and Fast JPEG Encoding
   Future<void> _captureAndStreamFrame(GlobalKey boundaryKey) async {
     if (!_isStreaming || _isCapturing) return;
     _isCapturing = true;
@@ -82,8 +85,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Capture at 1.0 pixel ratio (350x220 native resolution)
-      final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
+      // Capture at 0.8 pixel ratio for ultra-fast, low CPU encoding
+      final ui.Image image = await boundary.toImage(pixelRatio: 0.8);
       final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       image.dispose();
 
@@ -92,11 +95,10 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      final width = boundary.size.width.toInt();
-      final height = boundary.size.height.toInt();
+      final width = (boundary.size.width * 0.8).toInt();
+      final height = (boundary.size.height * 0.8).toInt();
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Convert raw RGBA to img.Image and encode as fast baseline JPEG (quality: 55 for optimal throughput)
       final imgImage = img.Image.fromBytes(
         width: width,
         height: height,
@@ -104,13 +106,12 @@ class EspStreamService extends ChangeNotifier {
         order: img.ChannelOrder.rgba,
       );
 
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 55));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 40));
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
       _frameCount++;
       _framesInCurrentSec++;
 
-      // Update actual FPS metric every second
       final now = DateTime.now();
       if (_lastFpsUpdate != null && now.difference(_lastFpsUpdate!).inMilliseconds >= 1000) {
         final elapsed = now.difference(_lastFpsUpdate!).inMilliseconds / 1000.0;
@@ -120,13 +121,8 @@ class EspStreamService extends ChangeNotifier {
         notifyListeners();
       }
 
-      // 1. Broadcast frame to all connected Wi-Fi / MJPEG clients
+      // Broadcast frame to connected Wi-Fi / MJPEG clients
       _broadcastMjpegFrame(jpegBytes);
-
-      // 2. Send over BLE in chunked MTU packets if BLE is connected
-      if (bleService.isConnected) {
-        _sendJpegOverBle(jpegBytes);
-      }
     } catch (_) {
     } finally {
       _isCapturing = false;

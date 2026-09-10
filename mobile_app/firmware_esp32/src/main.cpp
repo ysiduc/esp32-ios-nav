@@ -6,10 +6,10 @@
 #include "display_ui.h"
 
 // =========================================================================
-// Configuration & Credentials
+// Wi-Fi SoftAP Configuration
 // =========================================================================
 const char* AP_SSID = "ESP32-Navigator-Screen";
-const char* AP_PASS = "12345678"; // Mật khẩu Wi-Fi (hoặc để rỗng "" nếu không pass)
+const char* AP_PASS = "12345678";
 
 WebServer server(80);
 
@@ -35,7 +35,10 @@ volatile uint16_t curDist = 0;
 volatile uint16_t curTotalDist = 0;
 volatile uint8_t curSpeed = 0;
 volatile uint8_t curEta = 0;
-String curStreet = "Cho ket noi tu App...";
+volatile double curLat = 20.9785;  // Default: Ha Noi (Pho Nguyen Canh Di)
+volatile double curLng = 105.8322;
+volatile int curHeading = 0;
+String curStreet = "San sang dan duong";
 String curArrival = "--:--";
 
 // ANCS State
@@ -45,7 +48,7 @@ String popupType = "NONE"; // "CALL", "SMS", "NONE"
 unsigned long popupExpire = 0;
 
 // =========================================================================
-// HTML / JS Web App for Virtual TFT Screen
+// High-Fidelity Web Page: Real HD Google Maps / OSM Mini Map + 50/50 HUD
 // =========================================================================
 const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -53,134 +56,147 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ESP32 TFT Virtual Screen Preview</title>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <title>ESP32 Smart Navigator Screen</title>
+  <!-- Google Fonts & Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    :root {
-      --bg: #090c10;
-      --card: #161b22;
-      --border: #30363d;
-      --accent: #2563eb;
-      --green: #22c55e;
-      --yellow: #eab308;
-      --red: #ef4444;
-      --cyan: #06b6d4;
-    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: var(--bg);
+      background: #0b0f17;
       color: #fff;
-      font-family: 'Inter', -apple-system, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       min-height: 100vh;
-      padding: 16px;
-      overflow-x: hidden;
+      padding: 12px;
     }
     header {
       text-align: center;
-      margin-bottom: 16px;
-      width: 100%;
-      max-width: 520px;
-    }
-    header h1 {
-      font-size: 1.25rem;
-      font-weight: 800;
-      background: linear-gradient(135deg, #38bdf8, #818cf8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .badge-bar {
-      display: flex;
-      justify-content: center;
-      gap: 10px;
-      margin-top: 6px;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      background: #21262d;
-      border: 1px solid var(--border);
-    }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
-    .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); }
-    .dot.anim { animation: pulse 1.5s infinite; }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
-
-    /* Hardware TFT Bezel Frame */
-    .tft-container {
-      position: relative;
+      margin-bottom: 12px;
       width: 100%;
       max-width: 480px;
-      aspect-ratio: 4 / 3;
-      background: #020617;
-      border-radius: 20px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.8), 0 0 0 8px #1e293b, 0 0 0 10px #334155;
-      overflow: hidden;
-      display: flex;
     }
-    
-    /* 50/50 Split Screen Layout */
-    .left-map {
-      width: 50%;
-      height: 100%;
-      background: #0a0f1d;
-      position: relative;
-      border-right: 2px solid #1e293b;
-      overflow: hidden;
-    }
-    .map-grid {
-      position: absolute;
-      width: 200%;
-      height: 200%;
-      top: -50%;
-      left: -50%;
-      background-image: 
-        radial-gradient(circle at center, rgba(37,99,235,0.06) 1px, transparent 1px),
-        linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
-      background-size: 24px 24px, 24px 24px, 24px 24px;
-    }
-    .route-line {
-      position: absolute;
-      width: 8px;
-      height: 160px;
-      background: linear-gradient(180deg, #38bdf8 0%, #2563eb 100%);
-      border-radius: 4px;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) rotate(0deg);
-      box-shadow: 0 0 12px #38bdf8;
-      transition: transform 0.5s ease;
-    }
-    .user-marker {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 28px;
-      height: 28px;
-      background: #3b82f6;
-      border: 3px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 0 16px #3b82f6;
+    .header-title {
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: #00F0FF;
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10;
+      gap: 8px;
     }
-    .user-marker::after {
-      content: '';
+    .status-row {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      background: #161e28;
+      border: 1px solid #233044;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; }
+    .dot.active { background: #05FFA1; box-shadow: 0 0 6px #05FFA1; }
+
+    /* Realistic ESP32 Device Frame (Matching iOS Screen 2) */
+    .device-shell {
+      position: relative;
+      width: 100%;
+      max-width: 420px;
+      height: 250px;
+      background: #1E242C;
+      border-radius: 26px;
+      border: 6px solid #30363D;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.9);
+      overflow: hidden;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Hardware Bar */
+    .hw-bar {
+      height: 22px;
+      background: rgba(0,0,0,0.7);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px;
+      font-size: 0.65rem;
+      font-family: monospace;
+      font-weight: bold;
+      margin-bottom: 4px;
+      z-index: 100;
+    }
+    .ble-status { color: #ff5555; }
+    .ble-status.connected { color: #00F0FF; }
+    .battery { color: #05FFA1; }
+
+    /* 50/50 Screen Area */
+    .screen-area {
+      flex: 1;
+      display: flex;
+      gap: 6px;
+      position: relative;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      padding: 4px;
+    }
+
+    /* LEFT 50%: Live HD Map */
+    .map-box {
+      flex: 1;
+      height: 100%;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1.2px solid rgba(0, 240, 255, 0.4);
+      position: relative;
+      background: #0f172a;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #0f172a;
+    }
+    .map-live-tag {
+      position: absolute;
+      bottom: 4px;
+      left: 4px;
+      background: rgba(0,0,0,0.8);
+      color: #00F0FF;
+      font-size: 0.55rem;
+      font-family: monospace;
+      font-weight: 800;
+      padding: 1px 5px;
+      border-radius: 4px;
+      z-index: 1000;
+    }
+
+    /* Custom Centered Car/Vehicle Icon on Leaflet */
+    .vehicle-marker {
+      width: 28px;
+      height: 28px;
+      background: #0084FF;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #0084FF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s linear;
+    }
+    .vehicle-arrow {
       width: 0;
       height: 0;
       border-left: 5px solid transparent;
@@ -188,321 +204,376 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       border-bottom: 8px solid #ffffff;
       margin-bottom: 2px;
     }
-    .compass-pill {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(15,23,42,0.8);
-      border: 1px solid rgba(255,255,255,0.1);
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 0.65rem;
-      font-weight: 700;
-      color: #38bdf8;
-    }
 
-    /* Right Half: HUD Telemetry */
-    .right-hud {
-      width: 50%;
+    /* RIGHT 50%: HUD Display */
+    .hud-box {
+      flex: 1;
       height: 100%;
-      background: #0f172a;
+      background: #161E28;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 8px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 12px;
-      position: relative;
     }
-    .top-turn-row {
+
+    /* Turn Header */
+    .turn-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
     }
-    .turn-icon-box {
-      width: 52px;
-      height: 52px;
-      background: #1e293b;
-      border-radius: 12px;
+    .turn-badge {
+      width: 44px;
+      height: 44px;
+      background: rgba(0, 240, 255, 0.15);
+      border: 1.5px solid #00F0FF;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid #334155;
     }
-    .turn-icon-box svg {
-      width: 36px;
-      height: 36px;
-      fill: var(--cyan);
+    .turn-badge svg {
+      width: 30px;
+      height: 30px;
+      fill: #00F0FF;
     }
-    .turn-distance {
-      font-family: 'Orbitron', monospace;
-      font-size: 1.4rem;
-      font-weight: 900;
-      color: #ffffff;
-      letter-spacing: -0.5px;
-    }
-    .turn-distance small {
-      font-size: 0.8rem;
-      color: var(--cyan);
-      margin-left: 2px;
-    }
-    .speedometer-card {
-      background: #1e293b;
-      padding: 6px 10px;
-      border-radius: 8px;
-      border-left: 3px solid var(--green);
+    .turn-dist-col {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      flex-direction: column;
     }
-    .speed-val {
-      font-family: 'Orbitron', monospace;
+    .dist-val {
       font-size: 1.25rem;
       font-weight: 900;
-      color: var(--green);
+      font-family: monospace;
+      color: #ffffff;
+      line-height: 1;
     }
-    .speed-lbl {
-      font-size: 0.65rem;
-      font-weight: 700;
-      color: #94a3b8;
+    .speed-val {
+      font-size: 0.75rem;
+      font-weight: 800;
+      font-family: monospace;
+      color: #05FFA1;
+      margin-top: 2px;
     }
-    .street-banner {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      padding: 6px 8px;
+
+    /* Street Banner */
+    .street-card {
+      background: #0F172A;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      padding: 4px 6px;
       text-align: center;
     }
-    .street-text {
-      font-size: 0.8rem;
+    .street-name {
+      font-size: 0.75rem;
       font-weight: 800;
-      color: var(--yellow);
+      color: #FFB800;
+      font-family: monospace;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      text-transform: uppercase;
     }
-    .bottom-eta-row {
+
+    /* Arrival / ETA footer */
+    .eta-card {
+      background: #0A0E14;
+      border-radius: 6px;
+      padding: 4px 8px;
       display: flex;
       justify-content: space-between;
-      background: #020617;
-      padding: 6px 8px;
-      border-radius: 8px;
-      font-size: 0.7rem;
-      font-weight: 700;
+      align-items: center;
+      font-family: monospace;
     }
-    .eta-clock { color: #f8fafc; }
-    .eta-remain { color: var(--cyan); }
+    .eta-left {
+      font-size: 0.65rem;
+      color: #94a3b8;
+    }
+    .eta-clock {
+      color: #00F0FF;
+      font-weight: bold;
+      font-size: 0.8rem;
+    }
+    .eta-mins {
+      color: #05FFA1;
+      font-weight: bold;
+      font-size: 0.8rem;
+    }
 
-    /* ANCS Popup Overlay */
-    .popup-overlay {
+    /* ANCS Popup (Incoming Call & SMS) */
+    .ancs-popup {
       position: absolute;
-      inset: 8px;
-      background: rgba(15, 23, 42, 0.95);
-      border-radius: 14px;
-      border: 2px solid var(--green);
-      padding: 16px;
+      inset: 6px;
+      background: rgba(0, 43, 27, 0.96);
+      border-radius: 12px;
+      border: 2px solid #05FFA1;
       display: none;
       flex-direction: column;
+      align-items: center;
       justify-content: center;
-      align-items: center;
       text-align: center;
-      z-index: 50;
+      padding: 12px;
+      z-index: 2000;
       backdrop-filter: blur(8px);
-      animation: popIn 0.3s ease;
     }
-    .popup-overlay.call { border-color: var(--green); }
-    .popup-overlay.sms { border-color: var(--cyan); }
-    .popup-title { font-size: 1.1rem; font-weight: 800; margin-top: 8px; color: #fff; }
-    .popup-sub { font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
-
-    @keyframes popIn {
-      from { opacity: 0; transform: scale(0.9); }
-      to { opacity: 1; transform: scale(1); }
+    .ancs-popup.sms {
+      background: rgba(43, 31, 0, 0.96);
+      border-color: #FFB800;
     }
-
-    /* Test Controls Card */
-    .control-panel {
-      margin-top: 20px;
-      width: 100%;
-      max-width: 480px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-    }
-    .control-panel h3 {
+    .popup-hdr {
       font-size: 0.9rem;
-      margin-bottom: 10px;
+      font-weight: 800;
+      color: #05FFA1;
+      letter-spacing: 1px;
+    }
+    .ancs-popup.sms .popup-hdr { color: #FFB800; }
+    .popup-title {
+      font-size: 1.2rem;
+      font-weight: 900;
+      color: #fff;
+      margin: 6px 0;
+    }
+    .popup-sub {
+      font-size: 0.75rem;
+      color: #cbd5e1;
+    }
+
+    /* Test Controls */
+    .control-box {
+      margin-top: 14px;
+      width: 100%;
+      max-width: 420px;
+      background: #161E28;
+      border: 1px solid #233044;
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .ctrl-title {
+      font-size: 0.8rem;
+      font-weight: 700;
       color: #94a3b8;
+      margin-bottom: 8px;
       display: flex;
-      align-items: center;
       justify-content: space-between;
     }
-    .btn-grid {
+    .grid-btns {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
+      gap: 6px;
     }
     .btn {
-      background: #21262d;
+      background: #212B38;
+      border: 1px solid #303E50;
       color: #fff;
-      border: 1px solid var(--border);
+      padding: 8px;
       border-radius: 8px;
-      padding: 10px;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       font-weight: 600;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: all 0.15s ease;
     }
-    .btn:active {
-      transform: scale(0.97);
-      background: #30363d;
-    }
+    .btn:active { transform: scale(0.97); }
+    .btn.call { border-color: #05FFA1; color: #05FFA1; }
+    .btn.sms { border-color: #FFB800; color: #FFB800; }
   </style>
 </head>
 <body>
 
   <header>
-    <h1>ESP32-S3 TFT Display Simulation</h1>
-    <div class="badge-bar">
-      <div class="badge">
+    <div class="header-title">
+      <span>📺 Màn Hình ESP32 Smart Navigator</span>
+    </div>
+    <div class="status-row">
+      <div class="pill">
         <div id="bleDot" class="dot"></div>
         <span id="bleText">BLE: Đang chờ iPhone...</span>
       </div>
-      <div class="badge">
-        <div class="dot online anim"></div>
-        <span>Wi-Fi AP (192.168.4.1)</span>
+      <div class="pill">
+        <div class="dot active"></div>
+        <span>Wi-Fi Hotspot (192.168.4.1)</span>
       </div>
     </div>
   </header>
 
-  <!-- Virtual Physical TFT Screen (240x320 / 320x240 Landscape Mode) -->
-  <div class="tft-container">
-    
-    <!-- Left 50%: Live Mini Map -->
-    <div class="left-map">
-      <div class="map-grid"></div>
-      <div id="routeLine" class="route-line"></div>
-      <div class="user-marker"></div>
-      <div class="compass-pill">GPS 3D LOCK</div>
+  <!-- Physical Enclosure Mockup -->
+  <div class="device-shell">
+    <!-- Status Line -->
+    <div class="hw-bar">
+      <div id="hwBle" class="ble-status">NO BLE</div>
+      <div id="clockTxt">10:52</div>
+      <div class="battery">100% 🔋</div>
     </div>
 
-    <!-- Right 50%: Turn HUD & Telemetry -->
-    <div class="right-hud">
-      <div class="top-turn-row">
-        <div class="turn-icon-box" id="turnIconBox">
-          <!-- Turn Arrow SVG (Dynamically Injected) -->
-          <svg viewBox="0 0 24 24" id="turnSvg">
-            <path d="M12 2L4 10h5v10h6V10h5L12 2z"/>
-          </svg>
+    <!-- 50/50 Screen Area -->
+    <div class="screen-area">
+      <!-- LEFT 50%: Live Mini Map Canvas -->
+      <div class="map-box">
+        <div id="map"></div>
+        <div class="map-live-tag">MAP LIVE</div>
+      </div>
+
+      <!-- RIGHT 50%: Turn Directions, Speed & ETA -->
+      <div class="hud-box">
+        <div class="turn-row">
+          <div class="turn-badge" id="turnIconBox">
+            <svg viewBox="0 0 24 24" id="turnSvg">
+              <path d="M12 2L4 10h5v10h6V10h5L12 2z"/>
+            </svg>
+          </div>
+          <div class="turn-dist-col">
+            <div class="dist-val" id="distTxt">0m</div>
+            <div class="speed-val" id="speedTxt">0 km/h</div>
+          </div>
         </div>
-        <div>
-          <div class="turn-distance" id="distTxt">0<small>m</small></div>
+
+        <div class="street-card">
+          <div class="street-name" id="streetTxt">SAN SANG DAN DUONG</div>
+        </div>
+
+        <div class="eta-card">
+          <div>
+            <div class="eta-left">DỰ KIẾN</div>
+            <div class="eta-clock" id="arrivalTxt">10:52</div>
+          </div>
+          <div style="text-align: right;">
+            <div class="eta-left" id="totalDistTxt">0.0 km</div>
+            <div class="eta-mins" id="etaTxt">0 ph</div>
+          </div>
         </div>
       </div>
 
-      <div class="speedometer-card">
-        <div>
-          <div class="speed-val" id="speedTxt">0</div>
-        </div>
-        <div class="speed-lbl">KM/H</div>
-      </div>
-
-      <div class="street-banner">
-        <div class="street-text" id="streetTxt">Tiep tuc</div>
-      </div>
-
-      <div class="bottom-eta-row">
-        <div class="eta-clock" id="arrivalTxt">DEN: --:--</div>
-        <div class="eta-remain" id="etaTxt">CON: 0 ph</div>
+      <!-- ANCS Popup -->
+      <div id="ancsPopup" class="ancs-popup">
+        <div class="popup-hdr" id="popupHdr">CUOC GOI DEN</div>
+        <div class="popup-title" id="popupTitle">NGUYEN VAN A</div>
+        <div class="popup-sub" id="popupSub">iPhone Notification</div>
       </div>
     </div>
-
-    <!-- ANCS Call/SMS Alert Overlay -->
-    <div id="popupOverlay" class="popup-overlay">
-      <div id="popupIcon" style="font-size: 2rem;">📞</div>
-      <div id="popupTitle" class="popup-title">CUOC GOI DEN</div>
-      <div id="popupSub" class="popup-sub">iPhone Connected</div>
-    </div>
-
   </div>
 
-  <!-- Interactive Test Panel (Previewing Without Phone) -->
-  <div class="control-panel">
-    <h3>
-      <span>Bảng Giả Lập & Thử Nghiệm</span>
-      <span style="font-size: 0.75rem; color: var(--cyan);" id="fpsVal">15 FPS</span>
-    </h3>
-    <div class="btn-grid">
-      <button class="btn" onclick="testNav(6, 150, 42, 'Pho Dinh Cong', 5, '10:50')">⬅️ Rẽ trái 150m</button>
-      <button class="btn" onclick="testNav(2, 450, 48, 'Duong Giai Phong', 12, '10:57')">➡️ Rẽ phải 450m</button>
-      <button class="btn" onclick="testNav(0, 1200, 55, 'Pho Xa Dan', 22, '11:07')">⬆️ Đi thẳng 1.2km</button>
-      <button class="btn" onclick="testNav(8, 80, 25, 'Vong xuyen Big C', 3, '10:48')">🔄 Vòng xuyến 80m</button>
-      <button class="btn" onclick="testCall('Me Yeu (0912345678)')">📞 Test Cuộc Gọi Đến</button>
-      <button class="btn" onclick="testSms('Zalo', 'Dang o dau the?')">💬 Test Tin Nhắn Zalo</button>
+  <!-- Interactive Controls -->
+  <div class="control-box">
+    <div class="ctrl-title">
+      <span>Thử Nghiệm Tính Năng (Test Controls)</span>
+    </div>
+    <div class="grid-btns">
+      <button class="btn" onclick="testNav(6, 410, 38, 'P. Nguyen Canh Di', 1, '10:53', 20.9785, 105.8322, 180)">⬅️ Rẽ trái 410m (P. Nguyễn Cảnh Dị)</button>
+      <button class="btn" onclick="testNav(2, 250, 42, 'Pho Dinh Cong', 3, '10:55', 20.9820, 105.8390, 90)">➡️ Rẽ phải 250m (Phố Định Công)</button>
+      <button class="btn" onclick="testNav(0, 1200, 50, 'Duong Giai Phong', 10, '11:02', 20.9890, 105.8420, 0)">⬆️ Đi thẳng 1.2km (Đường Giải Phóng)</button>
+      <button class="btn" onclick="testNav(8, 80, 25, 'Vong Xuyen Big C', 2, '10:54', 21.0040, 105.7920, 270)">🔄 Vòng xuyến 80m</button>
+      <button class="btn call" onclick="testCall('Nguyen Van A')">📞 Test Cuộc Gọi Đến</button>
+      <button class="btn sms" onclick="testSms('Me', 'Con ve nha an com nhe!')">💬 Test Tin Nhắn SMS</button>
     </div>
   </div>
 
   <script>
+    // 1. Initialize Real Leaflet Map with Google Retina Vector Tiles
+    let map = null;
+    let vehicleMarker = null;
+    let currentLatLng = [20.9785, 105.8322];
+
+    try {
+      map = L.map('map', {
+        center: currentLatLng,
+        zoom: 17,
+        zoomControl: false,
+        attributionControl: false
+      });
+
+      // Google HD Retina Maps vector tile layer
+      L.tileLayer('https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}', {
+        maxZoom: 20,
+        subdomains:['mt0','mt1','mt2','mt3']
+      }).addTo(map);
+
+      // Custom Vehicle Icon
+      const vehicleHtml = `
+        <div id="vIcon" class="vehicle-marker">
+          <div class="vehicle-arrow"></div>
+        </div>`;
+      const customIcon = L.divIcon({
+        className: 'custom-vehicle-icon',
+        html: vehicleHtml,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+
+      vehicleMarker = L.marker(currentLatLng, { icon: customIcon }).addTo(map);
+    } catch(e) {
+      console.log('Leaflet tile fallback:', e);
+    }
+
     const turnIcons = {
-      0: `<path d="M12 2L4 10h5v10h6V10h5L12 2z"/>`, // Straight
-      1: `<path d="M14 4l-1.4 1.4 2.6 2.6H8c-2.2 0-4 1.8-4 4v6h2v-6c0-1.1.9-2 2-2h7.2l-2.6 2.6L14 18l6-7-6-7z"/>`, // Slight Right
-      2: `<path d="M19 12l-7-7v4H6a2 2 0 0 0-2 2v9h4v-7h4v4l7-7z"/>`, // Right
-      3: `<path d="M19 12l-7-7v4H6a2 2 0 0 0-2 2v9h4v-7h4v4l7-7z"/>`, // Sharp Right
-      4: `<path d="M6 14v-4c0-3.3 2.7-6 6-6s6 2.7 6 6v7h2v-7c0-4.4-3.6-8-8-8s-8 3.6-8 8v4H1l4.5 5.5L10 14H6z"/>`, // U-Turn
-      5: `<path d="M10 4l1.4 1.4-2.6 2.6H16c2.2 0 4 1.8 4 4v6h-2v-6c0-1.1-.9-2-2-2H8.8l2.6 2.6L10 18l-6-7 6-7z"/>`, // Slight Left
-      6: `<path d="M5 12l7-7v4h6a2 2 0 0 1 2 2v9h-4v-7h-4v4l-7-7z"/>`, // Left
-      7: `<path d="M5 12l7-7v4h6a2 2 0 0 1 2 2v9h-4v-7h-4v4l-7-7z"/>`, // Sharp Left
-      8: `<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.9V14h-2v2.9A8 8 0 0 1 4.1 11H7V9H4.1A8 8 0 0 1 11 4.1V7h2V4.1A8 8 0 0 1 19.9 11H17v2h2.9a8 8 0 0 1-6.9 3.9z"/>`, // Roundabout
-      9: `<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>` // Arrive
+      0: `<path d="M12 2L4 10h5v10h6V10h5L12 2z"/>`,
+      1: `<path d="M14 4l-1.4 1.4 2.6 2.6H8c-2.2 0-4 1.8-4 4v6h2v-6c0-1.1.9-2 2-2h7.2l-2.6 2.6L14 18l6-7-6-7z"/>`,
+      2: `<path d="M19 12l-7-7v4H6a2 2 0 0 0-2 2v9h4v-7h4v4l7-7z"/>`,
+      3: `<path d="M19 12l-7-7v4H6a2 2 0 0 0-2 2v9h4v-7h4v4l7-7z"/>`,
+      4: `<path d="M6 14v-4c0-3.3 2.7-6 6-6s6 2.7 6 6v7h2v-7c0-4.4-3.6-8-8-8s-8 3.6-8 8v4H1l4.5 5.5L10 14H6z"/>`,
+      5: `<path d="M10 4l1.4 1.4-2.6 2.6H16c2.2 0 4 1.8 4 4v6h-2v-6c0-1.1-.9-2-2-2H8.8l2.6 2.6L10 18l-6-7 6-7z"/>`,
+      6: `<path d="M5 12l7-7v4h6a2 2 0 0 1 2 2v9h-4v-7h-4v4l-7-7z"/>`,
+      7: `<path d="M5 12l7-7v4h6a2 2 0 0 1 2 2v9h-4v-7h-4v4l-7-7z"/>`,
+      8: `<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.9V14h-2v2.9A8 8 0 0 1 4.1 11H7V9H4.1A8 8 0 0 1 11 4.1V7h2V4.1A8 8 0 0 1 19.9 11H17v2h2.9a8 8 0 0 1-6.9 3.9z"/>`,
+      9: `<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>`
     };
 
     function updateUi(data) {
-      // BLE Badge
+      // 1. BLE Header
       const bleDot = document.getElementById('bleDot');
       const bleText = document.getElementById('bleText');
+      const hwBle = document.getElementById('hwBle');
+
       if (data.ble) {
-        bleDot.className = 'dot online anim';
+        bleDot.className = 'dot active';
         bleText.innerText = 'iPhone Đã Kết Nối';
+        hwBle.innerText = 'ESP32 BLE';
+        hwBle.className = 'ble-status connected';
       } else {
         bleDot.className = 'dot';
         bleText.innerText = 'BLE: Đang chờ iPhone...';
+        hwBle.innerText = 'NO BLE';
+        hwBle.className = 'ble-status';
       }
 
-      // Distance
+      // 2. HUD Metrics
       const distTxt = document.getElementById('distTxt');
       if (data.dist >= 1000) {
-        distTxt.innerHTML = (data.dist / 1000).toFixed(1) + '<small>km</small>';
+        distTxt.innerText = (data.dist / 1000).toFixed(1) + 'km';
       } else {
-        distTxt.innerHTML = data.dist + '<small>m</small>';
+        distTxt.innerText = data.dist + 'm';
       }
 
-      // Turn Icon
-      const turnSvg = document.getElementById('turnSvg');
-      turnSvg.innerHTML = turnIcons[data.turn] || turnIcons[0];
+      document.getElementById('speedTxt').innerText = data.speed + ' km/h';
+      document.getElementById('streetTxt').innerText = data.street || 'SAN SANG DAN DUONG';
+      document.getElementById('arrivalTxt').innerText = data.arrival || '--:--';
+      document.getElementById('etaTxt').innerText = data.eta + ' ph';
+      
+      if (data.tot_dist) {
+        document.getElementById('totalDistTxt').innerText = (data.tot_dist / 1000).toFixed(1) + ' km';
+      }
 
-      // Speed & Street
-      document.getElementById('speedTxt').innerText = data.speed;
-      document.getElementById('streetTxt').innerText = data.street || 'Tiep tuc';
+      // 3. Turn Arrow SVG
+      document.getElementById('turnSvg').innerHTML = turnIcons[data.turn] || turnIcons[0];
 
-      // ETA
-      document.getElementById('arrivalTxt').innerText = 'DEN: ' + (data.arrival || '--:--');
-      document.getElementById('etaTxt').innerText = 'CON: ' + data.eta + ' ph';
+      // 4. Update Leaflet Map Position & Heading
+      if (data.lat && data.lng && map) {
+        const newPos = [data.lat, data.lng];
+        map.panTo(newPos, { animate: true, duration: 0.5 });
+        if (vehicleMarker) {
+          vehicleMarker.setLatLng(newPos);
+          const vIcon = document.getElementById('vIcon');
+          if (vIcon && data.head !== undefined) {
+            vIcon.style.transform = `rotate(${data.head}deg)`;
+          }
+        }
+      }
 
-      // Map Route Line tilt
-      const routeLine = document.getElementById('routeLine');
-      if (data.turn === 2 || data.turn === 1) routeLine.style.transform = 'translate(-50%, -50%) rotate(35deg)';
-      else if (data.turn === 6 || data.turn === 5) routeLine.style.transform = 'translate(-50%, -50%) rotate(-35deg)';
-      else routeLine.style.transform = 'translate(-50%, -50%) rotate(0deg)';
-
-      // Popup
-      const popup = document.getElementById('popupOverlay');
+      // 5. ANCS Popup
+      const popup = document.getElementById('ancsPopup');
       if (data.popup && data.popup !== 'NONE') {
         popup.style.display = 'flex';
-        popup.className = 'popup-overlay ' + (data.popup === 'CALL' ? 'call' : 'sms');
-        document.getElementById('popupIcon').innerText = data.popup === 'CALL' ? '📞' : '💬';
+        popup.className = 'ancs-popup ' + (data.popup === 'CALL' ? 'call' : 'sms');
+        document.getElementById('popupHdr').innerText = data.popup === 'CALL' ? 'CUOC GOI DEN' : 'SMS / ZALO';
         document.getElementById('popupTitle').innerText = data.title || 'THONG BAO';
         document.getElementById('popupSub').innerText = data.msg || 'iPhone Notification';
       } else {
@@ -510,7 +581,15 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
       }
     }
 
-    // Live Polling loop from ESP32 REST API (~15 FPS)
+    // Clock
+    setInterval(() => {
+      const d = new Date();
+      const h = String(d.getHours()).padStart(2, '0');
+      const m = String(d.getMinutes()).padStart(2, '0');
+      document.getElementById('clockTxt').innerText = `${h}:${m}`;
+    }, 1000);
+
+    // Live Polling
     async function pollStatus() {
       try {
         const res = await fetch('/api/status');
@@ -518,14 +597,14 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
           const data = await res.json();
           updateUi(data);
         }
-      } catch (e) {}
-      setTimeout(pollStatus, 100);
+      } catch(e) {}
+      setTimeout(pollStatus, 120);
     }
     pollStatus();
 
-    // Client-side testing handlers
-    function testNav(turn, dist, speed, street, eta, arrival) {
-      fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}`);
+    // Test handlers
+    function testNav(turn, dist, speed, street, eta, arrival, lat, lng, head) {
+      fetch(`/api/test?turn=${turn}&dist=${dist}&speed=${speed}&street=${encodeURIComponent(street)}&eta=${eta}&arrival=${arrival}&lat=${lat}&lng=${lng}&head=${head}`);
     }
     function testCall(name) {
       fetch(`/api/test_call?name=${encodeURIComponent(name)}`);
@@ -546,7 +625,6 @@ void handleRoot() {
 }
 
 void handleStatusApi() {
-  // Check if popup expired
   if (popupType != "NONE" && millis() > popupExpire) {
     popupType = "NONE";
   }
@@ -560,6 +638,9 @@ void handleStatusApi() {
   doc["eta"] = curEta;
   doc["street"] = curStreet;
   doc["arrival"] = curArrival;
+  doc["lat"] = curLat;
+  doc["lng"] = curLng;
+  doc["head"] = curHeading;
   doc["popup"] = popupType;
   doc["title"] = popupTitle;
   doc["msg"] = popupMsg;
@@ -576,6 +657,9 @@ void handleTestNav() {
   if (server.hasArg("street")) curStreet = server.arg("street");
   if (server.hasArg("eta")) curEta = server.arg("eta").toInt();
   if (server.hasArg("arrival")) curArrival = server.arg("arrival");
+  if (server.hasArg("lat")) curLat = server.arg("lat").toDouble();
+  if (server.hasArg("lng")) curLng = server.arg("lng").toDouble();
+  if (server.hasArg("head")) curHeading = server.arg("head").toInt();
 
   display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str());
   server.send(200, "text/plain", "OK");
@@ -623,19 +707,40 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 };
 
 // =========================================================================
-// 2. Custom Navigation Characteristic Callback (BLE RX from iPhone)
+// 2. Custom Navigation Characteristic Callback (Receives Navigation & Popups)
 // =========================================================================
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) return;
 
-    Serial.printf("[BLE RX Nav]: %s\n", value.c_str());
+    Serial.printf("[BLE RX]: %s\n", value.c_str());
 
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, value.c_str());
 
     if (!error) {
+      // Check for Direct Notification Packets from iOS App
+      if (doc["type"] == "CALL") {
+        const char* name = doc["title"] | "Cuoc goi den";
+        popupTitle = name;
+        popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
+        popupType = "CALL";
+        popupExpire = millis() + 8000;
+        display.showCallAlert(name);
+        return;
+      } else if (doc["type"] == "SMS") {
+        const char* sender = doc["title"] | "Tin nhan";
+        const char* content = doc["msg"] | "Thong bao moi";
+        popupTitle = sender;
+        popupMsg = content;
+        popupType = "SMS";
+        popupExpire = millis() + 6000;
+        display.showSmsAlert(sender, content);
+        return;
+      }
+
+      // Navigation Telemetry Payload
       curTurn = doc["turn"] | 0;
       curDist = doc["dist"] | 0;
       curTotalDist = doc["tot_dist"] | 0;
@@ -643,6 +748,9 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       curEta = doc["eta"] | 0;
       curStreet = String(doc["street"] | "Tiep tuc");
       curArrival = String(doc["arrival"] | "--:--");
+      if (doc.containsKey("lat")) curLat = doc["lat"];
+      if (doc.containsKey("lng")) curLng = doc["lng"];
+      if (doc.containsKey("head")) curHeading = doc["head"];
 
       display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str());
     } else {
@@ -657,31 +765,32 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR WITH WEB PREVIEW ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR INITIALIZING ===");
 
-  // 1. Khởi động Wi-Fi SoftAP để điện thoại/máy tính truy cập Web
+  // 1. Start Wi-Fi SoftAP
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
   IPAddress IP = WiFi.softAPIP();
-  Serial.printf("[WiFi AP] Da bat Hotspot Wi-Fi: %s (Pass: %s)\n", AP_SSID, AP_PASS);
-  Serial.printf("[WiFi AP] Truy cap giao dien tai: http://%s\n", IP.toString().c_str());
+  Serial.printf("[WiFi AP] Hotspot: %s (Pass: %s)\n", AP_SSID, AP_PASS);
+  Serial.printf("[WiFi AP] Live URL: http://%s\n", IP.toString().c_str());
 
-  // 2. Cấu hình WebServer
+  // 2. Start Web Server
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_GET, handleStatusApi);
   server.on("/api/test", HTTP_GET, handleTestNav);
   server.on("/api/test_call", HTTP_GET, handleTestCall);
   server.on("/api/test_sms", HTTP_GET, handleTestSms);
   server.begin();
-  Serial.println("[HTTP] Web Server dang chay tren port 80!");
 
-  // 3. Khởi động màn hình TFT (nếu có gắn)
+  // 3. Start Display (if hardware attached)
   display.init();
 
-  // 4. Khởi động BLE Server
+  // 4. Start NimBLE Server with Bonding for iOS ANCS
   NimBLEDevice::init("ESP32_NAV_ANCS");
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -700,16 +809,11 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da bat dau phat Bluetooth (ANCS + Navigation)!");
+  Serial.println("[BLE] Da phat Bluetooth (ANCS + Navigation)!");
 }
 
 void loop() {
-  // Xử lý các yêu cầu Web Server từ điện thoại thứ 2
   server.handleClient();
-
-  // Cập nhật màn hình phần cứng TFT (nếu có gắn)
   display.update();
-  
-  delay(10); // Loop nhạy 10ms mượt mà
+  delay(10);
 }
-

@@ -31,15 +31,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
-      final streamService = Provider.of<EspStreamService>(context, listen: false);
-
       if (navManager.currentLocation != null) {
         _miniMapController.move(navManager.currentLocation!, 17.0);
       }
-
-      // Default to 20 FPS high-speed streaming
-      streamService.setTargetFps(20);
-      streamService.startStreaming(boundaryKey: _streamBoundaryKey);
     });
   }
 
@@ -49,6 +43,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       _showCallPopup = true;
       _showSmsPopup = false;
     });
+
+    final bleService = Provider.of<BleService>(context, listen: false);
+    if (bleService.isConnected) {
+      bleService.sendRawString('{"type":"CALL","title":"Nguyen Van A","msg":"Cuoc goi den tu iPhone"}');
+    }
 
     _popupDismissTimer = Timer(const Duration(seconds: 6), () {
       if (mounted) setState(() => _showCallPopup = false);
@@ -61,6 +60,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       _showSmsPopup = true;
       _showCallPopup = false;
     });
+
+    final bleService = Provider.of<BleService>(context, listen: false);
+    if (bleService.isConnected) {
+      bleService.sendRawString('{"type":"SMS","title":"Me","msg":"Con ve nha an com nhe!"}');
+    }
 
     _popupDismissTimer = Timer(const Duration(seconds: 5), () {
       if (mounted) setState(() => _showSmsPopup = false);

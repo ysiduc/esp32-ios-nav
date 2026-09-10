@@ -10,6 +10,9 @@ class EspNavPayload {
   final int currentSpeed;       // current speed in km/h
   final int stepIndex;          // current step index (0-based)
   final int totalSteps;         // total count of steps
+  final double? latitude;       // GPS latitude
+  final double? longitude;      // GPS longitude
+  final int heading;            // Vehicle bearing / compass heading (0-360)
 
   EspNavPayload({
     required this.turnCode,
@@ -20,6 +23,9 @@ class EspNavPayload {
     required this.currentSpeed,
     required this.stepIndex,
     required this.totalSteps,
+    this.latitude,
+    this.longitude,
+    this.heading = 0,
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -79,6 +85,9 @@ class EspNavPayload {
       'step': stepIndex + 1,
       'tot_steps': totalSteps,
       'arrival': arrivalTimeClock,
+      'lat': latitude != null ? double.parse(latitude!.toStringAsFixed(6)) : null,
+      'lng': longitude != null ? double.parse(longitude!.toStringAsFixed(6)) : null,
+      'head': heading,
     };
     return jsonEncode(map);
   }
