@@ -72,17 +72,26 @@ class EspStreamService extends ChangeNotifier {
   }
 
   HttpClient? _httpClient;
+  bool _isPostingHttp = false;
 
   Future<void> _postFrameToEsp32(Uint8List jpegBytes) async {
+    if (_isPostingHttp) return;
+    _isPostingHttp = true;
     try {
-      _httpClient ??= HttpClient()..connectionTimeout = const Duration(milliseconds: 250);
+      _httpClient ??= HttpClient()
+        ..connectionTimeout = const Duration(milliseconds: 300)
+        ..idleTimeout = const Duration(seconds: 30);
       final request = await _httpClient!.postUrl(Uri.parse('http://192.168.4.1/api/frame'));
+      request.persistentConnection = true;
       request.headers.set('Content-Type', 'image/jpeg');
       request.headers.set('Content-Length', jpegBytes.length.toString());
       request.add(jpegBytes);
       final response = await request.close();
       await response.drain();
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _isPostingHttp = false;
+    }
   }
 
   /// High-Speed Frame Capture with Isolate Multithreading (20-30 FPS)
@@ -116,7 +125,7 @@ class EspStreamService extends ChangeNotifier {
         'width': width,
         'height': height,
         'rawBytes': rawBytes,
-        'quality': 45,
+        'quality': 40,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -143,30 +152,42 @@ class EspStreamService extends ChangeNotifier {
     }
   }
 
-  /// Send JPEG frame over BLE in chunks
-  void _sendJpegOverBle(Uint8List jpegBytes) async {
-    if (!bleService.isConnected) return;
+  bool _isSendingBle = false;
 
-    const chunkSize = 240; // Fit in 256 MTU
-    final totalLen = jpegBytes.length;
-    final totalChunks = (totalLen / chunkSize).ceil();
-    final frameId = (_frameCount % 255);
+  /// Send JPEG frame over BLE in sequential paced chunks with mutex protection
+  Future<void> _sendJpegOverBle(Uint8List jpegBytes) async {
+    if (!bleService.isConnected || _isSendingBle) return;
+    _isSendingBle = true;
 
-    for (int i = 0; i < totalChunks; i++) {
-      final start = i * chunkSize;
-      final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
-      final slice = jpegBytes.sublist(start, end);
+    try {
+      const chunkSize = 240; // Fit in 256 MTU
+      final totalLen = jpegBytes.length;
+      final totalChunks = (totalLen / chunkSize).ceil();
+      final frameId = (_frameCount % 255);
 
-      // Packet format: [0xAA, 0xBB, frameId, totalChunks, chunkIdx, ...bytes]
-      final packet = Uint8List(5 + slice.length);
-      packet[0] = 0xAA;
-      packet[1] = 0xBB;
-      packet[2] = frameId;
-      packet[3] = totalChunks;
-      packet[4] = i;
-      packet.setRange(5, packet.length, slice);
+      for (int i = 0; i < totalChunks; i++) {
+        if (!bleService.isConnected || !_isStreaming) break;
 
-      await bleService.sendRawBytes(packet);
+        final start = i * chunkSize;
+        final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
+        final slice = jpegBytes.sublist(start, end);
+
+        // Packet format: [0xAA, 0xBB, frameId, totalChunks, chunkIdx, ...bytes]
+        final packet = Uint8List(5 + slice.length);
+        packet[0] = 0xAA;
+        packet[1] = 0xBB;
+        packet[2] = frameId;
+        packet[3] = totalChunks;
+        packet[4] = i;
+        packet.setRange(5, packet.length, slice);
+
+        await bleService.sendRawBytes(packet);
+        // Small 2ms delay between packets to prevent BLE hardware buffer overflow
+        await Future.delayed(const Duration(milliseconds: 2));
+      }
+    } catch (_) {
+    } finally {
+      _isSendingBle = false;
     }
   }
 
