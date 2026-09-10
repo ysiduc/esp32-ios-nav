@@ -119,12 +119,12 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker with optimal 42 quality
+      // Run pure JPEG encoding on background isolate worker with optimal 38 quality
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 42,
+        'quality': 38,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -159,7 +159,7 @@ class EspStreamService extends ChangeNotifier {
     _isSendingBle = true;
 
     try {
-      const chunkSize = 480; // Fit in 512 MTU for ultra-fast transfer (3-4 packets/frame)
+      const chunkSize = 180; // Safe size for all iOS CoreBluetooth ATT MTU sizes
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);
@@ -171,17 +171,26 @@ class EspStreamService extends ChangeNotifier {
         final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
         final slice = jpegBytes.sublist(start, end);
 
-        // Packet format: [0xAA, 0xBB, frameId, totalChunks, chunkIdx, ...bytes]
-        final packet = Uint8List(5 + slice.length);
+        // 9-byte Robust Chunk Packet:
+        // [0xAA, 0xBB, frameId, totalChunks, chunkIdx, offsetMSB, offsetLSB, totalLenMSB, totalLenLSB, ...slice]
+        final packet = Uint8List(9 + slice.length);
         packet[0] = 0xAA;
         packet[1] = 0xBB;
         packet[2] = frameId;
         packet[3] = totalChunks;
         packet[4] = i;
-        packet.setRange(5, packet.length, slice);
+        packet[5] = (start >> 8) & 0xFF;
+        packet[6] = start & 0xFF;
+        packet[7] = (totalLen >> 8) & 0xFF;
+        packet[8] = totalLen & 0xFF;
+        packet.setRange(9, packet.length, slice);
 
         final ok = await bleService.sendRawBytes(packet);
         if (!ok) break;
+
+        if (i < totalChunks - 1) {
+          await Future.delayed(const Duration(milliseconds: 3));
+        }
       }
     } catch (_) {
     } finally {
