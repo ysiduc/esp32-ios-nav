@@ -60,6 +60,17 @@
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Ung dung can vi tri lien tuc de dieu huong trong che do nen</string>
 
+	<!-- Quyen Ket noi Mang Cuc bo & HTTP Khong Ma hoa (Wi-Fi ESP32 192.168.4.1) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ung dung can ket noi mang cuc bo de stream anh JPEG 20 FPS sang man hinh ESP32 qua Wi-Fi</string>
+
 	<!-- Background Modes -->
 	<key>UIBackgroundModes</key>
 	<array>
