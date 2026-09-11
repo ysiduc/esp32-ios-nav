@@ -6,12 +6,12 @@ import 'package:latlong2/latlong.dart';
 import '../models/esp_payload.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
-import 'osrm_service.dart';
+import 'mapbox_directions_service.dart';
 import 'phone_media_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
-  final OsrmService _osrmService = OsrmService();
+  final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   PhoneMediaService? _mediaService;
 
   // Active navigation state
@@ -257,7 +257,7 @@ class NavigationManager extends ChangeNotifier {
         notifyListeners();
 
         final destination = _activeRoute!.polylinePoints.last;
-        final newRoute = await _osrmService.calculateRoute(location, destination, profile: 'bike');
+        final newRoute = await _directionsService.calculateRoute(location, destination, profile: 'bike');
 
         if (newRoute != null && _isNavigating) {
           _activeRoute = newRoute;

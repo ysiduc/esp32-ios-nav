@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 
 class SearchService {
@@ -9,6 +10,72 @@ class SearchService {
 
   // Optional Google Places API Key (can be set by user in Settings or dynamically)
   static String? googleApiKey;
+
+  /// Mapbox Geocoding API v6 - Primary Search (fast, Vietnamese-friendly)
+  Future<List<MapPlace>> _executeMapboxQuery(
+    String query, {
+    LatLng? nearLocation,
+  }) async {
+    if (!MapboxConfig.isConfigured) return [];
+    try {
+      final url = MapboxConfig.geocodingUrl(
+        query: query,
+        proximityLng: nearLocation?.longitude,
+        proximityLat: nearLocation?.latitude,
+        limit: 10,
+      );
+
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) return [];
+
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final features = data['features'] as List? ?? [];
+
+      return features.map<MapPlace>((f) {
+        final props = (f['properties'] as Map<String, dynamic>?) ?? {};
+        final coords = (f['geometry'] as Map<String, dynamic>?)?['coordinates'] as List?;
+        final context = props['context'] as Map<String, dynamic>? ?? {};
+
+        final lat = coords != null ? (coords[1] as num).toDouble() : 0.0;
+        final lng = coords != null ? (coords[0] as num).toDouble() : 0.0;
+        final coord = LatLng(lat, lng);
+
+        final name = f['text'] as String? ??
+            props['name'] as String? ??
+            f['place_name'] as String? ??
+            props['full_address'] as String? ??
+            'Địa điểm';
+        final placeName = f['place_name'] as String? ??
+            props['full_address'] as String? ??
+            props['place_formatted'] as String? ??
+            name;
+        final placeType = (f['place_type'] as List?)?.firstOrNull as String? ??
+            props['feature_type'] as String? ??
+            props['kind'] as String? ??
+            'place';
+
+        double? dist;
+        if (nearLocation != null) {
+          const distCalc = Distance();
+          dist = distCalc.as(LengthUnit.Meter, nearLocation, coord);
+        }
+
+        return MapPlace(
+          name: name,
+          displayName: placeName,
+          coordinate: coord,
+          type: placeType,
+          category: (context['category'] as String?) ?? placeType,
+          distanceMeters: dist,
+        );
+      }).where((p) => p.coordinate.latitude != 0).toList();
+    } catch (_) {
+      return [];
+    }
+  }
 
   // Common Vietnamese city/province suffixes and prefixes
   static const List<String> _vietnamCityKeywords = [
@@ -737,6 +804,21 @@ class SearchService {
     for (final list in nestedResults) {
       for (final p in list) {
         addPlace(p);
+      }
+    }
+
+    // Primary: Mapbox Geocoding API (fast, accurate, Vietnamese support)
+    if (MapboxConfig.isConfigured && mergedResults.length < 5) {
+      final mapboxResults = await _executeMapboxQuery(query, nearLocation: nearLocation);
+      for (final p in mapboxResults) {
+        addPlace(p);
+      }
+      // Also try stripped query for unaccented input
+      if (mapboxResults.isEmpty && strippedCityUnaccented != query) {
+        final mapboxResults2 = await _executeMapboxQuery(strippedCityUnaccented, nearLocation: nearLocation);
+        for (final p in mapboxResults2) {
+          addPlace(p);
+        }
       }
     }
 
