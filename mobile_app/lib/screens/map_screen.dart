@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
 import '../config/mapbox_config.dart';
@@ -28,7 +28,7 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  MaplibreMapController? _mapController;
+  ml.MapLibreMapController? _mapController;
   final SearchService _searchService = SearchService();
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
@@ -82,7 +82,7 @@ class _MapScreenState extends State<MapScreen> {
       navManager.onLocationChanged = (loc, heading) {
         if (mounted && navManager.isNavigating && _isAutoCentering) {
           _mapController?.animateCamera(
-            CameraUpdate.newLatLng(LatLng(loc.latitude, loc.longitude)),
+            ml.CameraUpdate.newLatLng(ml.LatLng(loc.latitude, loc.longitude)),
           );
           _updateRouteOnMap();
         }
@@ -106,15 +106,15 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// Called when MaplibreMap is created and controller is ready
-  void _onMapCreated(MaplibreMapController controller) {
+  void _onMapCreated(ml.MapLibreMapController controller) {
     _mapController = controller;
     _mapReady = true;
     // Move camera to user position
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final pos = navManager.currentLocation ?? _userPosition;
     controller.animateCamera(
-      CameraUpdate.newCameraPosition(
-        CameraPosition(target: LatLng(pos.latitude, pos.longitude), zoom: 16.0),
+      ml.CameraUpdate.newCameraPosition(
+        ml.CameraPosition(target: ml.LatLng(pos.latitude, pos.longitude), zoom: 16.0),
       ),
     );
   }
@@ -132,22 +132,30 @@ class _MapScreenState extends State<MapScreen> {
       points = _routes[_selectedRouteIndex].polylinePoints;
     }
 
-    final geoJsonCoords = points
-        .map((p) => '[${p.longitude},${p.latitude}]')
-        .join(',');
-    final geoJson = '{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"LineString","coordinates":[$geoJsonCoords]}}]}';
+    final geoJsonMap = {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': points.map((p) => [p.longitude, p.latitude]).toList(),
+          },
+        }
+      ],
+    };
 
     try {
       if (!_routeLayersAdded) {
         await ctrl.addSource(
           _routeSourceId,
-          GeojsonSourceProperties(data: geoJson),
+          ml.GeojsonSourceProperties(data: geoJsonMap),
         );
         // Glow layer
         await ctrl.addLineLayer(
           _routeSourceId,
           _routeLayerGlowId,
-          LineLayerProperties(
+          const ml.LineLayerProperties(
             lineColor: '#0084FF',
             lineWidth: 12.0,
             lineOpacity: 0.4,
@@ -159,7 +167,7 @@ class _MapScreenState extends State<MapScreen> {
         await ctrl.addLineLayer(
           _routeSourceId,
           _routeLayerId,
-          LineLayerProperties(
+          const ml.LineLayerProperties(
             lineColor: '#00F0FF',
             lineWidth: 7.0,
             lineOpacity: 1.0,
@@ -169,9 +177,9 @@ class _MapScreenState extends State<MapScreen> {
         );
         _routeLayersAdded = true;
       } else {
-        await ctrl.setGeoJsonSource(_routeSourceId, geoJson);
+        await ctrl.setGeoJsonSource(_routeSourceId, geoJsonMap);
       }
-      } catch (_) {}
+    } catch (_) {}
   }
 
   Future<void> _checkClipboardForGoogleMaps() async {
@@ -364,7 +372,12 @@ class _MapScreenState extends State<MapScreen> {
       _searchResults = [];
       _viewMode = 1; // Open Place Details Inspector
     });
-    _mapController.move(place.coordinate, 16.5);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(
+        ml.LatLng(place.coordinate.latitude, place.coordinate.longitude),
+        16.5,
+      ),
+    );
   }
 
   void _onMapTapped(LatLng point) async {
@@ -377,7 +390,12 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults = [];
         _viewMode = 1;
       });
-      _mapController.move(point, 16.5);
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngZoom(
+          ml.LatLng(point.latitude, point.longitude),
+          16.5,
+        ),
+      );
     }
   }
 
@@ -436,10 +454,10 @@ class _MapScreenState extends State<MapScreen> {
 
     // MapLibre camera bounds fitting
     _mapController?.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(minLat, minLng),
-          northeast: LatLng(maxLat, maxLng),
+      ml.CameraUpdate.newLatLngBounds(
+        ml.LatLngBounds(
+          southwest: ml.LatLng(minLat, minLng),
+          northeast: ml.LatLng(maxLat, maxLng),
         ),
         top: 140, bottom: 320, left: 40, right: 40,
       ),
@@ -466,7 +484,7 @@ class _MapScreenState extends State<MapScreen> {
     // Always center vehicle at the exact center of map at start
     final startPos = navManager.currentLocation ?? _userPosition;
     _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(LatLng(startPos.latitude, startPos.longitude), 17.5),
+      ml.CameraUpdate.newLatLngZoom(ml.LatLng(startPos.latitude, startPos.longitude), 17.5),
     );
     _updateRouteOnMap();
   }
@@ -478,7 +496,7 @@ class _MapScreenState extends State<MapScreen> {
       _isAutoCentering = true;
     });
     _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(LatLng(current.latitude, current.longitude), 17.5),
+      ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 17.5),
     );
   }
 
@@ -518,10 +536,10 @@ class _MapScreenState extends State<MapScreen> {
           // -----------------------------------------------------------
           // 1. MapLibre Native Vector Map (60fps GPU-rendered)
           // -----------------------------------------------------------
-          MaplibreMap(
+          ml.MapLibreMap(
             styleString: _buildMaplibreStyleString(),
-            initialCameraPosition: CameraPosition(
-              target: LatLng(userPos.latitude, userPos.longitude),
+            initialCameraPosition: ml.CameraPosition(
+              target: ml.LatLng(userPos.latitude, userPos.longitude),
               zoom: 16.5,
             ),
             onMapCreated: _onMapCreated,
@@ -535,12 +553,12 @@ class _MapScreenState extends State<MapScreen> {
             },
             trackCameraPosition: true,
             compassEnabled: true,
-            compassViewPosition: CompassViewPosition.TopRight,
+            compassViewPosition: ml.CompassViewPosition.topRight,
             myLocationEnabled: true,
             myLocationTrackingMode: _isAutoCentering && isDriving
-                ? MyLocationTrackingMode.Tracking
-                : MyLocationTrackingMode.None,
-            myLocationRenderMode: MyLocationRenderMode.COMPASS,
+                ? ml.MyLocationTrackingMode.tracking
+                : ml.MyLocationTrackingMode.none,
+            myLocationRenderMode: ml.MyLocationRenderMode.compass,
             rotateGesturesEnabled: true,
             scrollGesturesEnabled: true,
             zoomGesturesEnabled: true,
@@ -644,7 +662,7 @@ class _MapScreenState extends State<MapScreen> {
                   icon: Icons.explore_rounded,
                   iconColor: const Color(0xFFFF5252),
                   tooltip: 'Xoay về hướng Bắc',
-                  onTap: () => _mapController.rotate(0),
+                  onTap: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
                 ),
                 const SizedBox(height: 10),
                 // Recenter / GPS Button
@@ -659,7 +677,9 @@ class _MapScreenState extends State<MapScreen> {
                       _recenterToVehicle();
                     } else {
                       final current = navManager.currentLocation ?? _userPosition;
-                      _mapController.move(current, 16.5);
+                      _mapController?.animateCamera(
+                        ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
+                      );
                     }
                   },
                 ),
@@ -1827,28 +1847,28 @@ class _MapScreenState extends State<MapScreen> {
               const Text('CHỌN GIAO DIỆN BẢN ĐỒ', style: TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1)),
               const SizedBox(height: 14),
               _buildThemeOption(
-                title: 'Google Maps Chuẩn (HD Retina)',
-                subtitle: 'Giao diện quen thuộc, độ phân giải cao sắc nét, không mờ',
-                mode: MapThemeMode.googleRoad,
+                title: 'Bản đồ Đường phố (Streets)',
+                subtitle: 'Giao diện vector sắc nét, tải nhanh chuẩn MapTiler',
+                mode: MapThemeMode.streets,
                 icon: Icons.map_rounded,
               ),
               _buildThemeOption(
-                title: 'Vệ tinh Google (Satellite Hybrid HD)',
-                subtitle: 'Ảnh chụp vệ tinh thực tế độ nét cao kèm tên đường tiếng Việt',
-                mode: MapThemeMode.googleSatellite,
+                title: 'Vệ tinh lai (Hybrid Satellite)',
+                subtitle: 'Ảnh chụp vệ tinh độ nét cao kèm tên đường tiếng Việt',
+                mode: MapThemeMode.satellite,
                 icon: Icons.satellite_alt_rounded,
               ),
               _buildThemeOption(
-                title: 'Chế độ Ban Đêm (Dark Cyber)',
+                title: 'Chế độ Ban Đêm (Navigation Dark)',
                 subtitle: 'Theme tối độ tương phản cao, dịu mắt khi lái xe đêm',
-                mode: MapThemeMode.darkCyber,
+                mode: MapThemeMode.navigationNight,
                 icon: Icons.dark_mode_rounded,
               ),
               _buildThemeOption(
-                title: 'OpenStreetMap',
-                subtitle: 'Bản đồ mở thế giới',
-                mode: MapThemeMode.osmStandard,
-                icon: Icons.public_rounded,
+                title: 'Giao diện Tối (Dark Minimal)',
+                subtitle: 'Theme tối tối giản',
+                mode: MapThemeMode.dark,
+                icon: Icons.nightlight_round,
               ),
             ],
           ),
