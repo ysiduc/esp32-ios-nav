@@ -394,57 +394,56 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // 1. TOP STATUS BAR (y: 0 to 22) - Divided into 6 Parts:
-    // Part 1 (1/6 = 53px, x: 0-53):   * ysiduc
-    // Parts 2-4 (3/6 = 160px, x: 54-213): Scrolling Track & Artist (Gold Yellow)
-    // Part 5 (1/6 = 53px, x: 214-267): Real Clock
-    // Part 6 (1/6 = 53px, x: 268-320): Real Battery
+    // 1. TOP STATUS BAR (y: 0 to 22) - Balanced Waybar Layout:
+    // Left:   * ysiduc (x: 4..68)
+    // Middle: Marquee Song Title & Artist (x: 74..230)
+    // Right:  Clock (x: 234..274) & Battery (x: 278..316)
     tft.fillRect(0, 0, 320, 22, TFT_BLACK);
     _songScrollTick++;
 
-    // Part 1: * ysiduc (x: 2 to 53)
+    // Part 1: * ysiduc (x: 4 to 68)
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ysiduc", 2, 4, 2);
+    tft.drawString("* ysiduc", 4, 4, 2);
 
-    // Parts 2, 3, 4: Marquee Song Title & Artist (x: 54 to 213, width 160px)
-    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+    // Part 5: Real Clock (x: 234 to 274)
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawCentreString(_navData.currentTime, 254, 4, 2);
+
+    // Part 6: Battery & Icon (x: 278 to 316)
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    char batStr[16];
+    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+    tft.drawString(batStr, 276, 4, 2);
+    tft.drawRect(300, 6, 14, 8, TFT_GREEN);
+    int batFill = (_navData.batteryLevel * 10) / 100;
+    if (batFill < 1) batFill = 1;
+    if (batFill > 10) batFill = 10;
+    tft.fillRect(302, 8, batFill, 4, TFT_GREEN);
+
+    // Parts 2-4: Marquee Song Title & Artist (x: 74 to 230, width = 156px)
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
     if (hasSong) {
-      String fullSong = String("  ♫ ") + _navData.songTitle;
+      String fullSong = String("♫ ") + _navData.songTitle;
       if (strlen(_navData.songArtist) > 0) {
         fullSong += String(" - ") + _navData.songArtist;
       }
       fullSong += "       ";
 
-      int maxVisibleChars = 17;
+      int maxVisibleChars = 14;
       if (fullSong.length() <= maxVisibleChars) {
         tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK); // Amber Yellow
-        tft.drawCentreString(fullSong.c_str(), 134, 4, 2);
+        tft.drawCentreString(fullSong.c_str(), 152, 4, 2);
       } else {
         int offset = (_songScrollTick / 3) % fullSong.length();
         String wrapped = fullSong.substring(offset) + fullSong.substring(0, offset);
         String displayChunk = wrapped.substring(0, maxVisibleChars);
         tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK);
-        tft.drawString(displayChunk, 54, 4, 2);
+        tft.drawString(displayChunk, 74, 4, 2);
       }
     } else {
       tft.setTextColor(tft.color565(71, 85, 105), TFT_BLACK);
-      tft.drawCentreString("-- Chua phat nhac --", 134, 4, 1);
+      tft.drawCentreString("-- Chua phat nhac --", 152, 4, 1);
     }
-
-    // Part 5: Real Clock (x: 214 to 267)
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.currentTime, 240, 4, 2);
-
-    // Part 6: Battery & Icon (x: 268 to 320)
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    char batStr[16];
-    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    tft.drawString(batStr, 268, 4, 2);
-    tft.drawRect(298, 6, 14, 8, TFT_GREEN);
-    int batFill = (_navData.batteryLevel * 10) / 100;
-    if (batFill < 1) batFill = 1;
-    if (batFill > 10) batFill = 10;
-    tft.fillRect(300, 8, batFill, 4, TFT_GREEN);
 
     // Clean any leftover pixels between boxes
     tft.fillRect(152, 24, 6, 216, TFT_BLACK);
@@ -479,28 +478,51 @@ private:
       tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
       tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
 
-      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
 
       if (hasSong) {
+        // Clear inner text area of media card
+        tft.fillRect(166, 114, 142, 34, cPillBg);
+
         // Music Icon & "DANG PHAT" tag
         tft.setTextColor(TFT_YELLOW, cPillBg);
         tft.drawString("[>] DANG PHAT", 172, 100, 1);
 
-        // Song Title
+        // Song Title (Font 2, max 12 chars = 132px, strictly inside card x: 171..303)
         tft.setTextColor(TFT_WHITE, cPillBg);
         char upperSong[48];
         strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
         upperSong[sizeof(upperSong) - 1] = '\0';
         for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
-        tft.drawCentreString(upperSong, 237, 116, 2);
 
-        // Artist
+        int songLen = strlen(upperSong);
+        if (songLen <= 12) {
+          tft.drawCentreString(upperSong, 237, 116, 2);
+        } else {
+          String fullS = String(upperSong) + "    ";
+          int offset = (_songScrollTick / 2) % fullS.length();
+          String wrapped = fullS.substring(offset) + fullS.substring(0, offset);
+          String chunk = wrapped.substring(0, 12);
+          tft.drawString(chunk.c_str(), 171, 116, 2);
+        }
+
+        // Artist (Font 1, max 22 chars = 132px, strictly inside card x: 171..303)
         tft.setTextColor(cSubText, cPillBg);
         char upperArtist[32];
         strncpy(upperArtist, _navData.songArtist, sizeof(upperArtist) - 1);
         upperArtist[sizeof(upperArtist) - 1] = '\0';
         for (int i = 0; upperArtist[i]; i++) upperArtist[i] = toupper((unsigned char)upperArtist[i]);
-        tft.drawCentreString(upperArtist, 237, 136, 1);
+
+        int artistLen = strlen(upperArtist);
+        if (artistLen <= 22) {
+          tft.drawCentreString(upperArtist, 237, 136, 1);
+        } else {
+          String fullA = String(upperArtist) + "    ";
+          int offset = (_songScrollTick / 2) % fullA.length();
+          String wrapped = fullA.substring(offset) + fullA.substring(0, offset);
+          String chunk = wrapped.substring(0, 22);
+          tft.drawString(chunk.c_str(), 171, 136, 1);
+        }
 
         // Sound Equalizer Bars (active cyan)
         uint16_t cEq = TFT_CYAN;

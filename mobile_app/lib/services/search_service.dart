@@ -77,6 +77,39 @@ class SearchService {
     }
   }
 
+  Future<MapPlace?> _executeMapboxReverse(LatLng location) async {
+    if (!MapboxConfig.isConfigured) return null;
+    try {
+      final apiKey = MapboxConfig.maptilerApiKey;
+      final url =
+          'https://api.maptiler.com/geocoding/${location.longitude},${location.latitude}.json?key=$apiKey&language=vi';
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode != 200) return null;
+
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final features = data['features'] as List? ?? [];
+      if (features.isEmpty) return null;
+
+      final f = features.first as Map<String, dynamic>;
+      final placeName = f['place_name'] as String? ?? '';
+      final text = f['text'] as String? ?? (placeName.isNotEmpty ? placeName.split(',').first.trim() : 'Vị trí đã ghim');
+
+      if (placeName.isNotEmpty) {
+        return MapPlace(
+          name: text,
+          displayName: placeName,
+          coordinate: location,
+          type: (f['place_type'] as List?)?.firstOrNull as String? ?? 'place',
+          category: 'poi',
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+
   // Common Vietnamese city/province suffixes and prefixes
   static const List<String> _vietnamCityKeywords = [
     'hà nội', 'ha noi', 'tp hà nội', 'tp ha noi', 'hn',
@@ -711,24 +744,39 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 1: Check Built-in Vietnamese Landmark / POI Database (0ms)
+    // Step 1: Primary Search: MapTiler Geocoding API (Fast, accurate, Vietnamese support)
     // -------------------------------------------------------------
-    for (final landmark in _vietnameseLandmarks) {
-      final lName = landmark.name.toLowerCase();
-      final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
-      final lDisplayUnaccented = removeDiacritics(landmark.displayName).toLowerCase();
-
-      if (lName.contains(cleanQuery.toLowerCase()) ||
-          lNameUnaccented.contains(unaccented) ||
-          lNameUnaccented.contains(strippedCityUnaccented) ||
-          lDisplayUnaccented.contains(unaccented) ||
-          unaccented.contains(lNameUnaccented)) {
-        addPlace(landmark);
+    if (MapboxConfig.isConfigured) {
+      final mapboxResults = await _executeMapboxQuery(cleanQuery, nearLocation: nearLocation);
+      for (final p in mapboxResults) {
+        addPlace(p);
+      }
+      if (strippedCity != cleanQuery && mergedResults.length < 5) {
+        final strippedResults = await _executeMapboxQuery(strippedCity, nearLocation: nearLocation);
+        for (final p in strippedResults) {
+          addPlace(p);
+        }
       }
     }
 
     // -------------------------------------------------------------
-    // Step 2: Extract house number if user types "157 nguyễn cảnh", "96 định công", "12/4 láng hạ"
+    // Step 2: Check Built-in Vietnamese Landmark / POI Database
+    // -------------------------------------------------------------
+    if (cleanQuery.length >= 3) {
+      for (final landmark in _vietnameseLandmarks) {
+        final lName = landmark.name.toLowerCase();
+        final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
+
+        if (lName.contains(cleanQuery.toLowerCase()) ||
+            lNameUnaccented.contains(unaccented) ||
+            lNameUnaccented.contains(strippedCityUnaccented)) {
+          addPlace(landmark);
+        }
+      }
+    }
+
+    // -------------------------------------------------------------
+    // Step 3: Extract house number if user types "157 nguyễn cảnh", "96 định công", "12/4 láng hạ"
     // -------------------------------------------------------------
     final houseNumRegex = RegExp(r'^(\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?)\s+(.+)$');
     final match = houseNumRegex.firstMatch(strippedCity);
@@ -739,98 +787,69 @@ class SearchService {
       streetNamePart = match.group(3)?.trim();
     }
 
-    // Build list of distinct query permutations to run in parallel
-    final querySet = <String>{
-      cleanQuery,
-      unaccented,
-      strippedCity,
-      strippedCityUnaccented,
-    };
-
-    if (streetNamePart != null && streetNamePart.isNotEmpty) {
-      querySet.add(streetNamePart);
-      querySet.add(removeDiacritics(streetNamePart));
-    }
-
     // -------------------------------------------------------------
-    // Step 3: Run High-Speed Prioritized Multi-Engine Queries
+    // Step 4: Fallback to Photon only if MapTiler returned < 3 results
     // -------------------------------------------------------------
-    final futures = <Future<List<MapPlace>>>[];
-    futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
-    if (strippedCity != cleanQuery) {
-      futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
-    }
+    if (mergedResults.length < 3) {
+      final futures = <Future<List<MapPlace>>>[];
+      futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
+      if (strippedCity != cleanQuery) {
+        futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
+      }
+      if (streetNamePart != null && streetNamePart.isNotEmpty) {
+        futures.add(_executePhotonQuery(streetNamePart, nearLocation: nearLocation));
+      }
 
-    final nestedResults = await Future.wait(futures).timeout(
-      const Duration(milliseconds: 1400),
-      onTimeout: () => [],
-    );
+      final nestedResults = await Future.wait(futures).timeout(
+        const Duration(milliseconds: 1400),
+        onTimeout: () => [],
+      );
+
+      for (final list in nestedResults) {
+        for (final p in list) {
+          addPlace(p);
+        }
+      }
+    }
 
     // If query had a house number, synthesize top-ranked house number places
     if (houseNumber != null) {
-      for (final list in nestedResults) {
-        for (final p in list) {
-          final isStreet = p.type == 'street' ||
-              p.type == 'residential' ||
-              p.type == 'secondary' ||
-              p.type == 'primary' ||
-              p.type == 'tertiary' ||
-              p.type == 'trunk' ||
-              p.name.toLowerCase().contains('phố') ||
-              p.name.toLowerCase().contains('đường') ||
-              p.name.toLowerCase().contains('ngõ') ||
-              p.name.toLowerCase().contains('hẻm');
+      final streetsToSynthesize = mergedResults.toList();
+      for (final p in streetsToSynthesize) {
+        final isStreet = p.type == 'street' ||
+            p.type == 'residential' ||
+            p.type == 'secondary' ||
+            p.type == 'primary' ||
+            p.type == 'tertiary' ||
+            p.type == 'trunk' ||
+            p.name.toLowerCase().contains('phố') ||
+            p.name.toLowerCase().contains('đường') ||
+            p.name.toLowerCase().contains('ngõ') ||
+            p.name.toLowerCase().contains('hẻm');
 
-          if (isStreet) {
-            final customName = 'Số $houseNumber ${p.name}';
-            final customDisplay = p.displayName.contains(p.name)
-                ? p.displayName.replaceFirst(p.name, customName)
-                : '$customName, ${p.displayName}';
+        if (isStreet && !p.name.contains(houseNumber)) {
+          final customName = 'Số $houseNumber ${p.name}';
+          final customDisplay = p.displayName.contains(p.name)
+              ? p.displayName.replaceFirst(p.name, customName)
+              : '$customName, ${p.displayName}';
 
-            addPlace(MapPlace(
+          mergedResults.insert(
+            0,
+            MapPlace(
               name: customName,
               displayName: customDisplay,
               coordinate: p.coordinate,
               type: 'house',
               category: 'building',
               distanceMeters: p.distanceMeters,
-            ));
-          }
+            ),
+          );
+          break; // Only synthesize the top matched street
         }
       }
     }
 
-    // Add all direct search results
-    for (final list in nestedResults) {
-      for (final p in list) {
-        addPlace(p);
-      }
-    }
-
-    // Primary: Mapbox Geocoding API (fast, accurate, Vietnamese support)
-    if (MapboxConfig.isConfigured && mergedResults.length < 5) {
-      final mapboxResults = await _executeMapboxQuery(query, nearLocation: nearLocation);
-      for (final p in mapboxResults) {
-        addPlace(p);
-      }
-      // Also try stripped query for unaccented input
-      if (mapboxResults.isEmpty && strippedCityUnaccented != query) {
-        final mapboxResults2 = await _executeMapboxQuery(strippedCityUnaccented, nearLocation: nearLocation);
-        for (final p in mapboxResults2) {
-          addPlace(p);
-        }
-      }
-    }
-
-    // Fallback: If still 0 results, search globally with Photon
-    if (mergedResults.isEmpty) {
-      final globalList = await _executePhotonQuery(strippedCityUnaccented, nearLocation: nearLocation, useBbox: false);
-      for (final p in globalList) {
-        addPlace(p);
-      }
-    }
-
-    // Secondary Fallback: Nominatim if still empty
+    // Secondary Fallback: Nominatim if still completely empty
     if (mergedResults.isEmpty) {
       final nomList = await _executeNominatimQuery(query, nearLocation: nearLocation);
       for (final p in nomList) {
@@ -1002,7 +1021,13 @@ class SearchService {
 
   /// Reverse Geocode Coordinates to Human-Readable Vietnamese Address
   Future<MapPlace> reverseGeocode(LatLng location) async {
-    // Try Nominatim first for rich address components
+    // 1. Try MapTiler Reverse first (instant, high accuracy for Vietnam)
+    final maptilerPlace = await _executeMapboxReverse(location);
+    if (maptilerPlace != null) {
+      return maptilerPlace;
+    }
+
+    // 2. Try Nominatim second for rich address components
     try {
       final url = Uri.parse(
         '$_nominatimBaseUrl/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}&accept-language=vi',
