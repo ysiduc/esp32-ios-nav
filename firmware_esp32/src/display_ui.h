@@ -58,6 +58,8 @@ private:
   NavStateData _navData;
   AncsPopupData _popupData;
   bool _needFullRedraw = true;
+  bool _lastIsNavigating = false;
+  bool _lastStreamingState = false;
   unsigned long _lastRenderTime = 0;
   uint32_t _songScrollTick = 0;
 
@@ -84,6 +86,9 @@ public:
   }
 
   void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false) {
+    if (_navData.isNavigating != isNav) {
+      _needFullRedraw = true;
+    }
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
@@ -171,10 +176,7 @@ public:
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
-    if (_needFullRedraw || millis() - _lastRenderTime > 400) {
-      if (_needFullRedraw) {
-        tft.fillScreen(TFT_BLACK);
-      }
+    if (_needFullRedraw || millis() - _lastRenderTime > 250) {
       _renderTft(isStreamingActive);
       _lastRenderTime = millis();
       _needFullRedraw = false;
@@ -487,33 +489,52 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // 1. TOP STATUS BAR (y: 0 to 22) - Balanced Waybar Layout:
-    // Left:   * ysiduc (x: 4..68)
-    // Middle: Marquee Song Title & Artist (x: 74..230)
-    // Right:  Clock (x: 234..274) & Battery (x: 278..316)
-    tft.fillRect(0, 0, 320, 22, TFT_BLACK);
+    // Detect Navigation Mode or Streaming State Transitions
+    if (_lastIsNavigating != _navData.isNavigating || _lastStreamingState != isStreamingActive) {
+      _lastIsNavigating = _navData.isNavigating;
+      _lastStreamingState = isStreamingActive;
+      _needFullRedraw = true;
+    }
+
+    if (_needFullRedraw) {
+      tft.fillScreen(TFT_BLACK);
+
+      // Part 1: * ysiduc (x: 4 to 68)
+      tft.setTextColor(TFT_CYAN, TFT_BLACK);
+      tft.drawString("* ysiduc", 4, 4, 2);
+
+      // Part 5: Real Clock (x: 234 to 274)
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawCentreString(_navData.currentTime, 254, 4, 2);
+
+      // Part 6: Battery & Icon (x: 278 to 316)
+      tft.setTextColor(TFT_GREEN, TFT_BLACK);
+      char batStr[16];
+      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+      tft.drawString(batStr, 276, 4, 2);
+      tft.drawRect(300, 6, 14, 8, TFT_GREEN);
+      int batFill = (_navData.batteryLevel * 10) / 100;
+      if (batFill < 1) batFill = 1;
+      if (batFill > 10) batFill = 10;
+      tft.fillRect(302, 8, batFill, 4, TFT_GREEN);
+
+      // Map border container
+      tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
+
+      // Right Card Box Framework
+      tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
+      tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
+    } else {
+      // Partial updates: refresh clock
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawCentreString(_navData.currentTime, 254, 4, 2);
+    }
+
     _songScrollTick++;
 
-    // Part 1: * ysiduc (x: 4 to 68)
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ysiduc", 4, 4, 2);
+    // Marquee Song Title & Artist: Only wipe the scrolling text area strictly inside x: 72..232
+    tft.fillRect(72, 0, 160, 22, TFT_BLACK);
 
-    // Part 5: Real Clock (x: 234 to 274)
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.currentTime, 254, 4, 2);
-
-    // Part 6: Battery & Icon (x: 278 to 316)
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    char batStr[16];
-    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    tft.drawString(batStr, 276, 4, 2);
-    tft.drawRect(300, 6, 14, 8, TFT_GREEN);
-    int batFill = (_navData.batteryLevel * 10) / 100;
-    if (batFill < 1) batFill = 1;
-    if (batFill > 10) batFill = 10;
-    tft.fillRect(302, 8, batFill, 4, TFT_GREEN);
-
-    // Parts 2-4: Marquee Song Title & Artist (x: 74 to 230, width = 156px)
     bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
     if (hasSong) {
       String fullSong = String("♫ ") + _navData.songTitle;
@@ -535,20 +556,16 @@ private:
       _drawCentreUtf8String("-- Chưa phát nhạc --", 152, 3, tft.color565(100, 116, 139), TFT_BLACK);
     }
 
-    // Clean any leftover pixels between boxes
-    tft.fillRect(152, 24, 6, 216, TFT_BLACK);
-
     // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
     if (!isStreamingActive) {
       _renderStandbyVectorMap();
-    } else {
-      // Map border container
-      tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
     }
 
     // 3. RIGHT 50%: HUD NAVIGATION OR STANDBY MUSIC DASHBOARD (x: 158, y: 24, w: 158, h: 212)
-    tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
-    tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
+    if (_needFullRedraw) {
+      tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
+      tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
+    }
 
     if (!_navData.isNavigating) {
       // =======================================================================

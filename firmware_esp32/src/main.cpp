@@ -4,10 +4,12 @@
 #include "display_ui.h"
 #include "ams_service.h"
 
-// Double Buffering for Direct High-Speed 20 FPS JPEG Stream over BLE
-static uint8_t bleRxBuf[32768];
-static uint8_t renderBuf[32768];
-static volatile size_t renderBufLen = 0;
+// Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
+static uint8_t bleRxBuf[24576];
+static uint8_t renderBufA[24576];
+static uint8_t renderBufB[24576];
+static volatile uint8_t* activeRenderBuf = renderBufA;
+static volatile size_t activeRenderBufLen = 0;
 static volatile bool newFrameAvailable = false;
 static volatile unsigned long lastFrameTime = 0;
 
@@ -134,8 +136,10 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
           // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
           if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
-            memcpy(renderBuf, bleRxBuf, bleJpegBytesReceived);
-            renderBufLen = bleJpegBytesReceived;
+            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+            memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
+            activeRenderBuf = nextBuf;
+            activeRenderBufLen = bleJpegBytesReceived;
             newFrameAvailable = true;
           }
         }
@@ -170,7 +174,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
       curTurn = doc["turn"] | 0;
       curDist = doc["dist"] | 0;
-      curTotalDist = doc["tot_dist"] | 0;
+      curTotalDist = doc["tot_dist"] | doc["tot"] | 0;
       curSpeed = doc["speed"] | 0;
       curEta = doc["eta"] | 0;
       curStreet = String(doc["street"] | "CAU SONG LU");
@@ -272,8 +276,8 @@ void loop() {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
-    if (renderBufLen > 100) {
-      TJpgDec.drawJpg(6, 26, renderBuf, renderBufLen);
+    if (activeRenderBufLen > 100) {
+      TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
     }
     #endif
   }
@@ -285,5 +289,5 @@ void loop() {
   // 3. Periodic check for Apple Media Service discovery
   AppleMediaService::checkPeriodic();
 
-  delay(2);
+  delay(1);
 }

@@ -151,8 +151,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
-      // Pre-fetch surrounding tiles asynchronously
-      _prefetchSurroundingTiles(userPos, 16);
+      // Pre-fetch surrounding tiles asynchronously at high-detail zoom 17
+      _prefetchSurroundingTiles(userPos, 17);
 
       // 1. Draw Real Map Canvas (< 0.5ms)
       _drawRealMapCanvas(
@@ -186,7 +186,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 50));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -321,7 +321,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final double cx = w / 2.0;
     final double cy = h * 0.67;
 
-    const int zoom = 16;
+    const int zoom = 17;
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = userPos.latitude * (math.pi / 180.0);
     final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
@@ -410,10 +410,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Route Outer Glow
+      // Route Outer Glow / Casing
       final glowPaint = Paint()
-        ..color = const Color(0xFF0077B6).withAlpha(160)
-        ..strokeWidth = 8.0
+        ..color = const Color(0xFF003D66)
+        ..strokeWidth = 9.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
@@ -422,7 +422,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Route Core Cyan
       final corePaint = Paint()
         ..color = const Color(0xFF00F0FF)
-        ..strokeWidth = 4.5
+        ..strokeWidth = 5.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
