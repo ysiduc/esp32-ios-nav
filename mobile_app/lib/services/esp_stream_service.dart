@@ -166,14 +166,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~1.8KB)
+      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~1.3KB)
       final imgImage = img.Image.fromBytes(
         width: w,
         height: h,
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 32));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 28));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -429,10 +429,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         packet[4] = i;
         packet.setRange(5, 5 + slice.length, slice);
 
-        bleService.sendRawBytes(packet);
-        if (i < totalChunks - 1) {
-          await Future.delayed(const Duration(milliseconds: 1));
-        }
+        final success = await bleService.sendRawBytes(packet);
+        if (!success) break;
       }
     } catch (_) {
     } finally {

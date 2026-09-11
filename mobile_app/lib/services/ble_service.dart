@@ -263,9 +263,9 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Safe BLE packet payload size calculated from current negotiated ATT MTU
-  int get currentMtu => _connectedDevice?.mtuNow ?? 512;
-  int get safeChunkSize => (currentMtu > 23 ? currentMtu - 5 : 490).clamp(20, 500);
+  /// Safe BLE packet payload size calculated from iOS CoreBluetooth ATT MTU (max 185 -> payload max 180)
+  int get currentMtu => _connectedDevice?.mtuNow ?? 185;
+  int get safeChunkSize => (currentMtu > 23 ? (currentMtu - 5).clamp(20, 180) : 175);
 
   /// Send binary byte array over BLE (e.g. JPEG frames)
   Future<bool> sendRawBytes(Uint8List bytes) async {
