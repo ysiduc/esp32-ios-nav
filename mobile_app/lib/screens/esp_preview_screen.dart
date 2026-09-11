@@ -34,7 +34,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       final loc = navManager.currentLocation ?? (navManager.activeRoute?.polylinePoints.isNotEmpty == true ? navManager.activeRoute!.polylinePoints.first : const LatLng(21.0285, 105.8542));
       try {
-        _miniMapController.moveAndRotate(loc, 17.5, -navManager.currentHeading);
+        _miniMapController.moveAndRotate(loc, 17.0, -navManager.currentHeading);
       } catch (_) {}
 
       // Auto-start 20 FPS JPEG streaming immediately on screen open
@@ -98,10 +98,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
     final userLoc = navManager.currentLocation ?? (navManager.activeRoute?.polylinePoints.isNotEmpty == true ? navManager.activeRoute!.polylinePoints.first : const LatLng(21.0285, 105.8542));
 
-    // Keep Mini Map ALWAYS centered on vehicle and rotated Course-Up
+    // Keep Mini Map centered on vehicle
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        _miniMapController.moveAndRotate(userLoc, 17.5, -navManager.currentHeading);
+        _miniMapController.moveAndRotate(userLoc, 17.0, -navManager.currentHeading);
       } catch (_) {}
     });
 
@@ -165,7 +165,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                       Switch.adaptive(
                         value: streamService.isStreaming,
-                        activeColor: const Color(0xFF00F0FF),
+                        activeTrackColor: const Color(0xFF00F0FF),
                         onChanged: (val) {
                           if (val) {
                             streamService.startStreaming(boundaryKey: _streamBoundaryKey);
@@ -177,7 +177,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     ],
                   ),
                   const Divider(color: Colors.white12, height: 16),
-                  // Realtime Telemetry Stats (FPS, Resolution, Size)
+                  // Realtime Telemetry Stats (FPS, Size, Target)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
@@ -253,7 +253,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             ),
             const SizedBox(height: 14),
 
-            // 1. ESP32 Physical Device Enclosure Mockup (350x220 TFT LCD / OLED)
+            // 1. ESP32 Physical Device Enclosure Mockup (350x220 TFT ST7789)
             Center(
               child: Container(
                 width: 350,
@@ -273,7 +273,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(16),
                   child: Container(
-                    color: Colors.black, // Display Canvas
+                    color: Colors.black,
                     child: Stack(
                       children: [
                         // Display Content (Navigation HUD or Popups)
@@ -341,7 +341,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
             const SizedBox(height: 20),
 
-            // 2. Stream Connection Details Card
+            // 2. Stream Connection Details Card (100% Pure BLE)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -356,16 +356,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        'KẾT NỐI STREAM BẢN ĐỒ SANG ESP32 (20 FPS)',
+                        'KẾT NỐI STREAM BẢN ĐỒ SANG ESP32 (BLE)',
                         style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                       ),
-                      Icon(Icons.wifi_tethering_rounded, color: Color(0xFF00F0FF), size: 18),
+                      Icon(Icons.bluetooth_audio_rounded, color: Color(0xFF00F0FF), size: 18),
                     ],
                   ),
                   SizedBox(height: 8),
                   Text(
-                    '1. Kênh BLE: Tự động gửi frame JPEG bản đồ (nửa trái) qua Bluetooth BLE.\n'
-                    '2. Tiết kiệm pin & Khóa máy: Khi khóa iPhone, ESP32 tự động chuyển sang bản đồ Vector và nhận thông số rẽ/cuộc gọi ngầm.\n'
+                    '1. Kênh BLE: Tự động gửi frame JPEG bản đồ (nửa trái) qua Bluetooth BLE tốc độ cao (MTU 517).\n'
+                    '2. Tiết kiệm pin: Chạy 100% qua Bluetooth BLE siêu tiết kiệm pin, không cần bật WiFi Hotspot.\n'
                     '3. Vị trí xe luôn được căn chính xác 100% ở tâm giữa bản đồ.',
                     style: TextStyle(color: Colors.white60, fontSize: 12, height: 1.5),
                   ),
@@ -451,22 +451,30 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final step = navManager.currentStep;
     final dist = navManager.distanceToNextManeuver.round();
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)}km' : '${dist}m';
-    final street = step?.streetName ?? 'San sang dan duong';
+    final street = step?.streetName.isNotEmpty == true ? step!.streetName : 'KĐT ĐẠI KIM - ĐỊNH CÔNG';
     final speed = navManager.currentSpeedKmh.round();
-    final etaMins = navManager.remainingEtaMinutes;
-    final totalDistKm = (navManager.remainingTotalDistance / 1000).toStringAsFixed(1);
+    final etaMins = navManager.remainingEtaMinutes > 0 ? navManager.remainingEtaMinutes : 1;
+    final totalDistKm = navManager.remainingTotalDistance > 0 ? (navManager.remainingTotalDistance / 1000).toStringAsFixed(1) : '0.1';
 
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalClock = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
     final activeRoute = navManager.activeRoute;
+    final polylinePoints = activeRoute != null && activeRoute.polylinePoints.isNotEmpty
+        ? activeRoute.polylinePoints
+        : [
+            LatLng(userLoc.latitude - 0.0015, userLoc.longitude - 0.0010),
+            LatLng(userLoc.latitude, userLoc.longitude - 0.0010),
+            userLoc,
+            LatLng(userLoc.latitude + 0.0015, userLoc.longitude),
+          ];
 
     return Padding(
       padding: const EdgeInsets.only(top: 24.0),
       child: Row(
         children: [
           // -----------------------------------------------------------
-          // LEFT 50%: Live Mini Map Canvas (Strictly Centered on Vehicle)
+          // LEFT 50%: Live Mini Map Canvas
           // -----------------------------------------------------------
           Expanded(
             flex: 1,
@@ -477,38 +485,37 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF0F172A),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80), width: 1.2),
+                  border: Border.all(color: const Color(0xFF00F0FF).withAlpha(120), width: 1.2),
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(9),
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Mini Map Layer
+                      // Mini Map Layer (OpenStreetMap / CartoDB Voyager with Dark Filter)
                       FlutterMap(
                         mapController: _miniMapController,
                         options: MapOptions(
                           initialCenter: userLoc,
-                          initialZoom: 17.5,
+                          initialZoom: 17.0,
                           initialRotation: -navManager.currentHeading,
                           interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
                         ),
                         children: [
                           TileLayer(
-                            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                             userAgentPackageName: 'com.esp32nav.app',
-                            maxZoom: 20,
+                            maxZoom: 19,
                           ),
-                          if (activeRoute != null)
-                            PolylineLayer(
-                              polylines: [
-                                Polyline(
-                                  points: activeRoute.polylinePoints,
-                                  strokeWidth: 6.0,
-                                  color: const Color(0xFF00F0FF),
-                                ),
-                              ],
-                            ),
+                          PolylineLayer(
+                            polylines: [
+                              Polyline(
+                                points: polylinePoints,
+                                strokeWidth: 5.0,
+                                color: const Color(0xFF00F0FF),
+                              ),
+                            ],
+                          ),
                           MarkerLayer(
                             markers: [
                               Marker(
@@ -524,13 +531,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                       height: 32,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        color: const Color(0xFF0084FF).withAlpha(45),
-                                        border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
+                                        color: const Color(0xFF0084FF).withAlpha(50),
+                                        border: Border.all(color: const Color(0xFF00F0FF).withAlpha(180), width: 1.5),
                                       ),
                                     ),
                                     Container(
-                                      width: 22,
-                                      height: 22,
+                                      width: 20,
+                                      height: 20,
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
                                         color: const Color(0xFF0084FF),
@@ -539,7 +546,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                           BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
                                         ],
                                       ),
-                                      child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
+                                      child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 12),
                                     ),
                                   ],
                                 ),
@@ -549,19 +556,25 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         ],
                       ),
 
-                      // Mini Map Overlay Badge
+                      // MAP LIVE Pill Badge
                       Positioned(
-                        bottom: 4,
-                        left: 4,
+                        bottom: 6,
+                        left: 6,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: Colors.black.withAlpha(200),
                             borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.white24, width: 0.5),
                           ),
                           child: const Text(
                             'MAP LIVE',
-                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 8, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            style: TextStyle(
+                              color: Color(0xFF05FFA1),
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
                           ),
                         ),
                       ),
@@ -573,39 +586,40 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           ),
 
           // -----------------------------------------------------------
-          // RIGHT 50%: Turn Directions, Speed, Street Name & ETA Metrics
+          // RIGHT 50%: HUD Navigation Cards (Image 2 Replica)
           // -----------------------------------------------------------
           Expanded(
             flex: 1,
             child: Container(
               margin: const EdgeInsets.fromLTRB(3, 4, 6, 6),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF161E28),
+                color: const Color(0xFF151D2A),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: const Color(0xFF222F42), width: 1.2),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Row 1: Big Turn Arrow + Distance to Turn
+                  // Row 1: Maneuver Icon + Distance + Speed
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(4),
+                        width: 42,
+                        height: 42,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00F0FF).withAlpha(35),
+                          color: const Color(0xFF0F172A),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFF00F0FF), width: 1.2),
+                          border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
                         ),
-                        child: Icon(
-                          step?.icon ?? Icons.straight_rounded,
-                          color: const Color(0xFF00F0FF),
+                        child: const Icon(
+                          Icons.turn_right_rounded,
+                          color: Color(0xFF00F0FF),
                           size: 26,
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -615,9 +629,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                height: 1.1,
+                                fontWeight: FontWeight.w900,
                               ),
                             ),
                             Text(
@@ -626,7 +638,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 color: Color(0xFF05FFA1),
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
                               ),
                             ),
                           ],
@@ -635,60 +646,67 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     ],
                   ),
 
-                  // Row 2: Next Street Name Badge (Marquee/Uppercase)
+                  // Row 2: Street Name Pill Card
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
+                      color: const Color(0xFF0B111A),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: const Color(0xFF1E293B)),
                     ),
                     child: Text(
                       street.toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Color(0xFFFFB800),
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
-                        fontFamily: 'monospace',
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
 
-                  // Row 3: Arrival Time Clock & Remaining Duration/KM
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A0E14),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('DỰ KIẾN', style: TextStyle(color: Colors.white38, fontSize: 7, fontWeight: FontWeight.bold)),
-                            Text(
-                              arrivalClock,
-                              style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                  // Row 3: ETA & Remaining Distance
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'DỰ KIẾN',
+                            style: TextStyle(color: Colors.white54, fontSize: 8, fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            arrivalClock,
+                            style: const TextStyle(
+                              color: Color(0xFF00F0FF),
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
                             ),
-                          ],
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text('$totalDistKm km', style: const TextStyle(color: Colors.white70, fontSize: 8, fontFamily: 'monospace')),
-                            Text(
-                              '$etaMins ph',
-                              style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '$totalDistKm km',
+                            style: const TextStyle(color: Colors.white60, fontSize: 9),
+                          ),
+                          Text(
+                            '$etaMins ph',
+                            style: const TextStyle(
+                              color: Color(0xFF05FFA1),
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
                             ),
-                          ],
-                        ),
-                      ],
-                    ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -699,77 +717,39 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     );
   }
 
-  /// Screen View 2: Incoming Call Popup on ESP32
   Widget _buildCallPopup() {
     return Container(
-      color: const Color(0xFF002B1B),
+      color: const Color(0xFF022C22),
       padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.phone_in_talk, color: Color(0xFF05FFA1), size: 28),
-              SizedBox(width: 8),
-              Text(
-                'CUOC GOI DEN',
-                style: TextStyle(color: Color(0xFF05FFA1), fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _callerName.toUpperCase(),
-            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 12),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Text('☎️ Nhap nhay den bao...', style: TextStyle(color: Colors.white60, fontSize: 11)),
-            ],
-          ),
+          const Icon(Icons.phone_in_talk_rounded, color: Color(0xFF05FFA1), size: 36),
+          const SizedBox(height: 8),
+          const Text('CUỘC GỌI ĐẾN', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text(_callerName, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          const Text('Apple ANCS Notification', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 10)),
         ],
       ),
     );
   }
 
-  /// Screen View 3: SMS Notification Popup on ESP32
   Widget _buildSmsPopup() {
     return Container(
-      color: const Color(0xFF2B1F00),
-      padding: const EdgeInsets.all(14),
+      color: const Color(0xFF0B192C),
+      padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.mail_outline_rounded, color: Color(0xFFFFB800), size: 20),
-              SizedBox(width: 6),
-              Text(
-                'SMS: ${_smsSender.toUpperCase()}',
-                style: const TextStyle(color: Color(0xFFFFB800), fontSize: 14, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
+          const Icon(Icons.mark_chat_unread_rounded, color: Color(0xFF00F0FF), size: 36),
           const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              _smsContent,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          const Text('TIN NHẮN SMS', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text(_smsSender, style: const TextStyle(color: Color(0xFFFFB800), fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(_smsContent, style: const TextStyle(color: Colors.white, fontSize: 12), textAlign: TextAlign.center),
         ],
       ),
     );

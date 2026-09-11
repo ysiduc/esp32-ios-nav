@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -22,10 +19,6 @@ class EspStreamService extends ChangeNotifier {
   int _framesInCurrentSec = 0;
 
   Timer? _streamTimer;
-  HttpServer? _mjpegServer;
-  int _serverPort = 8080;
-  final List<HttpResponse> _mjpegClients = [];
-
   Uint8List? _latestJpegBytes;
 
   // Getters
@@ -33,7 +26,6 @@ class EspStreamService extends ChangeNotifier {
   int get targetFps => _targetFps;
   double get actualFps => _actualFps;
   int get frameSizeKb => _frameSizeKb;
-  int get serverPort => _serverPort;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
   EspStreamService({required this.bleService});
@@ -60,38 +52,12 @@ class EspStreamService extends ChangeNotifier {
     _framesInCurrentSec = 0;
     _lastFpsUpdate = DateTime.now();
 
-    // Start local MJPEG HTTP Server on port 8080
-    await _startMjpegServer();
-
     final intervalMs = (1000 / _targetFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) async {
       await _captureAndStreamFrame(_lastBoundaryKey!);
     });
 
     notifyListeners();
-  }
-
-  HttpClient? _httpClient;
-  bool _isPostingHttp = false;
-
-  Future<void> _postFrameToEsp32(Uint8List jpegBytes) async {
-    if (_isPostingHttp) return;
-    _isPostingHttp = true;
-    try {
-      _httpClient ??= HttpClient()
-        ..connectionTimeout = const Duration(milliseconds: 300)
-        ..idleTimeout = const Duration(seconds: 30);
-      final request = await _httpClient!.postUrl(Uri.parse('http://192.168.4.1/api/frame'));
-      request.persistentConnection = true;
-      request.headers.set('Content-Type', 'image/jpeg');
-      request.headers.set('Content-Length', jpegBytes.length.toString());
-      request.add(jpegBytes);
-      final response = await request.close();
-      await response.drain();
-    } catch (_) {
-    } finally {
-      _isPostingHttp = false;
-    }
   }
 
   /// High-Speed Frame Capture with Isolate Multithreading (20-30 FPS)
@@ -106,8 +72,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Adaptive scaling: target ~165px width for ultra-crisp HD 20 FPS BLE stream
-      final double targetRatio = (165.0 / boundary.size.width).clamp(0.2, 1.0);
+      // Adaptive scaling: target ~150px width for ultra-crisp HD 20 FPS BLE stream
+      final double targetRatio = (150.0 / boundary.size.width).clamp(0.2, 1.0);
       final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
@@ -126,7 +92,7 @@ class EspStreamService extends ChangeNotifier {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 40,
+        'quality': 38,
       });
 
       _latestJpegBytes = jpegBytes;
@@ -143,9 +109,7 @@ class EspStreamService extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Broadcast frame to MJPEG clients, non-blocking post to Wi-Fi & instant BLE stream
-      _broadcastMjpegFrame(jpegBytes);
-      unawaited(_postFrameToEsp32(jpegBytes));
+      // Direct BLE stream to ESP32
       await _sendJpegOverBle(jpegBytes);
     } catch (_) {
     } finally {
@@ -161,7 +125,7 @@ class EspStreamService extends ChangeNotifier {
     _isSendingBle = true;
 
     try {
-      const chunkSize = 480; // Fit in 512 MTU for ultra-fast transfer (3-4 packets/frame)
+      const chunkSize = 480; // Fit in 512 MTU for ultra-fast transfer
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);
@@ -180,69 +144,17 @@ class EspStreamService extends ChangeNotifier {
         packet[2] = frameId;
         packet[3] = totalChunks;
         packet[4] = i;
-        packet.setRange(5, packet.length, slice);
+        packet.setRange(5, 5 + slice.length, slice);
 
         await bleService.sendRawBytes(packet);
-        // Minimal 1ms delay between packets to prevent BLE hardware buffer overflow
-        await Future.delayed(const Duration(milliseconds: 1));
+        if (totalChunks > 1) {
+          await Future.delayed(const Duration(milliseconds: 3));
+        }
       }
     } catch (_) {
     } finally {
       _isSendingBle = false;
     }
-  }
-
-  /// Start HTTP MJPEG Stream Server (Accessible at http://<phone_ip>:8080/stream.mjpg)
-  Future<void> _startMjpegServer() async {
-    if (_mjpegServer != null) return;
-
-    try {
-      _mjpegServer = await HttpServer.bind(InternetAddress.anyIPv4, _serverPort);
-      _mjpegServer!.listen((HttpRequest request) {
-        final path = request.uri.path;
-
-        if (path == '/stream.mjpg' || path == '/mjpg') {
-          // Continuous MJPEG Stream
-          request.response.headers.set('Content-Type', 'multipart/x-mixed-replace; boundary=--myboundary');
-          request.response.headers.set('Cache-Control', 'no-cache, private');
-          request.response.headers.set('Connection', 'close');
-
-          _mjpegClients.add(request.response);
-        } else if (path == '/frame.jpg' || path == '/esp32.jpg' || path == '/') {
-          // Single Snapshot Frame
-          if (_latestJpegBytes != null) {
-            request.response.headers.set('Content-Type', 'image/jpeg');
-            request.response.headers.set('Content-Length', _latestJpegBytes!.length.toString());
-            request.response.add(_latestJpegBytes!);
-          }
-          request.response.close();
-        } else {
-          request.response.statusCode = HttpStatus.notFound;
-          request.response.close();
-        }
-      });
-    } catch (_) {}
-  }
-
-  void _broadcastMjpegFrame(Uint8List jpegBytes) {
-    if (_mjpegClients.isEmpty) return;
-
-    final header = utf8.encode('--myboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpegBytes.length}\r\n\r\n');
-    final footer = utf8.encode('\r\n');
-
-    final deadClients = <HttpResponse>[];
-
-    for (final client in _mjpegClients) {
-      try {
-        client.add(header);
-        client.add(jpegBytes);
-        client.add(footer);
-      } catch (_) {
-        deadClients.add(client);
-      }
-    }
-
-    _mjpegClients.removeWhere((c) => deadClients.contains(c));
   }
 
   /// Stop Streaming
@@ -252,24 +164,12 @@ class EspStreamService extends ChangeNotifier {
     _streamTimer?.cancel();
     _streamTimer = null;
     _actualFps = 0.0;
-
-    for (final client in _mjpegClients) {
-      try {
-        client.close();
-      } catch (_) {}
-    }
-    _mjpegClients.clear();
-
-    _mjpegServer?.close(force: true);
-    _mjpegServer = null;
-
     notifyListeners();
   }
 
   @override
   void dispose() {
     stopStreaming();
-    _httpClient?.close();
     super.dispose();
   }
 }

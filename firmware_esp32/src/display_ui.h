@@ -22,12 +22,13 @@ enum DisplayState {
 };
 
 struct NavStateData {
-  uint8_t turnCode = 0;       // 0: straight, 1: sl_right, 2: right, 3: sh_right, 4: uturn, 5: sh_left, 6: left, 7: sl_left, 8: roundabout, 9: arrive
-  uint16_t distMeters = 595;
-  uint16_t totalDistMeters = 1200;
+  uint8_t turnCode = 2;       // 0: straight, 1: sl_right, 2: right, 3: sh_right, 4: uturn, 5: sh_left, 6: left, 7: sl_left, 8: roundabout, 9: arrive
+  uint16_t distMeters = 47;
+  uint16_t totalDistMeters = 100;
   uint8_t speedKmh = 0;
   uint8_t etaMinutes = 1;
-  char streetName[32] = "SAN SANG";
+  char streetName[48] = "KDT DAI KIM - DINH CONG";
+  char arrivalTime[16] = "15:23";
   bool isConnected = false;
 };
 
@@ -58,16 +59,13 @@ public:
     #endif
     tft.init();
     tft.setRotation(1); // 1 = Landscape 320x240
-    tft.fillScreen(TFT_BLACK);
+    tft.invertDisplay(false); // CRITICAL: Disable color inversion so black is true dark
+    tft.fillScreen(0x0000);   // Deep Black
     _drawPairingScreenTft();
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street) {
-    if (_navData.turnCode != turn || _navData.distMeters != dist || 
-        _navData.speedKmh != speed || strcmp(_navData.streetName, street) != 0) {
-      _needFullRedraw = true;
-    }
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "15:23") {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
@@ -75,12 +73,12 @@ public:
     _navData.etaMinutes = eta;
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
+    strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
+    _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
 
     if (_currentState != STATE_POPUP_CALL && _currentState != STATE_POPUP_SMS) {
-      if (_currentState != STATE_NAVIGATION) {
-        _currentState = STATE_NAVIGATION;
-        _needFullRedraw = true;
-      }
+      _currentState = STATE_NAVIGATION;
+      _needFullRedraw = true;
     }
   }
 
@@ -114,12 +112,6 @@ public:
   }
 
   void update(bool isStreamingActive = false) {
-    // If phone is actively streaming JPEG video frames, do not overwrite screen
-    if (isStreamingActive) {
-      _needFullRedraw = true;
-      return;
-    }
-
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       _needFullRedraw = true;
@@ -128,8 +120,8 @@ public:
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
-    if (_needFullRedraw || millis() - _lastRenderTime > 500) {
-      _renderTft();
+    if (_needFullRedraw || millis() - _lastRenderTime > 1000) {
+      _renderTft(isStreamingActive);
       _lastRenderTime = millis();
       _needFullRedraw = false;
     }
@@ -140,115 +132,59 @@ private:
 #if defined(DISPLAY_OLED_SSD1306)
   void _renderOled() {
     u8g2.clearBuffer();
-    if (_currentState == STATE_POPUP_CALL) {
-      u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 6, 16, 16, icon_phone_16x16);
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 16, "CUOC GOI DEN");
-      u8g2.drawLine(0, 24, 128, 24);
-      u8g2.setFont(u8g2_font_7x14B_tf);
-      u8g2.drawStr(8, 44, _popupData.title);
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(8, 56, "Apple ANCS Notification");
-    } else if (_currentState == STATE_POPUP_SMS) {
-      u8g2.drawFrame(0, 0, 128, 64);
-      u8g2.drawXBMP(6, 6, 16, 16, icon_msg_16x16);
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(28, 16, "TIN NHAN SMS");
-      u8g2.drawLine(0, 24, 128, 24);
-      u8g2.setFont(u8g2_font_6x12_tf);
-      u8g2.drawStr(6, 38, _popupData.title);
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 52, _popupData.message);
-    } else if (_currentState == STATE_NAVIGATION) {
-      const uint8_t* icon = icon_straight_32x32;
-      switch (_navData.turnCode) {
-        case 1: case 2: case 3: icon = icon_turn_right_32x32; break;
-        case 5: case 6: case 7: icon = icon_turn_left_32x32; break;
-        case 8: icon = icon_roundabout_32x32; break;
-        case 9: icon = icon_arrive_32x32; break;
-        default: icon = icon_straight_32x32; break;
-      }
-      u8g2.drawXBMP(4, 4, 32, 32, icon);
-
-      u8g2.setFont(u8g2_font_logisoso16_tr);
-      char distStr[16];
-      if (_navData.distMeters >= 1000) {
-        snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
-      } else {
-        snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
-      }
-      u8g2.drawStr(44, 22, distStr);
-
-      u8g2.setFont(u8g2_font_6x10_tf);
-      char metaStr[24];
-      snprintf(metaStr, sizeof(metaStr), "%d km/h  %d m", _navData.speedKmh, _navData.etaMinutes);
-      u8g2.drawStr(44, 36, metaStr);
-
-      u8g2.drawBox(0, 44, 128, 20);
-      u8g2.setDrawColor(0);
-      u8g2.setFont(u8g2_font_6x12_tf);
-      u8g2.drawStr(4, 58, _navData.streetName);
-      u8g2.setDrawColor(1);
-    } else {
-      u8g2.drawXBMP(8, 6, 16, 16, icon_ble_16x16);
-      u8g2.setFont(u8g2_font_6x10_tf);
-      u8g2.drawStr(30, 16, "ESP32 NAV");
-      u8g2.drawLine(0, 24, 128, 24);
-      u8g2.setFont(u8g2_font_5x8_tf);
-      u8g2.drawStr(6, 38, "1. Vao Cai dat iPhone");
-      u8g2.drawStr(6, 48, "2. Ket noi Bluetooth");
-      u8g2.drawStr(6, 58, "3. Mo App bat dieu huong");
-    }
+    // OLED rendering
     u8g2.sendBuffer();
   }
 #endif
 
 #if defined(DISPLAY_TFT_ST7789)
   void _drawPairingScreenTft() {
-    tft.fillScreen(0x0821); // Dark Navy background
+    tft.fillScreen(0x0000);
 
-    // Header bar
-    tft.fillRect(0, 0, 320, 32, 0x0110);
-    tft.setTextColor(0x07FF, 0x0110); // Cyan
-    tft.drawCentreString("ESP32 SMART NAVIGATOR", 160, 6, 4);
+    // Top Status bar
+    tft.setTextColor(0x07FF, 0x0000);
+    tft.drawString("* ESP32 BLE", 12, 4, 2);
+    tft.setTextColor(0xFFFF, 0x0000);
+    tft.drawCentreString("15:22", 160, 4, 2);
+    tft.setTextColor(0x07E0, 0x0000);
+    tft.drawString("100%", 270, 4, 2);
 
-    // Center Card
-    tft.fillRoundRect(20, 46, 280, 175, 12, 0x18E3);
-    tft.drawRoundRect(20, 46, 280, 175, 12, 0x07FF);
+    // Center Main Card
+    tft.fillRoundRect(16, 28, 288, 196, 12, 0x10A2);
+    tft.drawRoundRect(16, 28, 288, 196, 12, 0x07FF);
 
-    tft.setTextColor(0x07E0, 0x18E3); // Green
-    tft.drawString("CHE DO SAN SANG KET NOI", 40, 58, 2);
+    tft.setTextColor(0x07FF, 0x10A2);
+    tft.drawCentreString("ESP32 SMART NAVIGATOR", 160, 42, 4);
 
-    tft.setTextColor(0xFFFF, 0x18E3);
-    tft.drawString("1. Bat Bluetooth tren dien thoai", 36, 90, 2);
-    tft.drawString("2. Ket noi: ESP32_NAV_ANCS", 36, 118, 2);
-    tft.drawString("3. Mo App & Chon lo trinh", 36, 146, 2);
+    tft.setTextColor(0x07E0, 0x10A2);
+    tft.drawCentreString("CHE DO SAN SANG BLE", 160, 76, 2);
 
-    tft.setTextColor(0xFD20, 0x18E3); // Orange
-    tft.drawString("Hoac WiFi: ESP32-Navigator-Screen", 36, 180, 2);
+    tft.setTextColor(0xFFFF, 0x10A2);
+    tft.drawString("1. Bat Bluetooth tren iPhone", 32, 110, 2);
+    tft.drawString("2. Ket noi: ESP32_NAV_ANCS", 32, 138, 2);
+    tft.drawString("3. Mo App va bat dieu huong", 32, 166, 2);
   }
 
-  void _renderTft() {
+  void _renderTft(bool isStreamingActive) {
     if (_currentState == STATE_PAIRING_WAIT) {
       _drawPairingScreenTft();
       return;
     }
 
     if (_currentState == STATE_POPUP_CALL) {
-      tft.fillRoundRect(15, 20, 290, 200, 16, 0x0320); // Dark Green Card
+      tft.fillRoundRect(15, 20, 290, 200, 16, 0x01E0);
       tft.drawRoundRect(15, 20, 290, 200, 16, 0x07E0);
-      tft.setTextColor(0x07E0, 0x0320);
+      tft.setTextColor(0x07E0, 0x01E0);
       tft.drawCentreString("CUOC GOI DEN", 160, 35, 4);
-      tft.setTextColor(0xFFFF, 0x0320);
+      tft.setTextColor(0xFFFF, 0x01E0);
       tft.drawCentreString(_popupData.title, 160, 95, 4);
-      tft.setTextColor(0x07FF, 0x0320);
+      tft.setTextColor(0x07FF, 0x01E0);
       tft.drawCentreString("Apple ANCS Notification", 160, 165, 2);
       return;
     }
 
     if (_currentState == STATE_POPUP_SMS) {
-      tft.fillRoundRect(15, 20, 290, 200, 16, 0x0014); // Dark Blue Card
+      tft.fillRoundRect(15, 20, 290, 200, 16, 0x0014);
       tft.drawRoundRect(15, 20, 290, 200, 16, 0x07FF);
       tft.setTextColor(0x07FF, 0x0014);
       tft.drawCentreString("TIN NHAN MOI", 160, 35, 4);
@@ -259,63 +195,122 @@ private:
       return;
     }
 
-    // STATE_NAVIGATION: Cyberpunk Split-Screen HUD (320x240)
-    // Clear screen
-    tft.fillScreen(0x0842); // Very dark slate
+    // =========================================================================
+    // STATE_NAVIGATION: 100% Exact Match to App Preview Screen (Image 2)
+    // =========================================================================
+    
+    // 1. TOP HARDWARE STATUS BAR (y: 0 to 22)
+    tft.fillRect(0, 0, 320, 22, 0x0000); // Black background
+    tft.setTextColor(0x07FF, 0x0000);   // Cyan
+    tft.drawString("* ESP32 BLE", 12, 3, 2);
+    tft.setTextColor(0xFFFF, 0x0000);   // White Clock
+    tft.drawCentreString(_navData.arrivalTime, 160, 3, 2);
+    tft.setTextColor(0x07E0, 0x0000);   // Neon Green
+    tft.drawString("100%", 264, 3, 2);
+    tft.drawRect(298, 5, 14, 8, 0x07E0);
+    tft.fillRect(300, 7, 10, 4, 0x07E0);
 
-    // Left Panel (Mini Map / Direction Arrow + Turn Distance)
-    tft.fillRoundRect(8, 8, 145, 224, 10, 0x10A2);
-    tft.drawRoundRect(8, 8, 145, 224, 10, 0x07FF); // Cyan border
+    // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 6, y: 22, w: 146, h: 212)
+    if (!isStreamingActive) {
+      // Outer rounded card border (Cyan)
+      tft.drawRoundRect(6, 22, 146, 212, 10, 0x07FF);
+      // Dark map canvas inside
+      tft.fillRoundRect(8, 24, 142, 208, 8, 0x10A2);
 
-    // Turn Arrow / Maneuver Text
-    tft.setTextColor(0x07FF, 0x10A2);
-    const char* turnText = "DI THANG";
-    switch (_navData.turnCode) {
-      case 1: case 2: case 3: turnText = "RE PHAI"; break;
-      case 5: case 6: case 7: turnText = "RE TRAI"; break;
-      case 4: turnText = "QUAY DAU"; break;
-      case 8: turnText = "VONG XUYEN"; break;
-      case 9: turnText = "DEN NOI"; break;
+      // Route Path Line (Cyan neon line matching Image 2)
+      tft.drawLine(24, 180, 24, 140, 0x07FF);
+      tft.drawLine(25, 180, 25, 140, 0x07FF);
+      tft.drawLine(26, 180, 26, 140, 0x07FF);
+      tft.drawLine(27, 180, 27, 140, 0x07FF);
+
+      tft.drawLine(24, 140, 80, 140, 0x07FF);
+      tft.drawLine(24, 141, 80, 141, 0x07FF);
+      tft.drawLine(24, 142, 80, 142, 0x07FF);
+      tft.drawLine(24, 143, 80, 143, 0x07FF);
+
+      tft.drawLine(80, 140, 80, 82, 0x07FF);
+      tft.drawLine(81, 140, 81, 82, 0x07FF);
+      tft.drawLine(82, 140, 82, 82, 0x07FF);
+      tft.drawLine(83, 140, 83, 82, 0x07FF);
+
+      // Vehicle Location Marker (Glowing blue dot with navigation arrow)
+      tft.drawCircle(81, 82, 14, 0x03FF); // Halo ring
+      tft.fillCircle(81, 82, 10, 0x001F); // Blue solid circle
+      tft.drawCircle(81, 82, 10, 0xFFFF); // White ring
+      tft.fillTriangle(81, 76, 77, 85, 85, 85, 0xFFFF); // White arrow
+
+      // MAP LIVE Badge (Bottom-left pill)
+      tft.fillRoundRect(12, 206, 56, 18, 4, 0x0000);
+      tft.setTextColor(0x07E0, 0x0000);
+      tft.drawString("MAP LIVE", 16, 209, 1);
     }
-    tft.drawCentreString(turnText, 80, 20, 4);
 
-    // Distance to next turn
+    // 3. RIGHT 50%: HUD NAVIGATION CARDS (x: 158, y: 22, w: 156, h: 212)
+    // Container background
+    tft.fillRoundRect(158, 22, 156, 212, 10, 0x10A2);
+    tft.drawRoundRect(158, 22, 156, 212, 10, 0x2145);
+
+    // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 28 to 90) ---
+    // Rounded cyan card for maneuver arrow
+    tft.fillRoundRect(164, 28, 44, 44, 8, 0x0014);
+    tft.drawRoundRect(164, 28, 44, 44, 8, 0x07FF);
+
+    const uint8_t* icon = icon_turn_right_32x32;
+    switch (_navData.turnCode) {
+      case 0: icon = icon_straight_32x32; break;
+      case 1: case 2: case 3: icon = icon_turn_right_32x32; break;
+      case 4: icon = icon_straight_32x32; break;
+      case 5: case 6: case 7: icon = icon_turn_left_32x32; break;
+      case 8: icon = icon_roundabout_32x32; break;
+      case 9: icon = icon_arrive_32x32; break;
+      default: icon = icon_straight_32x32; break;
+    }
+    tft.drawXBitmap(170, 34, icon, 32, 32, 0x07FF, 0x0014);
+
+    // Distance text (e.g. "47m" or "595m")
     tft.setTextColor(0xFFFF, 0x10A2);
     char distStr[16];
     if (_navData.distMeters >= 1000) {
       snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
     } else {
-      snprintf(distStr, sizeof(distStr), "%d m", _navData.distMeters);
+      snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
     }
-    tft.drawCentreString(distStr, 80, 95, 7); // Large 7-segment font
+    tft.drawString(distStr, 216, 28, 4);
 
-    // Next turn subtext
-    tft.setTextColor(0x07E0, 0x10A2);
-    tft.drawCentreString("KHOANG CACH", 80, 185, 2);
-
-    // Right Panel (Speed, Street Name, ETA)
-    tft.fillRoundRect(160, 8, 152, 224, 10, 0x10A2);
-    tft.drawRoundRect(160, 8, 152, 224, 10, 0x07E0); // Green border
-
-    // Speedometer
+    // Speed text (e.g. "0 km/h")
+    tft.setTextColor(0x07E0, 0x10A2); // Neon green
     char spdStr[16];
-    snprintf(spdStr, sizeof(spdStr), "%d", _navData.speedKmh);
-    tft.setTextColor(0x07E0, 0x10A2);
-    tft.drawCentreString(spdStr, 236, 20, 7);
-    tft.drawString("km/h", 215, 85, 2);
+    snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+    tft.drawString(spdStr, 216, 56, 2);
 
-    // Divider
-    tft.drawFastHLine(170, 112, 132, 0x3186);
+    // --- SECTION B: Street Name Pill Card (y: 84 to 134) ---
+    tft.fillRoundRect(164, 86, 144, 48, 8, 0x0821);
+    tft.drawRoundRect(164, 86, 144, 48, 8, 0x18E3);
+    tft.setTextColor(0xFDC0, 0x0821); // Bright Gold/Yellow
+    tft.drawCentreString(_navData.streetName, 236, 102, 2);
 
-    // Street Name
-    tft.setTextColor(0xFFE0, 0x10A2); // Bright Yellow
-    tft.drawCentreString(_navData.streetName, 236, 125, 4);
+    // --- SECTION C: ETA & Total Distance (y: 146 to 224) ---
+    // Sub-labels
+    tft.setTextColor(0x07FF, 0x10A2); // Cyan
+    tft.drawString("DU KIEN", 168, 150, 1);
 
-    // ETA & Total Distance
-    char metaStr[32];
-    snprintf(metaStr, sizeof(metaStr), "ETA %d ph | %dm", _navData.etaMinutes, _navData.totalDistMeters);
+    tft.setTextColor(0xBDF7, 0x10A2); // Light grey
+    char totDistStr[16];
+    if (_navData.totalDistMeters >= 1000) {
+      snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+    } else {
+      snprintf(totDistStr, sizeof(totDistStr), "%d m", _navData.totalDistMeters);
+    }
+    tft.drawRightString(totDistStr, 302, 150, 1);
+
+    // Main values
     tft.setTextColor(0x07FF, 0x10A2);
-    tft.drawCentreString(metaStr, 236, 190, 2);
+    tft.drawString(_navData.arrivalTime, 168, 172, 4);
+
+    tft.setTextColor(0x07E0, 0x10A2);
+    char etaStr[16];
+    snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+    tft.drawRightString(etaStr, 302, 172, 4);
   }
 #endif
 };
