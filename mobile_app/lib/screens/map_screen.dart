@@ -211,6 +211,10 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
+    try {
+      Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 600));
+    } catch (_) {}
+
     setState(() => _isSearching = true);
     _debounceTimer = Timer(const Duration(milliseconds: 250), () async {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
@@ -301,6 +305,10 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _calculateRoutesForPlace(MapPlace place) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final startPos = navManager.currentLocation ?? _userPosition;
+
+    try {
+      Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 1500));
+    } catch (_) {}
 
     setState(() {
       _isLoadingRoutes = true;

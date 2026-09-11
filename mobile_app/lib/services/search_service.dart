@@ -509,19 +509,14 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 3: Run Parallel Multi-Engine Queries (Photon + Nominatim)
+    // Step 3: Run High-Speed Prioritized Multi-Engine Queries
     // -------------------------------------------------------------
     final futures = <Future<List<MapPlace>>>[];
 
-    // Photon queries
-    for (final q in querySet) {
-      futures.add(_executePhotonQuery(q, nearLocation: nearLocation));
-    }
-
-    // Nominatim query for primary keywords
-    futures.add(_executeNominatimQuery(cleanQuery, nearLocation: nearLocation));
+    // Fast Photon queries (Top 2 cleanest permutations)
+    futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
     if (strippedCity != cleanQuery) {
-      futures.add(_executeNominatimQuery(strippedCity, nearLocation: nearLocation));
+      futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
     }
 
     final nestedResults = await Future.wait(futures);

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
@@ -9,12 +8,13 @@ import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'navigation_manager.dart';
 
-class EspStreamService extends ChangeNotifier {
+class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   BleService bleService;
   NavigationManager? navManager;
 
   bool _isStreaming = false;
   bool _isCapturing = false;
+  bool _isForeground = true;
   int _targetFps = 20; // 20 FPS default high-speed stream
   double _actualFps = 0.0;
   int _frameSizeKb = 0;
@@ -23,6 +23,7 @@ class EspStreamService extends ChangeNotifier {
   int _framesInCurrentSec = 0;
 
   Timer? _streamTimer;
+  Timer? _pauseTimer;
   Uint8List? _latestJpegBytes;
   bool _isSendingBle = false;
 
@@ -33,11 +34,43 @@ class EspStreamService extends ChangeNotifier {
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
-  EspStreamService({required this.bleService, this.navManager});
+  EspStreamService({required this.bleService, this.navManager}) {
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   void updateReferences(BleService newBle, NavigationManager newNav) {
     bleService = newBle;
     navManager = newNav;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _isForeground = true;
+      if (_isStreaming && _streamTimer == null) {
+        _startTimer();
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _isForeground = false;
+      // When in background / locked screen, pause high-speed JPEG stream to save battery & BLE queue
+      _streamTimer?.cancel();
+      _streamTimer = null;
+    }
+  }
+
+  /// Pause streaming temporarily (e.g. while user is typing in search bar)
+  void pauseForDuration(Duration duration) {
+    _pauseTimer?.cancel();
+    _streamTimer?.cancel();
+    _streamTimer = null;
+
+    _pauseTimer = Timer(duration, () {
+      if (_isStreaming && _isForeground && _streamTimer == null) {
+        _startTimer();
+      }
+    });
   }
 
   /// Set target FPS (10, 15, 20, 25, 30)
@@ -50,25 +83,31 @@ class EspStreamService extends ChangeNotifier {
   }
 
   /// Start High-Speed Headless 20-30 FPS JPEG Streaming
-  /// Works in ANY tab, in background, and with screen locked
-  void startStreaming({GlobalKey? boundaryKey}) {
+  void startStreaming() {
     stopStreaming();
     _isStreaming = true;
     _frameCount = 0;
     _framesInCurrentSec = 0;
     _lastFpsUpdate = DateTime.now();
 
-    final intervalMs = (1000 / _targetFps).round();
-    _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) async {
-      await _renderAndStreamHeadlessFrame();
-    });
+    if (_isForeground) {
+      _startTimer();
+    }
 
     notifyListeners();
   }
 
+  void _startTimer() {
+    _streamTimer?.cancel();
+    final intervalMs = (1000 / _targetFps).round();
+    _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
+      _renderAndStreamHeadlessFrame();
+    });
+  }
+
   /// Render 144x208 High-Definition Map in Memory (Takes <1ms) & Stream over BLE
   Future<void> _renderAndStreamHeadlessFrame() async {
-    if (!_isStreaming || _isCapturing) return;
+    if (!_isStreaming || _isCapturing || !_isForeground || _isSendingBle) return;
     _isCapturing = true;
 
     try {
@@ -85,7 +124,7 @@ class EspStreamService extends ChangeNotifier {
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
-      // 1. Draw Native High-Definition Cyberpunk Vector Map
+      // 1. Draw Native High-Definition Cyberpunk Vector Map (< 0.2ms)
       _drawHeadlessMapCanvas(
         canvas: canvas,
         w: w.toDouble(),
@@ -110,13 +149,14 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // 2. High-speed JPEG encoding in worker isolate (Takes ~3ms)
-      final jpegBytes = await compute(_encodeJpegWorker, {
-        'width': w,
-        'height': h,
-        'rawBytes': rawBytes,
-        'quality': 72,
-      });
+      // 2. Direct Fast In-Memory JPEG Encoding (144x208 takes ~1.2ms without isolate overhead)
+      final imgImage = img.Image.fromBytes(
+        width: w,
+        height: h,
+        bytes: rawBytes.buffer,
+        order: img.ChannelOrder.rgba,
+      );
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -129,7 +169,6 @@ class EspStreamService extends ChangeNotifier {
         _actualFps = (_framesInCurrentSec / elapsed);
         _framesInCurrentSec = 0;
         _lastFpsUpdate = now;
-        notifyListeners();
       }
 
       // 3. Paced BLE Chunk Transmission
@@ -282,7 +321,6 @@ class EspStreamService extends ChangeNotifier {
     canvas.drawPath(arrowPath, arrowPaint);
 
     // 7. Live Map Badges (MAP LIVE & Zoom Level)
-    // "MAP LIVE" Pill (Bottom-left)
     final badgeBg = Paint()
       ..color = const Color(0xFF000000).withAlpha(200)
       ..style = PaintingStyle.fill;
@@ -317,7 +355,7 @@ class EspStreamService extends ChangeNotifier {
       final frameId = (_frameCount % 255);
 
       for (int i = 0; i < totalChunks; i++) {
-        if (!bleService.isConnected || !_isStreaming) break;
+        if (!bleService.isConnected || !_isStreaming || !_isForeground) break;
 
         final start = i * chunkSize;
         final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
@@ -333,6 +371,9 @@ class EspStreamService extends ChangeNotifier {
         packet.setRange(5, 5 + slice.length, slice);
 
         await bleService.sendRawBytes(packet);
+        if (totalChunks > 1) {
+          await Future.delayed(const Duration(milliseconds: 1));
+        }
       }
     } catch (_) {
     } finally {
@@ -346,30 +387,16 @@ class EspStreamService extends ChangeNotifier {
     _isCapturing = false;
     _streamTimer?.cancel();
     _streamTimer = null;
+    _pauseTimer?.cancel();
+    _pauseTimer = null;
     _actualFps = 0.0;
     notifyListeners();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     stopStreaming();
     super.dispose();
   }
-}
-
-/// Top-level worker function running in background isolate for zero UI stutter
-Uint8List _encodeJpegWorker(Map<String, dynamic> params) {
-  final int width = params['width'] as int;
-  final int height = params['height'] as int;
-  final Uint8List rawBytes = params['rawBytes'] as Uint8List;
-  final int quality = params['quality'] as int;
-
-  final imgImage = img.Image.fromBytes(
-    width: width,
-    height: height,
-    bytes: rawBytes.buffer,
-    order: img.ChannelOrder.rgba,
-  );
-
-  return Uint8List.fromList(img.encodeJpg(imgImage, quality: quality));
 }

@@ -84,7 +84,9 @@ class BleService extends ChangeNotifier {
     final item = BleLogItem(message: msg, isError: isError, isTx: isTx);
     _logs.insert(0, item);
     if (_logs.length > 100) _logs.removeLast();
-    notifyListeners();
+    if (isError) {
+      notifyListeners();
+    }
   }
 
   /// Start scanning for BLE devices
