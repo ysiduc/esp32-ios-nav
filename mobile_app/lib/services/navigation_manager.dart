@@ -7,10 +7,12 @@ import '../models/esp_payload.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'osrm_service.dart';
+import 'phone_media_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
   final OsrmService _osrmService = OsrmService();
+  PhoneMediaService? _mediaService;
 
   // Active navigation state
   bool _isNavigating = false;
@@ -40,6 +42,7 @@ class NavigationManager extends ChangeNotifier {
   bool get isSimulating => _isSimulating;
   bool get isRerouting => _isRerouting;
   NavRoute? get activeRoute => _activeRoute;
+  PhoneMediaService? get mediaService => _mediaService;
   int get currentStepIndex => _currentStepIndex;
   LatLng? get currentLocation => _currentLocation;
   double get currentSpeedKmh => _currentSpeedKmh;
@@ -55,9 +58,24 @@ class NavigationManager extends ChangeNotifier {
     return _activeRoute!.steps[_currentStepIndex];
   }
 
-  NavigationManager({required this.bleService}) {
+  NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
     _initGps();
     _startIdleHeartbeat();
+    if (mediaService != null) {
+      attachMediaService(mediaService);
+    }
+  }
+
+  void attachMediaService(PhoneMediaService mediaService) {
+    _mediaService = mediaService;
+    if (mediaService.hasMedia) {
+      _currentSongTitle = mediaService.songTitle;
+      _currentSongArtist = mediaService.songArtist;
+      _isMusicPlaying = mediaService.isPlaying;
+    }
+    mediaService.onMediaChanged = (title, artist, isPlaying) {
+      setSong(title, artist, isPlaying: isPlaying);
+    };
   }
 
   void _startIdleHeartbeat() {
@@ -271,14 +289,17 @@ class NavigationManager extends ChangeNotifier {
     _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
   }
 
-  String _currentSongTitle = 'Waiting For You';
-  String _currentSongArtist = 'MONO';
+  String _currentSongTitle = '';
+  String _currentSongArtist = '';
+  bool _isMusicPlaying = false;
   String get currentSongTitle => _currentSongTitle;
   String get currentSongArtist => _currentSongArtist;
+  bool get isMusicPlaying => _isMusicPlaying;
 
-  void setSong(String title, String artist) {
-    _currentSongTitle = title;
-    _currentSongArtist = artist;
+  void setSong(String title, String artist, {bool isPlaying = true}) {
+    _currentSongTitle = title.trim();
+    _currentSongArtist = artist.trim();
+    _isMusicPlaying = isPlaying;
     sendPreviewPayloadToEsp32();
     notifyListeners();
   }
@@ -327,8 +348,8 @@ class NavigationManager extends ChangeNotifier {
       routePoints: upcomingPts,
       currentClock: curClock,
       batteryLevel: 89,
-      songTitle: _currentSongTitle,
-      songArtist: _currentSongArtist,
+      songTitle: _currentSongTitle.isNotEmpty ? _currentSongTitle : 'CHUA PHAT NHAC',
+      songArtist: _currentSongArtist.isNotEmpty ? _currentSongArtist : 'MO NHAC TREN IPHONE',
     );
 
     bleService.sendNavPayload(payload);
@@ -354,8 +375,8 @@ class NavigationManager extends ChangeNotifier {
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
       currentClock: curClock,
       batteryLevel: 89,
-      songTitle: _currentSongTitle,
-      songArtist: _currentSongArtist,
+      songTitle: _currentSongTitle.isNotEmpty ? _currentSongTitle : 'CHUA PHAT NHAC',
+      songArtist: _currentSongArtist.isNotEmpty ? _currentSongArtist : 'MO NHAC TREN IPHONE',
     );
 
     bleService.sendNavPayload(payload);

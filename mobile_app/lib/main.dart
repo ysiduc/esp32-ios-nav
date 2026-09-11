@@ -5,6 +5,8 @@ import 'services/ble_service.dart';
 import 'services/esp_stream_service.dart';
 import 'services/navigation_manager.dart';
 
+import 'services/phone_media_service.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const Esp32NavApp());
@@ -20,12 +22,20 @@ class Esp32NavApp extends StatelessWidget {
         ChangeNotifierProvider<BleService>(
           create: (_) => BleService(),
         ),
-        ChangeNotifierProxyProvider<BleService, NavigationManager>(
+        ChangeNotifierProvider<PhoneMediaService>(
+          create: (_) => PhoneMediaService(),
+        ),
+        ChangeNotifierProxyProvider2<BleService, PhoneMediaService, NavigationManager>(
           create: (ctx) => NavigationManager(
             bleService: Provider.of<BleService>(ctx, listen: false),
+            mediaService: Provider.of<PhoneMediaService>(ctx, listen: false),
           ),
-          update: (ctx, bleService, previousNavManager) =>
-              previousNavManager ?? NavigationManager(bleService: bleService),
+          update: (ctx, bleService, mediaService, previousNavManager) {
+            final nav = previousNavManager ??
+                NavigationManager(bleService: bleService, mediaService: mediaService);
+            nav.attachMediaService(mediaService);
+            return nav;
+          },
         ),
         ChangeNotifierProxyProvider2<BleService, NavigationManager, EspStreamService>(
           create: (ctx) => EspStreamService(

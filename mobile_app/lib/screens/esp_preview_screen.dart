@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/navigation_manager.dart';
+import '../services/phone_media_service.dart';
 
 class EspPreviewScreen extends StatefulWidget {
   const EspPreviewScreen({super.key});
@@ -108,6 +109,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final navManager = context.watch<NavigationManager>();
     final bleService = context.watch<BleService>();
     final streamService = context.watch<EspStreamService>();
+    final mediaService = context.watch<PhoneMediaService>();
 
     final userLoc = navManager.currentLocation ??
         (navManager.activeRoute?.polylinePoints.isNotEmpty == true
@@ -364,38 +366,86 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Text(
-                    'Đang phát: ${navManager.currentSongTitle} - ${navManager.currentSongArtist}',
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                  // Real-time iOS Now Playing Detection Status Banner
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0B111A),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: mediaService.hasMedia ? const Color(0xFF05FFA1).withAlpha(140) : Colors.white12,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          mediaService.hasMedia ? Icons.graphic_eq_rounded : Icons.music_off_rounded,
+                          color: mediaService.hasMedia ? const Color(0xFF05FFA1) : Colors.white38,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                mediaService.hasMedia ? 'PHÁT HIỆN TỪ IPHONE (REAL-TIME)' : 'CHƯA PHÁT NHẠC TRÊN IPHONE',
+                                style: TextStyle(
+                                  color: mediaService.hasMedia ? const Color(0xFF05FFA1) : Colors.white38,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                mediaService.hasMedia
+                                    ? '${mediaService.songTitle} - ${mediaService.songArtist}'
+                                    : 'Mở Spotify, Apple Music, YouTube hoặc Zing MP3...',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: mediaService.hasMedia ? Colors.white : Colors.white54,
+                                  fontSize: 12,
+                                  fontWeight: mediaService.hasMedia ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
                     runSpacing: 6,
                     children: [
                       ActionChip(
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Waiting For You - MONO', style: TextStyle(color: Colors.white70, fontSize: 11)),
-                        onPressed: () => navManager.setSong('Waiting For You', 'MONO'),
+                        avatar: const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF00F0FF)),
+                        backgroundColor: const Color(0xFF00F0FF).withAlpha(25),
+                        side: const BorderSide(color: Color(0xFF00F0FF)),
+                        label: const Text('Lấy lại nhạc iPhone', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        onPressed: () => mediaService.pollNowPlaying(),
                       ),
                       ActionChip(
                         backgroundColor: const Color(0xFF0E1520),
                         side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Nơi Này Có Anh - M-TP', style: TextStyle(color: Colors.white70, fontSize: 11)),
-                        onPressed: () => navManager.setSong('Noi Nay Co Anh', 'Son Tung M-TP'),
+                        label: const Text('Simulate: Waiting For You', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        onPressed: () => mediaService.setMockSong('Waiting For You', 'MONO'),
                       ),
                       ActionChip(
                         backgroundColor: const Color(0xFF0E1520),
                         side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Cắt Đôi Nỗi Sầu - TDT', style: TextStyle(color: Colors.white70, fontSize: 11)),
-                        onPressed: () => navManager.setSong('Cat Doi Noi Sau', 'Tang Duy Tan'),
+                        label: const Text('Simulate: Nơi Này Có Anh', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        onPressed: () => mediaService.setMockSong('Noi Nay Co Anh', 'Son Tung M-TP'),
                       ),
                       ActionChip(
                         avatar: const Icon(Icons.edit, size: 14, color: Color(0xFF00F0FF)),
-                        backgroundColor: const Color(0xFF00F0FF).withAlpha(30),
-                        side: const BorderSide(color: Color(0xFF00F0FF)),
-                        label: const Text('Đổi bài hát...', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        backgroundColor: const Color(0xFF0E1520),
+                        side: const BorderSide(color: Color(0xFF1E293B)),
+                        label: const Text('Nhập tùy ý...', style: TextStyle(color: Colors.white70, fontSize: 11)),
                         onPressed: () => _showEditSongDialog(context, navManager),
                       ),
                     ],
@@ -657,65 +707,76 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFF1E293B)),
           ),
-          child: Column(
-            children: [
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+          child: Builder(
+            builder: (context) {
+              final hasSong = navManager.currentSongTitle.isNotEmpty && navManager.currentSongTitle != 'CHUA PHAT NHAC';
+              return Column(
                 children: [
-                  Icon(Icons.play_arrow_rounded, color: Color(0xFFFFB800), size: 13),
-                  SizedBox(width: 3),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        hasSong ? Icons.play_arrow_rounded : Icons.headphones_rounded,
+                        color: hasSong ? const Color(0xFFFFB800) : Colors.white38,
+                        size: 13,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        hasSong ? 'ĐANG PHÁT' : 'CHƯA PHÁT NHẠC',
+                        style: TextStyle(
+                          color: hasSong ? const Color(0xFFFFB800) : Colors.white38,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
                   Text(
-                    'ĐANG PHÁT',
+                    (hasSong ? navManager.currentSongTitle : 'MỞ NHẠC TRÊN IPHONE').toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Color(0xFFFFB800),
-                      fontSize: 9,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
+                      color: hasSong ? Colors.white : Colors.white54,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
+                  Text(
+                    (hasSong ? navManager.currentSongArtist : 'SPOTIFY / APPLE MUSIC').toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFF94A3B8),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  // Audio Sound Equalizer visualizer bars
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: (hasSong
+                            ? [4, 10, 16, 12, 6, 14, 18, 8, 12, 6]
+                            : [2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+                        .map((h) => Container(
+                              width: 3.5,
+                              height: h.toDouble(),
+                              margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                              decoration: BoxDecoration(
+                                color: hasSong ? const Color(0xFF00F0FF) : const Color(0xFF1E293B),
+                                borderRadius: BorderRadius.circular(1.5),
+                              ),
+                            ))
+                        .toList(),
+                  ),
                 ],
-              ),
-              const SizedBox(height: 3),
-              Text(
-                navManager.currentSongTitle.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              Text(
-                navManager.currentSongArtist.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF94A3B8),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 5),
-              // Audio Sound Equalizer visualizer bars
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [4, 10, 16, 12, 6, 14, 18, 8, 12, 6]
-                    .map((h) => Container(
-                          width: 3.5,
-                          height: h.toDouble(),
-                          margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00F0FF),
-                            borderRadius: BorderRadius.circular(1.5),
-                          ),
-                        ))
-                    .toList(),
-              ),
-            ],
+              );
+            },
           ),
         ),
 

@@ -434,33 +434,51 @@ private:
       tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
       tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
 
-      // Music Icon & "DANG PHAT" tag
-      tft.setTextColor(TFT_YELLOW, cPillBg);
-      tft.drawString("[>] DANG PHAT", 172, 100, 1);
+      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
 
-      // Song Title
-      tft.setTextColor(TFT_WHITE, cPillBg);
-      char upperSong[48];
-      strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
-      upperSong[sizeof(upperSong) - 1] = '\0';
-      for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
-      tft.drawCentreString(upperSong, 237, 116, 2);
+      if (hasSong) {
+        // Music Icon & "DANG PHAT" tag
+        tft.setTextColor(TFT_YELLOW, cPillBg);
+        tft.drawString("[>] DANG PHAT", 172, 100, 1);
 
-      // Artist
-      tft.setTextColor(cSubText, cPillBg);
-      char upperArtist[32];
-      strncpy(upperArtist, _navData.songArtist, sizeof(upperArtist) - 1);
-      upperArtist[sizeof(upperArtist) - 1] = '\0';
-      for (int i = 0; upperArtist[i]; i++) upperArtist[i] = toupper((unsigned char)upperArtist[i]);
-      tft.drawCentreString(upperArtist, 237, 136, 1);
+        // Song Title
+        tft.setTextColor(TFT_WHITE, cPillBg);
+        char upperSong[48];
+        strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
+        upperSong[sizeof(upperSong) - 1] = '\0';
+        for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
+        tft.drawCentreString(upperSong, 237, 116, 2);
 
-      // Sound Equalizer Bars (animated/styled audio bars)
-      uint16_t cEq = TFT_CYAN;
-      int eqHeights[] = {4, 10, 16, 12, 6, 14, 18, 8, 12, 6};
-      for (int b = 0; b < 10; b++) {
-        int bx = 188 + (b * 10);
-        int by = 166 - eqHeights[b];
-        tft.fillRect(bx, by, 5, eqHeights[b], cEq);
+        // Artist
+        tft.setTextColor(cSubText, cPillBg);
+        char upperArtist[32];
+        strncpy(upperArtist, _navData.songArtist, sizeof(upperArtist) - 1);
+        upperArtist[sizeof(upperArtist) - 1] = '\0';
+        for (int i = 0; upperArtist[i]; i++) upperArtist[i] = toupper((unsigned char)upperArtist[i]);
+        tft.drawCentreString(upperArtist, 237, 136, 1);
+
+        // Sound Equalizer Bars (active cyan)
+        uint16_t cEq = TFT_CYAN;
+        int eqHeights[] = {4, 10, 16, 12, 6, 14, 18, 8, 12, 6};
+        for (int b = 0; b < 10; b++) {
+          int bx = 188 + (b * 10);
+          int by = 166 - eqHeights[b];
+          tft.fillRect(bx, by, 5, eqHeights[b], cEq);
+        }
+      } else {
+        tft.setTextColor(cSubText, cPillBg);
+        tft.drawString("[--] CHUA PHAT", 172, 100, 1);
+
+        tft.setTextColor(cSubText, cPillBg);
+        tft.drawCentreString("MO NHAC TREN DT", 237, 116, 2);
+        tft.drawCentreString("SPOTIFY / APPLE MUSIC", 237, 136, 1);
+
+        // Dim flat equalizer bars
+        uint16_t cDim = tft.color565(30, 41, 59);
+        for (int b = 0; b < 10; b++) {
+          int bx = 188 + (b * 10);
+          tft.fillRect(bx, 164, 5, 2, cDim);
+        }
       }
 
       // D. Bottom Status: "San sang di chuyen" (y: 186)

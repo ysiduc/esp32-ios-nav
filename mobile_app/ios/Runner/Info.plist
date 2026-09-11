@@ -52,6 +52,10 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Ung dung can Bluetooth de ket noi voi thiet bi ESP32</string>
 
+	<!-- Quyen doc thong tin bai hat dang phat tu iPhone -->
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Ung dung can doc thong tin bai hat dang phat tren dien thoai de hien thi len man hinh ESP32</string>
+
 	<!-- Quyen Vi tri GPS -->
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Ung dung can vi tri de ve lo trinh ban do va dieu huong chi duong</string>
