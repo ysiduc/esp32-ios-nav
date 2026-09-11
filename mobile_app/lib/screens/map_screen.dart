@@ -987,7 +987,7 @@ class _MapScreenState extends State<MapScreen> {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: categories.length + 1,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
             // First item: 1-Tap Google Maps Paste Chip
@@ -1173,7 +1173,7 @@ class _MapScreenState extends State<MapScreen> {
                         shrinkWrap: true,
                         padding: EdgeInsets.zero,
                         itemCount: listToShow.length,
-                        separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
+                        separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
                         itemBuilder: (context, index) {
                           final place = listToShow[index];
                           return Material(
@@ -1531,7 +1531,7 @@ class _MapScreenState extends State<MapScreen> {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: _routes.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
                 itemBuilder: (context, index) {
                   final r = _routes[index];
                   final isSelected = _selectedRouteIndex == index;
@@ -1715,7 +1715,7 @@ class _MapScreenState extends State<MapScreen> {
                   child: ListView.separated(
                     controller: scrollController,
                     itemCount: route.steps.length,
-                    separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
+                    separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
                     itemBuilder: (context, idx) {
                       final step = route.steps[idx];
                       final distStr = step.distanceMeters >= 1000
