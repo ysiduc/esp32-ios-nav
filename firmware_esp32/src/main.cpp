@@ -20,9 +20,9 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* 
 TFT_eSPI tft = TFT_eSPI();
 #include <TJpg_Decoder.h>
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-  if (y >= tft.height()) return 0;
-  // Clip or draw to mini-map frame at (8, 24)
-  tft.pushImage(x + 8, y + 24, w, h, bitmap);
+  if (y >= tft.height() || x >= 154) return 1;
+  int16_t drawW = (x + w > 154) ? (154 - x) : w;
+  tft.pushImage(x, y, drawW, h, bitmap);
   return 1;
 }
 #endif
@@ -33,14 +33,14 @@ NimBLECharacteristic* pNavChar = nullptr;
 
 // Navigation & Telemetry State
 volatile bool bleConnected = false;
-volatile uint8_t curTurn = 2; // Right turn
-volatile uint16_t curDist = 47;
-volatile uint16_t curTotalDist = 100;
+volatile uint8_t curTurn = 6; // Turn Left (Image 3)
+volatile uint16_t curDist = 208;
+volatile uint16_t curTotalDist = 5900;
 volatile uint8_t curSpeed = 0;
-volatile uint8_t curEta = 1;
+volatile uint8_t curEta = 11;
 volatile int curHeading = 0;
-String curStreet = "KDT DAI KIM - DINH CONG";
-String curArrival = "15:23";
+String curStreet = "CAU SONG LU";
+String curArrival = "12:05";
 
 // ANCS / Notification State
 String popupTitle = "";
@@ -95,7 +95,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         jpegFrameLen = bleJpegBytesReceived;
         lastFrameTime = millis();
         #if defined(DISPLAY_TFT_ST7789)
-        TJpgDec.drawJpg(0, 0, jpegFrameBuf, jpegFrameLen);
+        TJpgDec.drawJpg(6, 26, jpegFrameBuf, jpegFrameLen);
         #endif
       }
       return;
@@ -131,8 +131,8 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       curTotalDist = doc["tot_dist"] | 0;
       curSpeed = doc["speed"] | 0;
       curEta = doc["eta"] | 0;
-      curStreet = String(doc["street"] | "Tiep tuc");
-      curArrival = String(doc["arrival"] | "15:23");
+      curStreet = String(doc["street"] | "CAU SONG LU");
+      curArrival = String(doc["arrival"] | "12:05");
       if (doc["head"].is<int>()) curHeading = doc["head"];
 
       display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str());
@@ -146,13 +146,13 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (BLE 100% PURE) ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (IMAGE 3 100% MATCH) ===");
 
   // 1. Start Display
   display.init();
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
-  TJpgDec.setSwapBytes(true);
+  TJpgDec.setSwapBytes(false);
   TJpgDec.setCallback(tft_output);
   #endif
 
