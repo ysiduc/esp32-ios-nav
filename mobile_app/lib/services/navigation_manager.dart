@@ -387,6 +387,12 @@ class NavigationManager extends ChangeNotifier {
     _isNavigating = false;
     _isSimulating = false;
     _isRerouting = false;
+    _activeRoute = null; // Clear active route so minimap returns to standby mode!
+    _currentStepIndex = 0;
+    _simulatedPolylineIndex = 0;
+    _distanceToNextManeuver = 0.0;
+    _remainingTotalDistance = 0.0;
+    _remainingEtaMinutes = 0;
     _positionStream?.cancel();
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();

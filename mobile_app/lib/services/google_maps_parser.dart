@@ -208,16 +208,7 @@ class GoogleMapsParser {
   LatLng? _extractCoordinateFromUrl(String url) {
     final decoded = Uri.decodeFull(url);
 
-    // Format A: @21.028511,105.854212
-    final atRegex = RegExp(r'@(\-?\d{1,2}\.\d{3,}),(\-?\d{1,3}\.\d{3,})');
-    final atMatch = atRegex.firstMatch(decoded);
-    if (atMatch != null) {
-      final lat = double.tryParse(atMatch.group(1)!);
-      final lon = double.tryParse(atMatch.group(2)!);
-      if (lat != null && lon != null) return LatLng(lat, lon);
-    }
-
-    // Format B: !3d21.028511!4d105.854212 (Google Maps Protobuf data string)
+    // Priority 1: !3d21.028511!4d105.854212 (Exact Google Maps Place/POI/Pin Protobuf coordinates)
     final protoRegex = RegExp(r'!3d(\-?\d{1,2}\.\d{3,})!4d(\-?\d{1,3}\.\d{3,})');
     final protoMatch = protoRegex.firstMatch(decoded);
     if (protoMatch != null) {
@@ -226,7 +217,7 @@ class GoogleMapsParser {
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // Format C: ?q=21.028511,105.854212 or ?destination=... or ?ll=... or ?daddr=...
+    // Priority 2: ?q=21.028511,105.854212 or ?destination=... or ?ll=... or ?daddr=... (Explicit Pin/Query)
     final qRegex = RegExp(
       r'[?&](?:q|ll|destination|center|daddr|saddr|query)=(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})',
     );
@@ -237,7 +228,7 @@ class GoogleMapsParser {
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // Format D: /search/21.028511,+105.854212 or /search/21.028511,105.854212
+    // Priority 3: /search/21.028511,+105.854212 or /search/21.028511,105.854212
     final searchCoordRegex = RegExp(
       r'/search/(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})',
     );
@@ -248,9 +239,18 @@ class GoogleMapsParser {
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // Format E: Embedded DMS in URL e.g. /place/20°59'07.8"N+105°50'29.4"E
+    // Priority 4: Embedded DMS in URL e.g. /place/20°59'07.8"N+105°50'29.4"E
     final dmsCoord = parseDms(decoded);
     if (dmsCoord != null) return dmsCoord;
+
+    // Priority 5 (Fallback only): @21.028511,105.854212 (Camera viewport center)
+    final atRegex = RegExp(r'@(\-?\d{1,2}\.\d{3,}),(\-?\d{1,3}\.\d{3,})');
+    final atMatch = atRegex.firstMatch(decoded);
+    if (atMatch != null) {
+      final lat = double.tryParse(atMatch.group(1)!);
+      final lon = double.tryParse(atMatch.group(2)!);
+      if (lat != null && lon != null) return LatLng(lat, lon);
+    }
 
     return null;
   }

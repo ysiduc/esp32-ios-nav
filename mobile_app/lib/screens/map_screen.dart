@@ -1801,7 +1801,15 @@ class _MapScreenState extends State<MapScreen> {
                 padding: const EdgeInsets.all(14),
                 elevation: 4,
               ),
-              onPressed: () => navManager.stopNavigation(),
+              onPressed: () {
+                navManager.stopNavigation();
+                _mapController?.clearLines();
+                setState(() {
+                  _viewMode = 0;
+                  _routes = [];
+                  _selectedPlace = null;
+                });
+              },
               child: const Icon(Icons.close_rounded, size: 24),
             ),
           ],

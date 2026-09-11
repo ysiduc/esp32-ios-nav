@@ -18,12 +18,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 30; // 30 FPS target stream rate
-  double _actualFps = 30.0;
+  int _targetFps = 10; // Cool, energy-efficient 10 FPS stream (saves phone battery & CPU)
+  double _actualFps = 10.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
   int _framesInCurrentSec = 0;
+  int _stationaryTick = 0;
 
   Timer? _streamTimer;
   Timer? _pauseTimer;
@@ -99,9 +100,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Change target FPS (15 - 30)
+  /// Change target FPS (5 - 15)
   void setTargetFps(int fps) {
-    _targetFps = fps.clamp(10, 30);
+    _targetFps = fps.clamp(5, 15);
     if (_isStreaming && _isForeground) {
       startStreaming();
     }
@@ -150,6 +151,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
+      final isSim = navManager?.isSimulating ?? false;
+
+      // Smart Thermal Protection: When stationary / idle (speed < 1.5 km/h),
+      // throttle rendering to 2 FPS to keep the phone completely cool & save battery!
+      if (!isSim && speedKmh < 1.5) {
+        _stationaryTick = (_stationaryTick + 1) % 5;
+        if (_stationaryTick != 0 && _latestJpegBytes != null) {
+          _isCapturing = false;
+          return;
+        }
+      }
 
       // Pre-fetch surrounding tiles asynchronously
       _prefetchSurroundingTiles(userPos, 16);
@@ -339,8 +351,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Draw Route Polyline whenever route is available (in navigation, simulation, or preview)
-    final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
+    // Draw Route Polyline ONLY when user is actively navigating or simulating
+    final isNav = (navManager?.isNavigating ?? false) || (navManager?.isSimulating ?? false);
+    final points = (isNav && activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
         ? activeRoute.polylinePoints
         : <LatLng>[];
 
