@@ -22,6 +22,7 @@ static NimBLEUUID navCharUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 22, /* data=*/ 21);
 #elif defined(DISPLAY_TFT_ST7789)
 TFT_eSPI tft = TFT_eSPI();
+U8g2_for_TFT_eSPI u8f;
 #include <TJpg_Decoder.h>
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= 154) return 1;

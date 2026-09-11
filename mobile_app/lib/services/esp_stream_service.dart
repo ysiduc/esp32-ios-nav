@@ -230,19 +230,32 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   LatLng? _lastPrefetchPos;
 
-  /// Asynchronously pre-fetch surrounding Google Maps HD / CartoDB tiles
+  /// Asynchronously pre-fetch surrounding MapTiler / OSM HD tiles
   void _prefetchSurroundingTiles(LatLng pos, int zoom) {
-    if (_lastPrefetchPos != null) {
-      final dLat = (pos.latitude - _lastPrefetchPos!.latitude).abs();
-      final dLon = (pos.longitude - _lastPrefetchPos!.longitude).abs();
-      if (dLat < 0.0003 && dLon < 0.0003) return;
-    }
-    _lastPrefetchPos = pos;
-
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = pos.latitude * (math.pi / 180.0);
     final int cx = ((pos.longitude + 180.0) / 360.0 * n).floor();
     final int cy = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n).floor();
+
+    // If surrounding 9 tiles are already cached and position hasn't moved significantly, skip
+    if (_lastPrefetchPos != null) {
+      final dLat = (pos.latitude - _lastPrefetchPos!.latitude).abs();
+      final dLon = (pos.longitude - _lastPrefetchPos!.longitude).abs();
+      if (dLat < 0.0003 && dLon < 0.0003) {
+        bool allCached = true;
+        for (int dx = -1; dx <= 1; dx++) {
+          for (int dy = -1; dy <= 1; dy++) {
+            if (!_tileCache.containsKey('$zoom/${cx + dx}/${cy + dy}')) {
+              allCached = false;
+              break;
+            }
+          }
+          if (!allCached) break;
+        }
+        if (allCached) return;
+      }
+    }
+    _lastPrefetchPos = pos;
 
     for (int dx = -1; dx <= 1; dx++) {
       for (int dy = -1; dy <= 1; dy++) {
@@ -266,7 +279,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final url = apiKey.isNotEmpty
           ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y.$ext?key=$apiKey'
           : 'https://tile.openstreetmap.org/$z/$x/$y.png';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 4));
+
+      var response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'ESP32NavApp/2.0'},
+      ).timeout(const Duration(seconds: 4));
+
+      // Fallback to OSM standard tile if MapTiler failed or rate-limited
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        final fallbackUrl = 'https://tile.openstreetmap.org/$z/$x/$y.png';
+        response = await http.get(
+          Uri.parse(fallbackUrl),
+          headers: {'User-Agent': 'ESP32NavApp/2.0'},
+        ).timeout(const Duration(seconds: 4));
+      }
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
         final codec = await ui.instantiateImageCodec(response.bodyBytes);
@@ -277,6 +303,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           final firstKey = _tileCache.keys.first;
           _tileCache.remove(firstKey)?.dispose();
         }
+
+        // Trigger immediate redraw so black screen is updated with the real map as soon as tile loads!
+        _latestJpegBytes = null;
+        notifyListeners();
       }
     } catch (_) {
     } finally {
@@ -295,8 +325,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double distToTurn,
     required double speedKmh,
   }) {
-    // 1. Background Fill: Deep Dark Slate (#0F172A)
-    final bgPaint = Paint()..color = const Color(0xFF0F172A);
+    // 1. Background Fill: Dark Navy Cyber Slate (#0B111A)
+    final bgPaint = Paint()..color = const Color(0xFF0B111A);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle screen anchor (lower center: x=72, y=140)
@@ -338,10 +368,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Fallback Spatial Grid if tiles still loading
+    // High-visibility Cyber Blueprint Grid if tiles still loading
     if (!tilesDrawn) {
       final gridPaint = Paint()
-        ..color = const Color(0xFF1E293B)
+        ..color = const Color(0xFF1E2D42)
         ..strokeWidth = 1.0;
       for (double gx = -200; gx <= 200; gx += 28) {
         canvas.drawLine(Offset(gx, -200), Offset(gx, 200), gridPaint);
@@ -349,6 +379,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       for (double gy = -200; gy <= 200; gy += 28) {
         canvas.drawLine(Offset(-200, gy), Offset(200, gy), gridPaint);
       }
+
+      // Dynamic radar range rings & axes
+      final radarPaint = Paint()
+        ..color = const Color(0xFF00F0FF).withAlpha(50)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke;
+      canvas.drawCircle(Offset.zero, 45, radarPaint);
+      canvas.drawCircle(Offset.zero, 90, radarPaint);
+      canvas.drawLine(const Offset(-160, 0), const Offset(160, 0), radarPaint);
+      canvas.drawLine(const Offset(0, -160), const Offset(0, 160), radarPaint);
     }
 
     // Draw Route Polyline ONLY when user is actively navigating or simulating

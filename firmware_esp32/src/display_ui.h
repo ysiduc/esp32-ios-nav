@@ -10,6 +10,9 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
 #elif defined(DISPLAY_TFT_ST7789)
 #include <TFT_eSPI.h>
+#include <U8g2_for_TFT_eSPI.h>
+extern U8g2_for_TFT_eSPI u8f;
+
 extern TFT_eSPI tft;
 #endif
 
@@ -73,6 +76,9 @@ public:
     tft.setRotation(1); // Landscape 320x240
     tft.invertDisplay(false);
     tft.fillScreen(TFT_BLACK);
+    u8f.begin(tft);
+    u8f.setFontMode(0);
+    u8f.setFontDirection(0);
     _drawPairingScreenTft();
 #endif
   }
@@ -185,6 +191,24 @@ private:
 #endif
 
 #if defined(DISPLAY_TFT_ST7789)
+  
+  void _drawUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    u8f.setFont(font);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+    u8f.setCursor(x, y + 13);
+    u8f.print(str);
+  }
+
+  void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    u8f.setFont(font);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+    int w = u8f.getUTF8Width(str);
+    u8f.setCursor(cx - (w / 2), y + 13);
+    u8f.print(str);
+  }
+
   void _drawPairingScreenTft() {
     tft.fillScreen(TFT_BLACK);
 
@@ -363,12 +387,9 @@ private:
       uint16_t cCallBg = tft.color565(2, 44, 34);
       tft.fillRoundRect(15, 20, 290, 200, 16, cCallBg);
       tft.drawRoundRect(15, 20, 290, 200, 16, TFT_GREEN);
-      tft.setTextColor(TFT_GREEN, cCallBg);
-      tft.drawCentreString("CUOC GOI DEN", 160, 35, 4);
-      tft.setTextColor(TFT_WHITE, cCallBg);
-      tft.drawCentreString(_popupData.title, 160, 95, 4);
-      tft.setTextColor(TFT_CYAN, cCallBg);
-      tft.drawCentreString("Apple ANCS Notification", 160, 165, 2);
+      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 35, TFT_GREEN, cCallBg);
+      _drawCentreUtf8String(_popupData.title, 160, 95, TFT_WHITE, cCallBg);
+      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 165, TFT_CYAN, cCallBg);
       return;
     }
 
@@ -376,12 +397,9 @@ private:
       uint16_t cSmsBg = tft.color565(11, 25, 44);
       tft.fillRoundRect(15, 20, 290, 200, 16, cSmsBg);
       tft.drawRoundRect(15, 20, 290, 200, 16, TFT_CYAN);
-      tft.setTextColor(TFT_CYAN, cSmsBg);
-      tft.drawCentreString("TIN NHAN MOI", 160, 35, 4);
-      tft.setTextColor(TFT_YELLOW, cSmsBg);
-      tft.drawCentreString(_popupData.title, 160, 85, 4);
-      tft.setTextColor(TFT_WHITE, cSmsBg);
-      tft.drawCentreString(_popupData.message, 160, 135, 2);
+      _drawCentreUtf8String("TIN NHẮN MỚI", 160, 35, TFT_CYAN, cSmsBg);
+      _drawCentreUtf8String(_popupData.title, 160, 85, TFT_YELLOW, cSmsBg);
+      _drawCentreUtf8String(_popupData.message, 160, 135, TFT_WHITE, cSmsBg);
       return;
     }
 
@@ -431,18 +449,15 @@ private:
 
       int maxVisibleChars = 14;
       if (fullSong.length() <= maxVisibleChars) {
-        tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK); // Amber Yellow
-        tft.drawCentreString(fullSong.c_str(), 152, 4, 2);
+        _drawCentreUtf8String(fullSong.c_str(), 152, 3, tft.color565(250, 204, 21), TFT_BLACK);
       } else {
         int offset = (_songScrollTick / 3) % fullSong.length();
         String wrapped = fullSong.substring(offset) + fullSong.substring(0, offset);
         String displayChunk = wrapped.substring(0, maxVisibleChars);
-        tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK);
-        tft.drawString(displayChunk, 74, 4, 2);
+        _drawUtf8String(displayChunk.c_str(), 74, 3, tft.color565(250, 204, 21), TFT_BLACK);
       }
     } else {
-      tft.setTextColor(tft.color565(71, 85, 105), TFT_BLACK);
-      tft.drawCentreString("-- Chua phat nhac --", 152, 4, 1);
+      _drawCentreUtf8String("-- Chưa phát nhạc --", 152, 3, tft.color565(100, 116, 139), TFT_BLACK);
     }
 
     // Clean any leftover pixels between boxes
@@ -484,45 +499,9 @@ private:
         // Clear inner text area of media card
         tft.fillRect(166, 114, 142, 34, cPillBg);
 
-        // Music Icon & "DANG PHAT" tag
-        tft.setTextColor(TFT_YELLOW, cPillBg);
-        tft.drawString("[>] DANG PHAT", 172, 100, 1);
-
-        // Song Title (Font 2, max 12 chars = 132px, strictly inside card x: 171..303)
-        tft.setTextColor(TFT_WHITE, cPillBg);
-        char upperSong[48];
-        strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
-        upperSong[sizeof(upperSong) - 1] = '\0';
-        for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
-
-        int songLen = strlen(upperSong);
-        if (songLen <= 12) {
-          tft.drawCentreString(upperSong, 237, 116, 2);
-        } else {
-          String fullS = String(upperSong) + "    ";
-          int offset = (_songScrollTick / 2) % fullS.length();
-          String wrapped = fullS.substring(offset) + fullS.substring(0, offset);
-          String chunk = wrapped.substring(0, 12);
-          tft.drawString(chunk.c_str(), 171, 116, 2);
-        }
-
-        // Artist (Font 1, max 22 chars = 132px, strictly inside card x: 171..303)
-        tft.setTextColor(cSubText, cPillBg);
-        char upperArtist[32];
-        strncpy(upperArtist, _navData.songArtist, sizeof(upperArtist) - 1);
-        upperArtist[sizeof(upperArtist) - 1] = '\0';
-        for (int i = 0; upperArtist[i]; i++) upperArtist[i] = toupper((unsigned char)upperArtist[i]);
-
-        int artistLen = strlen(upperArtist);
-        if (artistLen <= 22) {
-          tft.drawCentreString(upperArtist, 237, 136, 1);
-        } else {
-          String fullA = String(upperArtist) + "    ";
-          int offset = (_songScrollTick / 2) % fullA.length();
-          String wrapped = fullA.substring(offset) + fullA.substring(0, offset);
-          String chunk = wrapped.substring(0, 22);
-          tft.drawString(chunk.c_str(), 171, 136, 1);
-        }
+        _drawUtf8String("[>] Đang phát", 172, 98, TFT_YELLOW, cPillBg);
+        _drawCentreUtf8String(_navData.songTitle, 237, 115, TFT_WHITE, cPillBg);
+        _drawCentreUtf8String(_navData.songArtist, 237, 135, cSubText, cPillBg);
 
         // Sound Equalizer Bars (active cyan)
         uint16_t cEq = TFT_CYAN;
@@ -533,12 +512,9 @@ private:
           tft.fillRect(bx, by, 5, eqHeights[b], cEq);
         }
       } else {
-        tft.setTextColor(cSubText, cPillBg);
-        tft.drawString("[--] CHUA PHAT", 172, 100, 1);
-
-        tft.setTextColor(cSubText, cPillBg);
-        tft.drawCentreString("MO NHAC TREN DT", 237, 116, 2);
-        tft.drawCentreString("SPOTIFY / APPLE MUSIC", 237, 136, 1);
+        _drawUtf8String("[--] Chưa phát", 172, 98, cSubText, cPillBg);
+        _drawCentreUtf8String("Mở nhạc trên ĐT", 237, 115, cSubText, cPillBg);
+        _drawCentreUtf8String("Spotify / Apple Music", 237, 135, cDimGrey, cPillBg);
 
         // Dim flat equalizer bars
         uint16_t cDim = tft.color565(30, 41, 59);
@@ -548,9 +524,8 @@ private:
         }
       }
 
-      // D. Bottom Status: "San sang di chuyen" (y: 186)
-      tft.setTextColor(TFT_GREEN, cCardBg);
-      tft.drawCentreString("SAN SANG DI CHUYEN", 237, 188, 2);
+      // D. Bottom Status: "Sẵn sàng di chuyển" (y: 186)
+      _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
 
     } else {
       // =======================================================================
@@ -581,21 +556,13 @@ private:
       tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
       tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
 
-      char upperStreet[48];
-      strncpy(upperStreet, _navData.streetName, sizeof(upperStreet) - 1);
-      upperStreet[sizeof(upperStreet) - 1] = '\0';
-      for (int i = 0; upperStreet[i]; i++) {
-        upperStreet[i] = toupper((unsigned char)upperStreet[i]);
-      }
-      tft.setTextColor(TFT_YELLOW, cPillBg);
-      tft.drawCentreString(upperStreet, 237, 98, 2);
+      _drawCentreUtf8String(_navData.streetName, 237, 97, TFT_YELLOW, cPillBg);
 
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
       tft.fillRect(164, 136, 146, 78, cCardBg);
 
       // Sub-labels (y: 146)
-      tft.setTextColor(cDimGrey, cCardBg);
-      tft.drawString("DU KIEN", 168, 146, 1);
+      _drawUtf8String("Dự kiến", 168, 146, cDimGrey, cCardBg);
 
       tft.setTextColor(cSubText, cCardBg);
       char totDistStr[16];
