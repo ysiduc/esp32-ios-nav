@@ -1084,6 +1084,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  display.update();
+  bool isStreaming = (millis() - lastFrameTime < 2500);
+  display.update(isStreaming);
   delay(2);
 }
