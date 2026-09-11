@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
 #include "display_ui.h"
+#include "ams_service.h"
 
 // Double Buffering for Direct High-Speed 20 FPS JPEG Stream over BLE
 static uint8_t bleRxBuf[32768];
@@ -61,11 +62,13 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     display.setBleConnected(true);
     Serial.println("[BLE] iPhone connected successfully!");
     pServer->updateConnParams(desc->conn_handle, 12, 16, 0, 400);
+    AppleMediaService::connHandle = desc->conn_handle;
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     display.setBleConnected(false);
+    AppleMediaService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -192,6 +195,12 @@ void setup() {
   NimBLEDevice::init("ESP32_NAV_ANCS");
   NimBLEDevice::setMTU(517);
 
+  // Security Auth & Bonding for iOS (Required by Apple Media Service)
+  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setCustomGapHandler(AppleMediaService::handleGapEvent);
+  AppleMediaService::init();
+
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
@@ -209,10 +218,15 @@ void setup() {
   pAdvertising->setMaxInterval(32); // 20ms
   pAdvertising->setMinPreferred(6); // 7.5ms min interval
   pAdvertising->setMaxPreferred(12); // 15ms max interval
+
+  // Include Apple Media Service Solicitation (AD Type 0x15) in Scan Response
+  NimBLEAdvertisementData scanResponseData;
+  scanResponseData.addData((char*)amsSolicitData, sizeof(amsSolicitData));
+  pAdvertising->setScanResponseData(scanResponseData);
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ysiduc ready for 20 FPS JPEG stream!");
+  Serial.println("[BLE] ysiduc ready for 20 FPS JPEG stream + Apple Media Service!");
 }
 
 void loop() {

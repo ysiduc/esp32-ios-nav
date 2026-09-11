@@ -37,8 +37,8 @@ struct NavStateData {
   uint8_t batteryLevel = 89;
   bool isConnected = false;
   bool isNavigating = false;
-  char songTitle[48] = "Waiting For You";
-  char songArtist[32] = "MONO";
+  char songTitle[48] = "";
+  char songArtist[32] = "";
   uint8_t routePointCount = 0;
   RoutePoint routePoints[32];
 };
@@ -115,6 +115,17 @@ public:
         _needFullRedraw = true;
       }
       _currentState = STATE_NAVIGATION;
+    }
+  }
+
+  void setSongInfo(const char* song, const char* artist) {
+    if (song != nullptr && strlen(song) > 0) {
+      strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
+      _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+    }
+    if (artist != nullptr && strlen(artist) > 0) {
+      strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
+      _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
     }
   }
 
