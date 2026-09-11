@@ -345,6 +345,71 @@ class SearchService {
       type: 'beach',
       category: 'natural',
     ),
+
+    // --- Tuyến đường & Khu đô thị phổ biến ---
+    MapPlace(
+      name: 'Phố Định Công',
+      displayName: 'Phố Định Công, Phường Định Công, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9886, 105.8361),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Số 96 Phố Định Công',
+      displayName: 'Số 96 Phố Định Công, Phương Liệt, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9902, 105.8398),
+      type: 'building',
+      category: 'address',
+    ),
+    MapPlace(
+      name: 'Khu đô thị Đại Kim - Định Công',
+      displayName: 'KĐT Mới Đại Kim, Định Công, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9782, 105.8298),
+      type: 'suburb',
+      category: 'place',
+    ),
+    MapPlace(
+      name: 'Cầu Sông Lừ',
+      displayName: 'Cầu Sông Lừ, Phố Định Công, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9832, 105.8425),
+      type: 'bridge',
+      category: 'transportation',
+    ),
+    MapPlace(
+      name: 'Đường Nguyễn Hữu Cảnh',
+      displayName: 'Đường Nguyễn Hữu Cảnh, Phường 22, Bình Thạnh, TP. Hồ Chí Minh',
+      coordinate: const LatLng(10.7915, 106.7125),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Cầu Giấy',
+      displayName: 'Đường Cầu Giấy, Phường Quan Hoa, Cầu Giấy, Hà Nội',
+      coordinate: const LatLng(21.0345, 105.7985),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Giải Phóng',
+      displayName: 'Đường Giải Phóng, Phương Mai, Đống Đa & Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9950, 105.8415),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Nguyễn Trãi',
+      displayName: 'Đường Nguyễn Trãi, Thanh Xuân Trung, Thanh Xuân, Hà Nội',
+      coordinate: const LatLng(20.9958, 105.8085),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Phạm Hùng',
+      displayName: 'Đường Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hà Nội',
+      coordinate: const LatLng(21.0185, 105.7815),
+      type: 'street',
+      category: 'highway',
+    ),
   ];
 
   // Recent searches cache

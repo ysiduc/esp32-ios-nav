@@ -54,10 +54,11 @@ unsigned long popupExpire = 0;
 // 1. BLE Server Callbacks
 // =========================================================================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* pServer) {
+  void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
     Serial.println("[BLE] iPhone connected successfully!");
+    pServer->updateConnParams(desc->conn_handle, 12, 16, 0, 400);
   }
 
   void onDisconnect(NimBLEServer* pServer) {

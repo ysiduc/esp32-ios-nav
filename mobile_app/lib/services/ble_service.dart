@@ -263,6 +263,10 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  /// Safe BLE packet payload size calculated from current negotiated ATT MTU
+  int get currentMtu => _connectedDevice?.mtuNow ?? 185;
+  int get safeChunkSize => (currentMtu > 23 ? currentMtu - 5 : 175).clamp(20, 180);
+
   /// Send binary byte array over BLE (e.g. JPEG frames)
   Future<bool> sendRawBytes(Uint8List bytes) async {
     if (!_isConnected || _writeCharacteristic == null) return false;
@@ -272,7 +276,8 @@ class BleService extends ChangeNotifier {
         withoutResponse: true,
       );
       return true;
-    } catch (_) {
+    } catch (e) {
+      _addLog('Lỗi gửi BLE Raw: $e', isError: true);
       return false;
     }
   }

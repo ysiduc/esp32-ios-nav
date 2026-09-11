@@ -119,7 +119,10 @@ public:
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
-    if (_needFullRedraw || millis() - _lastRenderTime > 800) {
+    if (_needFullRedraw || millis() - _lastRenderTime > 500) {
+      if (_needFullRedraw) {
+        tft.fillScreen(TFT_BLACK);
+      }
       _renderTft(isStreamingActive);
       _lastRenderTime = millis();
       _needFullRedraw = false;

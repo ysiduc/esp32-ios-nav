@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
 import '../models/route_model.dart';
@@ -27,6 +28,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _pauseTimer;
   Uint8List? _latestJpegBytes;
   bool _isSendingBle = false;
+
+  // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
+  final Map<String, ui.Image> _tileCache = {};
+  final Set<String> _pendingTileFetches = {};
 
   // Getters
   bool get isStreaming => _isStreaming;
@@ -63,6 +68,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     stopStreaming();
     _pauseTimer?.cancel();
+    _tileCache.forEach((_, img) => img.dispose());
+    _tileCache.clear();
     super.dispose();
   }
 
@@ -88,7 +95,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// Start High-Speed Headless 20-30 FPS JPEG Streaming
+  /// Start High-Speed Headless 15 FPS JPEG Streaming
   void startStreaming({GlobalKey? boundaryKey}) {
     stopStreaming();
     _isStreaming = true;
@@ -111,7 +118,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Render 144x208 High-Definition Map in Memory (Takes <1ms) & Stream over BLE
+  /// Render 144x208 High-Definition Real Street Map in Memory & Stream over BLE
   Future<void> _renderAndStreamHeadlessFrame() async {
     if (!_isStreaming || _isCapturing || !_isForeground || _isSendingBle) return;
     _isCapturing = true;
@@ -130,8 +137,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
-      // 1. Draw Native High-Definition Cyberpunk Vector Map (< 0.2ms)
-      _drawHeadlessMapCanvas(
+      // Pre-fetch surrounding tiles asynchronously
+      _prefetchSurroundingTiles(userPos, 16);
+
+      // 1. Draw Real Map Canvas (< 0.5ms)
+      _drawRealMapCanvas(
         canvas: canvas,
         w: w.toDouble(),
         h: h.toDouble(),
@@ -155,14 +165,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // 2. Direct Fast In-Memory JPEG Encoding (144x208 takes ~1.2ms without isolate overhead)
+      // 2. Direct Fast In-Memory JPEG Encoding (144x208 takes ~1.0ms)
       final imgImage = img.Image.fromBytes(
         width: w,
         height: h,
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 60));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 55));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -177,7 +187,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         _lastFpsUpdate = now;
       }
 
-      // 3. Paced BLE Chunk Transmission
+      // 3. Paced BLE Chunk Transmission with MTU-Safe Sizing
       await _sendJpegOverBle(jpegBytes);
     } catch (_) {
     } finally {
@@ -185,8 +195,50 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Headless Vector Map Painter at Exact 144x208 Resolution
-  void _drawHeadlessMapCanvas({
+  /// Asynchronously pre-fetch surrounding Google Maps HD / CartoDB tiles
+  void _prefetchSurroundingTiles(LatLng pos, int zoom) {
+    final double n = math.pow(2.0, zoom).toDouble();
+    final double latRad = pos.latitude * (math.pi / 180.0);
+    final int cx = ((pos.longitude + 180.0) / 360.0 * n).floor();
+    final int cy = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n).floor();
+
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
+        final tx = cx + dx;
+        final ty = cy + dy;
+        final key = '$zoom/$tx/$ty';
+
+        if (!_tileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
+          _fetchTileImage(key, tx, ty, zoom);
+        }
+      }
+    }
+  }
+
+  Future<void> _fetchTileImage(String key, int x, int y, int z) async {
+    _pendingTileFetches.add(key);
+    try {
+      final url = 'https://mt1.google.com/vt/lyrs=m&hl=vi&x=$x&y=$y&z=$z';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 4));
+
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        final codec = await ui.instantiateImageCodec(response.bodyBytes);
+        final frame = await codec.getNextFrame();
+        _tileCache[key] = frame.image;
+
+        if (_tileCache.length > 60) {
+          final firstKey = _tileCache.keys.first;
+          _tileCache.remove(firstKey)?.dispose();
+        }
+      }
+    } catch (_) {
+    } finally {
+      _pendingTileFetches.remove(key);
+    }
+  }
+
+  /// Draw Real Street Map Canvas with Rotating Map & Overlaid Route Polyline
+  void _drawRealMapCanvas({
     required Canvas canvas,
     required double w,
     required double h,
@@ -196,113 +248,119 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double distToTurn,
     required double speedKmh,
   }) {
-    // 1. Background Fill: Deep Cyberpunk Navy (#0B111A)
-    final bgPaint = Paint()..color = const Color(0xFF0B111A);
+    // 1. Background Fill: Deep Dark Slate (#0F172A)
+    final bgPaint = Paint()..color = const Color(0xFF0F172A);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
-    // 2. Center of vehicle on screen (lower-middle: x=72, y=140)
+    // Vehicle screen anchor (lower center: x=72, y=140)
     final double cx = w / 2.0;
     final double cy = h * 0.67;
 
-    // Scale: ~0.85 pixels per meter (covers ~220m ahead view)
-    const double metersToPixels = 0.85;
+    const int zoom = 16;
+    final double n = math.pow(2.0, zoom).toDouble();
+    final double latRad = userPos.latitude * (math.pi / 180.0);
+    final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
+    final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
+
+    final int centerTileX = (worldX / 256.0).floor();
+    final int centerTileY = (worldY / 256.0).floor();
+    final double subTileX = worldX - (centerTileX * 256.0);
+    final double subTileY = worldY - (centerTileY * 256.0);
+
     final double headingRad = headingDeg * (math.pi / 180.0);
-    final double cosH = math.cos(headingRad);
-    final double sinH = math.sin(headingRad);
-    final double cosLat = math.cos(userPos.latitude * (math.pi / 180.0));
 
-    // 3. Grid / Local Spatial Patterns (Perspective Road Lines)
-    final gridPaint = Paint()
-      ..color = const Color(0xFF162232)
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
+    // --- DRAW ROTATING MAP TILES & ROUTE ---
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(-headingRad);
 
-    for (int gx = 16; gx < w; gx += 28) {
-      canvas.drawLine(Offset(gx.toDouble(), 0), Offset(gx.toDouble(), h), gridPaint);
+    bool tilesDrawn = false;
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
+        final tx = centerTileX + dx;
+        final ty = centerTileY + dy;
+        final key = '$zoom/$tx/$ty';
+
+        final tileImg = _tileCache[key];
+        if (tileImg != null) {
+          final double drawX = (dx * 256.0) - subTileX;
+          final double drawY = (dy * 256.0) - subTileY;
+          canvas.drawImage(tileImg, Offset(drawX, drawY), Paint());
+          tilesDrawn = true;
+        }
+      }
     }
-    for (int gy = 16; gy < h; gy += 28) {
-      canvas.drawLine(Offset(0, gy.toDouble()), Offset(w, gy.toDouble()), gridPaint);
+
+    // Fallback Spatial Grid if tiles still loading
+    if (!tilesDrawn) {
+      final gridPaint = Paint()
+        ..color = const Color(0xFF1E293B)
+        ..strokeWidth = 1.0;
+      for (double gx = -200; gx <= 200; gx += 28) {
+        canvas.drawLine(Offset(gx, -200), Offset(gx, 200), gridPaint);
+      }
+      for (double gy = -200; gy <= 200; gy += 28) {
+        canvas.drawLine(Offset(-200, gy), Offset(200, gy), gridPaint);
+      }
     }
 
-    // 4. Transform and Draw Route Polyline
+    // Draw Route Polyline directly mapped to tile pixel coordinates
     final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
         ? activeRoute.polylinePoints
         : [
-            LatLng(userPos.latitude - 0.0030, userPos.longitude),
-            LatLng(userPos.latitude - 0.0010, userPos.longitude),
+            LatLng(userPos.latitude - 0.0020, userPos.longitude),
             userPos,
             LatLng(userPos.latitude + 0.0015, userPos.longitude),
-            LatLng(userPos.latitude + 0.0035, userPos.longitude + 0.0020),
+            LatLng(userPos.latitude + 0.0035, userPos.longitude + 0.0018),
           ];
 
     if (points.length >= 2) {
-      final path = ui.Path();
+      final routePath = ui.Path();
       bool first = true;
 
       for (final pt in points) {
-        // Equirectangular projection relative to user position
-        final double dyMeters = (pt.latitude - userPos.latitude) * 111139.0;
-        final double dxMeters = (pt.longitude - userPos.longitude) * 111139.0 * cosLat;
+        final double ptLatRad = pt.latitude * (math.pi / 180.0);
+        final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
+        final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
 
-        // Rotate by vehicle heading (Forward is UP on screen)
-        final double xRot = dxMeters * cosH - dyMeters * sinH;
-        final double yRot = dxMeters * sinH + dyMeters * cosH;
-
-        final double sx = cx + (xRot * metersToPixels);
-        final double sy = cy - (yRot * metersToPixels);
+        final double px = ptWorldX - worldX;
+        final double py = ptWorldY - worldY;
 
         if (first) {
-          path.moveTo(sx, sy);
+          routePath.moveTo(px, py);
           first = false;
         } else {
-          path.lineTo(sx, sy);
+          routePath.lineTo(px, py);
         }
       }
 
-      // Outer Neon Glow Polyline
+      // Route Outer Glow
       final glowPaint = Paint()
-        ..color = const Color(0xFF0077B6).withAlpha(150)
-        ..strokeWidth = 8.5
+        ..color = const Color(0xFF0077B6).withAlpha(160)
+        ..strokeWidth = 8.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, glowPaint);
+      canvas.drawPath(routePath, glowPaint);
 
-      // Core Vibrant Cyan Route Polyline (#00F0FF)
+      // Route Core Cyan
       final corePaint = Paint()
         ..color = const Color(0xFF00F0FF)
         ..strokeWidth = 4.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, corePaint);
+      canvas.drawPath(routePath, corePaint);
     }
 
-    // 5. Upcoming Turn Intersection Point Marker (if within 300m)
-    if (distToTurn < 300 && distToTurn > 5) {
-      final double turnDistPx = distToTurn * metersToPixels;
-      final double turnY = (cy - turnDistPx).clamp(20.0, cy - 10.0);
+    canvas.restore();
 
-      // Glowing Turn Radar Ring
-      final turnGlow = Paint()
-        ..color = const Color(0xFFFFB800).withAlpha(80)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(cx, turnY), 9, turnGlow);
-
-      final turnDot = Paint()
-        ..color = const Color(0xFFFFB800)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(Offset(cx, turnY), 4, turnDot);
-    }
-
-    // 6. Navigation Vehicle Indicator (Centered at cx, cy)
-    // Pulsating Radar Outer Ring
+    // 2. Navigation Vehicle Indicator (Stationary at center cx, cy pointing UP)
     final radarRing = Paint()
       ..color = const Color(0xFF0084FF).withAlpha(60)
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 14, radarRing);
+    canvas.drawCircle(Offset(cx, cy), 15, radarRing);
 
-    // Vehicle Core Circle
     final vehicleBg = Paint()
       ..color = const Color(0xFF0084FF)
       ..style = PaintingStyle.fill;
@@ -314,7 +372,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ..style = PaintingStyle.stroke;
     canvas.drawCircle(Offset(cx, cy), 9, vehicleBorder);
 
-    // Forward Direction Arrow (Pointing Upward)
+    // Direction Arrow pointing straight UP
     final arrowPath = ui.Path()
       ..moveTo(cx, cy - 6)
       ..lineTo(cx + 4, cy + 4)
@@ -326,7 +384,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ..style = PaintingStyle.fill;
     canvas.drawPath(arrowPath, arrowPaint);
 
-    // 7. Live Map Badges (MAP LIVE & Zoom Level)
+    // 3. Live Map Badges (MAP LIVE & GPS Indicator)
     final badgeBg = Paint()
       ..color = const Color(0xFF000000).withAlpha(200)
       ..style = PaintingStyle.fill;
@@ -337,7 +395,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ..style = PaintingStyle.fill;
     canvas.drawCircle(const Offset(16, 192), 3, badgeDot);
 
-    // Text "LIVE"
     final textPainter = TextPainter(
       text: const TextSpan(
         text: 'LIVE 16x',
@@ -349,13 +406,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     textPainter.paint(canvas, const Offset(23, 187));
   }
 
-  /// Send JPEG frame over BLE in sequential paced chunks with mutex protection
+  /// Send JPEG frame over BLE in MTU-safe sequential chunks with mutex protection
   Future<void> _sendJpegOverBle(Uint8List jpegBytes) async {
     if (!bleService.isConnected || _isSendingBle) return;
     _isSendingBle = true;
 
     try {
-      const chunkSize = 480; // 480 bytes with MTU 512 fits in 1 BLE PDU
+      // Chunk size dynamically matched to iOS / Android ATT MTU (175 bytes on iOS MTU 185)
+      final chunkSize = bleService.safeChunkSize;
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);
