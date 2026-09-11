@@ -19,12 +19,10 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 3. Install Dependencies & Pods
+      - name: 3. Install Dependencies
         working-directory: mobile_app
         run: |
           flutter pub get
-          cd ios
-          pod install || pod install --repo-update
 
       - name: 4. Build iOS App (Release, No CodeSign)
         working-directory: mobile_app
