@@ -36,8 +36,8 @@ class EspNavPayload {
     this.currentClock,
     this.batteryLevel = 89,
     this.isNavigating = false,
-    this.songTitle = 'Waiting For You',
-    this.songArtist = 'MONO',
+    this.songTitle = '',
+    this.songArtist = '',
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -110,8 +110,8 @@ class EspNavPayload {
       'arrival': arrivalTimeClock,
       'clock': phoneClock,
       'bat': batteryLevel,
-      'song': sanitizedSong,
-      'artist': sanitizedArtist,
+      if (sanitizedSong.isNotEmpty) 'song': sanitizedSong,
+      if (sanitizedArtist.isNotEmpty) 'artist': sanitizedArtist,
       'lat': latitude != null ? double.parse(latitude!.toStringAsFixed(6)) : null,
       'lng': longitude != null ? double.parse(longitude!.toStringAsFixed(6)) : null,
       'head': heading,

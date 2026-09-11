@@ -348,8 +348,8 @@ class NavigationManager extends ChangeNotifier {
       routePoints: upcomingPts,
       currentClock: curClock,
       batteryLevel: 89,
-      songTitle: _currentSongTitle.isNotEmpty ? _currentSongTitle : 'CHUA PHAT NHAC',
-      songArtist: _currentSongArtist.isNotEmpty ? _currentSongArtist : 'MO NHAC TREN IPHONE',
+      songTitle: _currentSongTitle,
+      songArtist: _currentSongArtist,
     );
 
     bleService.sendNavPayload(payload);
@@ -375,8 +375,8 @@ class NavigationManager extends ChangeNotifier {
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
       currentClock: curClock,
       batteryLevel: 89,
-      songTitle: _currentSongTitle.isNotEmpty ? _currentSongTitle : 'CHUA PHAT NHAC',
-      songArtist: _currentSongArtist.isNotEmpty ? _currentSongArtist : 'MO NHAC TREN IPHONE',
+      songTitle: _currentSongTitle,
+      songArtist: _currentSongArtist,
     );
 
     bleService.sendNavPayload(payload);
