@@ -105,22 +105,17 @@ class GoogleMapsParser {
         urlStr.contains('t.co') ||
         urlStr.length < 50;
 
-    String? htmlBodyTarget;
     if (isShortLink) {
       try {
-        final resolveResult = await _resolveRedirectsAndBody(urlStr);
-        if (resolveResult.finalUrl.isNotEmpty) {
-          urlStr = resolveResult.finalUrl;
+        final finalUrl = await _resolveRedirects(urlStr);
+        if (finalUrl.isNotEmpty) {
+          urlStr = finalUrl;
         }
-        htmlBodyTarget = resolveResult.htmlExtractedUrl;
       } catch (_) {}
     }
 
-    // 5. Extract Coordinates from Google Maps URL (or HTML extracted target)
+    // 5. Extract Coordinates from Google Maps URL
     LatLng? extractedCoord = _extractCoordinateFromUrl(urlStr);
-    if (extractedCoord == null && htmlBodyTarget != null && htmlBodyTarget.isNotEmpty) {
-      extractedCoord = _extractCoordinateFromUrl(htmlBodyTarget);
-    }
 
     if (extractedCoord != null) {
       final urlPlaceName = _extractPlaceNameFromUrl(urlStr);
@@ -142,27 +137,79 @@ class GoogleMapsParser {
       return reversePlace;
     }
 
-    // 6. If only a query exists in the URL (e.g. ?q=Landmark+72 or /place/Quán+Ăn/)
+    // 6. If only a query or address exists in the URL (e.g. ?q=Trường+Tiểu+học+Nguyễn+Siêu or /place/Quán+Ăn/)
     final queryName = _extractPlaceNameFromUrl(urlStr) ??
         _extractQueryFromUrl(urlStr) ??
         (userPrefixName.isNotEmpty ? userPrefixName : null);
 
     if (queryName != null && queryName.isNotEmpty) {
-      final list = await _searchService.searchPlaces(queryName, nearLocation: userLocation);
-      if (list.isNotEmpty) return list.first;
+      final resolvedPlace = await _resolveAddressQuery(queryName, userLocation: userLocation);
+      if (resolvedPlace != null) return resolvedPlace;
     }
 
     return null;
   }
 
-  /// Resolve HTTP redirects and extract fallback URLs from HTML body
-  Future<({String finalUrl, String? htmlExtractedUrl})> _resolveRedirectsAndBody(String urlStr) async {
+  /// Intelligently parse and resolve complex Google Maps shared address queries
+  /// (e.g. "Trường Tiểu học Nguyễn Siêu (Nguyen Sieu Primary School), 38 P. Nguyễn Xuân Nham, Yên Hòa, Hà Nội 100000")
+  Future<MapPlace?> _resolveAddressQuery(String rawQuery, {LatLng? userLocation}) async {
+    var cleaned = rawQuery.replaceAll(RegExp(r'\([^)]*\)'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\b\d{5,6}\b'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\bP\.\s*', caseSensitive: false), 'Phố ');
+    cleaned = cleaned.replaceAll(RegExp(r'\bĐ\.\s*', caseSensitive: false), 'Đường ');
+    cleaned = cleaned.replaceAll(RegExp(r'\bQ\.\s*', caseSensitive: false), 'Quận ');
+    cleaned = cleaned.replaceAll(RegExp(r'\bH\.\s*', caseSensitive: false), 'Huyện ');
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    final parts = cleaned.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    final candidates = <String>[];
+
+    if (parts.length >= 3) {
+      final place = parts.first;
+      final street = parts[1];
+      final ward = parts[2];
+      final city = parts.last;
+
+      candidates.add('$street, $ward, $city');
+      candidates.add('$street, $city');
+      candidates.add('$place, $ward, $city');
+      candidates.add('$place, $city');
+      candidates.add(street);
+      candidates.add(place);
+    } else if (parts.length == 2) {
+      final place = parts.first;
+      final city = parts.last;
+      candidates.add('$place, $city');
+      candidates.add(place);
+    } else {
+      candidates.add(cleaned);
+    }
+
+    for (final cand in candidates) {
+      final results = await _searchService.searchPlaces(cand, nearLocation: userLocation);
+      if (results.isNotEmpty) {
+        final top = results.first;
+        final finalName = parts.isNotEmpty ? parts.first : top.name;
+        return MapPlace(
+          name: finalName,
+          displayName: '$finalName, ${top.displayName}',
+          coordinate: top.coordinate,
+          type: top.type,
+          category: top.category,
+          distanceMeters: top.distanceMeters,
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /// Resolve HTTP redirects for shortlinks (including HTTP 3xx and meta refresh)
+  Future<String> _resolveRedirects(String urlStr) async {
     final client = HttpClient();
-    client.userAgent =
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    client.userAgent = 'curl/8.5.0'; // curl UA ensures clean HTTP 302 without Google consent walls
 
     String currentUrl = urlStr;
-    String? htmlExtractedUrl;
 
     for (int redirectCount = 0; redirectCount < 8; redirectCount++) {
       final uri = Uri.tryParse(currentUrl);
@@ -184,12 +231,10 @@ class GoogleMapsParser {
         }
       }
 
-      // Check if response has meta refresh or staticmap link in HTML body
+      // Check if response has meta refresh in HTML body
       final contentType = response.headers.contentType?.mimeType ?? '';
       if (contentType.contains('html') || contentType.contains('text')) {
         final body = await response.transform(utf8.decoder).join();
-
-        // 1. Meta refresh
         final metaRegex = RegExp(
           r'<meta[^>]*content=["\x27]\d+;\s*url=([^"\x27>]+)["\x27]',
           caseSensitive: false,
@@ -200,31 +245,41 @@ class GoogleMapsParser {
           currentUrl = target.startsWith('http') ? target : uri.resolve(target).toString();
           continue;
         }
-
-        // 2. staticmap center or link href
-        final staticMapRegex = RegExp(r'(?:api/staticmap\?center=|link\s+href=["\x27]/search\?tbm=map&amp;[^"\x27]*q=)(\-?\d{1,2}\.\d+)[,%2C\+]+(\-?\d{1,3}\.\d+)');
-        final staticMatch = staticMapRegex.firstMatch(body);
-        if (staticMatch != null) {
-          htmlExtractedUrl = '?q=${staticMatch.group(1)},${staticMatch.group(2)}';
-        }
       }
       break;
     }
     client.close();
-    return (finalUrl: currentUrl, htmlExtractedUrl: htmlExtractedUrl);
+    return currentUrl;
   }
 
   /// Extract LatLng from various Google Maps URL formats
   LatLng? _extractCoordinateFromUrl(String url) {
     final decoded = Uri.decodeFull(url);
 
-    // Priority 1: !3d21.028511!4d105.854212 (Exact Google Maps Place/POI/Pin Protobuf coordinates)
-    final protoRegex = RegExp(r'!3d(\-?\d{1,2}\.\d{3,})!4d(\-?\d{1,3}\.\d{3,})');
+    // Priority 1: !3d/!4d or !4d/!3d (Exact Google Maps Place/POI/Pin Protobuf coordinates)
+    final protoRegex = RegExp(r'(?:!3d(\-?\d{1,2}\.\d{3,})[^!]*!4d(\-?\d{1,3}\.\d{3,})|!4d(\-?\d{1,3}\.\d{3,})[^!]*!3d(\-?\d{1,2}\.\d{3,}))');
     final protoMatch = protoRegex.firstMatch(decoded);
     if (protoMatch != null) {
-      final lat = double.tryParse(protoMatch.group(1)!);
-      final lon = double.tryParse(protoMatch.group(2)!);
-      if (lat != null && lon != null) return LatLng(lat, lon);
+      final latStr = protoMatch.group(1) ?? protoMatch.group(4);
+      final lonStr = protoMatch.group(2) ?? protoMatch.group(3);
+      if (latStr != null && lonStr != null) {
+        final lat = double.tryParse(latStr);
+        final lon = double.tryParse(lonStr);
+        if (lat != null && lon != null) return LatLng(lat, lon);
+      }
+    }
+
+    // Priority 1b: !1d/!2d (Protobuf route pins)
+    final proto12Regex = RegExp(r'(?:!1d(\-?\d{1,3}\.\d{3,})[^!]*!2d(\-?\d{1,2}\.\d{3,})|!2d(\-?\d{1,2}\.\d{3,})[^!]*!1d(\-?\d{1,3}\.\d{3,}))');
+    final proto12Match = proto12Regex.firstMatch(decoded);
+    if (proto12Match != null) {
+      final lonStr = proto12Match.group(1) ?? proto12Match.group(4);
+      final latStr = proto12Match.group(2) ?? proto12Match.group(3);
+      if (latStr != null && lonStr != null) {
+        final lat = double.tryParse(latStr);
+        final lon = double.tryParse(lonStr);
+        if (lat != null && lon != null) return LatLng(lat, lon);
+      }
     }
 
     // Priority 2: ?q=21.028511,105.854212 or ?destination=... or ?ll=... or ?daddr=... (Explicit Pin/Query)

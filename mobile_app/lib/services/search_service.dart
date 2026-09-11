@@ -744,25 +744,9 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 1: Primary Search: MapTiler Geocoding API (Fast, accurate, Vietnamese support)
+    // Step 1: Check Built-in Vietnamese Landmark / POI Database first
     // -------------------------------------------------------------
-    if (MapboxConfig.isConfigured) {
-      final mapboxResults = await _executeMapboxQuery(cleanQuery, nearLocation: nearLocation);
-      for (final p in mapboxResults) {
-        addPlace(p);
-      }
-      if (strippedCity != cleanQuery && mergedResults.length < 5) {
-        final strippedResults = await _executeMapboxQuery(strippedCity, nearLocation: nearLocation);
-        for (final p in strippedResults) {
-          addPlace(p);
-        }
-      }
-    }
-
-    // -------------------------------------------------------------
-    // Step 2: Check Built-in Vietnamese Landmark / POI Database
-    // -------------------------------------------------------------
-    if (cleanQuery.length >= 3) {
+    if (cleanQuery.length >= 2) {
       for (final landmark in _vietnameseLandmarks) {
         final lName = landmark.name.toLowerCase();
         final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
@@ -776,7 +760,7 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 3: Extract house number if user types "157 nguyễn cảnh", "96 định công", "12/4 láng hạ"
+    // Step 2: Extract house number if user types "157 nguyễn cảnh", "96 định công", "12/4 láng hạ"
     // -------------------------------------------------------------
     final houseNumRegex = RegExp(r'^(\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?)\s+(.+)$');
     final match = houseNumRegex.firstMatch(strippedCity);
@@ -788,27 +772,35 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 4: Fallback to Photon only if MapTiler returned < 3 results
+    // Step 3: Concurrently Query Photon (OSM POIs/Streets) & MapTiler
     // -------------------------------------------------------------
-    if (mergedResults.length < 3) {
-      final futures = <Future<List<MapPlace>>>[];
-      futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
+    final futures = <Future<List<MapPlace>>>[];
+
+    // A. Photon Search (Very rich OpenStreetMap coverage for Vietnamese POIs, restaurants, schools, addresses)
+    futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
+    if (strippedCity != cleanQuery) {
+      futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
+    }
+    if (streetNamePart != null && streetNamePart.isNotEmpty && streetNamePart != strippedCity) {
+      futures.add(_executePhotonQuery(streetNamePart, nearLocation: nearLocation));
+    }
+
+    // B. MapTiler Search (Official administrative areas & major streets)
+    if (MapboxConfig.isConfigured) {
+      futures.add(_executeMapboxQuery(cleanQuery, nearLocation: nearLocation));
       if (strippedCity != cleanQuery) {
-        futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
+        futures.add(_executeMapboxQuery(strippedCity, nearLocation: nearLocation));
       }
-      if (streetNamePart != null && streetNamePart.isNotEmpty) {
-        futures.add(_executePhotonQuery(streetNamePart, nearLocation: nearLocation));
-      }
+    }
 
-      final nestedResults = await Future.wait(futures).timeout(
-        const Duration(milliseconds: 1400),
-        onTimeout: () => [],
-      );
+    final queryBatches = await Future.wait(futures).timeout(
+      const Duration(seconds: 4),
+      onTimeout: () => [],
+    );
 
-      for (final list in nestedResults) {
-        for (final p in list) {
-          addPlace(p);
-        }
+    for (final batch in queryBatches) {
+      for (final p in batch) {
+        addPlace(p);
       }
     }
 
@@ -857,16 +849,58 @@ class SearchService {
       }
     }
 
-    // Sort by proximity distance to user location
-    if (nearLocation != null && mergedResults.isNotEmpty) {
-      mergedResults.sort((a, b) {
-        final distA = a.distanceMeters ?? double.infinity;
-        final distB = b.distanceMeters ?? double.infinity;
-        return distA.compareTo(distB);
-      });
-    }
+    // -------------------------------------------------------------
+    // Step 4: Intelligent Relevance & Proximity Scoring
+    // Exact match & high textual overlap always beat a nearby unrelated street!
+    // -------------------------------------------------------------
+    mergedResults.sort((a, b) {
+      final scoreA = _calculateRelevanceScore(cleanQuery, a.name, a.displayName, a.distanceMeters);
+      final scoreB = _calculateRelevanceScore(cleanQuery, b.name, b.displayName, b.distanceMeters);
+      return scoreB.compareTo(scoreA); // Highest score first!
+    });
 
     return mergedResults.take(15).toList();
+  }
+
+  /// Composite scoring algorithm: textual similarity (primary) + distance (secondary)
+  double _calculateRelevanceScore(
+    String query,
+    String name,
+    String displayName,
+    double? distanceMeters,
+  ) {
+    final q = removeDiacritics(query).toLowerCase().trim();
+    final n = removeDiacritics(name).toLowerCase().trim();
+    final d = removeDiacritics(displayName).toLowerCase().trim();
+
+    double score = 0.0;
+    if (q == n) {
+      score += 150.0;
+    } else if (n.startsWith(q)) {
+      score += 100.0;
+    } else if (n.contains(q)) {
+      score += 80.0;
+    } else if (d.contains(q)) {
+      score += 50.0;
+    } else {
+      final qWords = q.split(RegExp(r'\s+')).where((w) => w.length >= 2).toSet();
+      final nWords = n.split(RegExp(r'\s+')).where((w) => w.length >= 2).toSet();
+      final overlap = qWords.intersection(nWords).length;
+      score += overlap * 25.0;
+    }
+
+    if (distanceMeters != null) {
+      final distKm = distanceMeters / 1000.0;
+      if (distKm <= 15.0) {
+        // Boost places in the user's immediate vicinity/city (up to +30 points)
+        score += (30.0 - (distKm * 1.8));
+      } else {
+        // Strong penalty for places in far away provinces (e.g. 35km away loses 40+ points)
+        score -= (distKm - 15.0) * 2.0;
+      }
+    }
+
+    return score;
   }
 
   Future<List<MapPlace>> _executePhotonQuery(
