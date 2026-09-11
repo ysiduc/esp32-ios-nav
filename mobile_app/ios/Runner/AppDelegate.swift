@@ -19,7 +19,9 @@ import MediaPlayer
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    setupMediaChannel(binaryMessenger: engineBridge.applicationEngine.binaryMessenger)
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "MediaPlugin") {
+      setupMediaChannel(binaryMessenger: registrar.messenger())
+    }
   }
 
   private func setupMediaChannel(binaryMessenger: FlutterBinaryMessenger) {
@@ -43,11 +45,14 @@ import MediaPlayer
 
     // Set up listeners for lock-screen / now-playing changes
     MediaRemoteObserver.shared.onMediaChanged = { [weak self] title, artist, isPlaying in
-      self?.mediaChannel?.invokeMethod("onNowPlayingChanged", [
-        "title": title,
-        "artist": artist,
-        "isPlaying": isPlaying
-      ])
+      self?.mediaChannel?.invokeMethod(
+        "onNowPlayingChanged",
+        arguments: [
+          "title": title,
+          "artist": artist,
+          "isPlaying": isPlaying
+        ]
+      )
     }
   }
 
