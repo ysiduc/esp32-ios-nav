@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
@@ -50,22 +51,27 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (_isStreaming && _streamTimer == null) {
         _startTimer();
       }
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
-      // When in background / locked screen, pause high-speed JPEG stream to save battery & BLE queue
       _streamTimer?.cancel();
       _streamTimer = null;
     }
   }
 
-  /// Pause streaming temporarily (e.g. while user is typing in search bar)
-  void pauseForDuration(Duration duration) {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    stopStreaming();
     _pauseTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Pause streaming temporarily (e.g. during map search or routing) to give 100% CPU to UI
+  void pauseStreamingFor(Duration duration) {
+    if (!_isStreaming) return;
     _streamTimer?.cancel();
     _streamTimer = null;
-
+    _pauseTimer?.cancel();
     _pauseTimer = Timer(duration, () {
       if (_isStreaming && _isForeground && _streamTimer == null) {
         _startTimer();
@@ -73,17 +79,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Set target FPS (10, 15, 20, 25, 30)
+  /// Change target FPS (10 - 30)
   void setTargetFps(int fps) {
     _targetFps = fps.clamp(5, 30);
-    if (_isStreaming) {
+    if (_isStreaming && _isForeground) {
       startStreaming();
     }
     notifyListeners();
   }
 
   /// Start High-Speed Headless 20-30 FPS JPEG Streaming
-  void startStreaming() {
+  void startStreaming({GlobalKey? boundaryKey}) {
     stopStreaming();
     _isStreaming = true;
     _frameCount = 0;
@@ -381,6 +387,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Pause streaming temporarily (alias for backward compatibility)
+  void pauseForDuration(Duration duration) => pauseStreamingFor(duration);
+
   /// Stop Streaming
   void stopStreaming() {
     _isStreaming = false;
@@ -391,12 +400,5 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _pauseTimer = null;
     _actualFps = 0.0;
     notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    stopStreaming();
-    super.dispose();
   }
 }

@@ -562,10 +562,18 @@ class SearchService {
       }
     }
 
-    // Fallback: If still 0 results, search globally
+    // Fallback: If still 0 results, search globally with Photon
     if (mergedResults.isEmpty) {
       final globalList = await _executePhotonQuery(strippedCityUnaccented, nearLocation: nearLocation, useBbox: false);
       for (final p in globalList) {
+        addPlace(p);
+      }
+    }
+
+    // Secondary Fallback: Nominatim if still empty
+    if (mergedResults.isEmpty) {
+      final nomList = await _executeNominatimQuery(query, nearLocation: nearLocation);
+      for (final p in nomList) {
         addPlace(p);
       }
     }
