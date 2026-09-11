@@ -321,15 +321,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Draw Route Polyline directly mapped to tile pixel coordinates
-    final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
+    // Draw Route Polyline ONLY when user has started active navigation
+    final isNavigating = navManager?.isNavigating ?? false;
+    final points = (isNavigating && activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
         ? activeRoute.polylinePoints
-        : [
-            LatLng(userPos.latitude - 0.0020, userPos.longitude),
-            userPos,
-            LatLng(userPos.latitude + 0.0015, userPos.longitude),
-            LatLng(userPos.latitude + 0.0035, userPos.longitude + 0.0018),
-          ];
+        : <LatLng>[];
 
     if (points.length >= 2) {
       final routePath = ui.Path();

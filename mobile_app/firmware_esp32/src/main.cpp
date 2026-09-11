@@ -163,7 +163,11 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         }
       }
 
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount);
+      bool isNav = (doc["nav"] | 0) == 1;
+      String curSong = String(doc["song"] | "Waiting For You");
+      String curArtist = String(doc["artist"] | "MONO");
+
+      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curSong.c_str(), curArtist.c_str());
     }
   }
 };

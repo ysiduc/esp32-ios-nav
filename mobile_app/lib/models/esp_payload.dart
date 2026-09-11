@@ -16,6 +16,9 @@ class EspNavPayload {
   final List<List<int>>? routePoints; // Relative waypoint offsets [dx, dy] in meters
   final String? currentClock;    // Current time on phone (e.g. "18:25")
   final int batteryLevel;        // Phone battery percentage (e.g. 89)
+  final bool isNavigating;       // True if user started route navigation, false if idle/standby
+  final String songTitle;        // Current playing song title on phone
+  final String songArtist;       // Current song artist name
 
   EspNavPayload({
     required this.turnCode,
@@ -32,6 +35,9 @@ class EspNavPayload {
     this.routePoints,
     this.currentClock,
     this.batteryLevel = 89,
+    this.isNavigating = false,
+    this.songTitle = 'Waiting For You',
+    this.songArtist = 'MONO',
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -48,6 +54,8 @@ class EspNavPayload {
   }
 
   String get sanitizedStreet => removeDiacritics(streetName);
+  String get sanitizedSong => removeDiacritics(songTitle);
+  String get sanitizedArtist => removeDiacritics(songArtist);
 
   String get formattedDist {
     if (distanceToTurn >= 1000) {
@@ -90,6 +98,7 @@ class EspNavPayload {
   /// JSON payload format for easy parsing with ArduinoJson on ESP32
   String toJsonString() {
     final map = {
+      'nav': isNavigating ? 1 : 0,
       'turn': turnCode,
       'dist': distanceToTurn,
       'tot_dist': totalDistance,
@@ -101,6 +110,8 @@ class EspNavPayload {
       'arrival': arrivalTimeClock,
       'clock': phoneClock,
       'bat': batteryLevel,
+      'song': sanitizedSong,
+      'artist': sanitizedArtist,
       'lat': latitude != null ? double.parse(latitude!.toStringAsFixed(6)) : null,
       'lng': longitude != null ? double.parse(longitude!.toStringAsFixed(6)) : null,
       'head': heading,

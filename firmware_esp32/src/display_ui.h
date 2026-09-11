@@ -36,6 +36,9 @@ struct NavStateData {
   char currentTime[16] = "18:25";
   uint8_t batteryLevel = 89;
   bool isConnected = false;
+  bool isNavigating = false;
+  char songTitle[48] = "Waiting For You";
+  char songArtist[32] = "MONO";
   uint8_t routePointCount = 0;
   RoutePoint routePoints[32];
 };
@@ -73,12 +76,21 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0) {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, const char* song = "Waiting For You", const char* artist = "MONO") {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
     _navData.speedKmh = speed;
     _navData.etaMinutes = eta;
+    _navData.isNavigating = isNav;
+    if (song != nullptr && strlen(song) > 0) {
+      strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
+      _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+    }
+    if (artist != nullptr && strlen(artist) > 0) {
+      strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
+      _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
+    }
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
     if (arrival != nullptr && strlen(arrival) > 0) {
@@ -400,64 +412,120 @@ private:
       tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
     }
 
-    // 3. RIGHT 50%: HUD NAVIGATION CARDS (x: 158, y: 24, w: 158, h: 212)
+    // 3. RIGHT 50%: HUD NAVIGATION OR STANDBY MUSIC DASHBOARD (x: 158, y: 24, w: 158, h: 212)
     tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
     tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
 
-    // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
-    _drawManeuverArrow(164, 30, _navData.turnCode);
+    if (!_navData.isNavigating) {
+      // =======================================================================
+      // STANDBY / IDLE DASHBOARD MODE: Clock, ysiduc, Current Song & Artist
+      // =======================================================================
+      // A. Large Elegant Digital Clock (y: 32 to 58)
+      tft.setTextColor(TFT_WHITE, cCardBg);
+      tft.drawCentreString(_navData.currentTime, 237, 34, 4);
 
-    // Clear distance text area
-    tft.fillRect(216, 30, 94, 26, cCardBg);
-    tft.setTextColor(TFT_WHITE, cCardBg);
-    char distStr[16];
-    if (_navData.distMeters >= 1000) {
-      snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
+      // B. ysiduc Driver / Status Tag (y: 64 to 86)
+      tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
+      tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
+      tft.setTextColor(TFT_CYAN, cPillBg);
+      tft.drawCentreString("* ysiduc", 237, 68, 2);
+
+      // C. Media / Music Player Card (y: 94 to 174)
+      tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
+      tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
+
+      // Music Icon & "DANG PHAT" tag
+      tft.setTextColor(TFT_YELLOW, cPillBg);
+      tft.drawString("[>] DANG PHAT", 172, 100, 1);
+
+      // Song Title
+      tft.setTextColor(TFT_WHITE, cPillBg);
+      char upperSong[48];
+      strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
+      upperSong[sizeof(upperSong) - 1] = '\0';
+      for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
+      tft.drawCentreString(upperSong, 237, 116, 2);
+
+      // Artist
+      tft.setTextColor(cSubText, cPillBg);
+      char upperArtist[32];
+      strncpy(upperArtist, _navData.songArtist, sizeof(upperArtist) - 1);
+      upperArtist[sizeof(upperArtist) - 1] = '\0';
+      for (int i = 0; upperArtist[i]; i++) upperArtist[i] = toupper((unsigned char)upperArtist[i]);
+      tft.drawCentreString(upperArtist, 237, 136, 1);
+
+      // Sound Equalizer Bars (animated/styled audio bars)
+      uint16_t cEq = TFT_CYAN;
+      int eqHeights[] = {4, 10, 16, 12, 6, 14, 18, 8, 12, 6};
+      for (int b = 0; b < 10; b++) {
+        int bx = 188 + (b * 10);
+        int by = 166 - eqHeights[b];
+        tft.fillRect(bx, by, 5, eqHeights[b], cEq);
+      }
+
+      // D. Bottom Status: "San sang di chuyen" (y: 186)
+      tft.setTextColor(TFT_GREEN, cCardBg);
+      tft.drawCentreString("SAN SANG DI CHUYEN", 237, 188, 2);
+
     } else {
-      snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
+      // =======================================================================
+      // ACTIVE NAVIGATION MODE: Maneuver Icon + Distance + Speed + Street + ETA
+      // =======================================================================
+      // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
+      _drawManeuverArrow(164, 30, _navData.turnCode);
+
+      // Clear distance text area
+      tft.fillRect(216, 30, 94, 26, cCardBg);
+      tft.setTextColor(TFT_WHITE, cCardBg);
+      char distStr[16];
+      if (_navData.distMeters >= 1000) {
+        snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
+      } else {
+        snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
+      }
+      tft.drawString(distStr, 218, 30, 4);
+
+      // Clear speed text area
+      tft.fillRect(216, 56, 94, 20, cCardBg);
+      tft.setTextColor(TFT_CYAN, cCardBg);
+      char spdStr[16];
+      snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+      tft.drawString(spdStr, 218, 56, 2);
+
+      // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
+      tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
+      tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
+
+      char upperStreet[48];
+      strncpy(upperStreet, _navData.streetName, sizeof(upperStreet) - 1);
+      upperStreet[sizeof(upperStreet) - 1] = '\0';
+      for (int i = 0; upperStreet[i]; i++) {
+        upperStreet[i] = toupper((unsigned char)upperStreet[i]);
+      }
+      tft.setTextColor(TFT_YELLOW, cPillBg);
+      tft.drawCentreString(upperStreet, 237, 98, 2);
+
+      // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
+      tft.fillRect(164, 136, 146, 78, cCardBg);
+
+      // Sub-labels (y: 146)
+      tft.setTextColor(cDimGrey, cCardBg);
+      tft.drawString("DU KIEN", 168, 146, 1);
+
+      tft.setTextColor(cSubText, cCardBg);
+      char totDistStr[16];
+      snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+      tft.drawRightString(totDistStr, 304, 146, 2);
+
+      // Main values (y: 166)
+      tft.setTextColor(TFT_CYAN, cCardBg);
+      tft.drawString(_navData.arrivalTime, 168, 166, 4);
+
+      tft.setTextColor(TFT_GREEN, cCardBg);
+      char etaStr[16];
+      snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+      tft.drawRightString(etaStr, 304, 166, 4);
     }
-    tft.drawString(distStr, 218, 30, 4);
-
-    // Clear speed text area
-    tft.fillRect(216, 56, 94, 20, cCardBg);
-    tft.setTextColor(TFT_CYAN, cCardBg);
-    char spdStr[16];
-    snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
-    tft.drawString(spdStr, 218, 56, 2);
-
-    // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
-    tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
-    tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
-
-    char upperStreet[48];
-    strncpy(upperStreet, _navData.streetName, sizeof(upperStreet) - 1);
-    upperStreet[sizeof(upperStreet) - 1] = '\0';
-    for (int i = 0; upperStreet[i]; i++) {
-      upperStreet[i] = toupper((unsigned char)upperStreet[i]);
-    }
-    tft.setTextColor(TFT_YELLOW, cPillBg);
-    tft.drawCentreString(upperStreet, 237, 98, 2);
-
-    // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
-    tft.fillRect(164, 136, 146, 78, cCardBg);
-
-    // Sub-labels (y: 146)
-    tft.setTextColor(cDimGrey, cCardBg);
-    tft.drawString("DU KIEN", 168, 146, 1);
-
-    tft.setTextColor(cSubText, cCardBg);
-    char totDistStr[16];
-    snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
-    tft.drawRightString(totDistStr, 304, 146, 2);
-
-    // Main values (y: 166)
-    tft.setTextColor(TFT_CYAN, cCardBg);
-    tft.drawString(_navData.arrivalTime, 168, 166, 4);
-
-    tft.setTextColor(TFT_GREEN, cCardBg);
-    char etaStr[16];
-    snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
-    tft.drawRightString(etaStr, 304, 166, 4);
   }
 #endif
 };

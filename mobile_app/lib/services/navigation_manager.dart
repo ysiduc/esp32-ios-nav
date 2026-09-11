@@ -29,6 +29,7 @@ class NavigationManager extends ChangeNotifier {
   StreamSubscription<Position>? _positionStream;
   Timer? _blePushTimer;
   Timer? _simulationTimer;
+  Timer? _idleHeartbeatTimer;
   int _simulatedPolylineIndex = 0;
 
   // Callback for MapScreen when location updates to center vehicle
@@ -56,6 +57,16 @@ class NavigationManager extends ChangeNotifier {
 
   NavigationManager({required this.bleService}) {
     _initGps();
+    _startIdleHeartbeat();
+  }
+
+  void _startIdleHeartbeat() {
+    _idleHeartbeatTimer?.cancel();
+    _idleHeartbeatTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!_isNavigating && bleService.isConnected) {
+        sendPreviewPayloadToEsp32();
+      }
+    });
   }
 
   Future<void> _initGps() async {
@@ -260,33 +271,35 @@ class NavigationManager extends ChangeNotifier {
     _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
   }
 
+  String _currentSongTitle = 'Waiting For You';
+  String _currentSongArtist = 'MONO';
+  String get currentSongTitle => _currentSongTitle;
+  String get currentSongArtist => _currentSongArtist;
+
+  void setSong(String title, String artist) {
+    _currentSongTitle = title;
+    _currentSongArtist = artist;
+    sendPreviewPayloadToEsp32();
+    notifyListeners();
+  }
+
   /// Construct and transmit the payload to ESP32
   void _sendCurrentPayloadToEsp32() {
-    if (!_isNavigating || _activeRoute == null) return;
+    _pushNavigationDataToBle();
+  }
 
-    final step = currentStep;
-    if (step == null) return;
+  void _pushNavigationDataToBle() {
+    if (!bleService.isConnected || _activeRoute == null) return;
 
-    // Sample upcoming 24 waypoints relative to user location (for ESP32 real road rendering)
+    final step = currentStep ?? _activeRoute!.steps.first;
+
+    // Sample upcoming route coordinates into relative offset vectors (dx, dy)
     final upcomingPts = <List<int>>[];
-    if (_activeRoute != null && _activeRoute!.polylinePoints.isNotEmpty && _currentLocation != null) {
+    if (_activeRoute!.polylinePoints.isNotEmpty && _currentLocation != null) {
       final curLoc = _currentLocation!;
-      final poly = _activeRoute!.polylinePoints;
-      final cosLat = math.cos(curLoc.latitude * math.pi / 180.0);
-
-      int startIdx = 0;
-      double minD = double.infinity;
-      const distCalc = Distance();
-      for (int i = 0; i < poly.length; i++) {
-        final d = distCalc.as(LengthUnit.Meter, curLoc, poly[i]);
-        if (d < minD) {
-          minD = d;
-          startIdx = i;
-        }
-      }
-
-      for (int i = startIdx; i < math.min(startIdx + 24, poly.length); i++) {
-        final pt = poly[i];
+      final cosLat = math.cos(curLoc.latitude * (math.pi / 180.0));
+      for (int i = 0; i < _activeRoute!.polylinePoints.length && upcomingPts.length < 24; i += 2) {
+        final pt = _activeRoute!.polylinePoints[i];
         final dy = ((pt.latitude - curLoc.latitude) * 111139.0).round().clamp(-120, 120);
         final dx = ((pt.longitude - curLoc.longitude) * 111139.0 * cosLat).round().clamp(-120, 120);
         upcomingPts.add([dx, dy]);
@@ -299,6 +312,7 @@ class NavigationManager extends ChangeNotifier {
     final curClock = '$h:$m';
 
     final payload = EspNavPayload(
+      isNavigating: true,
       turnCode: step.turnCode,
       distanceToTurn: _distanceToNextManeuver.round(),
       totalDistance: _remainingTotalDistance.round(),
@@ -313,12 +327,14 @@ class NavigationManager extends ChangeNotifier {
       routePoints: upcomingPts,
       currentClock: curClock,
       batteryLevel: 89,
+      songTitle: _currentSongTitle,
+      songArtist: _currentSongArtist,
     );
 
     bleService.sendNavPayload(payload);
   }
 
-  /// Transmit preview / fallback telemetry to ESP32 so display always matches
+  /// Transmit preview / standby telemetry to ESP32 so display shows Clock, ysiduc & Song when not navigating
   void sendPreviewPayloadToEsp32() {
     if (!bleService.isConnected) return;
     final now = DateTime.now();
@@ -327,16 +343,19 @@ class NavigationManager extends ChangeNotifier {
     final curClock = '$h:$m';
 
     final payload = EspNavPayload(
-      turnCode: currentStep?.turnCode ?? 6, // Left turn default
-      distanceToTurn: _distanceToNextManeuver.round() > 0 ? _distanceToNextManeuver.round() : 209,
-      totalDistance: _remainingTotalDistance.round() > 0 ? _remainingTotalDistance.round() : 300,
-      etaMinutes: _remainingEtaMinutes > 0 ? _remainingEtaMinutes : 1,
-      streetName: currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : 'CAU SONG LU',
+      isNavigating: _isNavigating,
+      turnCode: _isNavigating ? (currentStep?.turnCode ?? 0) : 0,
+      distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
+      totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
+      etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
+      streetName: _isNavigating ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '') : 'SAN SANG',
       currentSpeed: _currentSpeedKmh.round(),
-      stepIndex: _currentStepIndex,
-      totalSteps: _activeRoute?.steps.length ?? 1,
+      stepIndex: _isNavigating ? _currentStepIndex : 0,
+      totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
       currentClock: curClock,
       batteryLevel: 89,
+      songTitle: _currentSongTitle,
+      songArtist: _currentSongArtist,
     );
 
     bleService.sendNavPayload(payload);
@@ -351,16 +370,15 @@ class NavigationManager extends ChangeNotifier {
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();
 
-    // Send stop / idle packet to ESP32
-    if (bleService.isConnected) {
-      bleService.sendRawString('{"turn":0,"dist":0,"street":"San sang","speed":0,"eta":0}');
-    }
+    // Send standby idle dashboard packet to ESP32
+    sendPreviewPayloadToEsp32();
 
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _idleHeartbeatTimer?.cancel();
     stopNavigation();
     super.dispose();
   }
