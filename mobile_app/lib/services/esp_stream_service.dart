@@ -16,7 +16,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 20; // 20 FPS default high-speed stream
+  int _targetFps = 15; // 15 FPS default optimal stream rate
   double _actualFps = 0.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -162,7 +162,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 60));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -355,7 +355,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _isSendingBle = true;
 
     try {
-      const chunkSize = 240; // 240 bytes with MTU 517 fits in 1 BLE PDU
+      const chunkSize = 480; // 480 bytes with MTU 512 fits in 1 BLE PDU
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);
@@ -376,9 +376,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         packet[4] = i;
         packet.setRange(5, 5 + slice.length, slice);
 
-        await bleService.sendRawBytes(packet);
+        final success = await bleService.sendRawBytes(packet);
+        if (!success) break;
+
         if (totalChunks > 1) {
-          await Future.delayed(const Duration(milliseconds: 1));
+          await Future.delayed(const Duration(milliseconds: 2));
         }
       }
     } catch (_) {

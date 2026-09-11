@@ -71,6 +71,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // =========================================================================
 // 2. Custom Navigation Characteristic Callback (Receives 20 FPS JPEG & JSON)
 // =========================================================================
+static uint8_t expectedBleChunkIdx = 0;
+
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
@@ -84,14 +86,16 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
       if (chunkIdx == 0) {
         currentBleFrameId = frameId;
+        expectedBleChunkIdx = 0;
         bleJpegBytesReceived = 0;
       }
 
-      if (frameId == currentBleFrameId) {
+      if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
         size_t payloadLen = value.length() - 5;
         if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
           memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
           bleJpegBytesReceived += payloadLen;
+          expectedBleChunkIdx++;
         }
 
         if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {

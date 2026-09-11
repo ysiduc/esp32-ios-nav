@@ -27,9 +27,7 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  final GlobalKey _mapStreamBoundaryKey = GlobalKey();
   final MapController _mapController = MapController();
-  final MapController _streamMapController = MapController();
   final SearchService _searchService = SearchService();
   final OsrmService _osrmService = OsrmService();
   final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
@@ -70,9 +68,6 @@ class _MapScreenState extends State<MapScreen> {
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
         _mapController.move(_userPosition, 16.0);
-        try {
-          _streamMapController.moveAndRotate(_userPosition, 17.8, -navManager.currentHeading);
-        } catch (_) {}
       }
 
       // Hook navigation position update callback to continuously center vehicle
@@ -80,9 +75,6 @@ class _MapScreenState extends State<MapScreen> {
         if (mounted && navManager.isNavigating && _isAutoCentering) {
           _mapController.move(loc, 17.5);
         }
-        try {
-          _streamMapController.moveAndRotate(loc, 17.8, -heading);
-        } catch (_) {}
       };
 
       // Auto-start headless 20-30 FPS live map stream
@@ -401,24 +393,36 @@ class _MapScreenState extends State<MapScreen> {
           urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
+          panBuffer: 2,
+          keepBuffer: 8,
+          tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
           urlTemplate: 'https://mt1.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
+          panBuffer: 2,
+          keepBuffer: 8,
+          tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.darkCyber:
         return TileLayer(
           urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
+          panBuffer: 2,
+          keepBuffer: 8,
+          tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.osmStandard:
         return TileLayer(
           urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
+          panBuffer: 2,
+          keepBuffer: 8,
+          tileProvider: NetworkTileProvider(),
         );
     }
   }
@@ -435,30 +439,11 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults.isNotEmpty ||
         _isSearching;
 
-    // Keep Stream Mini Map synced with vehicle
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      try {
-        _streamMapController.moveAndRotate(userPos, 17.8, -navManager.currentHeading);
-      } catch (_) {}
-    });
-
     return Scaffold(
       backgroundColor: const Color(0xFF0F141C),
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // -----------------------------------------------------------
-          // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (165x185 Retina)
-          // -----------------------------------------------------------
-          SizedBox(
-            width: 144,
-            height: 208,
-            child: RepaintBoundary(
-              key: _mapStreamBoundaryKey,
-              child: _buildDedicatedStreamMap(userPos, navManager),
-            ),
-          ),
-
           // -----------------------------------------------------------
           // 1. Crystal-Clear Main FlutterMap Layer (Retina HD!)
           // -----------------------------------------------------------
@@ -2001,104 +1986,6 @@ class _MapScreenState extends State<MapScreen> {
               color: isConnected ? const Color(0xFF05FFA1) : Colors.white54,
               fontSize: 11,
               fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
-    final activeRoute = navManager.activeRoute;
-    return Container(
-      width: 144,
-      height: 208,
-      color: const Color(0xFF0F172A),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          FlutterMap(
-            mapController: _streamMapController,
-            options: MapOptions(
-              initialCenter: userPos,
-              initialZoom: 16.0,
-              initialRotation: -navManager.currentHeading,
-              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
-                userAgentPackageName: 'com.esp32nav.app',
-                maxZoom: 20,
-              ),
-              if (activeRoute != null) ...[
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: activeRoute.polylinePoints,
-                      strokeWidth: 10.0,
-                      color: const Color(0xFF0077B6).withAlpha(140),
-                    ),
-                    Polyline(
-                      points: activeRoute.polylinePoints,
-                      strokeWidth: 6.5,
-                      color: const Color(0xFF00F0FF),
-                    ),
-                  ],
-                ),
-              ],
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: userPos,
-                    width: 36,
-                    height: 36,
-                    alignment: Alignment.center,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: const Color(0xFF0084FF).withAlpha(45),
-                            border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.5),
-                          ),
-                        ),
-                        Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: const Color(0xFF0084FF),
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: [
-                              BoxShadow(color: const Color(0xFF0084FF).withAlpha(200), blurRadius: 8),
-                            ],
-                          ),
-                          child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 14),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          Positioned(
-            bottom: 4,
-            left: 4,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.black.withAlpha(200),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Text(
-                'MAP LIVE',
-                style: TextStyle(color: Color(0xFF00F0FF), fontSize: 8, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-              ),
             ),
           ),
         ],

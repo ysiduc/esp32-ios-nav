@@ -212,6 +212,86 @@ private:
     }
   }
 
+  /// Draw High-Definition Standby Vector Map when JPEG stream is inactive
+  void _renderStandbyVectorMap() {
+    uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
+    uint16_t cGrid = tft.color565(22, 34, 50);      // Subtle Road Grid
+    uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Cyan Route
+    uint16_t cGlow = tft.color565(0, 80, 140);      // Outer Route Glow
+
+    // 1. Map container & border
+    tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
+    tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
+
+    // 2. Perspective Road Grid
+    for (int gx = 24; gx < 144; gx += 28) {
+      tft.drawFastVLine(6 + gx, 28, 204, cGrid);
+    }
+    for (int gy = 24; gy < 208; gy += 28) {
+      tft.drawFastHLine(8, 26 + gy, 140, cGrid);
+    }
+
+    // 3. Dynamic Vector Route according to turnCode
+    int cx = 78;
+    int cy = 150;
+
+    // Draw route path
+    if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
+      // TURN LEFT: path goes straight up to y=95 then branches left to x=24
+      tft.drawLine(cx, 215, cx, 95, cGlow);
+      tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
+      tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
+      tft.drawLine(cx, 95, 24, 95, cGlow);
+      tft.drawLine(cx, 94, 24, 94, cRoute);
+      tft.drawLine(cx, 96, 24, 96, cRoute);
+
+      // Destination flag/dot
+      tft.fillCircle(24, 95, 5, TFT_YELLOW);
+      tft.fillCircle(24, 95, 2, TFT_WHITE);
+    }
+    else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
+      // TURN RIGHT: path goes straight up to y=95 then branches right to x=132
+      tft.drawLine(cx, 215, cx, 95, cGlow);
+      tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
+      tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
+      tft.drawLine(cx, 95, 132, 95, cGlow);
+      tft.drawLine(cx, 94, 132, 94, cRoute);
+      tft.drawLine(cx, 96, 132, 96, cRoute);
+
+      // Destination flag/dot
+      tft.fillCircle(132, 95, 5, TFT_YELLOW);
+      tft.fillCircle(132, 95, 2, TFT_WHITE);
+    }
+    else {
+      // STRAIGHT or DEFAULT: path goes straight up to y=42
+      tft.drawLine(cx, 215, cx, 42, cGlow);
+      tft.drawLine(cx - 1, 215, cx - 1, 42, cRoute);
+      tft.drawLine(cx + 1, 215, cx + 1, 42, cRoute);
+
+      // Waypoint dot
+      tft.fillCircle(cx, 42, 5, TFT_YELLOW);
+      tft.fillCircle(cx, 42, 2, TFT_WHITE);
+    }
+
+    // 4. Vehicle Navigation Marker (Cyan triangle + radar pulse)
+    tft.drawCircle(cx, cy, 14, tft.color565(0, 100, 160));
+    tft.drawCircle(cx, cy, 22, tft.color565(0, 50, 90));
+
+    // Arrow pointing up / heading
+    tft.fillTriangle(cx, cy - 10, cx - 8, cy + 8, cx + 8, cy + 8, TFT_CYAN);
+    tft.fillCircle(cx, cy + 1, 3, TFT_WHITE);
+
+    // 5. GPS Radar Pulse Indicator (Top Right)
+    tft.fillCircle(134, 38, 4, TFT_GREEN);
+    tft.setTextColor(TFT_GREEN, cMapBg);
+    tft.drawString("GPS", 112, 34, 1);
+
+    // 6. Bottom Status Pill Badge
+    tft.fillRoundRect(10, 208, 64, 18, 4, TFT_BLACK);
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.drawString("STANDBY", 14, 211, 1);
+  }
+
   void _renderTft(bool isStreamingActive) {
     if (_currentState == STATE_PAIRING_WAIT) {
       _drawPairingScreenTft();
@@ -265,20 +345,11 @@ private:
     tft.fillRect(300, 8, 10, 4, TFT_GREEN);
 
     // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
-    // NO FAKE VIRTUAL MAP! ONLY real streamed JPEG from iOS App!
     if (!isStreamingActive) {
+      _renderStandbyVectorMap();
+    } else {
+      // Map border container
       tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
-      tft.fillRoundRect(6, 26, 144, 208, 10, tft.color565(14, 20, 28)); // Dark waiting background
-
-      tft.setTextColor(TFT_CYAN, tft.color565(14, 20, 28));
-      tft.drawCentreString("CHO STREAM MAP", 78, 100, 2);
-      tft.setTextColor(TFT_GREEN, tft.color565(14, 20, 28));
-      tft.drawCentreString("20 FPS BLE", 78, 124, 2);
-
-      // MAP LIVE Badge (Bottom-left pill)
-      tft.fillRoundRect(10, 208, 56, 18, 4, TFT_BLACK);
-      tft.setTextColor(TFT_GREEN, TFT_BLACK);
-      tft.drawString("MAP LIVE", 14, 211, 1);
     }
 
     // 3. RIGHT 50%: HUD NAVIGATION CARDS (x: 158, y: 24, w: 158, h: 212)
