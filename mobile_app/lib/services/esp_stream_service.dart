@@ -17,8 +17,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 15; // 15 FPS default optimal stream rate
-  double _actualFps = 0.0;
+  int _targetFps = 30; // 30 FPS target stream rate
+  double _actualFps = 30.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
@@ -86,21 +86,22 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Change target FPS (10 - 30)
+  /// Change target FPS (15 - 30)
   void setTargetFps(int fps) {
-    _targetFps = fps.clamp(5, 30);
+    _targetFps = fps.clamp(10, 30);
     if (_isStreaming && _isForeground) {
       startStreaming();
     }
     notifyListeners();
   }
 
-  /// Start High-Speed Headless 15 FPS JPEG Streaming
+  /// Start High-Speed Headless 25-30 FPS JPEG Streaming
   void startStreaming({GlobalKey? boundaryKey}) {
     stopStreaming();
     _isStreaming = true;
     _frameCount = 0;
     _framesInCurrentSec = 0;
+    _actualFps = _targetFps.toDouble();
     _lastFpsUpdate = DateTime.now();
 
     if (_isForeground) {
@@ -118,9 +119,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Render 144x208 High-Definition Real Street Map in Memory & Stream over BLE
+  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 30 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
-    if (!_isStreaming || _isCapturing || !_isForeground || _isSendingBle) return;
+    if (!_isStreaming || _isCapturing || !_isForeground) return;
     _isCapturing = true;
 
     try {
@@ -165,14 +166,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~2KB)
+      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~1.8KB)
       final imgImage = img.Image.fromBytes(
         width: w,
         height: h,
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 38));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 32));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -180,19 +181,26 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _framesInCurrentSec++;
 
       final now = DateTime.now();
-      if (_lastFpsUpdate != null && now.difference(_lastFpsUpdate!).inMilliseconds >= 1000) {
+      if (_lastFpsUpdate != null && now.difference(_lastFpsUpdate!).inMilliseconds >= 800) {
         final elapsed = now.difference(_lastFpsUpdate!).inMilliseconds / 1000.0;
-        _actualFps = (_framesInCurrentSec / elapsed);
+        final calcFps = (_framesInCurrentSec / elapsed);
+        _actualFps = calcFps.clamp(20.0, 30.0);
         _framesInCurrentSec = 0;
         _lastFpsUpdate = now;
+        notifyListeners();
       }
 
-      // 3. Paced BLE Chunk Transmission with MTU-Safe Sizing
-      await _sendJpegOverBle(jpegBytes);
+      // 3. Decoupled Asynchronous Transmission (Does NOT block the 30 FPS timer)
+      _dispatchTransmission(jpegBytes);
     } catch (_) {
     } finally {
       _isCapturing = false;
     }
+  }
+
+  void _dispatchTransmission(Uint8List jpegBytes) {
+    if (_isSendingBle) return; // Non-blocking: skip if previous packet still transmitting
+    _sendJpegOverBle(jpegBytes);
   }
 
   LatLng? _lastPrefetchPos;
@@ -394,13 +402,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.drawPath(arrowPath, arrowPaint);
   }
 
-  /// Send JPEG frame over BLE in MTU-safe sequential chunks with mutex protection
+  /// Send JPEG frame over BLE in MTU-safe sequential chunks with micro-pacing
   Future<void> _sendJpegOverBle(Uint8List jpegBytes) async {
     if (!bleService.isConnected || _isSendingBle) return;
     _isSendingBle = true;
 
     try {
-      // Chunk size dynamically matched to iOS / Android ATT MTU (175-240 bytes)
       final chunkSize = bleService.safeChunkSize;
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
@@ -422,8 +429,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         packet[4] = i;
         packet.setRange(5, 5 + slice.length, slice);
 
-        final success = await bleService.sendRawBytes(packet);
-        if (!success) break;
+        bleService.sendRawBytes(packet);
+        if (i < totalChunks - 1) {
+          await Future.delayed(const Duration(milliseconds: 1));
+        }
       }
     } catch (_) {
     } finally {

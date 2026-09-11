@@ -557,6 +557,55 @@ class SearchService {
     return q.isEmpty ? query.trim() : q;
   }
 
+  /// Instant 0ms Local Offline POI Database Search
+  List<MapPlace> searchInstantLocal(String query, {LatLng? nearLocation}) {
+    final cleanQuery = query.trim();
+    if (cleanQuery.isEmpty) return [];
+
+    final unaccented = removeDiacritics(cleanQuery).toLowerCase();
+    final strippedCity = stripCitySuffix(cleanQuery);
+    final strippedCityUnaccented = removeDiacritics(strippedCity).toLowerCase();
+
+    final results = <MapPlace>[];
+    final seen = <String>{};
+
+    for (final landmark in _vietnameseLandmarks) {
+      final lName = landmark.name.toLowerCase();
+      final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
+      final lDisplayUnaccented = removeDiacritics(landmark.displayName).toLowerCase();
+
+      if (lName.contains(cleanQuery.toLowerCase()) ||
+          lNameUnaccented.contains(unaccented) ||
+          lNameUnaccented.contains(strippedCityUnaccented) ||
+          lDisplayUnaccented.contains(unaccented) ||
+          unaccented.contains(lNameUnaccented)) {
+        final key = '${landmark.name}_${landmark.coordinate.latitude.toStringAsFixed(4)}'.toLowerCase();
+        if (!seen.contains(key)) {
+          seen.add(key);
+          if (nearLocation != null) {
+            const distanceCalculator = Distance();
+            final dist = distanceCalculator.as(LengthUnit.Meter, nearLocation, landmark.coordinate);
+            results.add(MapPlace(
+              name: landmark.name,
+              displayName: landmark.displayName,
+              coordinate: landmark.coordinate,
+              type: landmark.type,
+              category: landmark.category,
+              distanceMeters: dist,
+            ));
+          } else {
+            results.add(landmark);
+          }
+        }
+      }
+    }
+
+    if (nearLocation != null) {
+      results.sort((a, b) => (a.distanceMeters ?? 999999).compareTo(b.distanceMeters ?? 999999));
+    }
+    return results;
+  }
+
   /// Ultra-Fast Multi-Engine Search with POI Database, Nominatim & Photon
   Future<List<MapPlace>> searchPlaces(
     String query, {
@@ -595,7 +644,7 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 1: Check Built-in Vietnamese Landmark / POI Database
+    // Step 1: Check Built-in Vietnamese Landmark / POI Database (0ms)
     // -------------------------------------------------------------
     for (final landmark in _vietnameseLandmarks) {
       final lName = landmark.name.toLowerCase();
@@ -640,14 +689,15 @@ class SearchService {
     // Step 3: Run High-Speed Prioritized Multi-Engine Queries
     // -------------------------------------------------------------
     final futures = <Future<List<MapPlace>>>[];
-
-    // Fast Photon queries (Top 2 cleanest permutations)
     futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
     if (strippedCity != cleanQuery) {
       futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
     }
 
-    final nestedResults = await Future.wait(futures);
+    final nestedResults = await Future.wait(futures).timeout(
+      const Duration(milliseconds: 1400),
+      onTimeout: () => [],
+    );
 
     // If query had a house number, synthesize top-ranked house number places
     if (houseNumber != null) {

@@ -264,8 +264,8 @@ class BleService extends ChangeNotifier {
   }
 
   /// Safe BLE packet payload size calculated from current negotiated ATT MTU
-  int get currentMtu => _connectedDevice?.mtuNow ?? 185;
-  int get safeChunkSize => (currentMtu > 23 ? currentMtu - 5 : 175).clamp(20, 180);
+  int get currentMtu => _connectedDevice?.mtuNow ?? 512;
+  int get safeChunkSize => (currentMtu > 23 ? currentMtu - 5 : 490).clamp(20, 500);
 
   /// Send binary byte array over BLE (e.g. JPEG frames)
   Future<bool> sendRawBytes(Uint8List bytes) async {

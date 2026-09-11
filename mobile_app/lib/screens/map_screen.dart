@@ -207,10 +207,19 @@ class _MapScreenState extends State<MapScreen> {
       Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 600));
     } catch (_) {}
 
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+
+    // 1. Instant 0ms Local Offline Results
+    final instantMatches = _searchService.searchInstantLocal(query, nearLocation: currentPos);
+    if (instantMatches.isNotEmpty) {
+      setState(() {
+        _searchResults = instantMatches;
+      });
+    }
+
     setState(() => _isSearching = true);
-    _debounceTimer = Timer(const Duration(milliseconds: 250), () async {
-      final navManager = Provider.of<NavigationManager>(context, listen: false);
-      final currentPos = navManager.currentLocation ?? _userPosition;
+    _debounceTimer = Timer(const Duration(milliseconds: 200), () async {
       final results = await _searchService.searchPlaces(query, nearLocation: currentPos);
       if (mounted) {
         setState(() {
@@ -394,8 +403,8 @@ class _MapScreenState extends State<MapScreen> {
           subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 4,
-          keepBuffer: 16,
+          panBuffer: 1,
+          keepBuffer: 6,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.googleSatellite:
@@ -404,8 +413,8 @@ class _MapScreenState extends State<MapScreen> {
           subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 4,
-          keepBuffer: 16,
+          panBuffer: 1,
+          keepBuffer: 6,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.darkCyber:
@@ -413,8 +422,8 @@ class _MapScreenState extends State<MapScreen> {
           urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 4,
-          keepBuffer: 16,
+          panBuffer: 1,
+          keepBuffer: 6,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.osmStandard:
@@ -422,8 +431,8 @@ class _MapScreenState extends State<MapScreen> {
           urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 4,
-          keepBuffer: 16,
+          panBuffer: 1,
+          keepBuffer: 6,
           tileProvider: NetworkTileProvider(),
         );
     }
