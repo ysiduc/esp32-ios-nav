@@ -3,10 +3,13 @@
 #include <NimBLEDevice.h>
 #include "display_ui.h"
 
-// Frame Buffer for Direct High-Speed 20 FPS JPEG Stream over BLE
-static uint8_t jpegFrameBuf[40960];
-static volatile size_t jpegFrameLen = 0;
+// Double Buffering for Direct High-Speed 20 FPS JPEG Stream over BLE
+static uint8_t bleRxBuf[32768];
+static uint8_t renderBuf[32768];
+static volatile size_t renderBufLen = 0;
+static volatile bool newFrameAvailable = false;
 static volatile unsigned long lastFrameTime = 0;
+
 static uint8_t currentBleFrameId = 255;
 static size_t bleJpegBytesReceived = 0;
 
@@ -54,13 +57,13 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.println("[BLE] iPhone da ket noi!");
+    Serial.println("[BLE] iPhone connected successfully!");
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     display.setBleConnected(false);
-    Serial.println("[BLE] Da ngat ket noi. Phat quang ba lai...");
+    Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
 };
@@ -86,17 +89,18 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
       if (frameId == currentBleFrameId) {
         size_t payloadLen = value.length() - 5;
-        if (bleJpegBytesReceived + payloadLen < sizeof(jpegFrameBuf)) {
-          memcpy(jpegFrameBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+        if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
+          memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
           bleJpegBytesReceived += payloadLen;
         }
 
         if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
-          jpegFrameLen = bleJpegBytesReceived;
-          lastFrameTime = millis();
-          #if defined(DISPLAY_TFT_ST7789)
-          TJpgDec.drawJpg(6, 26, jpegFrameBuf, jpegFrameLen);
-          #endif
+          // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
+          if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
+            memcpy(renderBuf, bleRxBuf, bleJpegBytesReceived);
+            renderBufLen = bleJpegBytesReceived;
+            newFrameAvailable = true;
+          }
         }
       }
       return;
@@ -146,8 +150,8 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 // =========================================================================
 void setup() {
   Serial.begin(115200);
-  delay(300);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (IMAGE 3 100% MATCH) ===");
+  delay(200);
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (ST7789 2.4 INCH 20 FPS) ===");
 
   // 1. Start Display
   display.init();
@@ -160,8 +164,6 @@ void setup() {
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
   NimBLEDevice::init("ESP32_NAV_ANCS");
   NimBLEDevice::setMTU(517);
-  NimBLEDevice::setSecurityAuth(true, true, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -183,11 +185,23 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 da san sang nhan luong 20 FPS qua Bluetooth BLE (MTU 517)!");
+  Serial.println("[BLE] ESP32 ready for 20 FPS JPEG stream!");
 }
 
 void loop() {
+  // 1. Decode & push new JPEG Map Frame safely on the Main thread
+  if (newFrameAvailable) {
+    newFrameAvailable = false;
+    lastFrameTime = millis();
+    #if defined(DISPLAY_TFT_ST7789)
+    if (renderBufLen > 100) {
+      TJpgDec.drawJpg(6, 26, renderBuf, renderBufLen);
+    }
+    #endif
+  }
+
+  // 2. Update HUD and status UI
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
-  delay(5);
+  delay(2);
 }

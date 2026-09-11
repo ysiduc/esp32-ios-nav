@@ -430,9 +430,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                       children: [
                         TileLayer(
-                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
                           userAgentPackageName: 'com.esp32nav.app',
-                          maxZoom: 19,
+                          maxZoom: 20,
                         ),
                         PolylineLayer(
                           polylines: [

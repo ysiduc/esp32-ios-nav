@@ -382,41 +382,33 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Map Tiles Layer (Ultra-Sharp HD Retina Vector Tiles, Zero Watermark)
+  // Map Tiles Layer (Ultra-Sharp HD Google Maps & CartoDB Retina Tiles)
   // -------------------------------------------------------------
   Widget _buildMapTiles() {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&scale=2&hl=vi&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
       case MapThemeMode.darkCyber:
-        return ColorFiltered(
-          colorFilter: const ColorFilter.matrix(<double>[
-            -0.85, 0, 0, 0, 230,
-            0, -0.85, 0, 0, 230,
-            0, 0, -0.80, 0, 240,
-            0, 0, 0, 1, 0,
-          ]),
-          child: TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.esp32nav.app',
-            maxZoom: 20,
-          ),
+        return TileLayer(
+          urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+          userAgentPackageName: 'com.esp32nav.app',
+          maxZoom: 20,
         );
       case MapThemeMode.osmStandard:
         return TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
-          maxZoom: 19,
+          maxZoom: 20,
         );
     }
   }
@@ -2025,7 +2017,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
                 userAgentPackageName: 'com.esp32nav.app',
                 maxZoom: 20,
               ),
