@@ -388,7 +388,7 @@ class _MapScreenState extends State<MapScreen> {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
         );
@@ -407,7 +407,7 @@ class _MapScreenState extends State<MapScreen> {
             0, 0, 0, 1, 0,
           ]),
           child: TileLayer(
-            urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'com.esp32nav.app',
             maxZoom: 20,
           ),
@@ -449,8 +449,8 @@ class _MapScreenState extends State<MapScreen> {
           // 0. Dedicated HD Zoomed-In Map Stream Viewport for ESP32 (165x185 Retina)
           // -----------------------------------------------------------
           SizedBox(
-            width: 165,
-            height: 185,
+            width: 144,
+            height: 208,
             child: RepaintBoundary(
               key: _mapStreamBoundaryKey,
               child: _buildDedicatedStreamMap(userPos, navManager),
@@ -2009,8 +2009,8 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildDedicatedStreamMap(LatLng userPos, NavigationManager navManager) {
     final activeRoute = navManager.activeRoute;
     return Container(
-      width: 165,
-      height: 185,
+      width: 144,
+      height: 208,
       color: const Color(0xFF0F172A),
       child: Stack(
         alignment: Alignment.center,
@@ -2019,13 +2019,13 @@ class _MapScreenState extends State<MapScreen> {
             mapController: _streamMapController,
             options: MapOptions(
               initialCenter: userPos,
-              initialZoom: 17.8,
+              initialZoom: 16.0,
               initialRotation: -navManager.currentHeading,
               interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://mt1.google.com/vt/lyrs=m&scale=2&hl=vi&x={x}&y={y}&z={z}',
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.esp32nav.app',
                 maxZoom: 20,
               ),

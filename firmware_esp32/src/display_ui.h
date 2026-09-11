@@ -21,7 +21,7 @@ enum DisplayState {
 };
 
 struct NavStateData {
-  uint8_t turnCode = 6;       // 6 = Turn Left (as in user photo), 2 = Turn Right, 0 = Straight
+  uint8_t turnCode = 6;       // 6 = Turn Left, 2 = Turn Right, 0 = Straight
   uint16_t distMeters = 208;
   uint16_t totalDistMeters = 5900;
   uint8_t speedKmh = 0;
@@ -177,20 +177,14 @@ private:
 
     if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
       // TURN LEFT (Image 3)
-      // Vertical stem going up
       tft.fillRect(cx + 6, cy - 6, 4, 18, TFT_CYAN);
-      // Horizontal bar going left
       tft.fillRect(cx - 10, cy - 6, 18, 4, TFT_CYAN);
-      // Arrow head pointing Left
       tft.fillTriangle(cx - 14, cy - 4, cx - 6, cy - 11, cx - 6, cy + 3, TFT_CYAN);
     }
     else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
       // TURN RIGHT
-      // Vertical stem going up
       tft.fillRect(cx - 10, cy - 6, 4, 18, TFT_CYAN);
-      // Horizontal bar going right
       tft.fillRect(cx - 8, cy - 6, 18, 4, TFT_CYAN);
-      // Arrow head pointing Right
       tft.fillTriangle(cx + 14, cy - 4, cx + 6, cy - 11, cx + 6, cy + 3, TFT_CYAN);
     }
     else if (turnCode == 4) {
@@ -253,7 +247,7 @@ private:
     // =========================================================================
     // STATE_NAVIGATION: EXACT 100% REPLICA OF TARGET DESIGN (IMAGE 3)
     // =========================================================================
-    uint16_t cCardBg = tft.color565(19, 27, 38);   // Pure Dark Charcoal / Navy (#131B26)
+    uint16_t cCardBg = tft.color565(19, 27, 38);   // Pure Dark Charcoal (#131B26)
     uint16_t cPillBg = tft.color565(11, 17, 26);   // Deep Black Pill (#0B111A)
     uint16_t cBorder = tft.color565(32, 45, 61);   // Subtle Border (#202D3D)
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
@@ -271,19 +265,15 @@ private:
     tft.fillRect(300, 8, 10, 4, TFT_GREEN);
 
     // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
-    // If phone is actively streaming 20 FPS JPEG, do not overwrite canvas!
+    // NO FAKE VIRTUAL MAP! ONLY real streamed JPEG from iOS App!
     if (!isStreamingActive) {
       tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
-      tft.fillRoundRect(6, 26, 144, 208, 10, tft.color565(228, 231, 235)); // Light map canvas
+      tft.fillRoundRect(6, 26, 144, 208, 10, tft.color565(14, 20, 28)); // Dark waiting background
 
-      // Route Path Line (Cyan neon line)
-      tft.fillRect(76, 26, 6, 134, TFT_CYAN);
-
-      // Vehicle Location Marker
-      tft.drawCircle(79, 110, 15, tft.color565(0, 132, 255));
-      tft.fillCircle(79, 110, 10, tft.color565(0, 132, 255));
-      tft.drawCircle(79, 110, 10, TFT_WHITE);
-      tft.fillTriangle(79, 104, 75, 113, 83, 113, TFT_WHITE);
+      tft.setTextColor(TFT_CYAN, tft.color565(14, 20, 28));
+      tft.drawCentreString("CHO STREAM MAP", 78, 100, 2);
+      tft.setTextColor(TFT_GREEN, tft.color565(14, 20, 28));
+      tft.drawCentreString("20 FPS BLE", 78, 124, 2);
 
       // MAP LIVE Badge (Bottom-left pill)
       tft.fillRoundRect(10, 208, 56, 18, 4, TFT_BLACK);
