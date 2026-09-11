@@ -20,6 +20,11 @@ enum DisplayState {
   STATE_POPUP_SMS
 };
 
+struct RoutePoint {
+  int8_t dx;
+  int8_t dy;
+};
+
 struct NavStateData {
   uint8_t turnCode = 6;       // 6 = Turn Left, 2 = Turn Right, 0 = Straight
   uint16_t distMeters = 208;
@@ -29,6 +34,8 @@ struct NavStateData {
   char streetName[48] = "CAU SONG LU";
   char arrivalTime[16] = "12:05";
   bool isConnected = false;
+  uint8_t routePointCount = 0;
+  RoutePoint routePoints[32];
 };
 
 struct AncsPopupData {
@@ -64,7 +71,7 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "12:05") {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "12:05", const RoutePoint* pts = nullptr, uint8_t ptCount = 0) {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
@@ -74,6 +81,11 @@ public:
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
     strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
     _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+
+    if (pts != nullptr && ptCount > 0) {
+      _navData.routePointCount = ptCount > 32 ? 32 : ptCount;
+      memcpy(_navData.routePoints, pts, _navData.routePointCount * sizeof(RoutePoint));
+    }
 
     if (_currentState != STATE_POPUP_CALL && _currentState != STATE_POPUP_SMS) {
       _currentState = STATE_NAVIGATION;
@@ -234,46 +246,61 @@ private:
       tft.drawFastHLine(8, 26 + gy, 140, cGrid);
     }
 
-    // 3. Dynamic Vector Route according to turnCode
+    // 3. Dynamic Vector Route: Draw Real Road Geometry from GPS Route Points
     int cx = 78;
     int cy = 150;
 
-    // Draw route path
-    if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
-      // TURN LEFT: path goes straight up to y=95 then branches left to x=24
-      tft.drawLine(cx, 215, cx, 95, cGlow);
-      tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
-      tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
-      tft.drawLine(cx, 95, 24, 95, cGlow);
-      tft.drawLine(cx, 94, 24, 94, cRoute);
-      tft.drawLine(cx, 96, 24, 96, cRoute);
+    if (_navData.routePointCount >= 2) {
+      int prevX = cx;
+      int prevY = cy;
+      for (uint8_t i = 0; i < _navData.routePointCount; i++) {
+        int px = cx + (int)(_navData.routePoints[i].dx * 0.7);
+        int py = cy - (int)(_navData.routePoints[i].dy * 0.7);
+        px = constrain(px, 12, 140);
+        py = constrain(py, 32, 215);
 
-      // Destination flag/dot
-      tft.fillCircle(24, 95, 5, TFT_YELLOW);
-      tft.fillCircle(24, 95, 2, TFT_WHITE);
-    }
-    else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
-      // TURN RIGHT: path goes straight up to y=95 then branches right to x=132
-      tft.drawLine(cx, 215, cx, 95, cGlow);
-      tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
-      tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
-      tft.drawLine(cx, 95, 132, 95, cGlow);
-      tft.drawLine(cx, 94, 132, 94, cRoute);
-      tft.drawLine(cx, 96, 132, 96, cRoute);
+        tft.drawLine(prevX, prevY, px, py, cGlow);
+        tft.drawLine(prevX - 1, prevY, px - 1, py, cRoute);
+        tft.drawLine(prevX + 1, prevY, px + 1, py, cRoute);
 
-      // Destination flag/dot
-      tft.fillCircle(132, 95, 5, TFT_YELLOW);
-      tft.fillCircle(132, 95, 2, TFT_WHITE);
-    }
-    else {
-      // STRAIGHT or DEFAULT: path goes straight up to y=42
-      tft.drawLine(cx, 215, cx, 42, cGlow);
-      tft.drawLine(cx - 1, 215, cx - 1, 42, cRoute);
-      tft.drawLine(cx + 1, 215, cx + 1, 42, cRoute);
-
-      // Waypoint dot
-      tft.fillCircle(cx, 42, 5, TFT_YELLOW);
-      tft.fillCircle(cx, 42, 2, TFT_WHITE);
+        prevX = px;
+        prevY = py;
+      }
+      // Destination flag/dot at the end of real road path
+      tft.fillCircle(prevX, prevY, 5, TFT_YELLOW);
+      tft.fillCircle(prevX, prevY, 2, TFT_WHITE);
+    } else {
+      // Dynamic Turn Maneuver Curve fallback
+      if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
+        // TURN LEFT
+        tft.drawLine(cx, 215, cx, 95, cGlow);
+        tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
+        tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
+        tft.drawLine(cx, 95, 24, 95, cGlow);
+        tft.drawLine(cx, 94, 24, 94, cRoute);
+        tft.drawLine(cx, 96, 24, 96, cRoute);
+        tft.fillCircle(24, 95, 5, TFT_YELLOW);
+        tft.fillCircle(24, 95, 2, TFT_WHITE);
+      }
+      else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
+        // TURN RIGHT
+        tft.drawLine(cx, 215, cx, 95, cGlow);
+        tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
+        tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
+        tft.drawLine(cx, 95, 132, 95, cGlow);
+        tft.drawLine(cx, 94, 132, 94, cRoute);
+        tft.drawLine(cx, 96, 132, 96, cRoute);
+        tft.fillCircle(132, 95, 5, TFT_YELLOW);
+        tft.fillCircle(132, 95, 2, TFT_WHITE);
+      }
+      else {
+        // STRAIGHT
+        tft.drawLine(cx, 215, cx, 42, cGlow);
+        tft.drawLine(cx - 1, 215, cx - 1, 42, cRoute);
+        tft.drawLine(cx + 1, 215, cx + 1, 42, cRoute);
+        tft.fillCircle(cx, 42, 5, TFT_YELLOW);
+        tft.fillCircle(cx, 42, 2, TFT_WHITE);
+      }
     }
 
     // 4. Vehicle Navigation Marker (Cyan triangle + radar pulse)

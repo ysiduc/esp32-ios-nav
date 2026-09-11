@@ -195,8 +195,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  LatLng? _lastPrefetchPos;
+
   /// Asynchronously pre-fetch surrounding Google Maps HD / CartoDB tiles
   void _prefetchSurroundingTiles(LatLng pos, int zoom) {
+    if (_lastPrefetchPos != null) {
+      final dLat = (pos.latitude - _lastPrefetchPos!.latitude).abs();
+      final dLon = (pos.longitude - _lastPrefetchPos!.longitude).abs();
+      if (dLat < 0.0003 && dLon < 0.0003) return;
+    }
+    _lastPrefetchPos = pos;
+
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = pos.latitude * (math.pi / 180.0);
     final int cx = ((pos.longitude + 180.0) / 360.0 * n).floor();

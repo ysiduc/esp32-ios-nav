@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -266,6 +267,32 @@ class NavigationManager extends ChangeNotifier {
     final step = currentStep;
     if (step == null) return;
 
+    // Sample upcoming 24 waypoints relative to user location (for ESP32 real road rendering)
+    final upcomingPts = <List<int>>[];
+    if (_activeRoute != null && _activeRoute!.polylinePoints.isNotEmpty && _currentLocation != null) {
+      final curLoc = _currentLocation!;
+      final poly = _activeRoute!.polylinePoints;
+      final cosLat = math.cos(curLoc.latitude * math.pi / 180.0);
+
+      int startIdx = 0;
+      double minD = double.infinity;
+      const distCalc = Distance();
+      for (int i = 0; i < poly.length; i++) {
+        final d = distCalc.as(LengthUnit.Meter, curLoc, poly[i]);
+        if (d < minD) {
+          minD = d;
+          startIdx = i;
+        }
+      }
+
+      for (int i = startIdx; i < math.min(startIdx + 24, poly.length); i++) {
+        final pt = poly[i];
+        final dy = ((pt.latitude - curLoc.latitude) * 111139.0).round().clamp(-120, 120);
+        final dx = ((pt.longitude - curLoc.longitude) * 111139.0 * cosLat).round().clamp(-120, 120);
+        upcomingPts.add([dx, dy]);
+      }
+    }
+
     final payload = EspNavPayload(
       turnCode: step.turnCode,
       distanceToTurn: _distanceToNextManeuver.round(),
@@ -278,6 +305,7 @@ class NavigationManager extends ChangeNotifier {
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
       heading: _currentHeading.round(),
+      routePoints: upcomingPts,
     );
 
     bleService.sendNavPayload(payload);

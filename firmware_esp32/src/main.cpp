@@ -145,7 +145,21 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       curArrival = String(doc["arrival"] | "12:05");
       if (doc["head"].is<int>()) curHeading = doc["head"];
 
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str());
+      RoutePoint parsedPts[32];
+      uint8_t parsedPtCount = 0;
+      if (doc["pts"].is<JsonArray>()) {
+        JsonArray arr = doc["pts"].as<JsonArray>();
+        for (JsonVariant v : arr) {
+          if (parsedPtCount >= 32) break;
+          if (v.is<JsonArray>() && v.size() >= 2) {
+            parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
+            parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
+            parsedPtCount++;
+          }
+        }
+      }
+
+      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), parsedPts, parsedPtCount);
     }
   }
 };

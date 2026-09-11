@@ -13,6 +13,7 @@ class EspNavPayload {
   final double? latitude;       // GPS latitude
   final double? longitude;      // GPS longitude
   final int heading;            // Vehicle bearing / compass heading (0-360)
+  final List<List<int>>? routePoints; // Relative waypoint offsets [dx, dy] in meters
 
   EspNavPayload({
     required this.turnCode,
@@ -26,6 +27,7 @@ class EspNavPayload {
     this.latitude,
     this.longitude,
     this.heading = 0,
+    this.routePoints,
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -88,6 +90,7 @@ class EspNavPayload {
       'lat': latitude != null ? double.parse(latitude!.toStringAsFixed(6)) : null,
       'lng': longitude != null ? double.parse(longitude!.toStringAsFixed(6)) : null,
       'head': heading,
+      if (routePoints != null && routePoints!.isNotEmpty) 'pts': routePoints,
     };
     return jsonEncode(map);
   }
