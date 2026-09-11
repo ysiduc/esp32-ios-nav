@@ -19,10 +19,12 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 3. Install Dependencies
+      - name: 3. Install Dependencies & Pods
         working-directory: mobile_app
         run: |
           flutter pub get
+          cd ios
+          pod install || pod install --repo-update
 
       - name: 4. Build iOS App (Release, No CodeSign)
         working-directory: mobile_app
@@ -30,12 +32,20 @@ jobs:
           flutter build ios --release --no-codesign
 
       - name: 5. Package as IPA Payload
-        working-directory: mobile_app/build/ios/iphoneos
+        working-directory: mobile_app
         run: |
+          rm -rf Payload esp32_nav_app.ipa
           mkdir -p Payload
-          cp -r Runner.app Payload/
-          zip -r -y ../../../esp32_nav_app.ipa Payload
-          ls -lh ../../../esp32_nav_app.ipa
+          APP_PATH=$(find build/ios -name "Runner.app" -type d | head -n 1)
+          echo "Found app bundle at: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Runner.app not found in build/ios directory!"
+            find build/ -maxdepth 4 || true
+            exit 1
+          fi
+          cp -R "$APP_PATH" Payload/
+          zip -r -y -q esp32_nav_app.ipa Payload
+          ls -lh esp32_nav_app.ipa
 
       - name: 6. Upload IPA as Artifact
         uses: actions/upload-artifact@v4
