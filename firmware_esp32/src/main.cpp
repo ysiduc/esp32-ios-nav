@@ -157,7 +157,7 @@ void setup() {
   display.init();
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
-  TJpgDec.setSwapBytes(false);
+  TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tft_output);
   #endif
 

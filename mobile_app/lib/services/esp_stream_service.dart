@@ -87,12 +87,12 @@ class EspStreamService extends ChangeNotifier {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // Run pure JPEG encoding on background isolate worker
+      // Run high-definition JPEG encoding on background isolate worker
       final jpegBytes = await compute(_encodeJpegWorker, {
         'width': actualWidth,
         'height': actualHeight,
         'rawBytes': rawBytes,
-        'quality': 38,
+        'quality': 75,
       });
 
       _latestJpegBytes = jpegBytes;
