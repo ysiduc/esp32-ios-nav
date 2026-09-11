@@ -813,7 +813,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: hasSong ? Colors.white : Colors.white54,
-                      fontSize: 11,
+                      fontSize: 9.5,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -824,7 +824,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Color(0xFF94A3B8),
-                      fontSize: 9,
+                      fontSize: 8.5,
                       fontWeight: FontWeight.w500,
                     ),
                   ),

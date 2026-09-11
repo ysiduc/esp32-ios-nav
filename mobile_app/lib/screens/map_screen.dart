@@ -1,22 +1,23 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
+import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/google_maps_parser.dart';
+import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
-import '../services/osrm_service.dart';
 import '../services/search_service.dart';
 
 enum MapThemeMode {
-  googleRoad,      // Google Maps Standard HD Retina (Crisp, familiar, zero watermark)
-  googleSatellite, // Google Maps Hybrid Satellite HD Retina
-  darkCyber,       // Midnight Dark Mode HD Retina
-  osmStandard,     // OpenStreetMap Standard
+  streets,         // Mapbox Streets (crisp, familiar, fast vector)
+  satellite,       // Mapbox Satellite Streets
+  navigationNight, // Mapbox Navigation Night (dark, driver-optimized)
+  dark,            // Mapbox Dark v11
 }
 
 class MapScreen extends StatefulWidget {
@@ -27,12 +28,14 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  final MapController _mapController = MapController();
+  ml.MapLibreMapController? _mapController;
   final SearchService _searchService = SearchService();
-  final OsrmService _osrmService = OsrmService();
+  final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+
+  bool _mapReady = false;
 
   // Coordinates default (Hanoi)
   LatLng _userPosition = const LatLng(21.0285, 105.8542);
@@ -53,7 +56,7 @@ class _MapScreenState extends State<MapScreen> {
   // 2: Route Comparison & Alternatives
   int _viewMode = 0;
   bool _isMuted = false;
-  MapThemeMode _currentTheme = MapThemeMode.googleRoad; // Google Maps Retina HD (Zero blurriness!)
+  MapThemeMode _currentTheme = MapThemeMode.streets; // Mapbox Streets vector (fast, sharp)
 
   List<MapPlace> _searchResults = [];
   Timer? _debounceTimer;
@@ -67,13 +70,16 @@ class _MapScreenState extends State<MapScreen> {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
-        _mapController.move(_userPosition, 16.0);
+        // MaplibreMap controller is set in onMapCreated callback, not here
       }
 
       // Hook navigation position update callback to continuously center vehicle
       navManager.onLocationChanged = (loc, heading) {
         if (mounted && navManager.isNavigating && _isAutoCentering) {
-          _mapController.move(loc, 17.5);
+          _mapController?.animateCamera(
+            ml.CameraUpdate.newLatLng(ml.LatLng(loc.latitude, loc.longitude)),
+          );
+          _updateRouteOnMap();
         }
       };
 
@@ -94,7 +100,69 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
+  /// Called when MaplibreMap is created and controller is ready
+  void _onMapCreated(ml.MapLibreMapController controller) {
+    _mapController = controller;
+    _mapReady = true;
+    // Move camera to user position
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final pos = navManager.currentLocation ?? _userPosition;
+    controller.animateCamera(
+      ml.CameraUpdate.newCameraPosition(
+        ml.CameraPosition(target: ml.LatLng(pos.latitude, pos.longitude), zoom: 16.0),
+      ),
+    );
+  }
+
+  /// Update route polyline on the MapLibre map using high-level Line annotations
+  Future<void> _updateRouteOnMap() async {
+    final ctrl = _mapController;
+    if (ctrl == null || !_mapReady) return;
+
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    List<LatLng> points = [];
+    if (navManager.isNavigating && navManager.activeRoute != null) {
+      points = navManager.activeRoute!.polylinePoints;
+    } else if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
+      points = _routes[_selectedRouteIndex].polylinePoints;
+    }
+
+    try {
+      await ctrl.clearLines();
+      if (points.length < 2) return;
+
+      final mlGeometry = points
+          .map((p) => ml.LatLng(p.latitude, p.longitude))
+          .toList();
+
+      // 1. Casing / Glow outline
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#0055FF',
+          lineWidth: 9.0,
+          lineOpacity: 0.6,
+          lineJoin: 'round',
+        ),
+      );
+
+      // 2. Core neon navigation route line
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#00F0FF',
+          lineWidth: 5.5,
+          lineOpacity: 1.0,
+          lineJoin: 'round',
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error drawing route on MapLibre: $e');
+    }
+  }
+
   Future<void> _checkClipboardForGoogleMaps() async {
+
     try {
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       final text = data?.text?.trim();
@@ -283,7 +351,12 @@ class _MapScreenState extends State<MapScreen> {
       _searchResults = [];
       _viewMode = 1; // Open Place Details Inspector
     });
-    _mapController.move(place.coordinate, 16.5);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(
+        ml.LatLng(place.coordinate.latitude, place.coordinate.longitude),
+        16.5,
+      ),
+    );
   }
 
   void _onMapTapped(LatLng point) async {
@@ -296,7 +369,12 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults = [];
         _viewMode = 1;
       });
-      _mapController.move(point, 16.5);
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngZoom(
+          ml.LatLng(point.latitude, point.longitude),
+          16.5,
+        ),
+      );
     }
   }
 
@@ -319,7 +397,7 @@ class _MapScreenState extends State<MapScreen> {
       _routes = [];
     });
 
-    final routes = await _osrmService.calculateMultipleRoutes(
+    final routes = await _directionsService.calculateMultipleRoutes(
       startPos,
       place.coordinate,
       mode: _transportMode,
@@ -334,6 +412,7 @@ class _MapScreenState extends State<MapScreen> {
 
       if (routes.isNotEmpty) {
         _fitRouteBounds(routes.first.polylinePoints);
+        _updateRouteOnMap();
       }
     }
   }
@@ -353,10 +432,14 @@ class _MapScreenState extends State<MapScreen> {
       if (p.longitude > maxLng) maxLng = p.longitude;
     }
 
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
-        padding: const EdgeInsets.only(top: 140, bottom: 320, left: 40, right: 40),
+    // MapLibre camera bounds fitting
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngBounds(
+        ml.LatLngBounds(
+          southwest: ml.LatLng(minLat, minLng),
+          northeast: ml.LatLng(maxLat, maxLng),
+        ),
+        top: 140, bottom: 320, left: 40, right: 40,
       ),
     );
   }
@@ -380,7 +463,10 @@ class _MapScreenState extends State<MapScreen> {
 
     // Always center vehicle at the exact center of map at start
     final startPos = navManager.currentLocation ?? _userPosition;
-    _mapController.move(startPos, 17.5);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(ml.LatLng(startPos.latitude, startPos.longitude), 17.5),
+    );
+    _updateRouteOnMap();
   }
 
   void _recenterToVehicle() {
@@ -389,52 +475,24 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _isAutoCentering = true;
     });
-    _mapController.move(current, 17.5);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 17.5),
+    );
   }
 
   // -------------------------------------------------------------
-  // Map Tiles Layer (Ultra-Sharp HD Google Maps & CartoDB Retina Tiles)
+  // Mapbox Style URL for current theme
   // -------------------------------------------------------------
-  Widget _buildMapTiles() {
+  String _buildMaplibreStyleString() {
     switch (_currentTheme) {
-      case MapThemeMode.googleRoad:
-        return TileLayer(
-          urlTemplate: 'https://{s}.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
-          subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
-          userAgentPackageName: 'com.esp32nav.app',
-          maxZoom: 20,
-          panBuffer: 1,
-          keepBuffer: 6,
-          tileProvider: NetworkTileProvider(),
-        );
-      case MapThemeMode.googleSatellite:
-        return TileLayer(
-          urlTemplate: 'https://{s}.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
-          subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
-          userAgentPackageName: 'com.esp32nav.app',
-          maxZoom: 20,
-          panBuffer: 1,
-          keepBuffer: 6,
-          tileProvider: NetworkTileProvider(),
-        );
-      case MapThemeMode.darkCyber:
-        return TileLayer(
-          urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-          userAgentPackageName: 'com.esp32nav.app',
-          maxZoom: 20,
-          panBuffer: 1,
-          keepBuffer: 6,
-          tileProvider: NetworkTileProvider(),
-        );
-      case MapThemeMode.osmStandard:
-        return TileLayer(
-          urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          userAgentPackageName: 'com.esp32nav.app',
-          maxZoom: 20,
-          panBuffer: 1,
-          keepBuffer: 6,
-          tileProvider: NetworkTileProvider(),
-        );
+      case MapThemeMode.streets:
+        return MapboxConfig.styleStreets;
+      case MapThemeMode.satellite:
+        return MapboxConfig.styleSatelliteStreets;
+      case MapThemeMode.navigationNight:
+        return MapboxConfig.styleNavigationNight;
+      case MapThemeMode.dark:
+        return MapboxConfig.styleDark;
     }
   }
 
@@ -456,212 +514,82 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 1. Crystal-Clear Main FlutterMap Layer (Retina HD!)
+          // 1. MapLibre Native Vector Map (60fps GPU-rendered)
           // -----------------------------------------------------------
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: userPos,
-              initialZoom: 16.5,
-              onTap: (_, point) => _onMapTapped(point),
-              onPositionChanged: (pos, hasGesture) {
-                if (hasGesture) {
-                  final streamService = Provider.of<EspStreamService>(context, listen: false);
-                  streamService.pauseStreamingFor(const Duration(milliseconds: 1500));
-                }
-                // If user dragged map during active driving, pause auto-centering
-                if (hasGesture && isDriving && _isAutoCentering) {
-                  setState(() => _isAutoCentering = false);
-                  _recenterTimer?.cancel();
-                  _recenterTimer = Timer(const Duration(seconds: 5), () {
-                    if (mounted && isDriving) {
-                      _recenterToVehicle();
-                    }
-                  });
-                }
-              },
+          ml.MapLibreMap(
+            styleString: _buildMaplibreStyleString(),
+            initialCameraPosition: ml.CameraPosition(
+              target: ml.LatLng(userPos.latitude, userPos.longitude),
+              zoom: 16.5,
             ),
-            children: [
-              _buildMapTiles(),
+            onMapCreated: _onMapCreated,
+            onStyleLoadedCallback: () {
+              // After style loads, draw route if already available
+              _updateRouteOnMap();
+            },
+            onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
+            onCameraIdle: () {
+              // When camera stops moving, update stream frame
+            },
+            trackCameraPosition: true,
+            compassEnabled: true,
+            compassViewPosition: ml.CompassViewPosition.topRight,
+            myLocationEnabled: true,
+            myLocationTrackingMode: _isAutoCentering && isDriving
+                ? ml.MyLocationTrackingMode.tracking
+                : ml.MyLocationTrackingMode.none,
+            myLocationRenderMode: ml.MyLocationRenderMode.compass,
+            rotateGesturesEnabled: true,
+            scrollGesturesEnabled: true,
+            zoomGesturesEnabled: true,
+            tiltGesturesEnabled: true,
+          ),
 
-              // Multi-Route Polyline Layers (Comparison Mode)
-              if (!isDriving && _routes.isNotEmpty && _viewMode == 2) ...[
-                // Render Inactive Routes first (Slate Grey with slight glow)
-                for (int i = 0; i < _routes.length; i++)
-                  if (i != _selectedRouteIndex)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: _routes[i].polylinePoints,
-                          strokeWidth: 6.5,
-                          color: const Color(0xFF475569).withAlpha(190),
-                        ),
-                      ],
-                    ),
-
-                // Render Selected Active Route on Top (Vibrant Cyan/Green Glow)
-                if (_selectedRouteIndex < _routes.length)
-                  PolylineLayer(
-                    polylines: [
-                      // Outer glow layer
-                      Polyline(
-                        points: _routes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 12.0,
-                        color: _routes[_selectedRouteIndex].themeColor.withAlpha(90),
-                      ),
-                      // Core bright polyline
-                      Polyline(
-                        points: _routes[_selectedRouteIndex].polylinePoints,
-                        strokeWidth: 7.5,
-                        color: _routes[_selectedRouteIndex].themeColor,
-                      ),
-                    ],
-                  ),
-              ],
-
-              // Active Navigation Driving Polyline
-              if (isDriving && navManager.activeRoute != null)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: navManager.activeRoute!.polylinePoints,
-                      strokeWidth: 13.0,
-                      color: const Color(0xFF0077B6).withAlpha(120),
-                    ),
-                    Polyline(
-                      points: navManager.activeRoute!.polylinePoints,
-                      strokeWidth: 8.0,
-                      color: const Color(0xFF00F0FF),
-                    ),
-                  ],
-                ),
-
-              // Markers Layer
-              MarkerLayer(
-                markers: [
-                  // A. User GPS Navigation Puck with heading arrow & pulsing aura
-                  Marker(
-                    point: userPos,
-                    width: 56,
-                    height: 56,
-                    child: Stack(
-                      alignment: Alignment.center,
+          // -----------------------------------------------------------
+          // Destination Pin Overlay (Flutter Widget on top of map)
+          // -----------------------------------------------------------
+          if (_selectedPlace != null && !isDriving)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Align(
+                  alignment: Alignment.center,
+                  child: Transform.translate(
+                    offset: const Offset(0, -30),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                          width: 48,
-                          height: 48,
+                          padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: const Color(0xFF0084FF).withAlpha(35),
-                            border: Border.all(color: const Color(0xFF0084FF).withAlpha(100), width: 1.5),
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFFFF2E63), Color(0xFFFF5722)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                  color: const Color(0xFFFF2E63).withAlpha(140),
+                                  blurRadius: 12),
+                              BoxShadow(
+                                  color: Colors.black.withAlpha(120),
+                                  blurRadius: 6),
+                            ],
                           ),
+                          child: const Icon(Icons.location_on_rounded,
+                              color: Colors.white, size: 22),
                         ),
-                        Transform.rotate(
-                          angle: (navManager.currentHeading * (3.1415926535 / 180.0)),
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0xFF0084FF),
-                              boxShadow: [
-                                BoxShadow(color: const Color(0xFF0084FF).withAlpha(180), blurRadius: 10),
-                                BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 4),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.navigation_rounded,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                          ),
+                        CustomPaint(
+                          size: const Size(12, 6),
+                          painter:
+                              _TrianglePainter(color: const Color(0xFFFF5722)),
                         ),
                       ],
                     ),
                   ),
-
-                  // B. Selected Destination Pin Marker
-                  if (_selectedPlace != null && !isDriving)
-                    Marker(
-                      point: _selectedPlace!.coordinate,
-                      width: 52,
-                      height: 60,
-                      alignment: Alignment.topCenter,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFFF2E63), Color(0xFFFF5722)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              boxShadow: [
-                                BoxShadow(color: const Color(0xFFFF2E63).withAlpha(140), blurRadius: 12),
-                                BoxShadow(color: Colors.black.withAlpha(120), blurRadius: 6),
-                              ],
-                            ),
-                            child: const Icon(Icons.location_on_rounded, color: Colors.white, size: 22),
-                          ),
-                          CustomPaint(
-                            size: const Size(12, 6),
-                            painter: _TrianglePainter(color: const Color(0xFFFF5722)),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // C. Interactive Route ETA Pills on Map (Tap polyline label to switch routes)
-                  if (!isDriving && _viewMode == 2 && _routes.length > 1) ...[
-                    for (int i = 0; i < _routes.length; i++)
-                      if (_routes[i].polylinePoints.isNotEmpty)
-                        Marker(
-                          point: _routes[i].polylinePoints[_routes[i].polylinePoints.length ~/ 2],
-                          width: 90,
-                          height: 36,
-                          child: GestureDetector(
-                            onTap: () => setState(() => _selectedRouteIndex = i),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: _selectedRouteIndex == i
-                                    ? const Color(0xFF0077B6)
-                                    : const Color(0xFF1E293B).withAlpha(240),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(
-                                  color: _selectedRouteIndex == i ? const Color(0xFF00F0FF) : Colors.white24,
-                                  width: 1.5,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withAlpha(140),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Center(
-                                child: Text(
-                                  _routes[i].formattedDuration,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                  ],
-                ],
+                ),
               ),
-            ],
-          ),
+            ),
 
           // -----------------------------------------------------------
           // 2. Top Bar: Search Bar, Clipboard Banner & Quick Categories (Browse Mode)
@@ -714,7 +642,7 @@ class _MapScreenState extends State<MapScreen> {
                   icon: Icons.explore_rounded,
                   iconColor: const Color(0xFFFF5252),
                   tooltip: 'Xoay về hướng Bắc',
-                  onTap: () => _mapController.rotate(0),
+                  onTap: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
                 ),
                 const SizedBox(height: 10),
                 // Recenter / GPS Button
@@ -729,7 +657,9 @@ class _MapScreenState extends State<MapScreen> {
                       _recenterToVehicle();
                     } else {
                       final current = navManager.currentLocation ?? _userPosition;
-                      _mapController.move(current, 16.5);
+                      _mapController?.animateCamera(
+                        ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
+                      );
                     }
                   },
                 ),
@@ -1542,6 +1472,7 @@ class _MapScreenState extends State<MapScreen> {
                     onTap: () {
                       setState(() => _selectedRouteIndex = index);
                       _fitRouteBounds(r.polylinePoints);
+                      _updateRouteOnMap();
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
@@ -1870,7 +1801,15 @@ class _MapScreenState extends State<MapScreen> {
                 padding: const EdgeInsets.all(14),
                 elevation: 4,
               ),
-              onPressed: () => navManager.stopNavigation(),
+              onPressed: () {
+                navManager.stopNavigation();
+                _mapController?.clearLines();
+                setState(() {
+                  _viewMode = 0;
+                  _routes = [];
+                  _selectedPlace = null;
+                });
+              },
               child: const Icon(Icons.close_rounded, size: 24),
             ),
           ],
@@ -1897,28 +1836,28 @@ class _MapScreenState extends State<MapScreen> {
               const Text('CHỌN GIAO DIỆN BẢN ĐỒ', style: TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1)),
               const SizedBox(height: 14),
               _buildThemeOption(
-                title: 'Google Maps Chuẩn (HD Retina)',
-                subtitle: 'Giao diện quen thuộc, độ phân giải cao sắc nét, không mờ',
-                mode: MapThemeMode.googleRoad,
+                title: 'Bản đồ Đường phố (Streets)',
+                subtitle: 'Giao diện vector sắc nét, tải nhanh chuẩn MapTiler',
+                mode: MapThemeMode.streets,
                 icon: Icons.map_rounded,
               ),
               _buildThemeOption(
-                title: 'Vệ tinh Google (Satellite Hybrid HD)',
-                subtitle: 'Ảnh chụp vệ tinh thực tế độ nét cao kèm tên đường tiếng Việt',
-                mode: MapThemeMode.googleSatellite,
+                title: 'Vệ tinh lai (Hybrid Satellite)',
+                subtitle: 'Ảnh chụp vệ tinh độ nét cao kèm tên đường tiếng Việt',
+                mode: MapThemeMode.satellite,
                 icon: Icons.satellite_alt_rounded,
               ),
               _buildThemeOption(
-                title: 'Chế độ Ban Đêm (Dark Cyber)',
+                title: 'Chế độ Ban Đêm (Navigation Dark)',
                 subtitle: 'Theme tối độ tương phản cao, dịu mắt khi lái xe đêm',
-                mode: MapThemeMode.darkCyber,
+                mode: MapThemeMode.navigationNight,
                 icon: Icons.dark_mode_rounded,
               ),
               _buildThemeOption(
-                title: 'OpenStreetMap',
-                subtitle: 'Bản đồ mở thế giới',
-                mode: MapThemeMode.osmStandard,
-                icon: Icons.public_rounded,
+                title: 'Giao diện Tối (Dark Minimal)',
+                subtitle: 'Theme tối tối giản',
+                mode: MapThemeMode.dark,
+                icon: Icons.nightlight_round,
               ),
             ],
           ),
@@ -1943,6 +1882,16 @@ class _MapScreenState extends State<MapScreen> {
         trailing: isSelected ? const Icon(Icons.check_circle_rounded, color: Color(0xFF0084FF)) : null,
         onTap: () {
           setState(() => _currentTheme = mode);
+          try {
+            final streamService = Provider.of<EspStreamService>(context, listen: false);
+            if (mode == MapThemeMode.dark || mode == MapThemeMode.navigationNight) {
+              streamService.streamMapStyle = 'streets-v2-dark';
+            } else if (mode == MapThemeMode.satellite) {
+              streamService.streamMapStyle = 'hybrid';
+            } else {
+              streamService.streamMapStyle = 'streets-v2';
+            }
+          } catch (_) {}
           Navigator.pop(context);
         },
       ),

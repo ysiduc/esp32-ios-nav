@@ -196,6 +196,8 @@ private:
     u8f.setFont(font);
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
+    // Hard clamp: if in the right HUD card, never draw to the left of x = 168 (protects minimap)
+    if (x >= 140 && x < 168) x = 168;
     u8f.setCursor(x, y + 13);
     u8f.print(str);
   }
@@ -205,7 +207,10 @@ private:
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
     int w = u8f.getUTF8Width(str);
-    u8f.setCursor(cx - (w / 2), y + 13);
+    int startX = cx - (w / 2);
+    // Hard clamp: if in the right HUD card, never draw to the left of x = 168 (protects minimap)
+    if (cx >= 164 && startX < 168) startX = 168;
+    u8f.setCursor(startX, y + 13);
     u8f.print(str);
   }
 
@@ -496,12 +501,44 @@ private:
       bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
 
       if (hasSong) {
-        // Clear inner text area of media card
+        // Clear inner text area of media card strictly inside x: 166..308
         tft.fillRect(166, 114, 142, 34, cPillBg);
 
         _drawUtf8String("[>] Đang phát", 172, 98, TFT_YELLOW, cPillBg);
-        _drawCentreUtf8String(_navData.songTitle, 237, 115, TFT_WHITE, cPillBg);
-        _drawCentreUtf8String(_navData.songArtist, 237, 135, cSubText, cPillBg);
+
+        // Song Title strictly clamped within 130px width, starting >= 170
+        String songStr = String(_navData.songTitle);
+        int songW = u8f.getUTF8Width(songStr.c_str());
+        if (songW <= 130) {
+          int startX = 237 - (songW / 2);
+          if (startX < 170) startX = 170;
+          _drawUtf8String(songStr.c_str(), startX, 115, TFT_WHITE, cPillBg);
+        } else {
+          String fullS = songStr + "       ";
+          int offset = (_songScrollTick / 2) % fullS.length();
+          String wrapped = fullS.substring(offset) + fullS.substring(0, offset);
+          while (wrapped.length() > 0 && u8f.getUTF8Width(wrapped.c_str()) > 130) {
+            wrapped = wrapped.substring(0, wrapped.length() - 1);
+          }
+          _drawUtf8String(wrapped.c_str(), 170, 115, TFT_WHITE, cPillBg);
+        }
+
+        // Artist Name strictly clamped within 130px width, starting >= 170
+        String artistStr = String(_navData.songArtist);
+        int artistW = u8f.getUTF8Width(artistStr.c_str());
+        if (artistW <= 130) {
+          int startX = 237 - (artistW / 2);
+          if (startX < 170) startX = 170;
+          _drawUtf8String(artistStr.c_str(), startX, 133, cSubText, cPillBg);
+        } else {
+          String fullA = artistStr + "       ";
+          int offset = (_songScrollTick / 2) % fullA.length();
+          String wrapped = fullA.substring(offset) + fullA.substring(0, offset);
+          while (wrapped.length() > 0 && u8f.getUTF8Width(wrapped.c_str()) > 130) {
+            wrapped = wrapped.substring(0, wrapped.length() - 1);
+          }
+          _drawUtf8String(wrapped.c_str(), 170, 133, cSubText, cPillBg);
+        }
 
         // Sound Equalizer Bars (active cyan)
         uint16_t cEq = TFT_CYAN;
@@ -514,7 +551,7 @@ private:
       } else {
         _drawUtf8String("[--] Chưa phát", 172, 98, cSubText, cPillBg);
         _drawCentreUtf8String("Mở nhạc trên ĐT", 237, 115, cSubText, cPillBg);
-        _drawCentreUtf8String("Spotify / Apple Music", 237, 135, cDimGrey, cPillBg);
+        _drawCentreUtf8String("Spotify / Apple Music", 237, 133, cDimGrey, cPillBg);
 
         // Dim flat equalizer bars
         uint16_t cDim = tft.color565(30, 41, 59);
