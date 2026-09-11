@@ -79,8 +79,10 @@ public:
     _navData.etaMinutes = eta;
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
-    strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
-    _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+    if (arrival != nullptr && strlen(arrival) > 0) {
+      strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
+      _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+    }
 
     if (pts != nullptr && ptCount > 0) {
       _navData.routePointCount = ptCount > 32 ? 32 : ptCount;
@@ -88,8 +90,10 @@ public:
     }
 
     if (_currentState != STATE_POPUP_CALL && _currentState != STATE_POPUP_SMS) {
+      if (_currentState != STATE_NAVIGATION) {
+        _needFullRedraw = true;
+      }
       _currentState = STATE_NAVIGATION;
-      _needFullRedraw = true;
     }
   }
 
@@ -131,7 +135,7 @@ public:
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
-    if (_needFullRedraw || millis() - _lastRenderTime > 500) {
+    if (_needFullRedraw || millis() - _lastRenderTime > 400) {
       if (_needFullRedraw) {
         tft.fillScreen(TFT_BLACK);
       }
@@ -158,7 +162,7 @@ private:
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     tft.drawString("* ESP32 BLE", 10, 4, 2);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString("11:54", 160, 4, 2);
+    tft.drawCentreString(_navData.arrivalTime, 160, 4, 2);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.drawString("100%", 265, 4, 2);
     tft.drawRect(298, 6, 14, 8, TFT_GREEN);
@@ -368,11 +372,14 @@ private:
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     tft.drawString("* ESP32 BLE", 10, 4, 2);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString("11:54", 160, 4, 2);
+    tft.drawCentreString(_navData.arrivalTime, 160, 4, 2);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     tft.drawString("100%", 265, 4, 2);
     tft.drawRect(298, 6, 14, 8, TFT_GREEN);
     tft.fillRect(300, 8, 10, 4, TFT_GREEN);
+
+    // Clean any leftover pixels between boxes
+    tft.fillRect(152, 24, 6, 216, TFT_BLACK);
 
     // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
     if (!isStreamingActive) {
@@ -386,10 +393,11 @@ private:
     tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
     tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
 
-    // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 86) ---
+    // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
     _drawManeuverArrow(164, 30, _navData.turnCode);
 
-    // Distance text (e.g. "208m")
+    // Clear distance text area
+    tft.fillRect(216, 30, 94, 26, cCardBg);
     tft.setTextColor(TFT_WHITE, cCardBg);
     char distStr[16];
     if (_navData.distMeters >= 1000) {
@@ -399,40 +407,46 @@ private:
     }
     tft.drawString(distStr, 218, 30, 4);
 
-    // Speed text (e.g. "0 km/h")
+    // Clear speed text area
+    tft.fillRect(216, 56, 94, 20, cCardBg);
     tft.setTextColor(TFT_CYAN, cCardBg);
     char spdStr[16];
     snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
     tft.drawString(spdStr, 218, 56, 2);
 
-    // --- SECTION B: Street Name Pill Card (y: 88 to 136) ---
-    tft.fillRoundRect(164, 88, 146, 44, 8, cPillBg);
-    tft.drawRoundRect(164, 88, 146, 44, 8, tft.color565(30, 41, 59));
-    tft.setTextColor(TFT_YELLOW, cPillBg);
-    tft.drawString(_navData.streetName, 170, 102, 2);
+    // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
+    tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
+    tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
 
-    // --- SECTION C: ETA & Total Distance (y: 146 to 226) ---
-    // Sub-labels
+    char upperStreet[48];
+    strncpy(upperStreet, _navData.streetName, sizeof(upperStreet) - 1);
+    upperStreet[sizeof(upperStreet) - 1] = '\0';
+    for (int i = 0; upperStreet[i]; i++) {
+      upperStreet[i] = toupper((unsigned char)upperStreet[i]);
+    }
+    tft.setTextColor(TFT_YELLOW, cPillBg);
+    tft.drawCentreString(upperStreet, 237, 98, 2);
+
+    // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
+    tft.fillRect(164, 136, 146, 78, cCardBg);
+
+    // Sub-labels (y: 146)
     tft.setTextColor(cDimGrey, cCardBg);
-    tft.drawString("DU KIEN", 168, 152, 1);
+    tft.drawString("DU KIEN", 168, 146, 1);
 
     tft.setTextColor(cSubText, cCardBg);
     char totDistStr[16];
-    if (_navData.totalDistMeters >= 1000) {
-      snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
-    } else {
-      snprintf(totDistStr, sizeof(totDistStr), "%d m", _navData.totalDistMeters);
-    }
-    tft.drawRightString(totDistStr, 304, 152, 1);
+    snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+    tft.drawRightString(totDistStr, 304, 146, 2);
 
-    // Main values
+    // Main values (y: 166)
     tft.setTextColor(TFT_CYAN, cCardBg);
-    tft.drawString(_navData.arrivalTime, 168, 172, 4);
+    tft.drawString(_navData.arrivalTime, 168, 166, 4);
 
     tft.setTextColor(TFT_GREEN, cCardBg);
     char etaStr[16];
     snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
-    tft.drawRightString(etaStr, 304, 172, 4);
+    tft.drawRightString(etaStr, 304, 166, 4);
   }
 #endif
 };

@@ -451,9 +451,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: const Color(0xFF00F0FF), width: 1.8),
                       ),
-                      child: const Icon(
-                        Icons.turn_left_rounded,
-                        color: Color(0xFF00F0FF),
+                      child: Icon(
+                        _getTurnIcon(step?.turnCode ?? 6),
+                        color: const Color(0xFF00F0FF),
                         size: 28,
                       ),
                     ),
@@ -591,5 +591,26 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         ],
       ),
     );
+  }
+
+  IconData _getTurnIcon(int turnCode) {
+    switch (turnCode) {
+      case 1:
+      case 2:
+      case 3:
+        return Icons.turn_right_rounded;
+      case 4:
+        return Icons.u_turn_left_rounded;
+      case 5:
+      case 6:
+      case 7:
+        return Icons.turn_left_rounded;
+      case 8:
+        return Icons.roundabout_right_rounded;
+      case 9:
+        return Icons.flag_rounded;
+      default:
+        return Icons.straight_rounded;
+    }
   }
 }

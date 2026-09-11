@@ -390,20 +390,22 @@ class _MapScreenState extends State<MapScreen> {
     switch (_currentTheme) {
       case MapThemeMode.googleRoad:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://{s}.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+          subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 2,
-          keepBuffer: 8,
+          panBuffer: 4,
+          keepBuffer: 16,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.googleSatellite:
         return TileLayer(
-          urlTemplate: 'https://mt1.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
+          urlTemplate: 'https://{s}.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
+          subdomains: const ['mt0', 'mt1', 'mt2', 'mt3'],
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 2,
-          keepBuffer: 8,
+          panBuffer: 4,
+          keepBuffer: 16,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.darkCyber:
@@ -411,8 +413,8 @@ class _MapScreenState extends State<MapScreen> {
           urlTemplate: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 2,
-          keepBuffer: 8,
+          panBuffer: 4,
+          keepBuffer: 16,
           tileProvider: NetworkTileProvider(),
         );
       case MapThemeMode.osmStandard:
@@ -420,8 +422,8 @@ class _MapScreenState extends State<MapScreen> {
           urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
           userAgentPackageName: 'com.esp32nav.app',
           maxZoom: 20,
-          panBuffer: 2,
-          keepBuffer: 8,
+          panBuffer: 4,
+          keepBuffer: 16,
           tileProvider: NetworkTileProvider(),
         );
     }
@@ -454,6 +456,10 @@ class _MapScreenState extends State<MapScreen> {
               initialZoom: 16.5,
               onTap: (_, point) => _onMapTapped(point),
               onPositionChanged: (pos, hasGesture) {
+                if (hasGesture) {
+                  final streamService = Provider.of<EspStreamService>(context, listen: false);
+                  streamService.pauseStreamingFor(const Duration(milliseconds: 1500));
+                }
                 // If user dragged map during active driving, pause auto-centering
                 if (hasGesture && isDriving && _isAutoCentering) {
                   setState(() => _isAutoCentering = false);

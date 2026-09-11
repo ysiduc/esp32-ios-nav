@@ -46,7 +46,70 @@ class SearchService {
   /// Curated High-Precision Vietnamese POI & Landmark Database
   /// Guarantees instant 100% accurate results for top places in Vietnam
   static final List<MapPlace> _vietnameseLandmarks = [
-    // --- Hà Nội ---
+    // --- Hà Nội & Tuyến Phố Trọng Điểm ---
+    MapPlace(
+      name: 'Phố Nguyễn Hữu Thọ',
+      displayName: 'Phố Nguyễn Hữu Thọ, Hoàng Liệt, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9702, 105.8345),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Phố Định Công',
+      displayName: 'Phố Định Công, Phường Định Công, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9882, 105.8398),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Phố Đại Từ',
+      displayName: 'Phố Đại Từ, Đại Kim, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9765, 105.8378),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Nguyễn Cảnh Dị',
+      displayName: 'Đường Nguyễn Cảnh Dị, Định Công, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9812, 105.8395),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Cầu Sông Lừ',
+      displayName: 'Cầu Sông Lừ, Phố Định Công, Phương Liệt, Hoàng Mai, Hà Nội',
+      coordinate: const LatLng(20.9855, 105.8415),
+      type: 'bridge',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Giải Phóng',
+      displayName: 'Đường Giải Phóng, Phương Liệt, Thanh Xuân, Hà Nội',
+      coordinate: const LatLng(20.9950, 105.8420),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Trường Chinh',
+      displayName: 'Đường Trường Chinh, Khương Mai, Thanh Xuân, Hà Nội',
+      coordinate: const LatLng(21.0018, 105.8315),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Nguyễn Trãi',
+      displayName: 'Đường Nguyễn Trãi, Thượng Đình, Thanh Xuân, Hà Nội',
+      coordinate: const LatLng(20.9958, 105.8115),
+      type: 'street',
+      category: 'highway',
+    ),
+    MapPlace(
+      name: 'Đường Cầu Giấy',
+      displayName: 'Đường Cầu Giấy, Dịch Vọng, Cầu Giấy, Hà Nội',
+      coordinate: const LatLng(21.0335, 105.7950),
+      type: 'street',
+      category: 'highway',
+    ),
     MapPlace(
       name: 'Keangnam Hanoi Landmark 72',
       displayName: 'Tòa nhà Keangnam Landmark 72, Đường Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hà Nội',
