@@ -19,15 +19,16 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 3. Install Dependencies
+      - name: 3. Enable SwiftPM & Install Dependencies
         working-directory: mobile_app
         run: |
+          flutter config --enable-swift-package-manager
           flutter pub get
 
       - name: 4. Build iOS App (Release, No CodeSign)
         working-directory: mobile_app
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign --verbose
 
       - name: 5. Package as IPA Payload
         working-directory: mobile_app
