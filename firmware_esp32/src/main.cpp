@@ -60,15 +60,35 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
-    pServer->updateConnParams(desc->conn_handle, 12, 16, 0, 400);
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
+                  desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
+
+    // Increase supervision timeout to 1000 (10 seconds) to prevent auto-disconnects when idle in background
+    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 1000);
 
     AppleMediaService::connHandle = desc->conn_handle;
     AppleMediaService::lastCheckTime = millis();
 
-    // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
-    int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
-    Serial.printf("[BLE] startSecurity returned: %d\n", secRc);
+    // If already encrypted/bonded, immediately trigger AMS
+    if (desc->sec_state.encrypted) {
+      Serial.println("[BLE] Link already encrypted. Starting AMS discovery...");
+      AppleMediaService::onEncrypted(desc->conn_handle);
+    } else {
+      // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
+      int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
+      Serial.printf("[BLE] startSecurity returned: %d\n", secRc);
+    }
+
+    // Keep advertising active so the App or other scans can still find this device
+    NimBLEDevice::startAdvertising();
+  }
+
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) {
+    Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
+                  desc->sec_state.encrypted, desc->sec_state.bonded);
+    if (desc->sec_state.encrypted) {
+      AppleMediaService::onEncrypted(desc->conn_handle);
+    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {

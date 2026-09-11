@@ -56,6 +56,7 @@ private:
   AncsPopupData _popupData;
   bool _needFullRedraw = true;
   unsigned long _lastRenderTime = 0;
+  uint32_t _songScrollTick = 0;
 
 public:
   void init() {
@@ -396,16 +397,52 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // 1. TOP HARDWARE STATUS BAR (y: 0 to 22): * ysiduc | Real Clock | Real Battery
+    // 1. TOP STATUS BAR (y: 0 to 22) - Divided into 6 Parts:
+    // Part 1 (1/6 = 53px, x: 0-53):   * ysiduc
+    // Parts 2-4 (3/6 = 160px, x: 54-213): Scrolling Track & Artist (Gold Yellow)
+    // Part 5 (1/6 = 53px, x: 214-267): Real Clock
+    // Part 6 (1/6 = 53px, x: 268-320): Real Battery
     tft.fillRect(0, 0, 320, 22, TFT_BLACK);
+    _songScrollTick++;
+
+    // Part 1: * ysiduc (x: 2 to 53)
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ysiduc", 10, 4, 2);
+    tft.drawString("* ysiduc", 2, 4, 2);
+
+    // Parts 2, 3, 4: Marquee Song Title & Artist (x: 54 to 213, width 160px)
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+    if (hasSong) {
+      String fullSong = String("  ♫ ") + _navData.songTitle;
+      if (strlen(_navData.songArtist) > 0) {
+        fullSong += String(" - ") + _navData.songArtist;
+      }
+      fullSong += "       ";
+
+      int maxVisibleChars = 17;
+      if (fullSong.length() <= maxVisibleChars) {
+        tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK); // Amber Yellow
+        tft.drawCentreString(fullSong.c_str(), 134, 4, 2);
+      } else {
+        int offset = (_songScrollTick / 3) % fullSong.length();
+        String wrapped = fullSong.substring(offset) + fullSong.substring(0, offset);
+        String displayChunk = wrapped.substring(0, maxVisibleChars);
+        tft.setTextColor(tft.color565(250, 204, 21), TFT_BLACK);
+        tft.drawString(displayChunk, 54, 4, 2);
+      }
+    } else {
+      tft.setTextColor(tft.color565(71, 85, 105), TFT_BLACK);
+      tft.drawCentreString("-- Chua phat nhac --", 134, 4, 1);
+    }
+
+    // Part 5: Real Clock (x: 214 to 267)
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.currentTime, 160, 4, 2);
+    tft.drawCentreString(_navData.currentTime, 240, 4, 2);
+
+    // Part 6: Battery & Icon (x: 268 to 320)
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
     char batStr[16];
     snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    tft.drawString(batStr, 260, 4, 2);
+    tft.drawString(batStr, 268, 4, 2);
     tft.drawRect(298, 6, 14, 8, TFT_GREEN);
     int batFill = (_navData.batteryLevel * 10) / 100;
     if (batFill < 1) batFill = 1;

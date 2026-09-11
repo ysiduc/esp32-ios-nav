@@ -260,48 +260,82 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              Icon(
-                                bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
-                                color: const Color(0xFF00F0FF),
-                                size: 13,
-                              ),
-                              const SizedBox(width: 4),
-                              const Text(
-                                'ysiduc',
-                                style: TextStyle(
-                                  color: Color(0xFF00F0FF),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
+                          // 1/6: * ysiduc
+                          Expanded(
+                            flex: 1,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
+                                  color: const Color(0xFF00F0FF),
+                                  size: 11,
                                 ),
-                              ),
-                            ],
-                          ),
-                          Text(
-                            _getCurrentClock(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                                const SizedBox(width: 2),
+                                const Text(
+                                  '* ysiduc',
+                                  style: TextStyle(
+                                    color: Color(0xFF00F0FF),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const Row(
-                            children: [
-                              Text(
-                                '89%',
+
+                          // 3/6: Marquee / Current Track Title & Artist
+                          Expanded(
+                            flex: 3,
+                            child: Center(
+                              child: Text(
+                                mediaService.hasMedia
+                                    ? '♫ ${mediaService.songTitle}${mediaService.songArtist.isNotEmpty ? " - ${mediaService.songArtist}" : ""}'
+                                    : '-- Chưa phát nhạc --',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: Color(0xFF05FFA1),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
+                                  color: mediaService.hasMedia ? const Color(0xFFFBBF24) : Colors.white38,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              SizedBox(width: 3),
-                              Icon(Icons.battery_5_bar_rounded, color: Color(0xFF05FFA1), size: 14),
-                            ],
+                            ),
+                          ),
+
+                          // 1/6: Current Clock
+                          Expanded(
+                            flex: 1,
+                            child: Center(
+                              child: Text(
+                                _getCurrentClock(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          // 1/6: Battery & Icon
+                          const Expanded(
+                            flex: 1,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '89%',
+                                  style: TextStyle(
+                                    color: Color(0xFF05FFA1),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                SizedBox(width: 2),
+                                Icon(Icons.battery_5_bar_rounded, color: Color(0xFF05FFA1), size: 12),
+                              ],
+                            ),
                           ),
                         ],
                       ),

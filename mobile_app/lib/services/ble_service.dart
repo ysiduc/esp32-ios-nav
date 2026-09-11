@@ -104,6 +104,35 @@ class BleService extends ChangeNotifier {
       _isScanning = true;
       notifyListeners();
 
+      // 1. Immediately retrieve devices already connected to iOS System (e.g. via Settings > Bluetooth)
+      try {
+        final sysDevices = await FlutterBluePlus.systemDevices([
+          Guid("0000FFE0-0000-1000-8000-00805F9B34FB"),
+          Guid("89D3502B-0F36-433A-8EF4-C502AD55F8DC"),
+        ]);
+        for (final d in sysDevices) {
+          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi (Đã kết nối)';
+          if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
+            _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -35));
+          }
+        }
+        notifyListeners();
+      } catch (_) {}
+
+      // 2. Also retrieve bonded devices on iOS/Android
+      try {
+        final bonded = await FlutterBluePlus.bondedDevices;
+        for (final d in bonded) {
+          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
+          if (name.toLowerCase().contains('esp') || name.toLowerCase().contains('navi')) {
+            if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
+              _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -40));
+            }
+          }
+        }
+        notifyListeners();
+      } catch (_) {}
+
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (final r in results) {
@@ -163,11 +192,29 @@ class BleService extends ChangeNotifier {
       _isConnecting = false;
       _addLog('Đã kết nối thành công với: $_connectedDeviceName!', isTx: false);
 
-      // Listen for unexpected disconnections
+      // Listen for disconnections & auto-reconnect if app was suspended/idle
       _connectionSubscription?.cancel();
-      _connectionSubscription = device.connectionState.listen((state) {
+      _connectionSubscription = device.connectionState.listen((state) async {
         if (state == BluetoothConnectionState.disconnected) {
-          _handleDisconnect();
+          _addLog('Tạm ngắt kết nối Bluetooth, đang duy trì tự động kết nối lại...', isTx: false);
+          _isConnected = false;
+          notifyListeners();
+          try {
+            await Future.delayed(const Duration(milliseconds: 1500));
+            if (!_isConnected && _connectedDevice != null) {
+              await _connectedDevice!.connect(
+                license: License.nonprofit,
+                timeout: const Duration(seconds: 20),
+                autoConnect: true,
+              );
+              await _discoverServices(_connectedDevice!);
+              _isConnected = true;
+              notifyListeners();
+              _addLog('Đã tự động kết nối lại thành công!', isTx: false);
+            }
+          } catch (_) {
+            _handleDisconnect();
+          }
         }
       });
 
