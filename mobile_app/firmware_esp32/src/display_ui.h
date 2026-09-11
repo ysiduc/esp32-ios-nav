@@ -27,12 +27,14 @@ struct RoutePoint {
 
 struct NavStateData {
   uint8_t turnCode = 6;       // 6 = Turn Left, 2 = Turn Right, 0 = Straight
-  uint16_t distMeters = 208;
-  uint16_t totalDistMeters = 5900;
+  uint16_t distMeters = 209;
+  uint16_t totalDistMeters = 300;
   uint8_t speedKmh = 0;
-  uint8_t etaMinutes = 11;
+  uint8_t etaMinutes = 1;
   char streetName[48] = "CAU SONG LU";
-  char arrivalTime[16] = "12:05";
+  char arrivalTime[16] = "18:26";
+  char currentTime[16] = "18:25";
+  uint8_t batteryLevel = 89;
   bool isConnected = false;
   uint8_t routePointCount = 0;
   RoutePoint routePoints[32];
@@ -71,7 +73,7 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "12:05", const RoutePoint* pts = nullptr, uint8_t ptCount = 0) {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0) {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
@@ -82,6 +84,13 @@ public:
     if (arrival != nullptr && strlen(arrival) > 0) {
       strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
       _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+    }
+    if (clock != nullptr && strlen(clock) > 0) {
+      strncpy(_navData.currentTime, clock, sizeof(_navData.currentTime) - 1);
+      _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+    }
+    if (battery > 0 && battery <= 100) {
+      _navData.batteryLevel = battery;
     }
 
     if (pts != nullptr && ptCount > 0) {
@@ -158,13 +167,15 @@ private:
   void _drawPairingScreenTft() {
     tft.fillScreen(TFT_BLACK);
 
-    // Top Status bar
+    // Top Status bar (Header: * ysiduc | Current Clock | Battery)
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ESP32 BLE", 10, 4, 2);
+    tft.drawString("* ysiduc", 10, 4, 2);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.arrivalTime, 160, 4, 2);
+    tft.drawCentreString(_navData.currentTime, 160, 4, 2);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("100%", 265, 4, 2);
+    char batStr[16];
+    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+    tft.drawString(batStr, 260, 4, 2);
     tft.drawRect(298, 6, 14, 8, TFT_GREEN);
     tft.fillRect(300, 8, 10, 4, TFT_GREEN);
 
@@ -174,14 +185,14 @@ private:
     tft.drawRoundRect(14, 26, 292, 202, 12, TFT_CYAN);
 
     tft.setTextColor(TFT_CYAN, cCardBg);
-    tft.drawCentreString("ESP32 SMART NAVIGATOR", 160, 42, 4);
+    tft.drawCentreString("YSIDUC SMART NAVIGATOR", 160, 42, 4);
 
     tft.setTextColor(TFT_GREEN, cCardBg);
-    tft.drawCentreString("STREAM MAP 20 FPS (ZOOM x16)", 160, 76, 2);
+    tft.drawCentreString("STREAM MAP 20 FPS (HD RETINA)", 160, 76, 2);
 
     tft.setTextColor(TFT_WHITE, cCardBg);
     tft.drawString("1. Mo App tren dien thoai", 34, 110, 2);
-    tft.drawString("2. Ket noi Bluetooth: ESP32_NAV_ANCS", 34, 138, 2);
+    tft.drawString("2. Ket noi Bluetooth: ysiduc_NAV", 34, 138, 2);
     tft.drawString("3. Bat 'Mo phong Man hinh ESP32'", 34, 166, 2);
   }
 
@@ -195,7 +206,7 @@ private:
     int cy = y + 22;
 
     if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
-      // TURN LEFT (Image 3)
+      // TURN LEFT
       tft.fillRect(cx + 6, cy - 6, 4, 18, TFT_CYAN);
       tft.fillRect(cx - 10, cy - 6, 18, 4, TFT_CYAN);
       tft.fillTriangle(cx - 14, cy - 4, cx - 6, cy - 11, cx - 6, cy + 3, TFT_CYAN);
@@ -319,11 +330,6 @@ private:
     tft.fillCircle(134, 38, 4, TFT_GREEN);
     tft.setTextColor(TFT_GREEN, cMapBg);
     tft.drawString("GPS", 112, 34, 1);
-
-    // 6. Bottom Status Pill Badge
-    tft.fillRoundRect(10, 208, 64, 18, 4, TFT_BLACK);
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("STANDBY", 14, 211, 1);
   }
 
   void _renderTft(bool isStreamingActive) {
@@ -359,7 +365,7 @@ private:
     }
 
     // =========================================================================
-    // STATE_NAVIGATION: EXACT 100% REPLICA OF TARGET DESIGN (IMAGE 3)
+    // STATE_NAVIGATION: EXACT 100% REPLICA OF TARGET DESIGN
     // =========================================================================
     uint16_t cCardBg = tft.color565(19, 27, 38);   // Pure Dark Charcoal (#131B26)
     uint16_t cPillBg = tft.color565(11, 17, 26);   // Deep Black Pill (#0B111A)
@@ -367,16 +373,21 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // 1. TOP HARDWARE STATUS BAR (y: 0 to 22)
+    // 1. TOP HARDWARE STATUS BAR (y: 0 to 22): * ysiduc | Real Clock | Real Battery
     tft.fillRect(0, 0, 320, 22, TFT_BLACK);
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ESP32 BLE", 10, 4, 2);
+    tft.drawString("* ysiduc", 10, 4, 2);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.arrivalTime, 160, 4, 2);
+    tft.drawCentreString(_navData.currentTime, 160, 4, 2);
     tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("100%", 265, 4, 2);
+    char batStr[16];
+    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+    tft.drawString(batStr, 260, 4, 2);
     tft.drawRect(298, 6, 14, 8, TFT_GREEN);
-    tft.fillRect(300, 8, 10, 4, TFT_GREEN);
+    int batFill = (_navData.batteryLevel * 10) / 100;
+    if (batFill < 1) batFill = 1;
+    if (batFill > 10) batFill = 10;
+    tft.fillRect(300, 8, batFill, 4, TFT_GREEN);
 
     // Clean any leftover pixels between boxes
     tft.fillRect(152, 24, 6, 216, TFT_BLACK);

@@ -165,14 +165,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       final rawBytes = byteData.buffer.asUint8List();
 
-      // 2. Direct Fast In-Memory JPEG Encoding (144x208 takes ~1.0ms)
+      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~2KB)
       final imgImage = img.Image.fromBytes(
         width: w,
         height: h,
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 55));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 38));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -392,27 +392,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ..color = Colors.white
       ..style = PaintingStyle.fill;
     canvas.drawPath(arrowPath, arrowPaint);
-
-    // 3. Live Map Badges (MAP LIVE & GPS Indicator)
-    final badgeBg = Paint()
-      ..color = const Color(0xFF000000).withAlpha(200)
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(8, 184, 58, 16), const Radius.circular(4)), badgeBg);
-
-    final badgeDot = Paint()
-      ..color = const Color(0xFF05FFA1)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(const Offset(16, 192), 3, badgeDot);
-
-    final textPainter = TextPainter(
-      text: const TextSpan(
-        text: 'LIVE 16x',
-        style: TextStyle(color: Color(0xFF05FFA1), fontSize: 9, fontWeight: FontWeight.bold),
-      ),
-      textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, const Offset(23, 187));
   }
 
   /// Send JPEG frame over BLE in MTU-safe sequential chunks with mutex protection
@@ -421,7 +400,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _isSendingBle = true;
 
     try {
-      // Chunk size dynamically matched to iOS / Android ATT MTU (175 bytes on iOS MTU 185)
+      // Chunk size dynamically matched to iOS / Android ATT MTU (175-240 bytes)
       final chunkSize = bleService.safeChunkSize;
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
@@ -445,10 +424,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
         final success = await bleService.sendRawBytes(packet);
         if (!success) break;
-
-        if (totalChunks > 1) {
-          await Future.delayed(const Duration(milliseconds: 2));
-        }
       }
     } catch (_) {
     } finally {

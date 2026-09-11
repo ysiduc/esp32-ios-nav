@@ -25,6 +25,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   final String _smsContent = 'Con ve nha an com nhe!';
   Timer? _popupDismissTimer;
   Timer? _autoStartTimer;
+  Timer? _previewSyncTimer;
 
   @override
   void initState() {
@@ -48,6 +49,15 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           }
         }
       });
+
+      // Synchronize HUD navigation telemetry with physical ESP32 screen
+      _previewSyncTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
+        if (mounted) {
+          final nav = Provider.of<NavigationManager>(context, listen: false);
+          nav.sendPreviewPayloadToEsp32();
+        }
+      });
+      navManager.sendPreviewPayloadToEsp32();
     });
   }
 
@@ -88,6 +98,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   @override
   void dispose() {
     _autoStartTimer?.cancel();
+    _previewSyncTimer?.cancel();
     _popupDismissTimer?.cancel();
     super.dispose();
   }
@@ -258,7 +269,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                               ),
                               const SizedBox(width: 4),
                               const Text(
-                                'ESP32 BLE',
+                                'ysiduc',
                                 style: TextStyle(
                                   color: Color(0xFF00F0FF),
                                   fontSize: 10,
@@ -279,7 +290,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           const Row(
                             children: [
                               Text(
-                                '100%',
+                                '89%',
                                 style: TextStyle(
                                   color: Color(0xFF05FFA1),
                                   fontSize: 10,
@@ -287,7 +298,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 ),
                               ),
                               SizedBox(width: 3),
-                              Icon(Icons.battery_full_rounded, color: Color(0xFF05FFA1), size: 14),
+                              Icon(Icons.battery_5_bar_rounded, color: Color(0xFF05FFA1), size: 14),
                             ],
                           ),
                         ],

@@ -293,6 +293,11 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
+    final now = DateTime.now();
+    final h = now.hour.toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    final curClock = '$h:$m';
+
     final payload = EspNavPayload(
       turnCode: step.turnCode,
       distanceToTurn: _distanceToNextManeuver.round(),
@@ -306,6 +311,32 @@ class NavigationManager extends ChangeNotifier {
       longitude: _currentLocation?.longitude,
       heading: _currentHeading.round(),
       routePoints: upcomingPts,
+      currentClock: curClock,
+      batteryLevel: 89,
+    );
+
+    bleService.sendNavPayload(payload);
+  }
+
+  /// Transmit preview / fallback telemetry to ESP32 so display always matches
+  void sendPreviewPayloadToEsp32() {
+    if (!bleService.isConnected) return;
+    final now = DateTime.now();
+    final h = now.hour.toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    final curClock = '$h:$m';
+
+    final payload = EspNavPayload(
+      turnCode: currentStep?.turnCode ?? 6, // Left turn default
+      distanceToTurn: _distanceToNextManeuver.round() > 0 ? _distanceToNextManeuver.round() : 209,
+      totalDistance: _remainingTotalDistance.round() > 0 ? _remainingTotalDistance.round() : 300,
+      etaMinutes: _remainingEtaMinutes > 0 ? _remainingEtaMinutes : 1,
+      streetName: currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : 'CAU SONG LU',
+      currentSpeed: _currentSpeedKmh.round(),
+      stepIndex: _currentStepIndex,
+      totalSteps: _activeRoute?.steps.length ?? 1,
+      currentClock: curClock,
+      batteryLevel: 89,
     );
 
     bleService.sendNavPayload(payload);

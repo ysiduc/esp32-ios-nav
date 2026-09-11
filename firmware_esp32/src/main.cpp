@@ -35,14 +35,16 @@ NimBLECharacteristic* pNavChar = nullptr;
 
 // Navigation & Telemetry State
 volatile bool bleConnected = false;
-volatile uint8_t curTurn = 6; // Turn Left (Image 3)
-volatile uint16_t curDist = 208;
-volatile uint16_t curTotalDist = 5900;
+volatile uint8_t curTurn = 6; // Turn Left
+volatile uint16_t curDist = 209;
+volatile uint16_t curTotalDist = 300;
 volatile uint8_t curSpeed = 0;
-volatile uint8_t curEta = 11;
+volatile uint8_t curEta = 1;
 volatile int curHeading = 0;
 String curStreet = "CAU SONG LU";
-String curArrival = "12:05";
+String curArrival = "18:26";
+String curClock = "18:25";
+uint8_t curBattery = 89;
 
 // ANCS / Notification State
 String popupTitle = "";
@@ -142,7 +144,9 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       curSpeed = doc["speed"] | 0;
       curEta = doc["eta"] | 0;
       curStreet = String(doc["street"] | "CAU SONG LU");
-      curArrival = String(doc["arrival"] | "12:05");
+      curArrival = String(doc["arrival"] | "18:26");
+      curClock = String(doc["clock"] | "18:25");
+      curBattery = doc["bat"] | 89;
       if (doc["head"].is<int>()) curHeading = doc["head"];
 
       RoutePoint parsedPts[32];
@@ -159,7 +163,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         }
       }
 
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), parsedPts, parsedPtCount);
+      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount);
     }
   }
 };
@@ -170,7 +174,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (ST7789 2.4 INCH 20 FPS) ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUC ST7789 20 FPS) ===");
 
   // 1. Start Display
   display.init();
@@ -204,7 +208,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32 ready for 20 FPS JPEG stream!");
+  Serial.println("[BLE] ysiduc ready for 20 FPS JPEG stream!");
 }
 
 void loop() {

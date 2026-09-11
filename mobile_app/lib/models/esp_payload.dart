@@ -14,6 +14,8 @@ class EspNavPayload {
   final double? longitude;      // GPS longitude
   final int heading;            // Vehicle bearing / compass heading (0-360)
   final List<List<int>>? routePoints; // Relative waypoint offsets [dx, dy] in meters
+  final String? currentClock;    // Current time on phone (e.g. "18:25")
+  final int batteryLevel;        // Phone battery percentage (e.g. 89)
 
   EspNavPayload({
     required this.turnCode,
@@ -28,6 +30,8 @@ class EspNavPayload {
     this.longitude,
     this.heading = 0,
     this.routePoints,
+    this.currentClock,
+    this.batteryLevel = 89,
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -75,6 +79,14 @@ class EspNavPayload {
     return '$etaMinutes phút';
   }
 
+  String get phoneClock {
+    if (currentClock != null && currentClock!.isNotEmpty) return currentClock!;
+    final now = DateTime.now();
+    final h = now.hour.toString().padLeft(2, '0');
+    final m = now.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
   /// JSON payload format for easy parsing with ArduinoJson on ESP32
   String toJsonString() {
     final map = {
@@ -87,6 +99,8 @@ class EspNavPayload {
       'step': stepIndex + 1,
       'tot_steps': totalSteps,
       'arrival': arrivalTimeClock,
+      'clock': phoneClock,
+      'bat': batteryLevel,
       'lat': latitude != null ? double.parse(latitude!.toStringAsFixed(6)) : null,
       'lng': longitude != null ? double.parse(longitude!.toStringAsFixed(6)) : null,
       'head': heading,
