@@ -49,6 +49,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
       _lastPrefetchPos = null;
+      notifyListeners();
     }
   }
 

@@ -341,7 +341,60 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
+
+            // MapTiler Minimap Style Switcher
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131B26),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(60)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.layers_rounded, color: Color(0xFF00F0FF), size: 18),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'MAPTILER MINIMAP',
+                          style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Style bản đồ thu nhỏ gửi sang ESP32',
+                          style: TextStyle(color: Colors.white54, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+                  DropdownButton<String>(
+                    value: streamService.streamMapStyle,
+                    dropdownColor: const Color(0xFF1E293B),
+                    underline: const SizedBox(),
+                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF00F0FF)),
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    items: const [
+                      DropdownMenuItem(value: 'streets-v2', child: Text('Streets v2')),
+                      DropdownMenuItem(value: 'streets-v2-dark', child: Text('Dark v2 (Đêm)')),
+                      DropdownMenuItem(value: 'hybrid', child: Text('Hybrid (Vệ tinh)')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          streamService.streamMapStyle = val;
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 14),
 
             // Music & Standby Control
             Container(

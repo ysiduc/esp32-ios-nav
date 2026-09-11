@@ -193,18 +193,15 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       }
 
       bool isNav = (doc["nav"] | 0) == 1;
-      String curSong = String(doc["song"] | "");
-      String curArtist = String(doc["artist"] | "");
-      if (curSong.length() == 0 || curSong == "CHUA PHAT NHAC" || curSong == "Waiting For You") {
-        if (strlen(AppleMediaService::currentTitle) > 0) {
-          curSong = AppleMediaService::currentTitle;
-          curArtist = AppleMediaService::currentArtist;
-        } else {
-          curSong = "";
-          curArtist = "";
+      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
+
+      if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
+        String curSong = String(doc["song"] | "");
+        String curArtist = String(doc["artist"] | "");
+        if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC" && curSong != "Waiting For You") {
+          display.setSongInfo(curSong.c_str(), curArtist.c_str());
         }
       }
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curSong.c_str(), curArtist.c_str());
     }
   }
 };

@@ -77,21 +77,14 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, const char* song = "Waiting For You", const char* artist = "MONO") {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false) {
     _navData.turnCode = turn;
     _navData.distMeters = dist;
     _navData.totalDistMeters = totalDist;
     _navData.speedKmh = speed;
     _navData.etaMinutes = eta;
     _navData.isNavigating = isNav;
-    if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0 && strcmp(song, "Waiting For You") != 0) {
-      strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
-      _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
-    }
-    if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0 && strcmp(artist, "MONO") != 0) {
-      strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
-      _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
-    }
+
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
     if (arrival != nullptr && strlen(arrival) > 0) {
@@ -123,10 +116,14 @@ public:
     if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0 && strcmp(song, "Waiting For You") != 0) {
       strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
       _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+    } else if (song == nullptr || strlen(song) == 0 || strcmp(song, "CHUA PHAT NHAC") == 0) {
+      _navData.songTitle[0] = '\0';
     }
     if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0 && strcmp(artist, "MONO") != 0) {
       strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
       _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
+    } else if (artist == nullptr || strlen(artist) == 0) {
+      _navData.songArtist[0] = '\0';
     }
   }
 
