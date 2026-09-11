@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
+import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'navigation_manager.dart';
@@ -39,6 +40,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   double get actualFps => _actualFps;
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
+
+  String _streamMapStyle = 'streets-v2';
+  String get streamMapStyle => _streamMapStyle;
+  set streamMapStyle(String val) {
+    if (_streamMapStyle != val) {
+      _streamMapStyle = val;
+      _tileCache.forEach((_, img) => img.dispose());
+      _tileCache.clear();
+      _lastPrefetchPos = null;
+    }
+  }
 
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
@@ -235,7 +247,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _fetchTileImage(String key, int x, int y, int z) async {
     _pendingTileFetches.add(key);
     try {
-      final url = 'https://mt1.google.com/vt/lyrs=m&hl=vi&x=$x&y=$y&z=$z';
+      final apiKey = MapboxConfig.maptilerApiKey;
+      final style = _streamMapStyle;
+      final ext = style == 'hybrid' ? 'jpg' : 'png';
+      final url = apiKey.isNotEmpty
+          ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y.$ext?key=$apiKey'
+          : 'https://tile.openstreetmap.org/$z/$x/$y.png';
       final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
@@ -321,9 +338,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Draw Route Polyline ONLY when user has started active navigation
-    final isNavigating = navManager?.isNavigating ?? false;
-    final points = (isNavigating && activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
+    // Draw Route Polyline whenever route is available (in navigation, simulation, or preview)
+    final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
         ? activeRoute.polylinePoints
         : <LatLng>[];
 

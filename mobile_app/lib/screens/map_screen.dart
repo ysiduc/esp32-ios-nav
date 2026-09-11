@@ -35,12 +35,7 @@ class _MapScreenState extends State<MapScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
-  // Route source/layer IDs for MapLibre
-  static const _routeSourceId = 'route-source';
-  static const _routeLayerId = 'route-layer';
-  static const _routeLayerGlowId = 'route-layer-glow';
   bool _mapReady = false;
-  bool _routeLayersAdded = false;
 
   // Coordinates default (Hanoi)
   LatLng _userPosition = const LatLng(21.0285, 105.8542);
@@ -119,7 +114,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// Update route polyline on the MapLibre map using GeoJSON source
+  /// Update route polyline on the MapLibre map using high-level Line annotations
   Future<void> _updateRouteOnMap() async {
     final ctrl = _mapController;
     if (ctrl == null || !_mapReady) return;
@@ -132,54 +127,38 @@ class _MapScreenState extends State<MapScreen> {
       points = _routes[_selectedRouteIndex].polylinePoints;
     }
 
-    final geoJsonMap = {
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'LineString',
-            'coordinates': points.map((p) => [p.longitude, p.latitude]).toList(),
-          },
-        }
-      ],
-    };
-
     try {
-      if (!_routeLayersAdded) {
-        await ctrl.addSource(
-          _routeSourceId,
-          ml.GeojsonSourceProperties(data: geoJsonMap),
-        );
-        // Glow layer
-        await ctrl.addLineLayer(
-          _routeSourceId,
-          _routeLayerGlowId,
-          const ml.LineLayerProperties(
-            lineColor: '#0084FF',
-            lineWidth: 12.0,
-            lineOpacity: 0.4,
-            lineCap: 'round',
-            lineJoin: 'round',
-          ),
-        );
-        // Core route line
-        await ctrl.addLineLayer(
-          _routeSourceId,
-          _routeLayerId,
-          const ml.LineLayerProperties(
-            lineColor: '#00F0FF',
-            lineWidth: 7.0,
-            lineOpacity: 1.0,
-            lineCap: 'round',
-            lineJoin: 'round',
-          ),
-        );
-        _routeLayersAdded = true;
-      } else {
-        await ctrl.setGeoJsonSource(_routeSourceId, geoJsonMap);
-      }
-    } catch (_) {}
+      await ctrl.clearLines();
+      if (points.length < 2) return;
+
+      final mlGeometry = points
+          .map((p) => ml.LatLng(p.latitude, p.longitude))
+          .toList();
+
+      // 1. Casing / Glow outline
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#0055FF',
+          lineWidth: 9.0,
+          lineOpacity: 0.6,
+          lineJoin: 'round',
+        ),
+      );
+
+      // 2. Core neon navigation route line
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#00F0FF',
+          lineWidth: 5.5,
+          lineOpacity: 1.0,
+          lineJoin: 'round',
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error drawing route on MapLibre: $e');
+    }
   }
 
   Future<void> _checkClipboardForGoogleMaps() async {
@@ -433,6 +412,7 @@ class _MapScreenState extends State<MapScreen> {
 
       if (routes.isNotEmpty) {
         _fitRouteBounds(routes.first.polylinePoints);
+        _updateRouteOnMap();
       }
     }
   }
@@ -1492,6 +1472,7 @@ class _MapScreenState extends State<MapScreen> {
                     onTap: () {
                       setState(() => _selectedRouteIndex = index);
                       _fitRouteBounds(r.polylinePoints);
+                      _updateRouteOnMap();
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
@@ -1893,6 +1874,16 @@ class _MapScreenState extends State<MapScreen> {
         trailing: isSelected ? const Icon(Icons.check_circle_rounded, color: Color(0xFF0084FF)) : null,
         onTap: () {
           setState(() => _currentTheme = mode);
+          try {
+            final streamService = Provider.of<EspStreamService>(context, listen: false);
+            if (mode == MapThemeMode.dark || mode == MapThemeMode.navigationNight) {
+              streamService.streamMapStyle = 'streets-v2-dark';
+            } else if (mode == MapThemeMode.satellite) {
+              streamService.streamMapStyle = 'hybrid';
+            } else {
+              streamService.streamMapStyle = 'streets-v2';
+            }
+          } catch (_) {}
           Navigator.pop(context);
         },
       ),

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
@@ -17,7 +16,6 @@ class EspPreviewScreen extends StatefulWidget {
 
 class _EspPreviewScreenState extends State<EspPreviewScreen> {
   final GlobalKey _streamBoundaryKey = GlobalKey();
-  final MapController _miniMapController = MapController();
 
   bool _showCallPopup = false;
   bool _showSmsPopup = false;
@@ -32,14 +30,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final navManager = Provider.of<NavigationManager>(context, listen: false);
-      final loc = navManager.currentLocation ??
-          (navManager.activeRoute?.polylinePoints.isNotEmpty == true
-              ? navManager.activeRoute!.polylinePoints.first
-              : const LatLng(20.9832, 105.8425)); // Default to Pho Nguyen Cong Thai / Cau Song Lu
-      try {
-        _miniMapController.moveAndRotate(loc, 16.0, -navManager.currentHeading);
-      } catch (_) {}
 
       // Auto-start headless 20-30 FPS JPEG streaming immediately
       _autoStartTimer = Timer(const Duration(milliseconds: 200), () {
@@ -58,7 +48,8 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           nav.sendPreviewPayloadToEsp32();
         }
       });
-      navManager.sendPreviewPayloadToEsp32();
+      final nav = Provider.of<NavigationManager>(context, listen: false);
+      nav.sendPreviewPayloadToEsp32();
     });
   }
 
@@ -116,12 +107,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             ? navManager.activeRoute!.polylinePoints.first
             : const LatLng(20.9832, 105.8425));
 
-    // Keep Mini Map centered on vehicle with zoom 16.0
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      try {
-        _miniMapController.moveAndRotate(userLoc, 16.0, -navManager.currentHeading);
-      } catch (_) {}
-    });
+
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F17),
