@@ -60,9 +60,15 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.println("[BLE] iPhone connected successfully!");
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
     pServer->updateConnParams(desc->conn_handle, 12, 16, 0, 400);
+
     AppleMediaService::connHandle = desc->conn_handle;
+    AppleMediaService::lastCheckTime = millis();
+
+    // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
+    int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
+    Serial.printf("[BLE] startSecurity returned: %d\n", secRc);
   }
 
   void onDisconnect(NimBLEServer* pServer) {
@@ -192,7 +198,7 @@ void setup() {
   #endif
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
-  NimBLEDevice::init("ESP32_NAV_ANCS");
+  NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
   // Security Auth & Bonding for iOS (Required by Apple Media Service)
@@ -207,26 +213,31 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(navServiceUUID);
-  pAdvertising->setMinInterval(16); // 10ms fast advertising
-  pAdvertising->setMaxInterval(32); // 20ms
-  pAdvertising->setMinPreferred(6); // 7.5ms min interval
-  pAdvertising->setMaxPreferred(12); // 15ms max interval
 
-  // Include Apple Media Service Solicitation (AD Type 0x15) in Scan Response
+  // Custom Advertisement Data (22 bytes, NEVER truncated, full device name)
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
+  advData.setName("ESP32-S3 Navi");
+  advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
+  pAdvertising->setAdvertisementData(advData);
+
+  // Scan Response Data with Apple Media Service Solicitation (18 bytes)
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.addData((char*)amsSolicitData, sizeof(amsSolicitData));
   pAdvertising->setScanResponseData(scanResponseData);
+
+  pAdvertising->setMinInterval(16); // 10ms fast advertising
+  pAdvertising->setMaxInterval(32); // 20ms
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ysiduc ready for 20 FPS JPEG stream + Apple Media Service!");
+  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + Apple Media Service!");
 }
 
 void loop() {
@@ -244,5 +255,9 @@ void loop() {
   // 2. Update HUD and status UI
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
+
+  // 3. Periodic check for Apple Media Service discovery
+  AppleMediaService::checkPeriodic();
+
   delay(2);
 }

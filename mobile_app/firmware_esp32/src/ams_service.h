@@ -36,6 +36,7 @@ public:
   static uint16_t entityUpdateValHandle;
   static uint16_t connHandle;
   static bool isSubscribed;
+  static unsigned long lastCheckTime;
   static char currentTitle[64];
   static char currentArtist[64];
 
@@ -43,8 +44,19 @@ public:
     entityUpdateValHandle = 0;
     connHandle = 0;
     isSubscribed = false;
+    lastCheckTime = 0;
     currentTitle[0] = '\0';
     currentArtist[0] = '\0';
+  }
+
+  static void checkPeriodic() {
+    if (connHandle != 0 && !isSubscribed) {
+      if (millis() - lastCheckTime > 3000) {
+        lastCheckTime = millis();
+        Serial.printf("[AMS] Periodic check: discovering AMS on conn=%d...\n", connHandle);
+        ble_gattc_disc_svc_by_uuid(connHandle, &amsServiceUUID.u, amsSvcDiscCb, NULL);
+      }
+    }
   }
 
   static void onEncrypted(uint16_t conn_hdl) {
@@ -163,6 +175,7 @@ private:
 uint16_t AppleMediaService::entityUpdateValHandle = 0;
 uint16_t AppleMediaService::connHandle = 0;
 bool AppleMediaService::isSubscribed = false;
+unsigned long AppleMediaService::lastCheckTime = 0;
 char AppleMediaService::currentTitle[64] = "";
 char AppleMediaService::currentArtist[64] = "";
 
