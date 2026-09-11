@@ -1,4 +1,5 @@
 import 'dart:io';
+// ignore_for_file: avoid_print
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_app/services/google_maps_parser.dart';
 
