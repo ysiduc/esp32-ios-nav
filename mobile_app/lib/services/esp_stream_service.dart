@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -41,7 +40,7 @@ class EspStreamService extends ChangeNotifier {
 
   GlobalKey? _lastBoundaryKey;
 
-  /// Start 20-30 FPS JPEG Streaming from a RepaintBoundary widget
+  /// Start 20 FPS JPEG Streaming from a RepaintBoundary widget
   Future<void> startStreaming({GlobalKey? boundaryKey}) async {
     _lastBoundaryKey = boundaryKey ?? _lastBoundaryKey;
     if (_lastBoundaryKey == null) return;
@@ -60,7 +59,7 @@ class EspStreamService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// High-Speed Frame Capture with Isolate Multithreading (20-30 FPS)
+  /// High-Speed Frame Capture with Isolate Multithreading (20 FPS)
   Future<void> _captureAndStreamFrame(GlobalKey boundaryKey) async {
     if (!_isStreaming || _isCapturing) return;
     _isCapturing = true;
@@ -72,8 +71,8 @@ class EspStreamService extends ChangeNotifier {
         return;
       }
 
-      // Adaptive scaling: target ~150px width for ultra-crisp HD 20 FPS BLE stream
-      final double targetRatio = (150.0 / boundary.size.width).clamp(0.2, 1.0);
+      // Exact 144px width scaling (9 x 16 MCU blocks for zero tearing)
+      final double targetRatio = (144.0 / boundary.size.width).clamp(0.2, 1.2);
       final ui.Image image = await boundary.toImage(pixelRatio: targetRatio);
       final int actualWidth = image.width;
       final int actualHeight = image.height;
@@ -125,7 +124,7 @@ class EspStreamService extends ChangeNotifier {
     _isSendingBle = true;
 
     try {
-      const chunkSize = 480; // Fit in 512 MTU for ultra-fast transfer
+      const chunkSize = 160; // 160 bytes fits in standard iOS/Android MTU without drop
       final totalLen = jpegBytes.length;
       final totalChunks = (totalLen / chunkSize).ceil();
       final frameId = (_frameCount % 255);
@@ -148,7 +147,7 @@ class EspStreamService extends ChangeNotifier {
 
         await bleService.sendRawBytes(packet);
         if (totalChunks > 1) {
-          await Future.delayed(const Duration(milliseconds: 3));
+          await Future.delayed(const Duration(milliseconds: 2));
         }
       }
     } catch (_) {

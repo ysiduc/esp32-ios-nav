@@ -3,7 +3,7 @@
 #include <NimBLEDevice.h>
 #include "display_ui.h"
 
-// Frame Buffer for Direct High-Speed 20-30 FPS JPEG Stream over BLE
+// Frame Buffer for Direct High-Speed 20 FPS JPEG Stream over BLE
 static uint8_t jpegFrameBuf[40960];
 static volatile size_t jpegFrameLen = 0;
 static volatile unsigned long lastFrameTime = 0;
@@ -21,8 +21,7 @@ TFT_eSPI tft = TFT_eSPI();
 #include <TJpg_Decoder.h>
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= 154) return 1;
-  int16_t drawW = (x + w > 154) ? (154 - x) : w;
-  tft.pushImage(x, y, drawW, h, bitmap);
+  tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
 #endif
@@ -80,23 +79,25 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
       uint8_t totalChunks = (uint8_t)value[3];
       uint8_t chunkIdx = (uint8_t)value[4];
 
-      if (frameId != currentBleFrameId) {
+      if (chunkIdx == 0) {
         currentBleFrameId = frameId;
         bleJpegBytesReceived = 0;
       }
 
-      size_t payloadLen = value.length() - 5;
-      if (bleJpegBytesReceived + payloadLen < sizeof(jpegFrameBuf)) {
-        memcpy(jpegFrameBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
-        bleJpegBytesReceived += payloadLen;
-      }
+      if (frameId == currentBleFrameId) {
+        size_t payloadLen = value.length() - 5;
+        if (bleJpegBytesReceived + payloadLen < sizeof(jpegFrameBuf)) {
+          memcpy(jpegFrameBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+          bleJpegBytesReceived += payloadLen;
+        }
 
-      if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
-        jpegFrameLen = bleJpegBytesReceived;
-        lastFrameTime = millis();
-        #if defined(DISPLAY_TFT_ST7789)
-        TJpgDec.drawJpg(6, 26, jpegFrameBuf, jpegFrameLen);
-        #endif
+        if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
+          jpegFrameLen = bleJpegBytesReceived;
+          lastFrameTime = millis();
+          #if defined(DISPLAY_TFT_ST7789)
+          TJpgDec.drawJpg(6, 26, jpegFrameBuf, jpegFrameLen);
+          #endif
+        }
       }
       return;
     }
