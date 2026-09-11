@@ -83,57 +83,25 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Automatically detect and attach to any BLE device that iOS has already connected
-  /// (e.g. via Settings > Bluetooth). If found & already connected, skip device.connect()
-  /// and go straight to discoverServices() so the app shows map immediately.
+  /// Automatically detect and connect to any BLE device iOS has connected at system level.
+  /// Uses Guid('1800') = Generic Access Profile, which ALL BLE devices advertise.
+  /// IMPORTANT: flutter_blue_plus v2 requires device.connect() even for system-connected devices.
   Future<void> _autoConnectIfSystemConnected() async {
     if (_isConnected || _isConnecting) return;
     try {
-      final sysDevices = await FlutterBluePlus.systemDevices([]);
+      // Guid('1800') = Generic Access Profile - required on iOS, present on all BLE devices
+      final sysDevices = await FlutterBluePlus.systemDevices([Guid('1800')]);
+      _addLog('systemDevices found: ${sysDevices.length} devices', isTx: false);
       for (final d in sysDevices) {
-        final state = await d.connectionState.first;
-        if (state == BluetoothConnectionState.connected) {
-          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
-          _addLog('Tự động nhận kết nối iOS: $name', isTx: false);
-
-          _connectedDevice = d;
-          _connectedDeviceName = name;
-          _isConnected = true;
-          notifyListeners();
-
-          // Setup disconnect listener + auto-reconnect
-          _connectionSubscription?.cancel();
-          _connectionSubscription = d.connectionState.listen((cs) async {
-            if (cs == BluetoothConnectionState.disconnected) {
-              _addLog('Mất kết nối BLE, đang tự động kết nối lại...', isTx: false);
-              _isConnected = false;
-              notifyListeners();
-              try {
-                await Future.delayed(const Duration(milliseconds: 1500));
-                if (!_isConnected && _connectedDevice != null) {
-                  await _connectedDevice!.connect(
-                    license: License.nonprofit,
-                    timeout: const Duration(seconds: 20),
-                    autoConnect: true,
-                  );
-                  await _discoverServices(_connectedDevice!);
-                  _isConnected = true;
-                  notifyListeners();
-                  _addLog('Đã tự động kết nối lại!', isTx: false);
-                }
-              } catch (_) {
-                _handleDisconnect();
-              }
-            }
-          });
-
-          try { await d.requestMtu(512); } catch (_) {}
-          await _discoverServices(d);
-          notifyListeners();
-          return; // Connected to first found device, stop
-        }
+        final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
+        _addLog('Auto-connecting to system device: $name', isTx: false);
+        // connectToDevice handles the connect() call correctly
+        await connectToDevice(d, displayName: name);
+        if (_isConnected) return; // success, stop
       }
-    } catch (_) {}
+    } catch (e) {
+      _addLog('Auto-connect error: $e', isTx: false);
+    }
   }
 
   void _addLog(String msg, {bool isError = false, bool isTx = true}) {
@@ -160,42 +128,34 @@ class BleService extends ChangeNotifier {
       _isScanning = true;
       notifyListeners();
 
-      // 1. Retrieve ALL devices currently connected at iOS system level (Settings > Bluetooth)
-      // IMPORTANT: Pass empty list [] to get ALL connected peripherals regardless of service UUID.
-      // Custom service UUIDs (FFE0) are NOT returned by iOS ANCS/AMS filters.
+      // 1. Retrieve devices connected at iOS system level (Settings > Bluetooth)
+      // Guid('1800') = Generic Access Profile UUID - required by iOS, present on ALL BLE devices.
+      // After finding them, must still call device.connect() to attach to the app.
       try {
-        final sysDevices = await FlutterBluePlus.systemDevices([]);
+        final sysDevices = await FlutterBluePlus.systemDevices([Guid('1800')]);
+        _addLog('Scan: systemDevices found ${sysDevices.length}', isTx: false);
         for (final d in sysDevices) {
-          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi (Đã kết nối)';
+          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi (Đã kết nối iOS)';
           if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
             _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -35));
-            _addLog('Phát hiện thiết bị đang kết nối iOS: $name', isTx: false);
           }
           // Auto-connect if not already connected in app
           if (!_isConnected && !_isConnecting) {
-            final cs = await d.connectionState.first;
-            if (cs == BluetoothConnectionState.connected) {
-              _addLog('Tự động kết nối qua iOS Settings: $name', isTx: false);
-              _isScanning = false;
-              await connectToDevice(d, displayName: name);
+            _addLog('Tự động kết nối: $name', isTx: false);
+            _isScanning = false;
+            await connectToDevice(d, displayName: name);
+            if (_isConnected) {
               _isScanning = true;
+              notifyListeners();
+              break;
             }
+            _isScanning = true;
           }
         }
         notifyListeners();
-      } catch (_) {}
-
-      // 2. Also retrieve bonded/known devices
-      try {
-        final bonded = await FlutterBluePlus.bondedDevices;
-        for (final d in bonded) {
-          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
-          if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
-            _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -40));
-          }
-        }
-        notifyListeners();
-      } catch (_) {}
+      } catch (e) {
+        _addLog('systemDevices error: $e', isTx: false);
+      }
 
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
@@ -246,19 +206,22 @@ class BleService extends ChangeNotifier {
     try {
       await stopScan();
 
-      // Check if device is already connected at the iOS system level (via Settings > Bluetooth)
-      // In that case, skip device.connect() to avoid error/timeout and jump directly to services.
-      final currentState = await device.connectionState.first;
-      final alreadyConnected = currentState == BluetoothConnectionState.connected;
-
-      if (alreadyConnected) {
-        _addLog('Thiết bị đã kết nối qua iOS Settings. Đang khám phá dịch vụ...', isTx: false);
-      } else {
+      // Per flutter_blue_plus v2: must always call connect() even for iOS system-connected devices.
+      // If already connected to iOS system, connect() typically completes instantly or
+      // throws an "already connected" error which we handle gracefully below.
+      try {
         await device.connect(
           license: License.nonprofit,
-          timeout: const Duration(seconds: 15),
+          timeout: const Duration(seconds: 10),
           autoConnect: false,
         );
+      } catch (connectErr) {
+        final errMsg = connectErr.toString().toLowerCase();
+        // If "already connected" error, that's fine — continue to discoverServices
+        if (!errMsg.contains('already') && !errMsg.contains('connected') && !errMsg.contains('133')) {
+          rethrow;
+        }
+        _addLog('Thiết bị đã kết nối iOS system, tiếp tục khám phá dịch vụ...', isTx: false);
       }
 
       _connectedDevice = device;
