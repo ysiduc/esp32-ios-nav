@@ -27,12 +27,17 @@ class Esp32NavApp extends StatelessWidget {
           update: (ctx, bleService, previousNavManager) =>
               previousNavManager ?? NavigationManager(bleService: bleService),
         ),
-        ChangeNotifierProxyProvider<BleService, EspStreamService>(
+        ChangeNotifierProxyProvider2<BleService, NavigationManager, EspStreamService>(
           create: (ctx) => EspStreamService(
             bleService: Provider.of<BleService>(ctx, listen: false),
+            navManager: Provider.of<NavigationManager>(ctx, listen: false),
           ),
-          update: (ctx, bleService, previousStream) =>
-              previousStream ?? EspStreamService(bleService: bleService),
+          update: (ctx, bleService, navManager, previousStream) {
+            final service = previousStream ??
+                EspStreamService(bleService: bleService, navManager: navManager);
+            service.updateReferences(bleService, navManager);
+            return service;
+          },
         ),
       ],
       child: MaterialApp(

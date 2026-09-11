@@ -85,9 +85,11 @@ class _MapScreenState extends State<MapScreen> {
         } catch (_) {}
       };
 
-      // Auto-start streaming live map directly from main MapScreen
+      // Auto-start headless 20-30 FPS live map stream
       final streamService = Provider.of<EspStreamService>(context, listen: false);
-      streamService.startStreaming(boundaryKey: _mapStreamBoundaryKey);
+      if (!streamService.isStreaming) {
+        streamService.startStreaming();
+      }
 
       _checkClipboardForGoogleMaps();
     });

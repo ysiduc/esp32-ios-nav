@@ -39,12 +39,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         _miniMapController.moveAndRotate(loc, 16.0, -navManager.currentHeading);
       } catch (_) {}
 
-      // Auto-start 20 FPS JPEG streaming immediately
-      _autoStartTimer = Timer(const Duration(milliseconds: 400), () {
+      // Auto-start headless 20-30 FPS JPEG streaming immediately
+      _autoStartTimer = Timer(const Duration(milliseconds: 200), () {
         if (mounted) {
           final streamService = Provider.of<EspStreamService>(context, listen: false);
           if (!streamService.isStreaming) {
-            streamService.startStreaming(boundaryKey: _streamBoundaryKey);
+            streamService.startStreaming();
           }
         }
       });
@@ -301,7 +301,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           ? _buildCallPopup()
                           : _showSmsPopup
                               ? _buildSmsPopup()
-                              : _buildSplitView(navManager, userLoc),
+                              : _buildSplitView(navManager, streamService, userLoc),
                     ),
                   ],
                 ),
@@ -375,8 +375,8 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     return '$h:$m';
   }
 
-  /// Split View: Left 50% Map Zoom x16 (Streamed as JPEG) | Right 50% HUD Cards
-  Widget _buildSplitView(NavigationManager navManager, LatLng userLoc) {
+  /// Split View: Left 50% Live Streamed Map (100% Mirror of ESP32) | Right 50% HUD Cards
+  Widget _buildSplitView(NavigationManager navManager, EspStreamService streamService, LatLng userLoc) {
     final step = navManager.currentStep;
     final dist = navManager.distanceToNextManeuver.round() > 0 ? navManager.distanceToNextManeuver.round() : 208;
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)}km' : '${dist}m';
@@ -388,126 +388,38 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalClock = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
-    final activeRoute = navManager.activeRoute;
-    final polylinePoints = activeRoute != null && activeRoute.polylinePoints.isNotEmpty
-        ? activeRoute.polylinePoints
-        : [
-            LatLng(userLoc.latitude - 0.0035, userLoc.longitude),
-            LatLng(userLoc.latitude - 0.0010, userLoc.longitude),
-            userLoc,
-            LatLng(userLoc.latitude + 0.0035, userLoc.longitude),
-          ];
-
     return Row(
       children: [
         // -----------------------------------------------------------------
-        // LEFT 50%: REAL MAP TILES (Zoom x16.0) STREAMED AS JPEG
+        // LEFT 50%: EXACT 1:1 REAL-TIME ESP32 LIVE STREAM (144x208)
         // -----------------------------------------------------------------
         Expanded(
           flex: 1,
-          child: RepaintBoundary(
-            key: _streamBoundaryKey,
-            child: Container(
-              margin: const EdgeInsets.only(right: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE5E7EB),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // OpenStreetMap / Google Road Retina Map Layer at Zoom 16.0
-                    FlutterMap(
-                      mapController: _miniMapController,
-                      options: MapOptions(
-                        initialCenter: userLoc,
-                        initialZoom: 16.0,
-                        initialRotation: -navManager.currentHeading,
-                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
-                      ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: 'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
-                          userAgentPackageName: 'com.esp32nav.app',
-                          maxZoom: 20,
-                        ),
-                        PolylineLayer(
-                          polylines: [
-                            Polyline(
-                              points: polylinePoints,
-                              strokeWidth: 5.5,
-                              color: const Color(0xFF00F0FF),
-                            ),
-                          ],
-                        ),
-                        MarkerLayer(
-                          markers: [
-                            Marker(
-                              point: userLoc,
-                              width: 40,
-                              height: 40,
-                              alignment: Alignment.center,
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: const Color(0xFF0084FF).withAlpha(55),
-                                      border: Border.all(color: const Color(0xFF0084FF).withAlpha(180), width: 1.8),
-                                    ),
-                                  ),
-                                  Container(
-                                    width: 22,
-                                    height: 22,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: const Color(0xFF0084FF),
-                                      border: Border.all(color: Colors.white, width: 2.2),
-                                      boxShadow: [
-                                        BoxShadow(color: const Color(0xFF0084FF).withAlpha(220), blurRadius: 6),
-                                      ],
-                                    ),
-                                    child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 13),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-
-                    // MAP LIVE Badge (Bottom-Left Pill)
-                    Positioned(
-                      bottom: 5,
-                      left: 5,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withAlpha(220),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: Colors.white24, width: 0.5),
-                        ),
-                        child: const Text(
-                          'MAP LIVE',
-                          style: TextStyle(
-                            color: Color(0xFF05FFA1),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
+          child: Container(
+            margin: const EdgeInsets.only(right: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B111A),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: streamService.latestJpegBytes != null
+                  ? Image.memory(
+                      streamService.latestJpegBytes!,
+                      fit: BoxFit.fill,
+                      gaplessPlayback: true,
+                    )
+                  : const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: Color(0xFF00F0FF), strokeWidth: 2),
+                          SizedBox(height: 8),
+                          Text('Đang stream...', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
             ),
           ),
         ),
