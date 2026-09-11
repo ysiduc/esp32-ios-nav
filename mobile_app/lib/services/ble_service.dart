@@ -69,7 +69,10 @@ class BleService extends ChangeNotifier {
     try {
       _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
         _addLog('Bluetooth Adapter State: $state', isTx: false);
-        if (state != BluetoothAdapterState.on) {
+        if (state == BluetoothAdapterState.on) {
+          // BLE is ON: check if ESP32 is already connected via iOS Settings > Bluetooth
+          Future.delayed(const Duration(milliseconds: 800), _autoConnectIfSystemConnected);
+        } else {
           _handleDisconnect();
         }
       }, onError: (e) {
@@ -78,6 +81,59 @@ class BleService extends ChangeNotifier {
     } catch (_) {
       // Platform unsupported in mock test environment
     }
+  }
+
+  /// Automatically detect and attach to any BLE device that iOS has already connected
+  /// (e.g. via Settings > Bluetooth). If found & already connected, skip device.connect()
+  /// and go straight to discoverServices() so the app shows map immediately.
+  Future<void> _autoConnectIfSystemConnected() async {
+    if (_isConnected || _isConnecting) return;
+    try {
+      final sysDevices = await FlutterBluePlus.systemDevices([]);
+      for (final d in sysDevices) {
+        final state = await d.connectionState.first;
+        if (state == BluetoothConnectionState.connected) {
+          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
+          _addLog('Tự động nhận kết nối iOS: $name', isTx: false);
+
+          _connectedDevice = d;
+          _connectedDeviceName = name;
+          _isConnected = true;
+          notifyListeners();
+
+          // Setup disconnect listener + auto-reconnect
+          _connectionSubscription?.cancel();
+          _connectionSubscription = d.connectionState.listen((cs) async {
+            if (cs == BluetoothConnectionState.disconnected) {
+              _addLog('Mất kết nối BLE, đang tự động kết nối lại...', isTx: false);
+              _isConnected = false;
+              notifyListeners();
+              try {
+                await Future.delayed(const Duration(milliseconds: 1500));
+                if (!_isConnected && _connectedDevice != null) {
+                  await _connectedDevice!.connect(
+                    license: License.nonprofit,
+                    timeout: const Duration(seconds: 20),
+                    autoConnect: true,
+                  );
+                  await _discoverServices(_connectedDevice!);
+                  _isConnected = true;
+                  notifyListeners();
+                  _addLog('Đã tự động kết nối lại!', isTx: false);
+                }
+              } catch (_) {
+                _handleDisconnect();
+              }
+            }
+          });
+
+          try { await d.requestMtu(512); } catch (_) {}
+          await _discoverServices(d);
+          notifyListeners();
+          return; // Connected to first found device, stop
+        }
+      }
+    } catch (_) {}
   }
 
   void _addLog(String msg, {bool isError = false, bool isTx = true}) {
@@ -114,6 +170,16 @@ class BleService extends ChangeNotifier {
           if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
             _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -35));
             _addLog('Phát hiện thiết bị đang kết nối iOS: $name', isTx: false);
+          }
+          // Auto-connect if not already connected in app
+          if (!_isConnected && !_isConnecting) {
+            final cs = await d.connectionState.first;
+            if (cs == BluetoothConnectionState.connected) {
+              _addLog('Tự động kết nối qua iOS Settings: $name', isTx: false);
+              _isScanning = false;
+              await connectToDevice(d, displayName: name);
+              _isScanning = true;
+            }
           }
         }
         notifyListeners();
