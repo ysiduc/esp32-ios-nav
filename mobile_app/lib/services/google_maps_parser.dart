@@ -11,7 +11,7 @@ class GoogleMapsParser {
   /// Example: 20°59'07.8"N 105°50'29.4"E or 20°59'7.8"N, 105°50'29.4"E
   static LatLng? parseDms(String text) {
     final dmsRegex = RegExp(
-      r'(\d+)\s*°\s*(\d+)\s*[\x27\u2032]?\s*([\d.]+)\s*[\x22\u2033]?\s*([NSns])\s*[,;\s]+\s*(\d+)\s*°\s*(\d+)\s*[\x27\u2032]?\s*([\d.]+)\s*[\x22\u2033]?\s*([EWew])',
+      r'(\d+)\s*°\s*(\d+)\s*[\x27\u2032]?\s*([\d.]+)\s*[\x22\u2033]?\s*([NSns])\s*[,;\s\+]+\s*(\d+)\s*°\s*(\d+)\s*[\x27\u2032]?\s*([\d.]+)\s*[\x22\u2033]?\s*([EWew])',
     );
     final m = dmsRegex.firstMatch(text);
     if (m != null) {
@@ -65,16 +65,17 @@ class GoogleMapsParser {
     final trimmed = input.trim();
     if (trimmed.isEmpty) return null;
 
-    // 1. DMS Coordinate Match
+    // 1. DMS Coordinate Match anywhere in the raw text
     final dmsCoord = parseDms(trimmed);
     if (dmsCoord != null) {
       return await _searchService.reverseGeocode(dmsCoord);
     }
 
-    // 2. Direct Decimal Coordinate Match (e.g. "21.0285, 105.8542" or "20.9848 105.8385")
-    if (!trimmed.toLowerCase().startsWith('http://') && !trimmed.toLowerCase().startsWith('https://')) {
-      final coordRegex = RegExp(r'^\s*(\-?\d{1,2}\.\d{3,})[\s,;]+(\-?\d{1,3}\.\d{3,})\s*$');
-      final match = coordRegex.firstMatch(trimmed);
+    // 2. Direct Decimal Coordinate Match without URL (e.g. "21.0285, 105.8542" or "20.9848 105.8385")
+    final textWithoutUrl = trimmed.replaceAll(RegExp(r'https?://[^\s]+'), '').trim();
+    if (textWithoutUrl.isNotEmpty) {
+      final coordRegex = RegExp(r'(\-?\d{1,2}\.\d{3,})[\s,;]+(\-?\d{1,3}\.\d{3,})');
+      final match = coordRegex.firstMatch(textWithoutUrl);
       if (match != null) {
         final lat = double.tryParse(match.group(1)!);
         final lon = double.tryParse(match.group(2)!);
@@ -104,17 +105,23 @@ class GoogleMapsParser {
         urlStr.contains('t.co') ||
         urlStr.length < 50;
 
+    String? htmlBodyTarget;
     if (isShortLink) {
       try {
-        final finalUrl = await _resolveRedirects(urlStr);
-        if (finalUrl.isNotEmpty) {
-          urlStr = finalUrl;
+        final resolveResult = await _resolveRedirectsAndBody(urlStr);
+        if (resolveResult.finalUrl.isNotEmpty) {
+          urlStr = resolveResult.finalUrl;
         }
+        htmlBodyTarget = resolveResult.htmlExtractedUrl;
       } catch (_) {}
     }
 
-    // 5. Extract Coordinates from Google Maps URL
-    final extractedCoord = _extractCoordinateFromUrl(urlStr);
+    // 5. Extract Coordinates from Google Maps URL (or HTML extracted target)
+    LatLng? extractedCoord = _extractCoordinateFromUrl(urlStr);
+    if (extractedCoord == null && htmlBodyTarget != null && htmlBodyTarget.isNotEmpty) {
+      extractedCoord = _extractCoordinateFromUrl(htmlBodyTarget);
+    }
+
     if (extractedCoord != null) {
       final urlPlaceName = _extractPlaceNameFromUrl(urlStr);
       final placeName = userPrefixName.isNotEmpty
@@ -148,13 +155,15 @@ class GoogleMapsParser {
     return null;
   }
 
-  /// Resolve HTTP redirects for shortlinks (including HTTP 3xx and meta refresh)
-  Future<String> _resolveRedirects(String urlStr) async {
+  /// Resolve HTTP redirects and extract fallback URLs from HTML body
+  Future<({String finalUrl, String? htmlExtractedUrl})> _resolveRedirectsAndBody(String urlStr) async {
     final client = HttpClient();
     client.userAgent =
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     String currentUrl = urlStr;
+    String? htmlExtractedUrl;
+
     for (int redirectCount = 0; redirectCount < 8; redirectCount++) {
       final uri = Uri.tryParse(currentUrl);
       if (uri == null) break;
@@ -175,10 +184,12 @@ class GoogleMapsParser {
         }
       }
 
-      // Check if response has meta refresh or JS redirect in HTML body
+      // Check if response has meta refresh or staticmap link in HTML body
       final contentType = response.headers.contentType?.mimeType ?? '';
       if (contentType.contains('html') || contentType.contains('text')) {
         final body = await response.transform(utf8.decoder).join();
+
+        // 1. Meta refresh
         final metaRegex = RegExp(
           r'<meta[^>]*content=["\x27]\d+;\s*url=([^"\x27>]+)["\x27]',
           caseSensitive: false,
@@ -190,18 +201,17 @@ class GoogleMapsParser {
           continue;
         }
 
-        final jsRegex = RegExp(r'window\.location(?:\.href|\.replace)?\s*=\s*["\x27]([^"\x27]+)["\x27]');
-        final jsMatch = jsRegex.firstMatch(body);
-        if (jsMatch != null) {
-          final target = jsMatch.group(1)!.trim();
-          currentUrl = target.startsWith('http') ? target : uri.resolve(target).toString();
-          continue;
+        // 2. staticmap center or link href
+        final staticMapRegex = RegExp(r'(?:api/staticmap\?center=|link\s+href=["\x27]/search\?tbm=map&amp;[^"\x27]*q=)(\-?\d{1,2}\.\d+)[,%2C\+]+(\-?\d{1,3}\.\d+)');
+        final staticMatch = staticMapRegex.firstMatch(body);
+        if (staticMatch != null) {
+          htmlExtractedUrl = '?q=${staticMatch.group(1)},${staticMatch.group(2)}';
         }
       }
       break;
     }
     client.close();
-    return currentUrl;
+    return (finalUrl: currentUrl, htmlExtractedUrl: htmlExtractedUrl);
   }
 
   /// Extract LatLng from various Google Maps URL formats
@@ -219,7 +229,7 @@ class GoogleMapsParser {
 
     // Priority 2: ?q=21.028511,105.854212 or ?destination=... or ?ll=... or ?daddr=... (Explicit Pin/Query)
     final qRegex = RegExp(
-      r'[?&](?:q|ll|destination|center|daddr|saddr|query)=(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})',
+      r'[?&](?:q|ll|destination|center|daddr|saddr|query|dest)=(?:loc:)?(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})',
     );
     final qMatch = qRegex.firstMatch(decoded);
     if (qMatch != null) {
@@ -228,7 +238,29 @@ class GoogleMapsParser {
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // Priority 3: /search/21.028511,+105.854212 or /search/21.028511,105.854212
+    // Priority 3: /place/21.028511,105.854212 (Exact dropped pin in /place/ path before viewport @)
+    final placeCoordRegex = RegExp(r'/place/(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})');
+    final placeMatch = placeCoordRegex.firstMatch(decoded);
+    if (placeMatch != null) {
+      final lat = double.tryParse(placeMatch.group(1)!);
+      final lon = double.tryParse(placeMatch.group(2)!);
+      if (lat != null && lon != null) return LatLng(lat, lon);
+    }
+
+    // Priority 4: /dir/.../21.028511,105.854212 (Destination coordinates in directions path)
+    if (decoded.contains('/dir/')) {
+      final dirSection = decoded.split('/@').first;
+      final dirCoordRegex = RegExp(r'(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})');
+      final matches = dirCoordRegex.allMatches(dirSection).toList();
+      if (matches.isNotEmpty) {
+        final last = matches.last;
+        final lat = double.tryParse(last.group(1)!);
+        final lon = double.tryParse(last.group(2)!);
+        if (lat != null && lon != null) return LatLng(lat, lon);
+      }
+    }
+
+    // Priority 5: /search/21.028511,+105.854212 or /search/21.028511,105.854212
     final searchCoordRegex = RegExp(
       r'/search/(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})',
     );
@@ -239,11 +271,11 @@ class GoogleMapsParser {
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // Priority 4: Embedded DMS in URL e.g. /place/20°59'07.8"N+105°50'29.4"E
+    // Priority 6: Embedded DMS in URL e.g. /place/20°59'07.8"N+105°50'29.4"E
     final dmsCoord = parseDms(decoded);
     if (dmsCoord != null) return dmsCoord;
 
-    // Priority 5 (Fallback only): @21.028511,105.854212 (Camera viewport center)
+    // Priority 7 (Fallback only): @21.028511,105.854212 (Camera viewport center)
     final atRegex = RegExp(r'@(\-?\d{1,2}\.\d{3,}),(\-?\d{1,3}\.\d{3,})');
     final atMatch = atRegex.firstMatch(decoded);
     if (atMatch != null) {
