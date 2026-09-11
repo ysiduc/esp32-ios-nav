@@ -692,15 +692,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       fit: BoxFit.fill,
                       gaplessPlayback: true,
                     )
-                  : const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(color: Color(0xFF00F0FF), strokeWidth: 2),
-                          SizedBox(height: 8),
-                          Text('Đang stream...', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                        ],
-                      ),
+                  : CustomPaint(
+                      painter: StandbyVectorMapPainter(navManager: navManager),
+                      size: const Size(144, 208),
                     ),
             ),
           ),
@@ -1052,4 +1046,168 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         return Icons.straight_rounded;
     }
   }
+}
+
+class StandbyVectorMapPainter extends CustomPainter {
+  final NavigationManager navManager;
+  StandbyVectorMapPainter({required this.navManager});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final cx = w / 2.0;
+    final cy = h * 0.72;
+
+    // 1. Dark Cyber Navy Background
+    final bgPaint = Paint()..color = const Color(0xFF0B111A);
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
+
+    // 2. Concentric Radar Distance Rings (50m, 100m)
+    final radarPaint = Paint()
+      ..color = const Color(0xFF142030)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(Offset(cx, cy), 45, radarPaint);
+    canvas.drawCircle(Offset(cx, cy), 90, radarPaint);
+    canvas.drawLine(Offset(cx - 65, cy), Offset(cx + 65, cy), radarPaint);
+    canvas.drawLine(Offset(cx, cy - 110), Offset(cx, cy + 60), radarPaint);
+
+    // 3. Dynamic Vector Route Corridor
+    final points = navManager.computeUpcomingRoutePoints();
+    final isNav = navManager.isNavigating;
+    final turnCode = navManager.currentStep?.turnCode ?? 0;
+
+    if (points.length >= 2) {
+      final path = Path();
+      for (int i = 0; i < points.length; i++) {
+        final px = (cx + points[i][0]).clamp(8.0, w - 8.0);
+        final py = (cy - points[i][1]).clamp(28.0, h - 10.0);
+        if (i == 0) {
+          path.moveTo(px, py);
+        } else {
+          path.lineTo(px, py);
+        }
+      }
+
+      // Asphalt casing
+      final asphaltPaint = Paint()
+        ..color = const Color(0xFF1E293B)
+        ..strokeWidth = 10.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      canvas.drawPath(path, asphaltPaint);
+
+      // Cyan glow
+      final glowPaint = Paint()
+        ..color = const Color(0xFF0077B6).withAlpha(180)
+        ..strokeWidth = 6.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      canvas.drawPath(path, glowPaint);
+
+      // Vibrant core cyan
+      final corePaint = Paint()
+        ..color = const Color(0xFF00F0FF)
+        ..strokeWidth = 3.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      canvas.drawPath(path, corePaint);
+
+      // Destination target flag/dot at last point
+      final last = points.last;
+      final endX = (cx + last[0]).clamp(8.0, w - 8.0);
+      final endY = (cy - last[1]).clamp(28.0, h - 10.0);
+      canvas.drawCircle(Offset(endX, endY), 5, Paint()..color = const Color(0xFFFACC15));
+      canvas.drawCircle(Offset(endX, endY), 2.5, Paint()..color = Colors.white);
+    } else {
+      // Fallback smooth road corridor
+      double endX = cx;
+      double endY = 48.0;
+      if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
+        endX = 22.0;
+        endY = 95.0;
+      } else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
+        endX = w - 22.0;
+        endY = 95.0;
+      }
+
+      final curvePath = Path()
+        ..moveTo(cx, h)
+        ..lineTo(cx, 130)
+        ..lineTo(endX, endY);
+
+      canvas.drawPath(
+        curvePath,
+        Paint()
+          ..color = const Color(0xFF1E293B)
+          ..strokeWidth = 10.0
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..style = PaintingStyle.stroke,
+      );
+      canvas.drawPath(
+        curvePath,
+        Paint()
+          ..color = const Color(0xFF00F0FF)
+          ..strokeWidth = 3.0
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..style = PaintingStyle.stroke,
+      );
+      canvas.drawCircle(Offset(endX, endY), 4, Paint()..color = const Color(0xFFFACC15));
+    }
+
+    // 4. Vehicle Chevron at cx, cy pointing straight UP
+    final chevronPath = Path()
+      ..moveTo(cx, cy - 9)
+      ..lineTo(cx + 6, cy + 6)
+      ..lineTo(cx, cy + 3)
+      ..lineTo(cx - 6, cy + 6)
+      ..close();
+    canvas.drawCircle(Offset(cx, cy), 14, Paint()..color = const Color(0xFF00F0FF).withAlpha(40));
+    canvas.drawPath(chevronPath, Paint()..color = const Color(0xFF00F0FF));
+    canvas.drawCircle(Offset(cx, cy + 2), 2, Paint()..color = Colors.white);
+
+    // 5. Top HUD Glass Pill Overlay
+    final pillRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(8, 6, w - 16, 26),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF0F1724));
+    canvas.drawRRect(
+      pillRect,
+      Paint()
+        ..color = const Color(0xFF1E3048)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke,
+    );
+
+    // Pill Content
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    if (isNav) {
+      final distM = navManager.distanceToNextManeuver.round();
+      final distStr = distM >= 1000 ? '${(distM / 1000.0).toStringAsFixed(1)}km' : '${distM}m';
+      textPainter.text = TextSpan(
+        text: '➤  $distStr',
+        style: const TextStyle(color: Color(0xFFFACC15), fontSize: 11, fontWeight: FontWeight.bold),
+      );
+    } else {
+      textPainter.text = const TextSpan(
+        text: 'CHẾ ĐỘ CHỜ - GPS',
+        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontWeight: FontWeight.bold),
+      );
+    }
+    textPainter.layout();
+    textPainter.paint(canvas, const Offset(16, 12));
+
+    // GPS Status Dot
+    canvas.drawCircle(Offset(w - 18, 19), 3, Paint()..color = isNav ? const Color(0xFF22C55E) : const Color(0xFF00F0FF));
+  }
+
+  @override
+  bool shouldRepaint(covariant StandbyVectorMapPainter oldDelegate) => true;
 }

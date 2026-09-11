@@ -309,23 +309,68 @@ class NavigationManager extends ChangeNotifier {
     _pushNavigationDataToBle();
   }
 
+  /// Compute upcoming route waypoints rotated to vehicle heading
+  /// Returns List of [dx, dy] relative to vehicle where forward is +y and right is +x
+  List<List<int>> computeUpcomingRoutePoints() {
+    final upcomingPts = <List<int>>[];
+    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty || _currentLocation == null) {
+      return upcomingPts;
+    }
+
+    final curLoc = _currentLocation!;
+    final points = _activeRoute!.polylinePoints;
+
+    // 1. Find index of closest waypoint on route to current vehicle location
+    int closestIdx = 0;
+    double minDistanceSq = double.infinity;
+    for (int i = 0; i < points.length; i++) {
+      final dLat = points[i].latitude - curLoc.latitude;
+      final dLon = points[i].longitude - curLoc.longitude;
+      final distSq = dLat * dLat + dLon * dLon;
+      if (distSq < minDistanceSq) {
+        minDistanceSq = distSq;
+        closestIdx = i;
+      }
+    }
+
+    // 2. Rotate to align with vehicle heading so ahead is always UP on handlebars
+    final hRad = _currentHeading * (math.pi / 180.0);
+    final cosH = math.cos(hRad);
+    final sinH = math.sin(hRad);
+    final cosLat = math.cos(curLoc.latitude * (math.pi / 180.0));
+
+    // Anchor point: Vehicle itself [0, 0]
+    upcomingPts.add([0, 0]);
+
+    for (int i = closestIdx + 1; i < points.length && upcomingPts.length < 24; i++) {
+      final pt = points[i];
+      final dNorth = (pt.latitude - curLoc.latitude) * 111139.0;
+      final dEast = (pt.longitude - curLoc.longitude) * 111139.0 * cosLat;
+
+      // Coordinate transformation:
+      // xRel (right) = dEast * cos(H) - dNorth * sin(H)
+      // yRel (forward) = dNorth * cos(H) + dEast * sin(H)
+      final xRel = dEast * cosH - dNorth * sinH;
+      final yRel = dNorth * cosH + dEast * sinH;
+
+      // Scale: 0.8 pixel per meter
+      final sx = (xRel * 0.8).round().clamp(-125, 125);
+      final sy = (yRel * 0.8).round().clamp(-125, 125);
+
+      final last = upcomingPts.last;
+      if ((sx - last[0]).abs() >= 4 || (sy - last[1]).abs() >= 4) {
+        upcomingPts.add([sx, sy]);
+      }
+    }
+
+    return upcomingPts;
+  }
+
   void _pushNavigationDataToBle() {
     if (!bleService.isConnected || _activeRoute == null) return;
 
     final step = currentStep ?? _activeRoute!.steps.first;
-
-    // Sample upcoming route coordinates into relative offset vectors (dx, dy)
-    final upcomingPts = <List<int>>[];
-    if (_activeRoute!.polylinePoints.isNotEmpty && _currentLocation != null) {
-      final curLoc = _currentLocation!;
-      final cosLat = math.cos(curLoc.latitude * (math.pi / 180.0));
-      for (int i = 0; i < _activeRoute!.polylinePoints.length && upcomingPts.length < 24; i += 2) {
-        final pt = _activeRoute!.polylinePoints[i];
-        final dy = ((pt.latitude - curLoc.latitude) * 111139.0).round().clamp(-120, 120);
-        final dx = ((pt.longitude - curLoc.longitude) * 111139.0 * cosLat).round().clamp(-120, 120);
-        upcomingPts.add([dx, dy]);
-      }
-    }
+    final upcomingPts = computeUpcomingRoutePoints();
 
     final now = DateTime.now();
     final h = now.hour.toString().padLeft(2, '0');
@@ -345,7 +390,7 @@ class NavigationManager extends ChangeNotifier {
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
       heading: _currentHeading.round(),
-      routePoints: upcomingPts,
+      routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
       batteryLevel: 89,
       songTitle: _currentSongTitle,
@@ -362,6 +407,7 @@ class NavigationManager extends ChangeNotifier {
     final h = now.hour.toString().padLeft(2, '0');
     final m = now.minute.toString().padLeft(2, '0');
     final curClock = '$h:$m';
+    final upcomingPts = _isNavigating ? computeUpcomingRoutePoints() : <List<int>>[];
 
     final payload = EspNavPayload(
       isNavigating: _isNavigating,
@@ -373,6 +419,10 @@ class NavigationManager extends ChangeNotifier {
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _isNavigating ? _currentStepIndex : 0,
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
+      latitude: _currentLocation?.latitude,
+      longitude: _currentLocation?.longitude,
+      heading: _currentHeading.round(),
+      routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
       batteryLevel: 89,
       songTitle: _currentSongTitle,

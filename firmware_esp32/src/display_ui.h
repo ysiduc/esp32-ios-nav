@@ -292,94 +292,164 @@ private:
     }
   }
 
-  /// Draw High-Definition Standby Vector Map when JPEG stream is inactive
+  /// Draw Mini Maneuver Icon for HUD Card (fits inside 26px pill)
+  void _drawMiniTurnIcon(int cx, int cy, uint8_t turnCode) {
+    if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
+      // MINI TURN LEFT
+      tft.fillRect(cx + 3, cy - 3, 2, 8, TFT_CYAN);
+      tft.fillRect(cx - 5, cy - 3, 8, 2, TFT_CYAN);
+      tft.fillTriangle(cx - 7, cy - 2, cx - 3, cy - 6, cx - 3, cy + 2, TFT_CYAN);
+    }
+    else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
+      // MINI TURN RIGHT
+      tft.fillRect(cx - 5, cy - 3, 2, 8, TFT_CYAN);
+      tft.fillRect(cx - 3, cy - 3, 8, 2, TFT_CYAN);
+      tft.fillTriangle(cx + 7, cy - 2, cx + 3, cy - 6, cx + 3, cy + 2, TFT_CYAN);
+    }
+    else if (turnCode == 4) {
+      // MINI U-TURN
+      tft.fillRect(cx + 3, cy - 2, 2, 7, TFT_CYAN);
+      tft.fillRect(cx - 3, cy - 4, 7, 2, TFT_CYAN);
+      tft.fillRect(cx - 3, cy - 2, 2, 7, TFT_CYAN);
+      tft.fillTriangle(cx - 2, cy + 6, cx - 5, cy + 2, cx + 1, cy + 2, TFT_CYAN);
+    }
+    else if (turnCode == 9) {
+      // MINI DESTINATION FLAG
+      tft.fillRect(cx - 4, cy - 5, 2, 11, TFT_WHITE);
+      tft.fillTriangle(cx - 2, cy - 5, cx + 5, cy - 2, cx - 2, cy + 1, TFT_CYAN);
+    }
+    else {
+      // MINI STRAIGHT
+      tft.fillRect(cx - 1, cy - 2, 2, 9, TFT_CYAN);
+      tft.fillTriangle(cx, cy - 6, cx - 4, cy - 1, cx + 4, cy - 1, TFT_CYAN);
+    }
+  }
+
+  /// Draw High-Definition Realistic Standby Vector Map when JPEG stream is inactive
   void _renderStandbyVectorMap() {
     uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
-    uint16_t cGrid = tft.color565(22, 34, 50);      // Subtle Road Grid
-    uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Cyan Route
-    uint16_t cGlow = tft.color565(0, 80, 140);      // Outer Route Glow
+    uint16_t cAsphalt = tft.color565(26, 36, 50);   // Real Road Asphalt Casing
+    uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Neon Cyan Route
+    uint16_t cGlow = tft.color565(0, 100, 160);     // Outer Route Glow
+    uint16_t cRadar = tft.color565(20, 32, 48);     // Subtle Radar Grid Rings
+    uint16_t cPill = tft.color565(15, 23, 36);      // HUD Glass Pill
 
-    // 1. Map container & border
+    // 1. Map container box & border
     tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
     tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
 
-    // 2. Perspective Road Grid
-    for (int gx = 24; gx < 144; gx += 28) {
-      tft.drawFastVLine(6 + gx, 28, 204, cGrid);
-    }
-    for (int gy = 24; gy < 208; gy += 28) {
-      tft.drawFastHLine(8, 26 + gy, 140, cGrid);
-    }
-
-    // 3. Dynamic Vector Route: Draw Real Road Geometry from GPS Route Points
     int cx = 78;
-    int cy = 150;
+    int cy = 155;
 
+    // 2. Concentric Distance Radar Range Rings (50m, 100m scale)
+    tft.drawCircle(cx, cy, 45, cRadar);
+    tft.drawCircle(cx, cy, 90, cRadar);
+    tft.drawFastHLine(cx - 65, cy, 130, cRadar);
+    tft.drawFastVLine(cx, cy - 110, 170, cRadar);
+
+    // Subtle scale labels
+    tft.setTextColor(tft.color565(71, 85, 105), cMapBg);
+    tft.drawString("50m", cx + 47, cy - 8, 1);
+    tft.drawString("100m", cx + 70, cy - 8, 1);
+
+    // 3. Dynamic Vector Route: Draw Real Road Corridor from GPS Route Points
     if (_navData.routePointCount >= 2) {
-      int prevX = cx;
-      int prevY = cy;
+      int ptsX[32];
+      int ptsY[32];
       for (uint8_t i = 0; i < _navData.routePointCount; i++) {
-        int px = cx + (int)(_navData.routePoints[i].dx * 0.7);
-        int py = cy - (int)(_navData.routePoints[i].dy * 0.7);
-        px = constrain(px, 12, 140);
-        py = constrain(py, 32, 215);
-
-        tft.drawLine(prevX, prevY, px, py, cGlow);
-        tft.drawLine(prevX - 1, prevY, px - 1, py, cRoute);
-        tft.drawLine(prevX + 1, prevY, px + 1, py, cRoute);
-
-        prevX = px;
-        prevY = py;
+        ptsX[i] = constrain(cx + _navData.routePoints[i].dx, 10, 144);
+        ptsY[i] = constrain(cy - _navData.routePoints[i].dy, 30, 224);
       }
-      // Destination flag/dot at the end of real road path
-      tft.fillCircle(prevX, prevY, 5, TFT_YELLOW);
-      tft.fillCircle(prevX, prevY, 2, TFT_WHITE);
+
+      // Pass 1: Wide Asphalt Road Corridor Bed (Width ~10px)
+      for (uint8_t i = 0; i < _navData.routePointCount; i++) {
+        tft.fillCircle(ptsX[i], ptsY[i], 5, cAsphalt);
+      }
+      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+        for (int off = -5; off <= 5; off++) {
+          tft.drawLine(ptsX[i-1] + off, ptsY[i-1], ptsX[i] + off, ptsY[i], cAsphalt);
+          tft.drawLine(ptsX[i-1], ptsY[i-1] + off, ptsX[i], ptsY[i] + off, cAsphalt);
+        }
+      }
+
+      // Pass 2: Glowing Route Center (Width ~4px)
+      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+        // Outer cyan glow
+        tft.drawLine(ptsX[i-1] - 2, ptsY[i-1], ptsX[i] - 2, ptsY[i], cGlow);
+        tft.drawLine(ptsX[i-1] + 2, ptsY[i-1], ptsX[i] + 2, ptsY[i], cGlow);
+        tft.drawLine(ptsX[i-1], ptsY[i-1] - 2, ptsX[i], ptsY[i] - 2, cGlow);
+        tft.drawLine(ptsX[i-1], ptsY[i-1] + 2, ptsX[i], ptsY[i] + 2, cGlow);
+
+        // Core bright cyan
+        tft.drawLine(ptsX[i-1] - 1, ptsY[i-1], ptsX[i] - 1, ptsY[i], cRoute);
+        tft.drawLine(ptsX[i-1], ptsY[i-1], ptsX[i], ptsY[i], cRoute);
+        tft.drawLine(ptsX[i-1] + 1, ptsY[i-1], ptsX[i] + 1, ptsY[i], cRoute);
+      }
+
+      // Destination Target Flag at end of path
+      int last = _navData.routePointCount - 1;
+      tft.fillCircle(ptsX[last], ptsY[last], 5, TFT_YELLOW);
+      tft.fillCircle(ptsX[last], ptsY[last], 2, TFT_WHITE);
     } else {
-      // Dynamic Turn Maneuver Curve fallback
+      // Fallback Smooth Curved Corridor based on turnCode
+      int endX = cx;
+      int endY = 48;
       if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
-        // TURN LEFT
-        tft.drawLine(cx, 215, cx, 95, cGlow);
-        tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
-        tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
-        tft.drawLine(cx, 95, 24, 95, cGlow);
-        tft.drawLine(cx, 94, 24, 94, cRoute);
-        tft.drawLine(cx, 96, 24, 96, cRoute);
-        tft.fillCircle(24, 95, 5, TFT_YELLOW);
-        tft.fillCircle(24, 95, 2, TFT_WHITE);
+        endX = 22; endY = 95; // Turn Left
+      } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
+        endX = 134; endY = 95; // Turn Right
       }
-      else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
-        // TURN RIGHT
-        tft.drawLine(cx, 215, cx, 95, cGlow);
-        tft.drawLine(cx - 1, 215, cx - 1, 95, cRoute);
-        tft.drawLine(cx + 1, 215, cx + 1, 95, cRoute);
-        tft.drawLine(cx, 95, 132, 95, cGlow);
-        tft.drawLine(cx, 94, 132, 94, cRoute);
-        tft.drawLine(cx, 96, 132, 96, cRoute);
-        tft.fillCircle(132, 95, 5, TFT_YELLOW);
-        tft.fillCircle(132, 95, 2, TFT_WHITE);
+
+      // Draw corridor from (cx, 220) to (cx, 130) to (endX, endY)
+      for (int off = -5; off <= 5; off++) {
+        tft.drawLine(cx + off, 220, cx + off, 130, cAsphalt);
+        tft.drawLine(cx + off, 130, endX + off, endY, cAsphalt);
       }
-      else {
-        // STRAIGHT
-        tft.drawLine(cx, 215, cx, 42, cGlow);
-        tft.drawLine(cx - 1, 215, cx - 1, 42, cRoute);
-        tft.drawLine(cx + 1, 215, cx + 1, 42, cRoute);
-        tft.fillCircle(cx, 42, 5, TFT_YELLOW);
-        tft.fillCircle(cx, 42, 2, TFT_WHITE);
-      }
+      tft.fillCircle(cx, 130, 5, cAsphalt);
+      tft.fillCircle(endX, endY, 5, cAsphalt);
+
+      // Core cyan route
+      tft.drawLine(cx, 220, cx, 130, cRoute);
+      tft.drawLine(cx - 1, 220, cx - 1, 130, cRoute);
+      tft.drawLine(cx + 1, 220, cx + 1, 130, cRoute);
+      tft.drawLine(cx, 130, endX, endY, cRoute);
+      tft.drawLine(cx - 1, 130, endX - 1, endY, cRoute);
+      tft.drawLine(cx + 1, 130, endX + 1, endY, cRoute);
+
+      tft.fillCircle(endX, endY, 4, TFT_YELLOW);
+      tft.fillCircle(endX, endY, 2, TFT_WHITE);
     }
 
-    // 4. Vehicle Navigation Marker (Cyan triangle + radar pulse)
+    // 4. Vehicle Cockpit Indicator (Chevron at cx, cy pointing straight UP)
     tft.drawCircle(cx, cy, 14, tft.color565(0, 100, 160));
     tft.drawCircle(cx, cy, 22, tft.color565(0, 50, 90));
 
-    // Arrow pointing up / heading
-    tft.fillTriangle(cx, cy - 10, cx - 8, cy + 8, cx + 8, cy + 8, TFT_CYAN);
-    tft.fillCircle(cx, cy + 1, 3, TFT_WHITE);
+    // Arrowhead pointing UP
+    tft.fillTriangle(cx, cy - 10, cx - 7, cy + 7, cx + 7, cy + 7, TFT_CYAN);
+    tft.fillCircle(cx, cy + 1, 2, TFT_WHITE);
 
-    // 5. GPS Radar Pulse Indicator (Top Right)
-    tft.fillCircle(134, 38, 4, TFT_GREEN);
-    tft.setTextColor(TFT_GREEN, cMapBg);
-    tft.drawString("GPS", 112, 34, 1);
+    // 5. Live HUD Pill Overlay at Top of Minimap
+    tft.fillRoundRect(10, 30, 136, 26, 6, cPill);
+    tft.drawRoundRect(10, 30, 136, 26, 6, tft.color565(30, 48, 72));
+
+    if (_navData.isNavigating) {
+      _drawMiniTurnIcon(22, 43, _navData.turnCode);
+
+      char distBuf[16];
+      if (_navData.distMeters >= 1000) {
+        snprintf(distBuf, sizeof(distBuf), "%.1fkm", _navData.distMeters / 1000.0);
+      } else {
+        snprintf(distBuf, sizeof(distBuf), "%dm", _navData.distMeters);
+      }
+      tft.setTextColor(tft.color565(250, 204, 21), cPill);
+      tft.drawString(distBuf, 34, 35, 2);
+
+      tft.fillCircle(136, 43, 3, TFT_GREEN);
+    } else {
+      tft.setTextColor(tft.color565(148, 163, 184), cPill);
+      tft.drawCentreString("CHEDO CHO - GPS", 78, 35, 1);
+      tft.fillCircle(136, 43, 3, TFT_CYAN);
+    }
   }
 
   void _renderTft(bool isStreamingActive) {

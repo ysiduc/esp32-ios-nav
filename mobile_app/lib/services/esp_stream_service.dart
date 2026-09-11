@@ -24,7 +24,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
   int _framesInCurrentSec = 0;
-  int _stationaryTick = 0;
 
   Timer? _streamTimer;
   Timer? _pauseTimer;
@@ -151,17 +150,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
-      final isSim = navManager?.isSimulating ?? false;
-
-      // Smart Thermal Protection: When stationary / idle (speed < 1.5 km/h),
-      // throttle rendering to 2 FPS to keep the phone completely cool & save battery!
-      if (!isSim && speedKmh < 1.5) {
-        _stationaryTick = (_stationaryTick + 1) % 5;
-        if (_stationaryTick != 0 && _latestJpegBytes != null) {
-          _isCapturing = false;
-          return;
-        }
-      }
 
       // Pre-fetch surrounding tiles asynchronously
       _prefetchSurroundingTiles(userPos, 16);
@@ -198,7 +186,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         bytes: rawBytes.buffer,
         order: img.ChannelOrder.rgba,
       );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 28));
+      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 50));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -209,7 +197,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (_lastFpsUpdate != null && now.difference(_lastFpsUpdate!).inMilliseconds >= 800) {
         final elapsed = now.difference(_lastFpsUpdate!).inMilliseconds / 1000.0;
         final calcFps = (_framesInCurrentSec / elapsed);
-        _actualFps = calcFps.clamp(20.0, 30.0);
+        _actualFps = calcFps.clamp(1.0, 30.0);
         _framesInCurrentSec = 0;
         _lastFpsUpdate = now;
         notifyListeners();
@@ -277,7 +265,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final style = _streamMapStyle;
       final ext = style == 'hybrid' ? 'jpg' : 'png';
       final url = apiKey.isNotEmpty
-          ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y.$ext?key=$apiKey'
+          ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
           : 'https://tile.openstreetmap.org/$z/$x/$y.png';
 
       var response = await http.get(
@@ -362,7 +350,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         if (tileImg != null) {
           final double drawX = (dx * 256.0) - subTileX;
           final double drawY = (dy * 256.0) - subTileY;
-          canvas.drawImage(tileImg, Offset(drawX, drawY), Paint());
+          canvas.drawImageRect(
+            tileImg,
+            Rect.fromLTWH(0, 0, tileImg.width.toDouble(), tileImg.height.toDouble()),
+            Rect.fromLTWH(drawX, drawY, 256.0, 256.0),
+            Paint()..filterQuality = FilterQuality.medium,
+          );
           tilesDrawn = true;
         }
       }
@@ -497,6 +490,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
         final success = await bleService.sendRawBytes(packet);
         if (!success) break;
+        if (i < totalChunks - 1) {
+          await Future.delayed(const Duration(milliseconds: 3));
+        }
       }
     } catch (_) {
     } finally {
