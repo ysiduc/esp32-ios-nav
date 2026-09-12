@@ -2,7 +2,6 @@ import Flutter
 import UIKit
 import MediaPlayer
 import CallKit
-import Contacts
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -119,12 +118,13 @@ class CallObserverDelegate: NSObject, CXCallObserverDelegate {
 
   func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
     // Cuộc gọi đến và chưa kết nối (đổ chuông)
-    if call.isIncoming && !call.hasConnected && !call.hasEnded {
+    // CXCall không có thuộc tính `isIncoming`, dùng `!call.isOutgoing`
+    if !call.isOutgoing && !call.hasConnected && !call.hasEnded {
       // Tránh gửi trùng lặp cho cùng 1 UUID
       if lastCallUUID == call.uuid { return }
       lastCallUUID = call.uuid
 
-      // Lấy tên người gọi từ danh bạ (nếu có quyền)
+      // Lấy thông tin cuộc gọi đến
       resolveCallerInfo(call: call) { [weak self] info in
         self?.lastCallInfo = info
         self?.onIncomingCall?(info)
@@ -148,40 +148,14 @@ class CallObserverDelegate: NSObject, CXCallObserverDelegate {
     }
   }
 
-  /// Lấy tên người gọi từ Contacts (nếu được cấp quyền)
+  /// Lấy thông tin cuộc gọi đến
   private func resolveCallerInfo(call: CXCall, completion: @escaping ([String: Any]) -> Void) {
-    // CXCall không cung cấp số điện thoại trực tiếp
-    // Thử lấy qua CallKit handle (chỉ available trong CallDirectory Extension)
-    // Fallback: dùng "Cuoc goi den" làm tên mặc định
-
-    let store = CNContactStore()
-    let authStatus = CNContactStore.authorizationStatus(for: .contacts)
-
-    if authStatus == .authorized {
-      // Nếu có quyền contacts, tên sẽ được resolve từ danh bạ
-      // (iOS tự resolve tên khi có handle)
-      completion([
-        "name": "Cuoc goi den",
-        "number": "unknown",
-        "uuid": call.uuid.uuidString
-      ])
-    } else if authStatus == .notDetermined {
-      store.requestAccess(for: .contacts) { granted, _ in
-        DispatchQueue.main.async {
-          completion([
-            "name": "Cuoc goi den",
-            "number": "unknown",
-            "uuid": call.uuid.uuidString
-          ])
-        }
-      }
-    } else {
-      completion([
-        "name": "Cuoc goi den",
-        "number": "unknown",
-        "uuid": call.uuid.uuidString
-      ])
-    }
+    // CXCall trong iOS sandbox không cung cấp số/tên người gọi trực tiếp
+    completion([
+      "name": "Cuoc goi den",
+      "number": "unknown",
+      "uuid": call.uuid.uuidString
+    ])
   }
 }
 
