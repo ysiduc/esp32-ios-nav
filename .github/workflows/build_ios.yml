@@ -8,47 +8,103 @@ on:
 jobs:
   build-ios:
     name: Compile & Package iOS IPA
-    runs-on: macos-14
+    runs-on: macos-15
+    timeout-minutes: 60
+
     steps:
+      # ─── 1. Checkout ────────────────────────────────────────────────────
       - name: 1. Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: 2. Setup Flutter Environment
+      # ─── 2. Setup Xcode (ổn định nhất cho Flutter + native plugins) ─────
+      - name: 2. Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      # ─── 3. Setup Flutter ───────────────────────────────────────────────
+      - name: 3. Setup Flutter (Stable)
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: 3. Enable SwiftPM & Install Dependencies
+      - name: 4. Flutter version info
+        run: |
+          flutter --version
+          flutter doctor -v
+
+      # ─── 5. Install dependencies ────────────────────────────────────────
+      - name: 5. Install Flutter Dependencies
         working-directory: mobile_app
         run: |
-          flutter config --enable-swift-package-manager
+          # Tắt SwiftPM để tránh xung đột với CocoaPods native plugins
+          flutter config --no-enable-swift-package-manager
           flutter pub get
 
-      - name: 4. Build iOS App (Release, No CodeSign)
+      # ─── 6. Install CocoaPods dependencies ──────────────────────────────
+      - name: 6. CocoaPods Install
+        working-directory: mobile_app/ios
+        run: |
+          # Dùng pod install thay vì SwiftPM để đảm bảo maplibre_gl, geolocator, v.v. build đúng
+          pod install --repo-update 2>&1 | tail -20
+
+      # ─── 7. Build iOS Release (no code sign) ────────────────────────────
+      - name: 7. Build iOS Release (No CodeSign)
         working-directory: mobile_app
         run: |
-          flutter build ios --release --no-codesign --verbose
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --no-swift-package-manager \
+            2>&1 | tee build_log.txt || {
+              echo "=== Build failed. Last 100 lines of log ==="
+              tail -100 build_log.txt
+              exit 1
+            }
 
-      - name: 5. Package as IPA Payload
+      # ─── 8. Locate Runner.app ────────────────────────────────────────────
+      - name: 8. Debug - List build output
+        if: always()
+        working-directory: mobile_app
+        run: |
+          echo "=== Contents of build/ios ==="
+          find build/ios -maxdepth 4 -type d 2>/dev/null || echo "build/ios not found"
+
+      # ─── 9. Package as IPA ───────────────────────────────────────────────
+      - name: 9. Package as IPA
         working-directory: mobile_app
         run: |
           rm -rf Payload esp32_nav_app.ipa
-          mkdir -p Payload
-          APP_PATH=$(find build/ios -name "Runner.app" -type d | head -n 1)
-          echo "Found app bundle at: $APP_PATH"
+
+          # flutter build ios --no-codesign output goes to:
+          # build/ios/iphoneos/Runner.app  (device build)
+          APP_PATH=$(find build/ios -name "Runner.app" -type d 2>/dev/null | grep -v "Debug" | head -n 1)
+
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Runner.app not found in build/ios directory!"
-            find build/ -maxdepth 4 || true
+            echo "ERROR: Runner.app not found!"
+            find build/ -maxdepth 5 2>/dev/null
             exit 1
           fi
-          cp -R "$APP_PATH" Payload/
-          zip -r -y -q esp32_nav_app.ipa Payload
-          ls -lh esp32_nav_app.ipa
 
-      - name: 6. Upload IPA as Artifact
+          echo "✅ Found app at: $APP_PATH"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/Runner.app
+          zip -r -y -q esp32_nav_app.ipa Payload/
+          ls -lh esp32_nav_app.ipa
+          echo "✅ IPA created successfully"
+
+      # ─── 10. Upload IPA artifact ─────────────────────────────────────────
+      - name: 10. Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32_nav_ios_ipa
           path: mobile_app/esp32_nav_app.ipa
           retention-days: 14
+
+      # ─── 11. Upload build log nếu lỗi ────────────────────────────────────
+      - name: 11. Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_log
+          path: mobile_app/build_log.txt
+          retention-days: 3
