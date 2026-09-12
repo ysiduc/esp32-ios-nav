@@ -6,6 +6,7 @@ import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/phone_media_service.dart';
+import '../services/phone_call_service.dart';
 
 class EspPreviewScreen extends StatefulWidget {
   const EspPreviewScreen({super.key});
@@ -546,56 +547,154 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             const SizedBox(height: 14),
 
             // Notification Popups Testing
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'KIỂM THỬ THÔNG BÁO (ANCS POPUP)',
-                    style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold),
+            Consumer<PhoneCallService>(
+              builder: (ctx, callService, _) {
+                final isRinging = callService.callStatus == CallStatus.ringing;
+                final isActive = callService.callStatus == CallStatus.active;
+                final hasCall = isRinging || isActive;
+                return Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF131B26),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isRinging
+                          ? const Color(0xFF05FFA1).withAlpha(180)
+                          : isActive
+                              ? Colors.orange.withAlpha(180)
+                              : Colors.white12,
+                      width: hasCall ? 1.5 : 1,
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
-                            foregroundColor: const Color(0xFF05FFA1),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            side: const BorderSide(color: Color(0xFF05FFA1)),
+                      Row(
+                        children: [
+                          const Text(
+                            'THÔNG BÁO (CUỘC GỌI / TIN NHẮN)',
+                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold),
                           ),
-                          icon: const Icon(Icons.phone_in_talk_rounded, size: 18),
-                          label: const Text('Cuộc gọi đến', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          onPressed: _triggerMockCall,
-                        ),
+                          const Spacer(),
+                          if (hasCall)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: isRinging
+                                    ? const Color(0xFF05FFA1).withAlpha(40)
+                                    : Colors.orange.withAlpha(40),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    isRinging ? Icons.phone_callback_rounded : Icons.phone_in_talk_rounded,
+                                    color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
+                                    size: 12,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isRinging ? 'ĐỔ CHUÔNG' : 'ĐANG NGHE',
+                                    style: TextStyle(
+                                      color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFFB800).withAlpha(40),
-                            foregroundColor: const Color(0xFFFFB800),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            side: const BorderSide(color: Color(0xFFFFB800)),
+                      if (hasCall) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withAlpha(8),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          icon: const Icon(Icons.mark_chat_unread_rounded, size: 18),
-                          label: const Text('Tin nhắn SMS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          onPressed: _triggerMockSms,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.person_rounded, color: Colors.white54, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  callService.callerName,
+                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              Text(
+                                callService.callerNumber,
+                                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              ),
+                            ],
+                          ),
                         ),
+                      ],
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
+                                foregroundColor: const Color(0xFF05FFA1),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                side: const BorderSide(color: Color(0xFF05FFA1)),
+                              ),
+                              icon: const Icon(Icons.phone_in_talk_rounded, size: 18),
+                              label: const Text('Test Cuộc gọi', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              onPressed: _triggerMockCall,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFFB800).withAlpha(40),
+                                foregroundColor: const Color(0xFFFFB800),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                side: const BorderSide(color: Color(0xFFFFB800)),
+                              ),
+                              icon: const Icon(Icons.mark_chat_unread_rounded, size: 18),
+                              label: const Text('Test SMS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              onPressed: _triggerMockSms,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red.withAlpha(40),
+                              foregroundColor: Colors.red,
+                              padding: const EdgeInsets.all(10),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              side: const BorderSide(color: Colors.red),
+                            ),
+                            onPressed: () {
+                              final ble = Provider.of<BleService>(ctx, listen: false);
+                              if (ble.isConnected) {
+                                ble.sendRawString('{"type":"CALL_END"}');
+                              }
+                              setState(() {
+                                _showCallPopup = false;
+                                _showSmsPopup = false;
+                              });
+                            },
+                            child: const Icon(Icons.call_end_rounded, size: 18),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
           ],
         ),

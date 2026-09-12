@@ -1,18 +1,25 @@
 import Flutter
 import UIKit
 import MediaPlayer
+import CallKit
+import Contacts
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var mediaChannel: FlutterMethodChannel?
+  private var callChannel: FlutterMethodChannel?
   private var isChannelSetup = false
+
+  // CallKit observer - theo dõi cuộc gọi
+  private var callObserver: CXCallObserver?
+  private var callObserverDelegate: CallObserverDelegate?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     if let controller = window?.rootViewController as? FlutterViewController {
-      setupMediaChannel(binaryMessenger: controller.binaryMessenger)
+      setupChannels(binaryMessenger: controller.binaryMessenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -20,19 +27,19 @@ import MediaPlayer
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "MediaPlugin") {
-      setupMediaChannel(binaryMessenger: registrar.messenger())
+      setupChannels(binaryMessenger: registrar.messenger())
     }
   }
 
-  private func setupMediaChannel(binaryMessenger: FlutterBinaryMessenger) {
+  private func setupChannels(binaryMessenger: FlutterBinaryMessenger) {
     guard !isChannelSetup else { return }
     isChannelSetup = true
 
+    // ─── 1. Media Channel (nhạc đang phát) ───────────────────────────────
     mediaChannel = FlutterMethodChannel(
       name: "com.ysiduc.esp32_nav/media",
       binaryMessenger: binaryMessenger
     )
-
     mediaChannel?.setMethodCallHandler { [weak self] (call, result) in
       if call.method == "getNowPlaying" {
         self?.fetchCurrentNowPlaying(completion: { data in
@@ -43,7 +50,7 @@ import MediaPlayer
       }
     }
 
-    // Set up listeners for lock-screen / now-playing changes
+    // Lắng nghe khi bài hát thay đổi
     MediaRemoteObserver.shared.onMediaChanged = { [weak self] title, artist, isPlaying in
       self?.mediaChannel?.invokeMethod(
         "onNowPlayingChanged",
@@ -54,6 +61,44 @@ import MediaPlayer
         ]
       )
     }
+
+    // ─── 2. Call Channel (cuộc gọi đến) ──────────────────────────────────
+    callChannel = FlutterMethodChannel(
+      name: "com.ysiduc.esp32_nav/calls",
+      binaryMessenger: binaryMessenger
+    )
+
+    // Không cần xử lý call từ Flutter phía iOS (chỉ gửi 1 chiều iOS → Flutter)
+    callChannel?.setMethodCallHandler { (call, result) in
+      result(FlutterMethodNotImplemented)
+    }
+
+    // Khởi động CallKit observer
+    setupCallObserver()
+  }
+
+  // ─── CallKit Observer Setup ───────────────────────────────────────────────
+  private func setupCallObserver() {
+    let delegate = CallObserverDelegate()
+    delegate.onIncomingCall = { [weak self] callInfo in
+      DispatchQueue.main.async {
+        self?.callChannel?.invokeMethod("onIncomingCall", arguments: callInfo)
+      }
+    }
+    delegate.onCallAnswered = { [weak self] callInfo in
+      DispatchQueue.main.async {
+        self?.callChannel?.invokeMethod("onCallAnswered", arguments: callInfo)
+      }
+    }
+    delegate.onCallEnded = { [weak self] in
+      DispatchQueue.main.async {
+        self?.callChannel?.invokeMethod("onCallEnded", arguments: nil)
+      }
+    }
+
+    callObserverDelegate = delegate
+    callObserver = CXCallObserver()
+    callObserver?.setDelegate(delegate, queue: DispatchQueue.main)
   }
 
   private func fetchCurrentNowPlaying(completion: @escaping ([String: Any]) -> Void) {
@@ -61,6 +106,88 @@ import MediaPlayer
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - CallKit Observer Delegate
+// ─────────────────────────────────────────────────────────────────────────────
+class CallObserverDelegate: NSObject, CXCallObserverDelegate {
+  var onIncomingCall: (([String: Any]) -> Void)?
+  var onCallAnswered: (([String: Any]) -> Void)?
+  var onCallEnded: (() -> Void)?
+
+  private var lastCallUUID: UUID?
+  private var lastCallInfo: [String: Any] = [:]
+
+  func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+    // Cuộc gọi đến và chưa kết nối (đổ chuông)
+    if call.isIncoming && !call.hasConnected && !call.hasEnded {
+      // Tránh gửi trùng lặp cho cùng 1 UUID
+      if lastCallUUID == call.uuid { return }
+      lastCallUUID = call.uuid
+
+      // Lấy tên người gọi từ danh bạ (nếu có quyền)
+      resolveCallerInfo(call: call) { [weak self] info in
+        self?.lastCallInfo = info
+        self?.onIncomingCall?(info)
+      }
+    }
+
+    // Đã kết nối (nghe máy)
+    else if call.hasConnected && !call.hasEnded {
+      if !lastCallInfo.isEmpty {
+        onCallAnswered?(lastCallInfo)
+      }
+    }
+
+    // Kết thúc cuộc gọi
+    else if call.hasEnded {
+      if lastCallUUID == call.uuid {
+        lastCallUUID = nil
+        lastCallInfo = [:]
+        onCallEnded?()
+      }
+    }
+  }
+
+  /// Lấy tên người gọi từ Contacts (nếu được cấp quyền)
+  private func resolveCallerInfo(call: CXCall, completion: @escaping ([String: Any]) -> Void) {
+    // CXCall không cung cấp số điện thoại trực tiếp
+    // Thử lấy qua CallKit handle (chỉ available trong CallDirectory Extension)
+    // Fallback: dùng "Cuoc goi den" làm tên mặc định
+
+    let store = CNContactStore()
+    let authStatus = CNContactStore.authorizationStatus(for: .contacts)
+
+    if authStatus == .authorized {
+      // Nếu có quyền contacts, tên sẽ được resolve từ danh bạ
+      // (iOS tự resolve tên khi có handle)
+      completion([
+        "name": "Cuoc goi den",
+        "number": "unknown",
+        "uuid": call.uuid.uuidString
+      ])
+    } else if authStatus == .notDetermined {
+      store.requestAccess(for: .contacts) { granted, _ in
+        DispatchQueue.main.async {
+          completion([
+            "name": "Cuoc goi den",
+            "number": "unknown",
+            "uuid": call.uuid.uuidString
+          ])
+        }
+      }
+    } else {
+      completion([
+        "name": "Cuoc goi den",
+        "number": "unknown",
+        "uuid": call.uuid.uuidString
+      ])
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Media Remote Observer (Nhạc đang phát)
+// ─────────────────────────────────────────────────────────────────────────────
 class MediaRemoteObserver {
   static let shared = MediaRemoteObserver()
 

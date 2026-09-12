@@ -4,8 +4,8 @@ import 'screens/home_screen.dart';
 import 'services/ble_service.dart';
 import 'services/esp_stream_service.dart';
 import 'services/navigation_manager.dart';
-
 import 'services/phone_media_service.dart';
+import 'services/phone_call_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +24,14 @@ class Esp32NavApp extends StatelessWidget {
         ),
         ChangeNotifierProvider<PhoneMediaService>(
           create: (_) => PhoneMediaService(),
+        ),
+        // PhoneCallService cần BleService để gửi BLE
+        ChangeNotifierProxyProvider<BleService, PhoneCallService>(
+          create: (ctx) => PhoneCallService(
+            bleService: Provider.of<BleService>(ctx, listen: false),
+          ),
+          update: (ctx, bleService, prev) =>
+              prev ?? PhoneCallService(bleService: bleService),
         ),
         ChangeNotifierProxyProvider2<BleService, PhoneMediaService, NavigationManager>(
           create: (ctx) => NavigationManager(

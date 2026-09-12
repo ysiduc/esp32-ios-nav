@@ -167,6 +167,22 @@ public:
     _needFullRedraw = true;
   }
 
+  void dismissAlert() {
+    if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+      _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _needFullRedraw = true;
+    }
+  }
+
+  void showCallActiveAlert(const char* callerName) {
+    // Re-use call popup with shorter duration - shows "Dang nghe"
+    strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
+    snprintf(_popupData.message, sizeof(_popupData.message), "Dang nghe may");
+    _popupData.expireMillis = millis() + 5000;
+    _currentState = STATE_POPUP_CALL;
+    _needFullRedraw = true;
+  }
+
   void update(bool isStreamingActive = false) {
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;

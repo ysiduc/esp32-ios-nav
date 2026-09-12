@@ -170,6 +170,18 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         popupExpire = millis() + 8000;
         display.showSmsAlert(sender, content);
         return;
+      } else if (typeStr == "CALL_END") {
+        popupType = "NONE";
+        popupExpire = 0;
+        display.dismissAlert();
+        return;
+      } else if (typeStr == "CALL_ACTIVE") {
+        const char* name = doc["title"] | "Dang nghe may";
+        popupTitle = name;
+        popupType = "CALL_ACTIVE";
+        popupExpire = millis() + 5000;
+        display.showCallActiveAlert(name);
+        return;
       }
 
       curTurn = doc["turn"] | 0;
