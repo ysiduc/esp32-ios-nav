@@ -2,6 +2,7 @@
 #define DISPLAY_UI_H
 
 #include <Arduino.h>
+#include <SPIFFS.h>
 
 #if defined(DISPLAY_OLED_SSD1306)
 #include <U8g2lib.h>
@@ -11,10 +12,13 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #elif defined(DISPLAY_TFT_ST7789)
 #include <TFT_eSPI.h>
 #include <U8g2_for_TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 extern U8g2_for_TFT_eSPI u8f;
 
 extern TFT_eSPI tft;
 #endif
+
+#include "icons.h"
 
 enum DisplayState {
   STATE_PAIRING_WAIT,
@@ -152,9 +156,14 @@ public:
     }
   }
 
-  void showCallAlert(const char* callerName) {
+  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
-    _popupData.expireMillis = millis() + 8000;
+    if (phoneOrMsg != nullptr && phoneOrMsg[0] != '\0') {
+      strncpy(_popupData.message, phoneOrMsg, sizeof(_popupData.message) - 1);
+    } else {
+      _popupData.message[0] = '\0';
+    }
+    _popupData.expireMillis = millis() + 10000;
     _currentState = STATE_POPUP_CALL;
     _needFullRedraw = true;
   }
@@ -174,12 +183,7 @@ public:
     }
   }
 
-  void showCallActiveAlert(const char* callerName) {
-    // Re-use call popup with shorter duration - shows "Dang nghe"
-    strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
-    snprintf(_popupData.message, sizeof(_popupData.message), "Dang nghe may");
-    _popupData.expireMillis = millis() + 5000;
-    _currentState = STATE_POPUP_CALL;
+  void forceRedraw() {
     _needFullRedraw = true;
   }
 
@@ -233,6 +237,23 @@ private:
   }
 
   void _drawPairingScreenTft() {
+    if (SPIFFS.exists("/bg_wait.jpg")) {
+      TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+      // Top status bar overlay
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawString("* ysiduc", 10, 4, 2);
+      char batStr[16];
+      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+      tft.drawString(batStr, 270, 4, 2);
+
+      // Bottom Glass Banner
+      uint16_t cBarBg = tft.color565(11, 17, 26);
+      tft.fillRoundRect(20, 202, 280, 32, 8, cBarBg);
+      tft.drawRoundRect(20, 202, 280, 32, 8, TFT_CYAN);
+      _drawCentreUtf8String("CHỜ KẾT NỐI BLUETOOTH...", 160, 208, TFT_CYAN, cBarBg);
+      return;
+    }
+
     tft.fillScreen(TFT_BLACK);
 
     // Top Status bar (Header: * ysiduc | Current Clock | Battery)
@@ -345,6 +366,12 @@ private:
 
   /// Draw High-Definition Realistic Standby Vector Map when JPEG stream is inactive
   void _renderStandbyVectorMap() {
+    if (!_navData.isNavigating && SPIFFS.exists("/bg_map.jpg")) {
+      TJpgDec.drawFsJpg(6, 26, "/bg_map.jpg");
+      tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
+      return;
+    }
+
     uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
     uint16_t cAsphalt = tft.color565(26, 36, 50);   // Real Road Asphalt Casing
     uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Neon Cyan Route
@@ -480,9 +507,12 @@ private:
       uint16_t cCallBg = tft.color565(2, 44, 34);
       tft.fillRoundRect(15, 20, 290, 200, 16, cCallBg);
       tft.drawRoundRect(15, 20, 290, 200, 16, TFT_GREEN);
-      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 35, TFT_GREEN, cCallBg);
-      _drawCentreUtf8String(_popupData.title, 160, 95, TFT_WHITE, cCallBg);
-      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 165, TFT_CYAN, cCallBg);
+      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 32, TFT_GREEN, cCallBg);
+      _drawCentreUtf8String(_popupData.title, 160, 80, TFT_WHITE, cCallBg);
+      if (_popupData.message[0] != '\0') {
+        _drawCentreUtf8String(_popupData.message, 160, 125, TFT_YELLOW, cCallBg);
+      }
+      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 175, TFT_CYAN, cCallBg);
       return;
     }
 

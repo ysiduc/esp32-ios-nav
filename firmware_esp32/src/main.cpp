@@ -3,6 +3,7 @@
 #include <NimBLEDevice.h>
 #include "display_ui.h"
 #include "ams_service.h"
+#include "ancs_service.h"
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -56,6 +57,13 @@ String popupMsg = "";
 String popupType = "NONE";
 unsigned long popupExpire = 0;
 
+// Combined GAP event handler for AMS & ANCS
+static int combinedGapHandler(ble_gap_event *event, void *arg) {
+  AppleMediaService::handleGapEvent(event, arg);
+  AppleNotificationService::handleGapEvent(event, arg);
+  return 0;
+}
+
 // =========================================================================
 // 1. BLE Server Callbacks
 // =========================================================================
@@ -71,11 +79,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
     AppleMediaService::connHandle = desc->conn_handle;
     AppleMediaService::lastCheckTime = millis();
+    AppleNotificationService::connHandle = desc->conn_handle;
+    AppleNotificationService::lastCheckTime = millis();
 
-    // If already encrypted/bonded, immediately trigger AMS
+    // If already encrypted/bonded, immediately trigger AMS & ANCS discovery
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting AMS discovery...");
+      Serial.println("[BLE] Link already encrypted. Starting AMS & ANCS discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
+      AppleNotificationService::onEncrypted(desc->conn_handle);
     } else {
       // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
       int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
@@ -91,6 +102,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
       AppleMediaService::onEncrypted(desc->conn_handle);
+      AppleNotificationService::onEncrypted(desc->conn_handle);
     }
   }
 
@@ -98,6 +110,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnected = false;
     display.setBleConnected(false);
     AppleMediaService::onDisconnected();
+    AppleNotificationService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -113,38 +126,69 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) return;
 
-    // 1. Check for Binary Chunked JPEG Packet (Magic 0xAA 0xBB from iPhone Stream)
-    if (value.length() >= 5 && (uint8_t)value[0] == 0xAA && (uint8_t)value[1] == 0xBB) {
-      uint8_t frameId = (uint8_t)value[2];
-      uint8_t totalChunks = (uint8_t)value[3];
-      uint8_t chunkIdx = (uint8_t)value[4];
+    // 1. Check for Binary Chunked JPEG Packet:
+    // Magic 0xAA 0xBB: Live streaming JPEG frame (RAM)
+    // Magic 0xAA 0xBC: Uploading custom background for Bluetooth pairing screen (/bg_wait.jpg)
+    // Magic 0xAA 0xBD: Uploading custom background for map waiting/idle screen (/bg_map.jpg)
+    if (value.length() >= 5 && (uint8_t)value[0] == 0xAA) {
+      uint8_t magic2 = (uint8_t)value[1];
+      if (magic2 == 0xBB) {
+        uint8_t frameId = (uint8_t)value[2];
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
 
-      if (chunkIdx == 0) {
-        currentBleFrameId = frameId;
-        expectedBleChunkIdx = 0;
-        bleJpegBytesReceived = 0;
-      }
-
-      if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
-        size_t payloadLen = value.length() - 5;
-        if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
-          memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
-          bleJpegBytesReceived += payloadLen;
-          expectedBleChunkIdx++;
+        if (chunkIdx == 0) {
+          currentBleFrameId = frameId;
+          expectedBleChunkIdx = 0;
+          bleJpegBytesReceived = 0;
         }
 
-        if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
-          // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
-          if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
-            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-            memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
-            activeRenderBuf = nextBuf;
-            activeRenderBufLen = bleJpegBytesReceived;
-            newFrameAvailable = true;
+        if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
+          size_t payloadLen = value.length() - 5;
+          if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
+            memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+            bleJpegBytesReceived += payloadLen;
+            expectedBleChunkIdx++;
+          }
+
+          if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
+            // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
+            if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
+              uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+              memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
+              activeRenderBuf = nextBuf;
+              activeRenderBufLen = bleJpegBytesReceived;
+              newFrameAvailable = true;
+            }
           }
         }
+        return;
+      } else if (magic2 == 0xBC || magic2 == 0xBD) {
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
+        size_t payloadLen = value.length() - 5;
+        const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg" : "/bg_map.jpg";
+
+        static File bgUploadFile;
+        if (chunkIdx == 0) {
+          if (SPIFFS.exists(targetPath)) SPIFFS.remove(targetPath);
+          bgUploadFile = SPIFFS.open(targetPath, FILE_WRITE);
+          Serial.printf("[SPIFFS] Started uploading %s (%d chunks)\n", targetPath, totalChunks);
+        }
+
+        if (bgUploadFile) {
+          bgUploadFile.write((const uint8_t*)value.data() + 5, payloadLen);
+        }
+
+        if (chunkIdx == totalChunks - 1) {
+          if (bgUploadFile) {
+            bgUploadFile.close();
+            Serial.printf("[SPIFFS] Finished uploading %s! Saved to flash.\n", targetPath);
+          }
+          display.forceRedraw();
+        }
+        return;
       }
-      return;
     }
 
     // 2. JSON Notification or Navigation Telemetry
@@ -153,13 +197,23 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
     if (!error) {
       String typeStr = String(doc["type"] | "");
-      if (typeStr == "CALL") {
+      if (typeStr == "DEL_BG") {
+        String target = String(doc["target"] | "all");
+        if (target == "wait" || target == "all") {
+          if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
+        }
+        if (target == "map" || target == "all") {
+          if (SPIFFS.exists("/bg_map.jpg")) SPIFFS.remove("/bg_map.jpg");
+        }
+        display.forceRedraw();
+        return;
+      } else if (typeStr == "CALL") {
         const char* name = doc["title"] | "Cuoc goi den";
         popupTitle = name;
         popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
         popupType = "CALL";
         popupExpire = millis() + 10000;
-        display.showCallAlert(name);
+        display.showCallAlert(name, popupMsg.c_str());
         return;
       } else if (typeStr == "SMS") {
         const char* sender = doc["title"] | "Tin nhan";
@@ -180,7 +234,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         popupTitle = name;
         popupType = "CALL_ACTIVE";
         popupExpire = millis() + 5000;
-        display.showCallActiveAlert(name);
+        display.showCallAlert(name, "Dang nghe may");
         return;
       }
 
@@ -231,6 +285,13 @@ void setup() {
   delay(200);
   Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUC ST7789 20 FPS) ===");
 
+  // 0. Mount SPIFFS Filesystem for Custom Background Images
+  if (!SPIFFS.begin(true)) {
+    Serial.println("[SPIFFS] Mount failed, formatted partition.");
+  } else {
+    Serial.println("[SPIFFS] Filesystem mounted successfully.");
+  }
+
   // 1. Start Display
   display.init();
   #if defined(DISPLAY_TFT_ST7789)
@@ -246,8 +307,9 @@ void setup() {
   // Security Auth & Bonding for iOS (Required by Apple Media Service)
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setCustomGapHandler(AppleMediaService::handleGapEvent);
+  NimBLEDevice::setCustomGapHandler(combinedGapHandler);
   AppleMediaService::init();
+  AppleNotificationService::init();
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -269,9 +331,10 @@ void setup() {
   advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setAdvertisementData(advData);
 
-  // Scan Response Data with Apple Media Service Solicitation (18 bytes)
+  // Scan Response Data with Apple Notification Center Service (ANCS) Solicitation (18 bytes)
+  // This triggers the native iOS prompt: "Allow ESP32-S3 Navi to display iPhone notifications?"
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.addData((char*)amsSolicitData, sizeof(amsSolicitData));
+  scanResponseData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -279,7 +342,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + Apple Media Service!");
+  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS!");
 }
 
 void loop() {
@@ -298,8 +361,9 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
 
-  // 3. Periodic check for Apple Media Service discovery
+  // 3. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
+  AppleNotificationService::checkPeriodic();
 
   delay(1);
 }

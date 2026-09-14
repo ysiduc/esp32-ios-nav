@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
 import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/navigation_manager.dart';
@@ -20,18 +23,26 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
   bool _showCallPopup = false;
   bool _showSmsPopup = false;
-  final String _callerName = 'Nguyễn Văn A';
-  final String _smsSender = 'Mẹ';
-  final String _smsContent = 'Con ve nha an com nhe!';
+  final TextEditingController _callerNameCtrl = TextEditingController(text: 'Mẹ');
+  final TextEditingController _callerNumCtrl = TextEditingController(text: '0912 345 678');
+  final TextEditingController _smsSenderCtrl = TextEditingController(text: 'Zalo: Anh Nam');
+  final TextEditingController _smsMsgCtrl = TextEditingController(text: 'Bạn đang ở đâu đấy?');
+
   Timer? _popupDismissTimer;
   Timer? _autoStartTimer;
   Timer? _previewSyncTimer;
+
+  // Background Upload State
+  bool _isUploadingBg = false;
+  double _uploadProgress = 0.0;
+  String _uploadStatusText = '';
+  Uint8List? _waitImagePreview;
+  Uint8List? _mapImagePreview;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-
       // Auto-start headless 20-30 FPS JPEG streaming immediately
       _autoStartTimer = Timer(const Duration(milliseconds: 200), () {
         if (mounted) {
@@ -54,38 +65,218 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     });
   }
 
-  void _triggerMockCall() {
+  void _triggerCall({String? name, String? number}) {
     _popupDismissTimer?.cancel();
+    final callName = name ?? _callerNameCtrl.text.trim();
+    final callNum = number ?? _callerNumCtrl.text.trim();
+
     setState(() {
       _showCallPopup = true;
       _showSmsPopup = false;
     });
 
-    final bleService = Provider.of<BleService>(context, listen: false);
-    if (bleService.isConnected) {
-      bleService.sendRawString('{"type":"CALL","title":"Nguyen Van A","msg":"Cuoc goi den tu iPhone"}');
-    }
+    final callService = Provider.of<PhoneCallService>(context, listen: false);
+    callService.triggerMockCall(name: callName, number: callNum);
 
-    _popupDismissTimer = Timer(const Duration(seconds: 6), () {
+    _popupDismissTimer = Timer(const Duration(seconds: 10), () {
       if (mounted) setState(() => _showCallPopup = false);
     });
   }
 
-  void _triggerMockSms() {
+  void _dismissCall() {
     _popupDismissTimer?.cancel();
+    setState(() => _showCallPopup = false);
+    final bleService = Provider.of<BleService>(context, listen: false);
+    if (bleService.isConnected) {
+      bleService.sendRawString('{"type":"CALL_END"}');
+    }
+  }
+
+  void _triggerSms({String? sender, String? message}) {
+    _popupDismissTimer?.cancel();
+    final sName = sender ?? _smsSenderCtrl.text.trim();
+    final sMsg = message ?? _smsMsgCtrl.text.trim();
+
     setState(() {
       _showSmsPopup = true;
       _showCallPopup = false;
     });
 
-    final bleService = Provider.of<BleService>(context, listen: false);
-    if (bleService.isConnected) {
-      bleService.sendRawString('{"type":"SMS","title":"Me","msg":"Con ve nha an com nhe!"}');
-    }
+    final callService = Provider.of<PhoneCallService>(context, listen: false);
+    callService.triggerMockSms(sender: sName, message: sMsg);
 
-    _popupDismissTimer = Timer(const Duration(seconds: 5), () {
+    _popupDismissTimer = Timer(const Duration(seconds: 6), () {
       if (mounted) setState(() => _showSmsPopup = false);
     });
+  }
+
+  Future<void> _pickAndUploadImage({required bool isWaitScreen}) async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 95);
+    if (picked == null) return;
+
+    final bytes = await picked.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể giải mã file ảnh!'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+
+    final int targetW = isWaitScreen ? 320 : 144;
+    final int targetH = isWaitScreen ? 240 : 208;
+    final double targetRatio = targetW / targetH;
+    final double currentRatio = decoded.width / decoded.height;
+
+    int cropW = decoded.width;
+    int cropH = decoded.height;
+    int cropX = 0;
+    int cropY = 0;
+
+    if (currentRatio > targetRatio) {
+      cropW = (decoded.height * targetRatio).round();
+      cropX = (decoded.width - cropW) ~/ 2;
+    } else {
+      cropH = (decoded.width / targetRatio).round();
+      cropY = (decoded.height - cropH) ~/ 2;
+    }
+
+    final cropped = img.copyCrop(decoded, x: cropX, y: cropY, width: cropW, height: cropH);
+    final resized = img.copyResize(cropped, width: targetW, height: targetH, interpolation: img.Interpolation.linear);
+    final jpegBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 82));
+
+    setState(() {
+      if (isWaitScreen) {
+        _waitImagePreview = jpegBytes;
+      } else {
+        _mapImagePreview = jpegBytes;
+      }
+    });
+
+    await _sendImageToEsp32(jpegBytes: jpegBytes, isWaitScreen: isWaitScreen);
+  }
+
+  Future<void> _sendImageToEsp32({required Uint8List jpegBytes, required bool isWaitScreen}) async {
+    final bleService = Provider.of<BleService>(context, listen: false);
+    final streamService = Provider.of<EspStreamService>(context, listen: false);
+
+    if (!bleService.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vui lòng kết nối ESP32 qua Bluetooth trước!'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    final bool wasStreaming = streamService.isStreaming;
+    if (wasStreaming) {
+      streamService.stopStreaming();
+    }
+
+    setState(() {
+      _isUploadingBg = true;
+      _uploadProgress = 0.0;
+      _uploadStatusText = 'Đang tải ảnh (${(jpegBytes.length / 1024).toStringAsFixed(1)} KB)...';
+    });
+
+    final int chunkSize = bleService.safeChunkSize;
+    final int totalLen = jpegBytes.length;
+    final int totalChunks = (totalLen / chunkSize).ceil();
+    final int magic2 = isWaitScreen ? 0xBC : 0xBD;
+
+    bool uploadSuccess = true;
+
+    for (int i = 0; i < totalChunks; i++) {
+      if (!mounted || !bleService.isConnected) {
+        uploadSuccess = false;
+        break;
+      }
+
+      final start = i * chunkSize;
+      final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
+      final slice = jpegBytes.sublist(start, end);
+
+      // Packet: [0xAA, magic2, 0, totalChunks, chunkIdx, ...slice]
+      final packet = Uint8List(5 + slice.length);
+      packet[0] = 0xAA;
+      packet[1] = magic2;
+      packet[2] = 0;
+      packet[3] = totalChunks;
+      packet[4] = i;
+      packet.setRange(5, 5 + slice.length, slice);
+
+      final success = await bleService.sendRawBytes(packet);
+      if (!success) {
+        uploadSuccess = false;
+        break;
+      }
+
+      setState(() {
+        _uploadProgress = (i + 1) / totalChunks;
+        _uploadStatusText = 'Đang nạp Flash: ${((i + 1) / totalChunks * 100).toInt()}% (${i + 1}/$totalChunks)';
+      });
+
+      await Future.delayed(const Duration(milliseconds: 15));
+    }
+
+    if (wasStreaming && mounted) {
+      streamService.startStreaming();
+    }
+
+    if (mounted) {
+      setState(() {
+        _isUploadingBg = false;
+      });
+
+      if (uploadSuccess) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isWaitScreen
+                  ? '✓ Đã lưu ảnh màn chờ vào Flash ESP32 thành công!'
+                  : '✓ Đã lưu ảnh màn Map vào Flash ESP32 thành công!',
+            ),
+            backgroundColor: const Color(0xFF05FFA1),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Lỗi gửi ảnh sang ESP32!'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteBgImage({required bool isWaitScreen}) async {
+    final bleService = Provider.of<BleService>(context, listen: false);
+    if (!bleService.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vui lòng kết nối ESP32 qua Bluetooth!'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    final target = isWaitScreen ? 'wait' : 'map';
+    await bleService.sendRawString('{"type":"DEL_BG","target":"$target"}');
+
+    setState(() {
+      if (isWaitScreen) {
+        _waitImagePreview = null;
+      } else {
+        _mapImagePreview = null;
+      }
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isWaitScreen ? 'Đã xóa ảnh màn chờ, khôi phục mặc định.' : 'Đã xóa ảnh màn Map, khôi phục mặc định.'),
+          backgroundColor: Colors.blueAccent,
+        ),
+      );
+    }
   }
 
   @override
@@ -93,6 +284,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     _autoStartTimer?.cancel();
     _previewSyncTimer?.cancel();
     _popupDismissTimer?.cancel();
+    _callerNameCtrl.dispose();
+    _callerNumCtrl.dispose();
+    _smsSenderCtrl.dispose();
+    _smsMsgCtrl.dispose();
     super.dispose();
   }
 
@@ -102,6 +297,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final bleService = context.watch<BleService>();
     final streamService = context.watch<EspStreamService>();
     final mediaService = context.watch<PhoneMediaService>();
+    final phoneCallService = context.watch<PhoneCallService>();
+
+    final isCallActive = _showCallPopup || phoneCallService.isRinging;
+    final isSmsActive = _showSmsPopup || phoneCallService.showSmsNotification;
+    final activeCallerName = phoneCallService.isRinging ? phoneCallService.callerName : _callerNameCtrl.text;
+    final activeCallerNum = phoneCallService.isRinging ? phoneCallService.phoneNumber : _callerNumCtrl.text;
+    final activeSmsSender = phoneCallService.showSmsNotification ? phoneCallService.lastSmsSender : _smsSenderCtrl.text;
+    final activeSmsMsg = phoneCallService.showSmsNotification ? phoneCallService.lastSmsMessage : _smsMsgCtrl.text;
 
     final userLoc = navManager.currentLocation ??
         (navManager.activeRoute?.polylinePoints.isNotEmpty == true
@@ -331,10 +534,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
                     // Main Split Screen Body (50% Map Zoom x16 | 50% HUD Cards)
                     Expanded(
-                      child: _showCallPopup
-                          ? _buildCallPopup()
-                          : _showSmsPopup
-                              ? _buildSmsPopup()
+                      child: isCallActive
+                          ? _buildCallPopup(activeCallerName, activeCallerNum)
+                          : isSmsActive
+                              ? _buildSmsPopup(activeSmsSender, activeSmsMsg)
                               : _buildSplitView(navManager, streamService, userLoc),
                     ),
                   ],
@@ -546,155 +749,382 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             ),
             const SizedBox(height: 14),
 
-            // Notification Popups Testing
-            Consumer<PhoneCallService>(
-              builder: (ctx, callService, _) {
-                final isRinging = callService.callStatus == CallStatus.ringing;
-                final isActive = callService.callStatus == CallStatus.active;
-                final hasCall = isRinging || isActive;
-                return Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF131B26),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: isRinging
-                          ? const Color(0xFF05FFA1).withAlpha(180)
-                          : isActive
-                              ? Colors.orange.withAlpha(180)
-                              : Colors.white12,
-                      width: hasCall ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            // -------------------------------------------------------------
+            // CÀI ĐẶT ẢNH NỀN ESP32 (LƯU VĨNH VIỄN VÀO FLASH SPIFFS)
+            // -------------------------------------------------------------
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131B26),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
                     children: [
-                      Row(
+                      Icon(Icons.photo_library_rounded, color: Color(0xFF00F0FF), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'CÀI ĐẶT HÌNH NỀN TÙY CHỌN (FLASH ESP32)',
+                        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Ảnh được nạp và lưu vĩnh viễn vào bộ nhớ Flash SPIFFS của ESP32 đến khi bạn thay mới.',
+                    style: TextStyle(color: Colors.white60, fontSize: 11),
+                  ),
+                  const SizedBox(height: 12),
+
+                  if (_isUploadingBg) ...[
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF00F0FF)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'THÔNG BÁO (CUỘC GỌI / TIN NHẮN)',
-                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(_uploadStatusText, style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 12, fontWeight: FontWeight.bold)),
+                              Text('${(_uploadProgress * 100).toInt()}%', style: const TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold)),
+                            ],
                           ),
-                          const Spacer(),
-                          if (hasCall)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: isRinging
-                                    ? const Color(0xFF05FFA1).withAlpha(40)
-                                    : Colors.orange.withAlpha(40),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    isRinging ? Icons.phone_callback_rounded : Icons.phone_in_talk_rounded,
-                                    color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
-                                    size: 12,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    isRinging ? 'ĐỔ CHUÔNG' : 'ĐANG NGHE',
-                                    style: TextStyle(
-                                      color: isRinging ? const Color(0xFF05FFA1) : Colors.orange,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            value: _uploadProgress,
+                            backgroundColor: Colors.white12,
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F0FF)),
+                          ),
                         ],
                       ),
-                      if (hasCall) ...[
-                        const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                  ],
+
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 1. Ảnh Ngang Màn Chờ (320x240)
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: Colors.white.withAlpha(8),
-                            borderRadius: BorderRadius.circular(8),
+                            color: const Color(0xFF0B111A),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white12),
                           ),
-                          child: Row(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Icon(Icons.person_rounded, color: Colors.white54, size: 16),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  callService.callerName,
-                                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                              const Text('Ảnh Ngang (Màn Chờ)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 2),
+                              const Text('320 x 240 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                              const SizedBox(height: 8),
+                              AspectRatio(
+                                aspectRatio: 320 / 240,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black26,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: _waitImagePreview != null
+                                      ? ClipRRect(
+                                          borderRadius: BorderRadius.circular(7),
+                                          child: Image.memory(_waitImagePreview!, fit: BoxFit.cover),
+                                        )
+                                      : const Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(Icons.wallpaper_rounded, color: Colors.white38, size: 28),
+                                            SizedBox(height: 4),
+                                            Text('Màn chờ kết nối', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                          ],
+                                        ),
                                 ),
                               ),
-                              Text(
-                                callService.callerNumber,
-                                style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF00F0FF),
+                                    foregroundColor: Colors.black,
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  ),
+                                  icon: const Icon(Icons.file_upload_outlined, size: 16),
+                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  onPressed: _isUploadingBg ? null : () => _pickAndUploadImage(isWaitScreen: true),
+                                ),
+                              ),
+                              TextButton(
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                onPressed: _isUploadingBg ? null : () => _deleteBgImage(isWaitScreen: true),
+                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Colors.redAccent, fontSize: 10)),
                               ),
                             ],
                           ),
                         ),
-                      ],
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
-                                foregroundColor: const Color(0xFF05FFA1),
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                side: const BorderSide(color: Color(0xFF05FFA1)),
+                      ),
+                      const SizedBox(width: 10),
+
+                      // 2. Ảnh Dọc Màn Map Chờ (144x208)
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0B111A),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Text('Ảnh Dọc (Màn Map)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 2),
+                              const Text('144 x 208 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                              const SizedBox(height: 8),
+                              AspectRatio(
+                                aspectRatio: 144 / 208,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black26,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.white24),
+                                  ),
+                                  child: _mapImagePreview != null
+                                      ? ClipRRect(
+                                          borderRadius: BorderRadius.circular(7),
+                                          child: Image.memory(_mapImagePreview!, fit: BoxFit.cover),
+                                        )
+                                      : const Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(Icons.map_outlined, color: Colors.white38, size: 28),
+                                            SizedBox(height: 4),
+                                            Text('Chờ xuất phát', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                          ],
+                                        ),
+                                ),
                               ),
-                              icon: const Icon(Icons.phone_in_talk_rounded, size: 18),
-                              label: const Text('Test Cuộc gọi', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                              onPressed: _triggerMockCall,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFFFB800).withAlpha(40),
-                                foregroundColor: const Color(0xFFFFB800),
-                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                side: const BorderSide(color: Color(0xFFFFB800)),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF05FFA1),
+                                    foregroundColor: Colors.black,
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  ),
+                                  icon: const Icon(Icons.file_upload_outlined, size: 16),
+                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  onPressed: _isUploadingBg ? null : () => _pickAndUploadImage(isWaitScreen: false),
+                                ),
                               ),
-                              icon: const Icon(Icons.mark_chat_unread_rounded, size: 18),
-                              label: const Text('Test SMS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                              onPressed: _triggerMockSms,
-                            ),
+                              TextButton(
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                onPressed: _isUploadingBg ? null : () => _deleteBgImage(isWaitScreen: false),
+                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Colors.redAccent, fontSize: 10)),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red.withAlpha(40),
-                              foregroundColor: Colors.red,
-                              padding: const EdgeInsets.all(10),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              side: const BorderSide(color: Colors.red),
-                            ),
-                            onPressed: () {
-                              final ble = Provider.of<BleService>(ctx, listen: false);
-                              if (ble.isConnected) {
-                                ble.sendRawString('{"type":"CALL_END"}');
-                              }
-                              setState(() {
-                                _showCallPopup = false;
-                                _showSmsPopup = false;
-                              });
-                            },
-                            child: const Icon(Icons.call_end_rounded, size: 18),
-                          ),
-                        ],
+                        ),
                       ),
                     ],
                   ),
-                );
-              },
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // -------------------------------------------------------------
+            // THÔNG BÁO CUỘC GỌI & TIN NHẮN (ANCS)
+            // -------------------------------------------------------------
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131B26),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.notifications_active_rounded, color: Color(0xFFFFB800), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'THÔNG BÁO CUỘC GỌI & TIN NHẮN (ANCS)',
+                        style: TextStyle(color: Color(0xFFFFB800), fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // ANCS Setup Guide
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F1B2A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.info_outline_rounded, color: Color(0xFF00F0FF), size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Để iPhone tự động gửi tên người gọi & tin nhắn thật đến ESP32:\n'
+                            '1. Mở Cài đặt iPhone ➔ Bluetooth\n'
+                            '2. Bấm chữ (i) bên cạnh "ESP32-S3 Navi"\n'
+                            '3. BẬT mục "Chia sẻ thông báo hệ thống" (Share System Notifications).',
+                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, height: 1.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Call Controls
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: TextField(
+                          controller: _callerNameCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Tên người gọi',
+                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 4,
+                        child: TextField(
+                          controller: _callerNumCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Số điện thoại',
+                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
+                            foregroundColor: const Color(0xFF05FFA1),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            side: const BorderSide(color: Color(0xFF05FFA1)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          icon: const Icon(Icons.phone_in_talk_rounded, size: 16),
+                          label: const Text('Thử gọi đến', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          onPressed: () => _triggerCall(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          side: const BorderSide(color: Colors.redAccent),
+                          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.call_end_rounded, size: 16),
+                        label: const Text('Tắt máy', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        onPressed: _dismissCall,
+                      ),
+                    ],
+                  ),
+
+                  const Divider(color: Colors.white12, height: 20),
+
+                  // SMS Controls
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: TextField(
+                          controller: _smsSenderCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Người gửi SMS/Zalo',
+                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 5,
+                        child: TextField(
+                          controller: _smsMsgCtrl,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Nội dung tin nhắn',
+                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFB800).withAlpha(40),
+                        foregroundColor: const Color(0xFFFFB800),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        side: const BorderSide(color: Color(0xFFFFB800)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.mark_chat_unread_rounded, size: 16),
+                      label: const Text('Thử gửi tin nhắn SMS sang ESP32', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      onPressed: () => _triggerSms(),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -791,10 +1221,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       fit: BoxFit.fill,
                       gaplessPlayback: true,
                     )
-                  : CustomPaint(
-                      painter: StandbyVectorMapPainter(navManager: navManager),
-                      size: const Size(144, 208),
-                    ),
+                  : (_mapImagePreview != null
+                      ? Image.memory(
+                          _mapImagePreview!,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        )
+                      : CustomPaint(
+                          painter: StandbyVectorMapPainter(navManager: navManager),
+                          size: const Size(144, 208),
+                        )),
             ),
           ),
         ),
@@ -1087,11 +1523,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     );
   }
 
-  Widget _buildCallPopup() {
+  Widget _buildCallPopup(String name, String number) {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF022C22),
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF05FFA1), width: 1.5),
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -1100,26 +1537,31 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           const Icon(Icons.phone_in_talk_rounded, color: Color(0xFF05FFA1), size: 30),
           const SizedBox(height: 4),
           const Text('CUỘC GỌI ĐẾN', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 11, fontWeight: FontWeight.bold)),
-          Text(_callerName, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 2),
+          Text(name, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (number.isNotEmpty && number != 'unknown')
+            Text(number, style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
     );
   }
 
-  Widget _buildSmsPopup() {
+  Widget _buildSmsPopup(String sender, String content) {
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF0B192C),
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.mark_chat_unread_rounded, color: Color(0xFF00F0FF), size: 30),
+          const Icon(Icons.mark_chat_unread_rounded, color: Color(0xFF00F0FF), size: 28),
           const SizedBox(height: 4),
-          Text(_smsSender, style: const TextStyle(color: Color(0xFFFFB800), fontSize: 15, fontWeight: FontWeight.bold)),
-          Text(_smsContent, style: const TextStyle(color: Colors.white, fontSize: 11), textAlign: TextAlign.center),
+          Text(sender, style: const TextStyle(color: Color(0xFFFFB800), fontSize: 15, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 2),
+          Text(content, style: const TextStyle(color: Colors.white, fontSize: 11), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
         ],
       ),
     );

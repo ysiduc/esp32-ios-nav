@@ -144,16 +144,17 @@ class GoogleMapsParser {
       } catch (_) {}
     }
 
-    // 5. Extract Coordinates from Google Maps URL
+    // 5. Check if an explicit query or address exists in URL or shared text
+    String? queryName = (userPrefixName.isNotEmpty ? userPrefixName : null) ??
+        _extractPlaceNameFromUrl(urlStr) ??
+        _extractQueryFromUrl(urlStr);
+
+    // 6. Extract Coordinates from Google Maps URL
     LatLng? extractedCoord = _extractCoordinateFromUrl(urlStr);
 
-    // If URL coordinates not found, attempt to extract from HTML page (staticmap or JSON-LD)
-    if (extractedCoord == null && resolvedHtml.isNotEmpty) {
-      extractedCoord = _extractCoordinateFromHtml(resolvedHtml);
-    }
-
+    // If explicit coordinates were found in the URL, use them
     if (extractedCoord != null) {
-      final urlPlaceName = _extractPlaceNameFromUrl(urlStr) ?? _extractTitleFromHtml(resolvedHtml);
+      final urlPlaceName = _extractPlaceNameFromUrl(urlStr);
       final placeName = userPrefixName.isNotEmpty
           ? userPrefixName
           : (urlPlaceName != null && urlPlaceName.isNotEmpty ? urlPlaceName : null);
@@ -172,15 +173,19 @@ class GoogleMapsParser {
       return reversePlace;
     }
 
-    // 6. If only a query or address exists in the URL or text
-    final queryName = (userPrefixName.isNotEmpty ? userPrefixName : null) ??
-        _extractPlaceNameFromUrl(urlStr) ??
-        _extractQueryFromUrl(urlStr) ??
-        _extractTitleFromHtml(resolvedHtml);
-
+    // 7. If no coordinates in URL but we have an explicit address/place query, resolve it!
+    queryName ??= (resolvedHtml.isNotEmpty ? _extractTitleFromHtml(resolvedHtml) : null);
     if (queryName != null && queryName.isNotEmpty) {
       final resolvedPlace = await _resolveAddressQuery(queryName, userLocation: userLocation);
       if (resolvedPlace != null) return resolvedPlace;
+    }
+
+    // 8. Fallback: Only extract coordinates from HTML if no valid address query was found
+    if (resolvedHtml.isNotEmpty) {
+      extractedCoord = _extractCoordinateFromHtml(resolvedHtml);
+      if (extractedCoord != null) {
+        return await _searchService.reverseGeocode(extractedCoord);
+      }
     }
 
     return null;
@@ -200,34 +205,59 @@ class GoogleMapsParser {
     final parts = cleaned.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
     final candidates = <String>[];
 
-    // Priority 1: Full raw query (most specific)
-    candidates.add(cleaned);
-
     if (parts.length >= 3) {
       final place = parts.first;
-      final street = parts[1];
-      final ward = parts[2];
+      final wardOrDistrict = parts[1];
       final city = parts.last;
+      final streetOnly = place.replaceAll(RegExp(r'^\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?\s*'), '').trim();
 
-      // Priority 2: Place + Ward + City
-      candidates.add('$place, $ward, $city');
-      // Priority 3: Place + City
-      candidates.add('$place, $city');
-      // Priority 4: Place name alone
+      // In Vietnam, searching "Số nhà + Đường, Phường/Quận" gives 100% precision in OSM/Photon:
+      candidates.add('$place, $wardOrDistrict');
+      if (streetOnly.isNotEmpty && streetOnly != place) {
+        candidates.add('$streetOnly, $wardOrDistrict');
+      }
       candidates.add(place);
-      // Priority 5: Street + City
-      candidates.add('$street, $city');
+      if (streetOnly.isNotEmpty && streetOnly != place) {
+        candidates.add(streetOnly);
+      }
+      candidates.add('$place, $wardOrDistrict, $city');
+      candidates.add('$place, $city');
+      candidates.add(cleaned);
     } else if (parts.length == 2) {
       final place = parts.first;
       final city = parts.last;
+      final streetOnly = place.replaceAll(RegExp(r'^\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?\s*'), '').trim();
+
       candidates.add('$place, $city');
+      if (streetOnly.isNotEmpty && streetOnly != place) {
+        candidates.add('$streetOnly, $city');
+      }
       candidates.add(place);
+      if (streetOnly.isNotEmpty && streetOnly != place) {
+        candidates.add(streetOnly);
+      }
+      candidates.add(cleaned);
+    } else {
+      candidates.add(cleaned);
     }
 
     for (final cand in candidates) {
       final results = await _searchService.searchPlaces(cand, nearLocation: userLocation);
       if (results.isNotEmpty) {
-        final top = results.first;
+        // Pick best matching place: if nearLocation provided, pick closest local result
+        MapPlace top = results.first;
+        if (userLocation != null && results.length > 1) {
+          const distCalc = Distance();
+          double bestDist = double.infinity;
+          for (final r in results) {
+            final d = distCalc.as(LengthUnit.Meter, userLocation, r.coordinate);
+            if (d < bestDist) {
+              bestDist = d;
+              top = r;
+            }
+          }
+        }
+
         final finalName = parts.isNotEmpty ? parts.first : top.name;
         return MapPlace(
           name: finalName,

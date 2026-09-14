@@ -46,6 +46,12 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
+	<!-- Quyen Thu vien anh & Camera de tai anh len ESP32 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Ung dung can truy cap thu vien anh de ban co the chon anh tuy chinh cai lam hinh nen man hinh ESP32</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Ung dung can Camera de ban chup anh truc tiep lam hinh nen man hinh ESP32</string>
+
 	<!-- Quyen Bluetooth ket noi ESP32 -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Ung dung can Bluetooth de ket noi va truyen du lieu chi duong den man hinh ESP32</string>
