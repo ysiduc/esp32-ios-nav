@@ -27,8 +27,10 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* 
 TFT_eSPI tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
 #include <TJpg_Decoder.h>
+bool g_clipMapOnly = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-  if (y >= tft.height() || x >= 154) return 1;
+  if (y >= tft.height() || x >= tft.width()) return 1;
+  if (g_clipMapOnly && x >= 154) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
@@ -182,6 +184,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
         if (chunkIdx == totalChunks - 1) {
           if (bgUploadFile) {
+            bgUploadFile.flush();
             bgUploadFile.close();
             Serial.printf("[SPIFFS] Finished uploading %s! Saved to flash.\n", targetPath);
           }
@@ -292,13 +295,15 @@ void setup() {
     Serial.println("[SPIFFS] Filesystem mounted successfully.");
   }
 
-  // 1. Start Display
-  display.init();
+  // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
   TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tft_output);
   #endif
+
+  // 2. Start Display (safe to render SPIFFS JPEGs)
+  display.init();
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
   NimBLEDevice::init("ESP32-S3 Navi");
@@ -352,7 +357,9 @@ void loop() {
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
     if (activeRenderBufLen > 100) {
+      g_clipMapOnly = true;
       TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      g_clipMapOnly = false;
     }
     #endif
   }

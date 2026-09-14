@@ -238,20 +238,35 @@ private:
 
   void _drawPairingScreenTft() {
     if (SPIFFS.exists("/bg_wait.jpg")) {
-      TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
-      // Top status bar overlay
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-      tft.drawString("* ysiduc", 10, 4, 2);
-      char batStr[16];
-      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-      tft.drawString(batStr, 270, 4, 2);
+      File f = SPIFFS.open("/bg_wait.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 500) {
+          JRESULT res = TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+          if (res == JDR_OK) {
+            // Top status bar overlay
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.drawString("* ysiduc", 10, 4, 2);
+            char batStr[16];
+            snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+            tft.drawString(batStr, 270, 4, 2);
 
-      // Bottom Glass Banner
-      uint16_t cBarBg = tft.color565(11, 17, 26);
-      tft.fillRoundRect(20, 202, 280, 32, 8, cBarBg);
-      tft.drawRoundRect(20, 202, 280, 32, 8, TFT_CYAN);
-      _drawCentreUtf8String("CHỜ KẾT NỐI BLUETOOTH...", 160, 208, TFT_CYAN, cBarBg);
-      return;
+            // Bottom Glass Banner
+            uint16_t cBarBg = tft.color565(11, 17, 26);
+            tft.fillRoundRect(20, 202, 280, 32, 8, cBarBg);
+            tft.drawRoundRect(20, 202, 280, 32, 8, TFT_CYAN);
+            _drawCentreUtf8String("CHỜ KẾT NỐI BLUETOOTH...", 160, 208, TFT_CYAN, cBarBg);
+            return;
+          } else {
+            Serial.printf("[SPIFFS] /bg_wait.jpg decode failed (rc=%d), removing corrupt file.\n", res);
+            SPIFFS.remove("/bg_wait.jpg");
+          }
+        } else {
+          Serial.println("[SPIFFS] /bg_wait.jpg incomplete (<500B), removing.");
+          SPIFFS.remove("/bg_wait.jpg");
+        }
+      }
     }
 
     tft.fillScreen(TFT_BLACK);
@@ -367,9 +382,27 @@ private:
   /// Draw High-Definition Realistic Standby Vector Map when JPEG stream is inactive
   void _renderStandbyVectorMap() {
     if (!_navData.isNavigating && SPIFFS.exists("/bg_map.jpg")) {
-      TJpgDec.drawFsJpg(6, 26, "/bg_map.jpg");
-      tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
-      return;
+      File f = SPIFFS.open("/bg_map.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 500) {
+          extern bool g_clipMapOnly;
+          g_clipMapOnly = true;
+          JRESULT res = TJpgDec.drawFsJpg(6, 26, "/bg_map.jpg");
+          g_clipMapOnly = false;
+          if (res == JDR_OK) {
+            tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
+            return;
+          } else {
+            Serial.printf("[SPIFFS] /bg_map.jpg decode failed (rc=%d), removing corrupt file.\n", res);
+            SPIFFS.remove("/bg_map.jpg");
+          }
+        } else {
+          Serial.println("[SPIFFS] /bg_map.jpg incomplete (<500B), removing.");
+          SPIFFS.remove("/bg_map.jpg");
+        }
+      }
     }
 
     uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
