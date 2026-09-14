@@ -152,9 +152,14 @@ public:
     }
   }
 
-  void showCallAlert(const char* callerName) {
+  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
-    _popupData.expireMillis = millis() + 8000;
+    if (phoneOrMsg != nullptr && phoneOrMsg[0] != '\0') {
+      strncpy(_popupData.message, phoneOrMsg, sizeof(_popupData.message) - 1);
+    } else {
+      _popupData.message[0] = '\0';
+    }
+    _popupData.expireMillis = millis() + 10000;
     _currentState = STATE_POPUP_CALL;
     _needFullRedraw = true;
   }
@@ -464,9 +469,12 @@ private:
       uint16_t cCallBg = tft.color565(2, 44, 34);
       tft.fillRoundRect(15, 20, 290, 200, 16, cCallBg);
       tft.drawRoundRect(15, 20, 290, 200, 16, TFT_GREEN);
-      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 35, TFT_GREEN, cCallBg);
-      _drawCentreUtf8String(_popupData.title, 160, 95, TFT_WHITE, cCallBg);
-      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 165, TFT_CYAN, cCallBg);
+      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 32, TFT_GREEN, cCallBg);
+      _drawCentreUtf8String(_popupData.title, 160, 80, TFT_WHITE, cCallBg);
+      if (_popupData.message[0] != '\0') {
+        _drawCentreUtf8String(_popupData.message, 160, 125, TFT_YELLOW, cCallBg);
+      }
+      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 175, TFT_CYAN, cCallBg);
       return;
     }
 

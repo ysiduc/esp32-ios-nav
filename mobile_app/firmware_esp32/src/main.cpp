@@ -3,6 +3,7 @@
 #include <NimBLEDevice.h>
 #include "display_ui.h"
 #include "ams_service.h"
+#include "ancs_service.h"
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -56,6 +57,13 @@ String popupMsg = "";
 String popupType = "NONE";
 unsigned long popupExpire = 0;
 
+// Combined GAP event handler for AMS & ANCS
+static int combinedGapHandler(ble_gap_event *event, void *arg) {
+  AppleMediaService::handleGapEvent(event, arg);
+  AppleNotificationService::handleGapEvent(event, arg);
+  return 0;
+}
+
 // =========================================================================
 // 1. BLE Server Callbacks
 // =========================================================================
@@ -71,11 +79,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
     AppleMediaService::connHandle = desc->conn_handle;
     AppleMediaService::lastCheckTime = millis();
+    AppleNotificationService::connHandle = desc->conn_handle;
+    AppleNotificationService::lastCheckTime = millis();
 
-    // If already encrypted/bonded, immediately trigger AMS
+    // If already encrypted/bonded, immediately trigger AMS & ANCS discovery
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting AMS discovery...");
+      Serial.println("[BLE] Link already encrypted. Starting AMS & ANCS discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
+      AppleNotificationService::onEncrypted(desc->conn_handle);
     } else {
       // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
       int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
@@ -91,6 +102,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
       AppleMediaService::onEncrypted(desc->conn_handle);
+      AppleNotificationService::onEncrypted(desc->conn_handle);
     }
   }
 
@@ -98,6 +110,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnected = false;
     display.setBleConnected(false);
     AppleMediaService::onDisconnected();
+    AppleNotificationService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -159,7 +172,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
         popupType = "CALL";
         popupExpire = millis() + 10000;
-        display.showCallAlert(name);
+        display.showCallAlert(name, popupMsg.c_str());
         return;
       } else if (typeStr == "SMS") {
         const char* sender = doc["title"] | "Tin nhan";
@@ -234,8 +247,9 @@ void setup() {
   // Security Auth & Bonding for iOS (Required by Apple Media Service)
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setCustomGapHandler(AppleMediaService::handleGapEvent);
+  NimBLEDevice::setCustomGapHandler(combinedGapHandler);
   AppleMediaService::init();
+  AppleNotificationService::init();
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -267,7 +281,7 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + Apple Media Service!");
+  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS!");
 }
 
 void loop() {
@@ -286,8 +300,9 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
 
-  // 3. Periodic check for Apple Media Service discovery
+  // 3. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
+  AppleNotificationService::checkPeriodic();
 
   delay(1);
 }
