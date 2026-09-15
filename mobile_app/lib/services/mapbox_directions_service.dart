@@ -2,22 +2,25 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
+import 'goong_service.dart';
 import 'osrm_service.dart';
 
 /// Navigation Directions Service
-/// Supports MapTiler/OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
+/// Supports Goong Map / MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
 class MapboxDirectionsService {
   // In-Memory Route Cache (instant retrieval for repeated queries)
   static final Map<String, List<NavRoute>> _routeCache = {};
   final OsrmService _osrmService = OsrmService();
+  final GoongService _goongService = GoongService();
 
   /// Calculate multiple alternative routes
   Future<List<NavRoute>> calculateMultipleRoutes(
     LatLng start,
     LatLng destination, {
-    String mode = 'bike', // 'bike' (motorcycle→driving-traffic), 'driving', 'foot'
+    String mode = 'bike', // 'bike' (motorcycle), 'driving', 'foot'
     bool avoidTolls = false,
     bool avoidHighways = false,
   }) async {
@@ -30,7 +33,16 @@ class MapboxDirectionsService {
 
     List<NavRoute> routes = [];
 
-    if (MapboxConfig.accessToken.isNotEmpty && !MapboxConfig.accessToken.startsWith('YOUR_')) {
+    // Priority 1: Goong Direction API (Tối ưu giao thông Việt Nam: xe máy/ô tô)
+    if (GoongConfig.hasRestApiKey) {
+      final vehicle = (mode == 'driving') ? 'car' : 'bike';
+      final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
+      if (goongRoute != null) {
+        routes = [goongRoute];
+      }
+    }
+
+    if (routes.isEmpty && MapboxConfig.accessToken.isNotEmpty && !MapboxConfig.accessToken.startsWith('YOUR_')) {
       routes = await _fetchFromMapbox(start, destination, mode: mode);
     }
 

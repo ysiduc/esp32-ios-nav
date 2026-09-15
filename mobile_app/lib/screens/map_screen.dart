@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
+import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import '../services/ble_service.dart';
@@ -524,9 +525,22 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Mapbox Style URL for current theme
+  // Maplibre Style URL for current theme (Goong Map / MapTiler)
   // -------------------------------------------------------------
   String _buildMaplibreStyleString() {
+    if (GoongConfig.hasMapTilesKey) {
+      switch (_currentTheme) {
+        case MapThemeMode.streets:
+          return GoongConfig.styleStreets;
+        case MapThemeMode.satellite:
+          return GoongConfig.styleStreets;
+        case MapThemeMode.navigationNight:
+          return GoongConfig.styleNavigationNight;
+        case MapThemeMode.dark:
+          return GoongConfig.styleDark;
+      }
+    }
+
     switch (_currentTheme) {
       case MapThemeMode.streets:
         return MapboxConfig.styleStreets;
@@ -2212,8 +2226,156 @@ class _MapScreenState extends State<MapScreen> {
                 mode: MapThemeMode.dark,
                 icon: Icons.nightlight_round,
               ),
+              const Divider(color: Colors.white12, height: 24),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: GoongConfig.isConfigured ? const Color(0xFF05FFA1).withAlpha(20) : const Color(0xFFFF9F1C).withAlpha(20),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: GoongConfig.isConfigured ? const Color(0xFF05FFA1).withAlpha(80) : const Color(0xFFFF9F1C).withAlpha(80)),
+                  ),
+                  child: Icon(Icons.vpn_key_rounded, color: GoongConfig.isConfigured ? const Color(0xFF05FFA1) : const Color(0xFFFF9F1C), size: 20),
+                ),
+                title: const Text(
+                  'Cấu hình Goong Map Key',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                subtitle: Text(
+                  GoongConfig.isConfigured
+                      ? 'Đang kích hoạt Goong Map (Bản đồ & Dẫn đường chuẩn VN)'
+                      : 'Chưa cấu hình (Bấm vào đây để nhập key từ goong.io)',
+                  style: TextStyle(color: GoongConfig.isConfigured ? const Color(0xFF05FFA1) : Colors.white54, fontSize: 11),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showGoongKeyDialog();
+                },
+              ),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  /// Dialog nhập MapTiles Key và REST API Key của Goong Map
+  void _showGoongKeyDialog() {
+    final mapTilesCtrl = TextEditingController(text: GoongConfig.maptilesKey);
+    final restApiCtrl = TextEditingController(text: GoongConfig.restApiKey);
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E293B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.map_rounded, color: Color(0xFF00F0FF), size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Cấu hình Goong Map Key',
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Goong Map là hệ thống bản đồ số 1 tại Việt Nam, tìm chính xác số nhà, ngõ ngách và dẫn đường phân làn xe máy chuẩn xác.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: mapTilesCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: '1. MapTiles Key (Hiển thị bản đồ)',
+                    labelStyle: TextStyle(color: Color(0xFF00F0FF), fontSize: 12),
+                    hintText: 'Dán MapTiles key từ account.goong.io',
+                    hintStyle: TextStyle(color: Colors.white24, fontSize: 11),
+                    filled: true,
+                    fillColor: Color(0xFF0F172A),
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: restApiCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: '2. REST API Key (Tìm kiếm & Dẫn đường)',
+                    labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 12),
+                    hintText: 'Dán API key từ account.goong.io',
+                    hintStyle: TextStyle(color: Colors.white24, fontSize: 11),
+                    filled: true,
+                    fillColor: Color(0xFF0F172A),
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(8),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded, color: Color(0xFF00F0FF), size: 14),
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Đăng ký miễn phí tại: account.goong.io/keys',
+                          style: TextStyle(color: Colors.white60, fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Hủy', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0084FF),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () {
+                setState(() {
+                  GoongConfig.maptilesKey = mapTilesCtrl.text.trim();
+                  GoongConfig.restApiKey = restApiCtrl.text.trim();
+                });
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: const Color(0xFF05FFA1),
+                    content: Text(
+                      GoongConfig.isConfigured
+                          ? 'Đã kích hoạt toàn bộ dịch vụ Goong Map thành công!'
+                          : 'Đã lưu cấu hình Goong Map',
+                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Lưu Key', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
         );
       },
     );
