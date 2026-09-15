@@ -250,11 +250,7 @@ class GoogleMapsParser {
         // Extract house number and street keywords from query
         final houseNumMatch = RegExp(r'\b(\d+[a-zA-Z]?)\b').firstMatch(parts.isNotEmpty ? parts.first : cleaned);
         final houseNum = houseNumMatch?.group(1);
-
-        String streetKey = parts.isNotEmpty
-            ? parts.first.replaceAll(RegExp(r'^\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?\s*'), '').trim().toLowerCase()
-            : '';
-        streetKey = streetKey.replaceAll(RegExp(r'^(phố|đường|ngõ|hẻm)\s+'), '').trim();
+        final streetKey = SearchService.cleanStreetKeyword(parts.isNotEmpty ? parts.first : cleaned);
 
         // 1. Priority: Result with matching house number and street keyword
         MapPlace? bestMatch;
@@ -262,8 +258,11 @@ class GoogleMapsParser {
           for (final r in results) {
             final n = r.name.toLowerCase();
             final dn = r.displayName.toLowerCase();
-            if ((n.contains(houseNum) || dn.contains(houseNum)) &&
-                (streetKey.isEmpty || n.contains(streetKey) || dn.contains(streetKey))) {
+            final matchesNum = n.contains(houseNum) || dn.contains(houseNum);
+            final matchesStreet = streetKey.isEmpty ||
+                SearchService.isExactStreetMatch(r.name, streetKey) ||
+                SearchService.isExactStreetMatch(r.displayName, streetKey);
+            if (matchesNum && matchesStreet) {
               bestMatch = r;
               break;
             }
@@ -273,9 +272,8 @@ class GoogleMapsParser {
         // 2. Priority: Result matching the street name directly
         if (bestMatch == null && streetKey.isNotEmpty) {
           for (final r in results) {
-            final n = r.name.toLowerCase();
-            final dn = r.displayName.toLowerCase();
-            if (n.contains(streetKey) || dn.contains(streetKey)) {
+            if (SearchService.isExactStreetMatch(r.name, streetKey) ||
+                SearchService.isExactStreetMatch(r.displayName, streetKey)) {
               bestMatch = r;
               break;
             }
