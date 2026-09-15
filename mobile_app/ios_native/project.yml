@@ -1,0 +1,37 @@
+name: ESP32NavApp
+options:
+  bundleIdPrefix: com.ysiduc
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  Ferrostar:
+    url: https://github.com/stadiamaps/ferrostar
+    from: 0.26.0
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    from: 5.13.0
+targets:
+  ESP32NavApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - Sources
+    info:
+      path: Info.plist
+    dependencies:
+      - package: Ferrostar
+        product: FerrostarCore
+      - package: MapLibre
+        product: MapLibre
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.ysiduc.esp32nav
+      GENERATE_INFOPLIST_FILE: false
+      INFOPLIST_FILE: Info.plist
+      MARKETING_VERSION: "1.0.0"
+      CURRENT_PROJECT_VERSION: "1"
+      SWIFT_VERSION: "5.10"
+      ENABLE_BITCODE: NO
+      CODE_SIGN_IDENTITY: ""
+      CODE_SIGNING_REQUIRED: NO
+      CODE_SIGNING_ALLOWED: NO
