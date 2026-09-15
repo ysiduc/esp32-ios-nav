@@ -244,16 +244,54 @@ class GoogleMapsParser {
     for (final cand in candidates) {
       final results = await _searchService.searchPlaces(cand, nearLocation: userLocation);
       if (results.isNotEmpty) {
-        // Pick best matching place: if nearLocation provided, pick closest local result
+        // Pick best matching place: prioritize exact house number / street name over random nearby POIs
         MapPlace top = results.first;
-        if (userLocation != null && results.length > 1) {
+
+        // Extract house number and street keywords from query
+        final houseNumMatch = RegExp(r'\b(\d+[a-zA-Z]?)\b').firstMatch(parts.isNotEmpty ? parts.first : cleaned);
+        final houseNum = houseNumMatch?.group(1);
+
+        String streetKey = parts.isNotEmpty
+            ? parts.first.replaceAll(RegExp(r'^\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?\s*'), '').trim().toLowerCase()
+            : '';
+        streetKey = streetKey.replaceAll(RegExp(r'^(phố|đường|ngõ|hẻm)\s+'), '').trim();
+
+        // 1. Priority: Result with matching house number and street keyword
+        MapPlace? bestMatch;
+        if (houseNum != null) {
+          for (final r in results) {
+            final n = r.name.toLowerCase();
+            final dn = r.displayName.toLowerCase();
+            if ((n.contains(houseNum) || dn.contains(houseNum)) &&
+                (streetKey.isEmpty || n.contains(streetKey) || dn.contains(streetKey))) {
+              bestMatch = r;
+              break;
+            }
+          }
+        }
+
+        // 2. Priority: Result matching the street name directly
+        if (bestMatch == null && streetKey.isNotEmpty) {
+          for (final r in results) {
+            final n = r.name.toLowerCase();
+            final dn = r.displayName.toLowerCase();
+            if (n.contains(streetKey) || dn.contains(streetKey)) {
+              bestMatch = r;
+              break;
+            }
+          }
+        }
+
+        if (bestMatch != null) {
+          top = bestMatch;
+        } else if (userLocation != null && results.length > 1) {
+          // If disambiguating between multiple cities, prefer the one near user's region (< 80km)
           const distCalc = Distance();
-          double bestDist = double.infinity;
           for (final r in results) {
             final d = distCalc.as(LengthUnit.Meter, userLocation, r.coordinate);
-            if (d < bestDist) {
-              bestDist = d;
+            if (d < 80000) {
               top = r;
+              break;
             }
           }
         }

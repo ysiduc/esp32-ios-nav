@@ -59,9 +59,19 @@ class PhoneCallService extends ChangeNotifier {
     _phoneNumber = number;
     notifyListeners();
 
-    // Send to ESP32 via BLE
-    final msg = number.isNotEmpty && number != 'unknown' ? number : 'Đang đổ chuông...';
-    _bleService.sendRawString('{"type":"CALL","title":"$name","msg":"$msg"}');
+    // Send to ESP32 via BLE ONLY IF we have a real caller name or number!
+    // If CallKit returns generic "Cuoc goi den" or "unknown", do not overwrite ESP32 ANCS!
+    final isGeneric = name.toLowerCase() == 'cuoc goi den' ||
+        name.toLowerCase() == 'cuộc gọi đến' ||
+        name.toLowerCase() == 'unknown' ||
+        name.isEmpty;
+    final hasRealNumber = number.isNotEmpty && number != 'unknown';
+
+    if (!isGeneric || hasRealNumber) {
+      final title = !isGeneric ? name : number;
+      final msg = hasRealNumber && !isGeneric ? number : 'Đang đổ chuông...';
+      _bleService.sendRawString('{"type":"CALL","title":"$title","msg":"$msg"}');
+    }
   }
 
   void _onCallEnded() {

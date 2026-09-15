@@ -10,7 +10,6 @@
 #include "display_ui.h"
 
 // Apple Media Service UUID: 89D3502B-0F36-433A-8EF4-C502AD55F8DC
-// Little-endian byte order for NimBLE ble_uuid128_t:
 static const ble_uuid128_t amsServiceUUID = {
   .u = { .type = BLE_UUID_TYPE_128 },
   .value = { 0xDC, 0xF8, 0x55, 0xAD, 0x02, 0xC5, 0xF4, 0x8E, 0x3A, 0x43, 0x36, 0x0F, 0x2B, 0x50, 0xD3, 0x89 }
@@ -22,7 +21,7 @@ static const ble_uuid128_t amsEntityUpdateUUID = {
   .value = { 0x02, 0xC1, 0x96, 0xBA, 0x92, 0xBB, 0x0C, 0x9A, 0x1F, 0x41, 0x8D, 0x80, 0xCE, 0xAB, 0x7C, 0x2F }
 };
 
-// Solicitation data for advertising (AD Type 0x15: 128-bit Service Solicitation)
+// Solicitation data for advertising
 static const uint8_t amsSolicitData[] = {
   0x11, 0x15,
   0xDC, 0xF8, 0x55, 0xAD, 0x02, 0xC5, 0xF4, 0x8E,
@@ -36,67 +35,65 @@ public:
   static uint16_t entityUpdateValHandle;
   static uint16_t connHandle;
   static bool isSubscribed;
+  static bool isDiscovering;
   static unsigned long lastCheckTime;
   static char currentTitle[64];
   static char currentArtist[64];
+
+  static uint16_t svcStartHdl;
+  static uint16_t svcEndHdl;
 
   static void init() {
     entityUpdateValHandle = 0;
     connHandle = 0;
     isSubscribed = false;
+    isDiscovering = false;
     lastCheckTime = 0;
+    svcStartHdl = 0;
+    svcEndHdl = 0;
     currentTitle[0] = '\0';
     currentArtist[0] = '\0';
   }
 
-  static void checkPeriodic() {
-    if (connHandle != 0 && !isSubscribed) {
-      if (millis() - lastCheckTime > 3000) {
-        lastCheckTime = millis();
-        Serial.printf("[AMS] Periodic check: discovering AMS on conn=%d...\n", connHandle);
-        ble_gattc_disc_svc_by_uuid(connHandle, &amsServiceUUID.u, amsSvcDiscCb, NULL);
-      }
+  static void startDiscovery(uint16_t conn_hdl) {
+    if (isSubscribed || isDiscovering) return;
+    connHandle = conn_hdl;
+    isDiscovering = true;
+    entityUpdateValHandle = 0;
+    svcStartHdl = 0;
+    svcEndHdl = 0;
+    Serial.printf("[AMS] Discovering Apple Media Service on conn=%d...\n", conn_hdl);
+    int rc = ble_gattc_disc_svc_by_uuid(conn_hdl, &amsServiceUUID.u, amsSvcDiscCb, NULL);
+    if (rc != 0) {
+      Serial.printf("[AMS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
+      isDiscovering = false;
     }
   }
 
   static void onEncrypted(uint16_t conn_hdl) {
     connHandle = conn_hdl;
-    entityUpdateValHandle = 0;
-    isSubscribed = false;
-    Serial.printf("[AMS] Secure link established (conn=%d). Discovering Apple Media Service...\n", conn_hdl);
-    int rc = ble_gattc_disc_svc_by_uuid(conn_hdl, &amsServiceUUID.u, amsSvcDiscCb, NULL);
-    if (rc != 0) {
-      Serial.printf("[AMS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
-    }
+    startDiscovery(conn_hdl);
   }
 
   static void onDisconnected() {
-    entityUpdateValHandle = 0;
-    connHandle = 0;
-    isSubscribed = false;
-    currentTitle[0] = '\0';
-    currentArtist[0] = '\0';
+    init();
     Serial.println("[AMS] Device disconnected. Resetting media state.");
   }
 
+  static void checkPeriodic() {
+    if (connHandle != 0 && !isSubscribed && !isDiscovering) {
+      if (millis() - lastCheckTime > 8000) {
+        lastCheckTime = millis();
+        startDiscovery(connHandle);
+      }
+    }
+  }
+
   static int handleGapEvent(ble_gap_event *event, void *arg) {
-    switch (event->type) {
-      case BLE_GAP_EVENT_ENC_CHANGE:
-        if (event->enc_change.status == 0) {
-          onEncrypted(event->enc_change.conn_handle);
-        } else {
-          Serial.printf("[AMS] Encryption status=%d\n", event->enc_change.status);
-        }
-        break;
-
-      case BLE_GAP_EVENT_NOTIFY_RX:
-        if (entityUpdateValHandle != 0 && event->notify_rx.attr_handle == entityUpdateValHandle) {
-          handleNotification(event->notify_rx.om);
-        }
-        break;
-
-      default:
-        break;
+    if (event->type == BLE_GAP_EVENT_NOTIFY_RX) {
+      if (entityUpdateValHandle != 0 && event->notify_rx.attr_handle == entityUpdateValHandle) {
+        handleNotification(event->notify_rx.om);
+      }
     }
     return 0;
   }
@@ -110,13 +107,15 @@ private:
         ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, NULL, NULL);
 
         // Subscribe to Track Title (2) and Artist (0)
-        // EntityID: 2 (Track), AttributeID: 2 (Title), AttributeID: 0 (Artist)
         uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 };
         ble_gattc_write_flat(conn_hdl, entityUpdateValHandle, trackSubCmd, sizeof(trackSubCmd), NULL, NULL);
 
         isSubscribed = true;
+        isDiscovering = false;
         Serial.println("[AMS] Subscribed to Track Title & Artist successfully!");
       }
+    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
+      isDiscovering = false;
     }
     return 0;
   }
@@ -124,9 +123,18 @@ private:
   static int amsChrDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, const struct ble_gatt_chr *chr, void *arg) {
     if (error->status == 0 && chr != nullptr) {
       if (ble_uuid_cmp(&chr->uuid.u, &amsEntityUpdateUUID.u) == 0) {
-        Serial.printf("[AMS] Found Entity Update characteristic! Value handle = %d\n", chr->val_handle);
+        Serial.printf("[AMS] Found Entity Update chr! Value handle = %d\n", chr->val_handle);
         entityUpdateValHandle = chr->val_handle;
-        ble_gattc_disc_all_dscs(conn_hdl, chr->val_handle, chr->val_handle + 2, amsDscDiscCb, NULL);
+      }
+    } else if (error->status == BLE_HS_EDONE || chr == nullptr) {
+      if (entityUpdateValHandle != 0) {
+        int rc = ble_gattc_disc_all_dscs(conn_hdl, entityUpdateValHandle, entityUpdateValHandle + 2, amsDscDiscCb, NULL);
+        if (rc != 0) {
+          Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
+          isDiscovering = false;
+        }
+      } else {
+        isDiscovering = false;
       }
     }
     return 0;
@@ -135,9 +143,19 @@ private:
   static int amsSvcDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, const struct ble_gatt_svc *service, void *arg) {
     if (error->status == 0 && service != nullptr) {
       Serial.printf("[AMS] Apple Media Service found! (handles %d - %d)\n", service->start_handle, service->end_handle);
-      ble_gattc_disc_all_chrs(conn_hdl, service->start_handle, service->end_handle, amsChrDiscCb, NULL);
-    } else if (error->status == BLE_HS_EDONE) {
-      Serial.println("[AMS] Service discovery finished.");
+      svcStartHdl = service->start_handle;
+      svcEndHdl = service->end_handle;
+    } else if (error->status == BLE_HS_EDONE || service == nullptr) {
+      if (svcStartHdl != 0) {
+        int rc = ble_gattc_disc_all_chrs(conn_hdl, svcStartHdl, svcEndHdl, amsChrDiscCb, NULL);
+        if (rc != 0) {
+          Serial.printf("[AMS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
+          isDiscovering = false;
+        }
+      } else {
+        Serial.println("[AMS] Service not found on this connection.");
+        isDiscovering = false;
+      }
     }
     return 0;
   }
@@ -175,8 +193,11 @@ private:
 uint16_t AppleMediaService::entityUpdateValHandle = 0;
 uint16_t AppleMediaService::connHandle = 0;
 bool AppleMediaService::isSubscribed = false;
+bool AppleMediaService::isDiscovering = false;
 unsigned long AppleMediaService::lastCheckTime = 0;
 char AppleMediaService::currentTitle[64] = "";
 char AppleMediaService::currentArtist[64] = "";
+uint16_t AppleMediaService::svcStartHdl = 0;
+uint16_t AppleMediaService::svcEndHdl = 0;
 
 #endif // AMS_SERVICE_H

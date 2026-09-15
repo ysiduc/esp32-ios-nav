@@ -814,10 +814,15 @@ class SearchService {
             p.type == 'primary' ||
             p.type == 'tertiary' ||
             p.type == 'trunk' ||
+            p.type == 'address' ||
+            p.type == 'way' ||
+            p.category == 'highway' ||
             p.name.toLowerCase().contains('phố') ||
             p.name.toLowerCase().contains('đường') ||
             p.name.toLowerCase().contains('ngõ') ||
-            p.name.toLowerCase().contains('hẻm');
+            p.name.toLowerCase().contains('hẻm') ||
+            p.displayName.toLowerCase().contains('phố') ||
+            p.displayName.toLowerCase().contains('đường');
 
         if (isStreet && !p.name.contains(houseNumber)) {
           final customName = 'Số $houseNumber ${p.name}';

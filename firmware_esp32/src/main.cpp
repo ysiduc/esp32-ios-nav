@@ -103,7 +103,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
-      AppleMediaService::onEncrypted(desc->conn_handle);
       AppleNotificationService::onEncrypted(desc->conn_handle);
     }
   }
