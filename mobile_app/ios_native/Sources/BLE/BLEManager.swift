@@ -1,5 +1,5 @@
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import Combine
 
 /// Central Manager handling Bluetooth Low Energy communication with the ESP32 screen

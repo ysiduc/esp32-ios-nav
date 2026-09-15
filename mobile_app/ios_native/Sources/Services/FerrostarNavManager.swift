@@ -1,5 +1,5 @@
 import Foundation
-import CoreLocation
+@preconcurrency import CoreLocation
 import Combine
 
 #if canImport(FerrostarCore)

@@ -136,8 +136,8 @@ public struct MainMapView: View {
                                 .background(
                                     LinearGradient(
                                         colors: [Color(red: 0.0, green: 0.55, blue: 0.27), Color(red: 0.0, green: 0.70, blue: 0.35)],
-                                        begin: .leading,
-                                        end: .trailing
+                                        startPoint: .leading,
+                                        endPoint: .trailing
                                     )
                                 )
                                 .cornerRadius(16)
@@ -217,7 +217,7 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
 
     public func updateUIView(_ uiView: UIView, context: Context) {
         #if canImport(MapLibre)
-        guard let mapView = uiView as? MLNMapView else { return }
+        guard uiView is MLNMapView else { return }
         context.coordinator.update(
             route: route,
             destination: destination,

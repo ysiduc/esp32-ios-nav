@@ -58,8 +58,8 @@ public struct NavigationHUDView: View {
             .background(
                 LinearGradient(
                     colors: [Color(red: 0.05, green: 0.48, blue: 0.25), Color(red: 0.02, green: 0.38, blue: 0.18)],
-                    begin: .top,
-                    end: .bottom
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
             )
             .cornerRadius(20)

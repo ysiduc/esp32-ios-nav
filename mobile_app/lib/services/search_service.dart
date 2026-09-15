@@ -796,6 +796,15 @@ class SearchService {
       streetNamePart = match.group(3)?.trim();
     }
 
+    String cleanStreetKeyword(String raw) {
+      var s = raw.split(',').first.trim();
+      s = removeDiacritics(s).toLowerCase();
+      s = s.replaceAll(RegExp(r'^(phố|đường|ngõ|hẻm|đ\.|p\.)\s+'), '').trim();
+      return s;
+    }
+
+    final streetKeyword = streetNamePart != null ? cleanStreetKeyword(streetNamePart) : '';
+
     // -------------------------------------------------------------
     // Step 3: Concurrently Query Photon (OSM POIs/Streets) & MapTiler
     // -------------------------------------------------------------
@@ -807,8 +816,8 @@ class SearchService {
     if (strippedCity != cleanQuery) {
       futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
     }
-    if (streetNamePart != null && streetNamePart.isNotEmpty && streetNamePart != strippedCity) {
-      futures.add(_executePhotonQuery(streetNamePart, nearLocation: nearLocation));
+    if (streetKeyword.isNotEmpty && streetKeyword != cleanQuery) {
+      futures.add(_executePhotonQuery(streetKeyword, nearLocation: nearLocation));
     }
     if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
       futures.add(_executePhotonQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
@@ -820,8 +829,8 @@ class SearchService {
       if (strippedCity != cleanQuery) {
         futures.add(_executeMapboxQuery(strippedCity, nearLocation: nearLocation));
       }
-      if (streetNamePart != null && streetNamePart.isNotEmpty && streetNamePart != strippedCity) {
-        futures.add(_executeMapboxQuery(streetNamePart, nearLocation: nearLocation));
+      if (streetKeyword.isNotEmpty && streetKeyword != cleanQuery) {
+        futures.add(_executeMapboxQuery(streetKeyword, nearLocation: nearLocation));
       }
       if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
         futures.add(_executeMapboxQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
@@ -841,8 +850,6 @@ class SearchService {
 
     // If query had a house number, synthesize top-ranked house number places accurately
     if (houseNumber != null) {
-      final unaccentedStreet = streetNamePart != null ? removeDiacritics(streetNamePart).toLowerCase() : '';
-
       final matchingStreets = mergedResults.where((p) {
         final isStreet = p.type == 'street' ||
             p.type == 'residential' ||
@@ -861,10 +868,10 @@ class SearchService {
             p.displayName.toLowerCase().contains('đường');
 
         if (!isStreet) return false;
-        if (unaccentedStreet.isNotEmpty) {
+        if (streetKeyword.isNotEmpty) {
           final pNameUn = removeDiacritics(p.name).toLowerCase();
           final pDispUn = removeDiacritics(p.displayName).toLowerCase();
-          return pNameUn.contains(unaccentedStreet) || pDispUn.contains(unaccentedStreet);
+          return pNameUn.contains(streetKeyword) || pDispUn.contains(streetKeyword);
         }
         return true;
       }).toList();
@@ -891,8 +898,11 @@ class SearchService {
           bestStreet = _estimateStreetPosition(matchingStreets, houseNumber);
         }
 
-        final baseStreetName = bestStreet.name.replaceAll(RegExp(r'^Số\s+\w+\s+'), '');
-        final customName = 'Số $houseNumber $baseStreetName';
+        final baseStreetName = bestStreet.name
+            .replaceAll(RegExp(r'^Số\s+\w+\s+', caseSensitive: false), '')
+            .replaceAll(RegExp(r'^\d+\s+', caseSensitive: false), '')
+            .trim();
+        final customName = '$houseNumber $baseStreetName';
         final customDisplay = bestStreet.displayName.contains(bestStreet.name)
             ? bestStreet.displayName.replaceFirst(bestStreet.name, customName)
             : '$customName, ${bestStreet.displayName}';
@@ -1242,12 +1252,18 @@ class SearchService {
     if (segments.length == 1) return segments.first;
     final num = int.tryParse(RegExp(r'^\d+').firstMatch(houseNumStr)?.group(0) ?? '') ?? 1;
 
-    // Sort by latitude (North-South in Vietnam)
-    final sorted = List<MapPlace>.from(segments)..sort((a, b) => a.coordinate.latitude.compareTo(b.coordinate.latitude));
+    // Filter outliers (keep only segments within 5km of the first segment)
+    const distCalc = Distance();
+    final firstCoord = segments.first.coordinate;
+    final validSegments = segments.where((s) => distCalc.as(LengthUnit.Meter, firstCoord, s.coordinate) < 5000).toList();
+    if (validSegments.isEmpty) return segments.first;
 
-    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 25%, 150 -> 75%, 200+ -> 100%)
-    final double ratio = (num / 200.0).clamp(0.0, 1.0);
-    final targetIndex = ((sorted.length - 1) * ratio).round();
+    // Sort by latitude (North-South in Vietnam)
+    final sorted = List<MapPlace>.from(validSegments)..sort((a, b) => a.coordinate.latitude.compareTo(b.coordinate.latitude));
+
+    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 25%, 150 -> 65%, 250+ -> 100%)
+    final double ratio = (num / 250.0).clamp(0.0, 1.0);
+    final targetIndex = ((sorted.length - 1) * ratio).round().clamp(0, sorted.length - 1);
     return sorted[targetIndex];
   }
 }
