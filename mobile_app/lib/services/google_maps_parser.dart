@@ -487,15 +487,23 @@ class GoogleMapsParser {
 
   /// Extract coordinates from Google Maps HTML page (staticmap image or APP_INITIALIZATION_STATE)
   LatLng? _extractCoordinateFromHtml(String html) {
-    // 1. Staticmap image URL with markers=lat,lon or center=lat,lon
-    final staticMatch = RegExp(r'staticmap\?[^"\x27]*?(?:center|markers)=(?:color:[^|]+\|)?(\-?\d{1,2}\.\d{3,})%2C(\-?\d{1,3}\.\d{3,})').firstMatch(html);
-    if (staticMatch != null) {
-      final lat = double.tryParse(staticMatch.group(1)!);
-      final lon = double.tryParse(staticMatch.group(2)!);
+    // 1. Staticmap image URL with explicit markers=lat,lon (Must be a marker pin, not just broad regional center=)
+    final markerMatch = RegExp(r'staticmap\?[^"\x27]*?markers=(?:color:[^|]+\|)?(\-?\d{1,2}\.\d{3,})%2C(\-?\d{1,3}\.\d{3,})').firstMatch(html);
+    if (markerMatch != null) {
+      final lat = double.tryParse(markerMatch.group(1)!);
+      final lon = double.tryParse(markerMatch.group(2)!);
       if (lat != null && lon != null) return LatLng(lat, lon);
     }
 
-    // 2. Coordinates in Google JSON data: [null,null,lat,lon]
+    // 2. Staticmap with high zoom (>= 15) indicates exact place center, not regional province view
+    final staticHighZoomMatch = RegExp(r'staticmap\?[^"\x27]*?center=(\-?\d{1,2}\.\d{3,})%2C(\-?\d{1,3}\.\d{3,})[^"\x27]*?zoom=(?:1[5-9]|2\d)').firstMatch(html);
+    if (staticHighZoomMatch != null) {
+      final lat = double.tryParse(staticHighZoomMatch.group(1)!);
+      final lon = double.tryParse(staticHighZoomMatch.group(2)!);
+      if (lat != null && lon != null) return LatLng(lat, lon);
+    }
+
+    // 3. Coordinates in Google JSON data: [null,null,lat,lon]
     final jsonCoordMatch = RegExp(r'\[\s*null\s*,\s*null\s*,\s*(\-?\d{1,2}\.\d{4,})\s*,\s*(\-?\d{1,3}\.\d{4,})\s*\]').firstMatch(html);
     if (jsonCoordMatch != null) {
       final lat = double.tryParse(jsonCoordMatch.group(1)!);

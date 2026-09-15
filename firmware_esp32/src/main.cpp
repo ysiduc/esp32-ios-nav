@@ -195,7 +195,15 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
     if (!error) {
       String typeStr = String(doc["type"] | "");
-      if (typeStr == "DEL_BG") {
+      if (typeStr == "PING") {
+        if (doc["clock"].is<const char*>()) {
+          curClock = String(doc["clock"].as<const char*>());
+        }
+        if (doc["bat"].is<uint8_t>()) {
+          curBattery = doc["bat"].as<uint8_t>();
+        }
+        return;
+      } else if (typeStr == "DEL_BG") {
         String target = String(doc["target"] | "all");
         if (target == "wait" || target == "all") {
           if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
@@ -305,7 +313,7 @@ void setup() {
   NimBLEDevice::setMTU(517);
 
   // Security Auth & Bonding for iOS (Required by Apple Media Service)
-  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityAuth(true, false, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
   AppleMediaService::init();

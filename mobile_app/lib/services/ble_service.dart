@@ -51,6 +51,8 @@ class BleService extends ChangeNotifier {
   StreamSubscription? _scanSubscription;
   StreamSubscription? _adapterStateSubscription;
   StreamSubscription? _connectionSubscription;
+  Timer? _heartbeatTimer;
+  DateTime _lastTxTime = DateTime.now();
 
   // Getters
   bool get isScanning => _isScanning;
@@ -262,6 +264,7 @@ class BleService extends ChangeNotifier {
 
       // Discover GATT Services
       await _discoverServices(device);
+      _startHeartbeat();
       notifyListeners();
       return true;
     } catch (e) {
@@ -271,6 +274,22 @@ class BleService extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  /// Start periodic heartbeat to prevent BLE sleep/timeout on iOS
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _lastTxTime = DateTime.now();
+    _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+      if (!_isConnected || _writeCharacteristic == null) return;
+      final diff = DateTime.now().difference(_lastTxTime).inMilliseconds;
+      if (diff >= 2000) {
+        final now = DateTime.now();
+        final h = now.hour.toString().padLeft(2, '0');
+        final m = now.minute.toString().padLeft(2, '0');
+        sendRawString('{"type":"PING","clock":"$h:$m"}');
+      }
+    });
   }
 
   /// Discover services and locate the RX Characteristic
@@ -318,6 +337,7 @@ class BleService extends ChangeNotifier {
         withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
       );
 
+      _lastTxTime = DateTime.now();
       _addLog('TX [${payload.turnCode}|${payload.distanceToTurn}m]: $jsonStr');
       return true;
     } catch (e) {
@@ -339,7 +359,10 @@ class BleService extends ChangeNotifier {
         bytes,
         withoutResponse: _writeCharacteristic!.properties.writeWithoutResponse,
       );
-      _addLog('TX RAW: $text');
+      _lastTxTime = DateTime.now();
+      if (!text.contains('"PING"')) {
+        _addLog('TX RAW: $text');
+      }
       return true;
     } catch (e) {
       _addLog('Lỗi gửi RAW: $e', isError: true);
@@ -359,6 +382,7 @@ class BleService extends ChangeNotifier {
         bytes,
         withoutResponse: true,
       );
+      _lastTxTime = DateTime.now();
       return true;
     } catch (e) {
       _addLog('Lỗi gửi BLE Raw: $e', isError: true);
@@ -377,6 +401,8 @@ class BleService extends ChangeNotifier {
   }
 
   void _handleDisconnect() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _isConnected = false;
     _isConnecting = false;
     _connectedDevice = null;
@@ -393,6 +419,7 @@ class BleService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _heartbeatTimer?.cancel();
     _scanSubscription?.cancel();
     _adapterStateSubscription?.cancel();
     _connectionSubscription?.cancel();
