@@ -891,6 +891,17 @@ class SearchService {
           // If user is within 500m of this street corridor, the closest segment to user is the most accurate reference
           if (closestDist <= 500) {
             bestStreet = matchingStreets.first;
+            // If user is within 200m of this street corridor, snap directly to user's position along the street!
+            if (closestDist <= 200) {
+              bestStreet = MapPlace(
+                name: bestStreet.name,
+                displayName: bestStreet.displayName,
+                coordinate: LatLng(nearLocation.latitude, bestStreet.coordinate.longitude),
+                type: bestStreet.type,
+                category: bestStreet.category,
+                distanceMeters: 0,
+              );
+            }
           } else {
             bestStreet = _estimateStreetPosition(matchingStreets, houseNumber);
           }
@@ -1261,8 +1272,8 @@ class SearchService {
     // Sort by latitude (North-South in Vietnam)
     final sorted = List<MapPlace>.from(validSegments)..sort((a, b) => a.coordinate.latitude.compareTo(b.coordinate.latitude));
 
-    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 25%, 150 -> 65%, 250+ -> 100%)
-    final double ratio = (num / 250.0).clamp(0.0, 1.0);
+    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 15%, 150 -> 45%, 350+ -> 100%)
+    final double ratio = (num / 350.0).clamp(0.0, 1.0);
     final targetIndex = ((sorted.length - 1) * ratio).round().clamp(0, sorted.length - 1);
     return sorted[targetIndex];
   }

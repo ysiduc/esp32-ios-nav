@@ -101,10 +101,22 @@ class NavigationManager extends ChangeNotifier {
           notifyListeners();
         }
 
-        const settings = LocationSettings(accuracy: LocationAccuracy.high);
-        final currentPos = await Geolocator.getCurrentPosition(locationSettings: settings);
-        _currentLocation = LatLng(currentPos.latitude, currentPos.longitude);
-        notifyListeners();
+        // Immediately start continuous high-accuracy location updates for map & search
+        _positionStream?.cancel();
+        const settings = LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 2,
+        );
+        _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
+          _currentLocation = LatLng(pos.latitude, pos.longitude);
+          _currentSpeedKmh = pos.speed * 3.6;
+          _currentHeading = pos.heading;
+          if (_isNavigating) {
+            _updateUserPosition(_currentLocation!, _currentSpeedKmh, _currentHeading);
+          } else {
+            notifyListeners();
+          }
+        });
       }
     } catch (_) {
       // Default fallback (Hanoi)
