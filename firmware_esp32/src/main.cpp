@@ -76,18 +76,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
                   desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
 
-    // Increase supervision timeout to 1000 (10 seconds) to prevent auto-disconnects when idle in background
-    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 1000);
-
     AppleMediaService::connHandle = desc->conn_handle;
     AppleMediaService::lastCheckTime = millis();
     AppleNotificationService::connHandle = desc->conn_handle;
     AppleNotificationService::lastCheckTime = millis();
 
-    // If already encrypted/bonded, immediately trigger AMS & ANCS discovery
+    // If already encrypted/bonded, immediately trigger ANCS sequential discovery (which chains to AMS)
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting AMS & ANCS discovery...");
-      AppleMediaService::onEncrypted(desc->conn_handle);
+      Serial.println("[BLE] Link already encrypted. Starting ANCS sequential discovery...");
       AppleNotificationService::onEncrypted(desc->conn_handle);
     } else {
       // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)

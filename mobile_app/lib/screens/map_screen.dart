@@ -161,6 +161,45 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// Update native vector circle marker for destination pin at exact GPS coordinate
+  Future<void> _updateDestinationMarker() async {
+    final ctrl = _mapController;
+    if (ctrl == null || !_mapReady) return;
+    try {
+      await ctrl.clearCircles();
+      if (_selectedPlace != null) {
+        final pt = ml.LatLng(
+          _selectedPlace!.coordinate.latitude,
+          _selectedPlace!.coordinate.longitude,
+        );
+        // Outer pulsing halo
+        await ctrl.addCircle(
+          ml.CircleOptions(
+            geometry: pt,
+            circleRadius: 18.0,
+            circleColor: '#FF2E63',
+            circleOpacity: 0.35,
+            circleStrokeWidth: 1.5,
+            circleStrokeColor: '#FF2E63',
+          ),
+        );
+        // Inner sharp solid pin core
+        await ctrl.addCircle(
+          ml.CircleOptions(
+            geometry: pt,
+            circleRadius: 8.5,
+            circleColor: '#FF2E63',
+            circleOpacity: 1.0,
+            circleStrokeWidth: 3.0,
+            circleStrokeColor: '#FFFFFF',
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error updating destination marker on MapLibre: $e');
+    }
+  }
+
   Future<void> _checkClipboardForGoogleMaps() async {
 
     try {
@@ -357,6 +396,7 @@ class _MapScreenState extends State<MapScreen> {
         16.5,
       ),
     );
+    _updateDestinationMarker();
   }
 
   void _onMapTapped(LatLng point) async {
@@ -375,6 +415,7 @@ class _MapScreenState extends State<MapScreen> {
           16.5,
         ),
       );
+      _updateDestinationMarker();
     }
   }
 
@@ -396,6 +437,7 @@ class _MapScreenState extends State<MapScreen> {
       _selectedRouteIndex = 0;
       _routes = [];
     });
+    _updateDestinationMarker();
 
     final routes = await _directionsService.calculateMultipleRoutes(
       startPos,
@@ -413,6 +455,7 @@ class _MapScreenState extends State<MapScreen> {
       if (routes.isNotEmpty) {
         _fitRouteBounds(routes.first.polylinePoints);
         _updateRouteOnMap();
+        _updateDestinationMarker();
       }
     }
   }
@@ -524,8 +567,9 @@ class _MapScreenState extends State<MapScreen> {
             ),
             onMapCreated: _onMapCreated,
             onStyleLoadedCallback: () {
-              // After style loads, draw route if already available
+              // After style loads, draw route and destination pin if already available
               _updateRouteOnMap();
+              _updateDestinationMarker();
             },
             onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
             onCameraIdle: () {
@@ -544,52 +588,6 @@ class _MapScreenState extends State<MapScreen> {
             zoomGesturesEnabled: true,
             tiltGesturesEnabled: true,
           ),
-
-          // -----------------------------------------------------------
-          // Destination Pin Overlay (Flutter Widget on top of map)
-          // -----------------------------------------------------------
-          if (_selectedPlace != null && !isDriving)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: Align(
-                  alignment: Alignment.center,
-                  child: Transform.translate(
-                    offset: const Offset(0, -30),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFFF2E63), Color(0xFFFF5722)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                  color: const Color(0xFFFF2E63).withAlpha(140),
-                                  blurRadius: 12),
-                              BoxShadow(
-                                  color: Colors.black.withAlpha(120),
-                                  blurRadius: 6),
-                            ],
-                          ),
-                          child: const Icon(Icons.location_on_rounded,
-                              color: Colors.white, size: 22),
-                        ),
-                        CustomPaint(
-                          size: const Size(12, 6),
-                          painter:
-                              _TrianglePainter(color: const Color(0xFFFF5722)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
 
           // -----------------------------------------------------------
           // 2. Top Bar: Search Bar, Clipboard Banner & Quick Categories (Browse Mode)
@@ -918,7 +916,7 @@ class _MapScreenState extends State<MapScreen> {
       margin: const EdgeInsets.only(top: 8),
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: categories.length + 1,
+        itemCount: categories.length + 2,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -952,7 +950,38 @@ class _MapScreenState extends State<MapScreen> {
             );
           }
 
-          final cat = categories[index - 1];
+          if (index == 1) {
+            // Second item: Direct GPS Coordinate Input Chip
+            return GestureDetector(
+              onTap: _showCoordinateInputDialog,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF00897B), Color(0xFF00B4D8)],
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white24),
+                  boxShadow: [
+                    BoxShadow(color: const Color(0xFF00897B).withAlpha(120), blurRadius: 6),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.gps_fixed_rounded, size: 16, color: Colors.white),
+                    SizedBox(width: 6),
+                    Text(
+                      'Nhập tọa độ',
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          final cat = categories[index - 2];
           return GestureDetector(
             onTap: () => _onSelectCategory(cat),
             child: Container(
@@ -980,6 +1009,253 @@ class _MapScreenState extends State<MapScreen> {
           );
         },
       ),
+    );
+  }
+
+  /// Show dedicated GPS coordinate / Google Maps input and conversion dialog
+  void _showCoordinateInputDialog() {
+    final textController = TextEditingController();
+    LatLng? parsedCoord;
+    String statusMessage = '';
+    bool isValid = false;
+    bool isResolving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void checkInput(String val) async {
+              final trimmed = val.trim();
+              if (trimmed.isEmpty) {
+                setModalState(() {
+                  parsedCoord = null;
+                  isValid = false;
+                  statusMessage = '';
+                  isResolving = false;
+                });
+                return;
+              }
+
+              // 1. Check DMS format (e.g. 20°58'57.0"N 105°50'06.4"E or 21°01'42.6"B)
+              final dms = GoogleMapsParser.parseDms(trimmed);
+              if (dms != null) {
+                setModalState(() {
+                  parsedCoord = dms;
+                  isValid = true;
+                  statusMessage = 'Đã nhận dạng tọa độ DMS:\n${dms.latitude.toStringAsFixed(6)}, ${dms.longitude.toStringAsFixed(6)}';
+                  isResolving = false;
+                });
+                return;
+              }
+
+              // 2. Check Decimal Lat, Lon pattern: e.g. 20.982512, 105.835123
+              final coordRegex = RegExp(r'(\-?\d{1,2}\.\d{3,})[\s,;]+(\-?\d{1,3}\.\d{3,})');
+              final match = coordRegex.firstMatch(trimmed);
+              if (match != null && !trimmed.startsWith('http')) {
+                final lat = double.tryParse(match.group(1)!);
+                final lon = double.tryParse(match.group(2)!);
+                if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+                  setModalState(() {
+                    parsedCoord = LatLng(lat, lon);
+                    isValid = true;
+                    statusMessage = 'Đã nhận dạng tọa độ GPS:\nVĩ độ: ${lat.toStringAsFixed(6)}, Kinh độ: ${lon.toStringAsFixed(6)}';
+                    isResolving = false;
+                  });
+                  return;
+                }
+              }
+
+              // 3. If it is a URL or search string, resolve with GoogleMapsParser
+              if (trimmed.startsWith('http') || trimmed.contains('maps') || trimmed.contains('goo.gl')) {
+                setModalState(() {
+                  isResolving = true;
+                  statusMessage = 'Đang trích xuất tọa độ từ liên kết Google Maps...';
+                });
+
+                try {
+                  final place = await _googleMapsParser.parseInput(trimmed, userLocation: _userPosition);
+                  if (place != null) {
+                    setModalState(() {
+                      parsedCoord = place.coordinate;
+                      isValid = true;
+                      isResolving = false;
+                      statusMessage = 'Đã tìm thấy địa điểm:\n${place.name}\nTọa độ: ${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}';
+                    });
+                    return;
+                  }
+                } catch (_) {}
+
+                setModalState(() {
+                  isResolving = false;
+                  isValid = false;
+                  statusMessage = 'Không thể lấy tọa độ tự động từ link này. Hãy sao chép dãy tọa độ trực tiếp từ Google Maps.';
+                });
+                return;
+              }
+
+              setModalState(() {
+                parsedCoord = null;
+                isValid = false;
+                isResolving = false;
+                statusMessage = 'Định dạng chưa đúng. Nhập dạng: 20.9825, 105.8351 hoặc 20°58\'57.0"N 105°50\'06.4"E';
+              });
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1E293B),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                  border: Border(top: BorderSide(color: Colors.white12)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                      ),
+                    ),
+                    const Row(
+                      children: [
+                        Icon(Icons.gps_fixed_rounded, color: Color(0xFF00F0FF), size: 22),
+                        SizedBox(width: 8),
+                        Text(
+                          'Nhập hoặc Dán Tọa Độ GPS',
+                          style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Hỗ trợ tọa độ thập phân (20.9825, 105.8351), tọa độ độ-phút-giây (DMS) hoặc link chia sẻ từ Google Maps.',
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: textController,
+                      autofocus: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: 'Ví dụ: 20.982512, 105.835123',
+                        hintStyle: const TextStyle(color: Colors.white38),
+                        filled: true,
+                        fillColor: const Color(0xFF0F172A),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide(color: isValid ? const Color(0xFF05FFA1) : Colors.white12),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide(color: isValid ? const Color(0xFF05FFA1) : Colors.white12),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide(color: isValid ? const Color(0xFF05FFA1) : const Color(0xFF0084FF), width: 1.5),
+                        ),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.paste_rounded, color: Color(0xFF00F0FF)),
+                          tooltip: 'Dán từ clipboard',
+                          onPressed: () async {
+                            final data = await Clipboard.getData(Clipboard.kTextPlain);
+                            if (data?.text != null) {
+                              textController.text = data!.text!;
+                              checkInput(data.text!);
+                            }
+                          },
+                        ),
+                      ),
+                      onChanged: checkInput,
+                    ),
+                    if (statusMessage.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isValid
+                              ? const Color(0xFF05FFA1).withAlpha(20)
+                              : const Color(0xFFFFB800).withAlpha(20),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isValid
+                                ? const Color(0xFF05FFA1).withAlpha(80)
+                                : const Color(0xFFFFB800).withAlpha(80),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (isResolving)
+                              const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F0FF)),
+                              )
+                            else
+                              Icon(
+                                isValid ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                                color: isValid ? const Color(0xFF05FFA1) : const Color(0xFFFFB800),
+                                size: 18,
+                              ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                statusMessage,
+                                style: TextStyle(
+                                  color: isValid ? const Color(0xFF05FFA1) : const Color(0xFFFFB800),
+                                  fontSize: 12,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isValid ? const Color(0xFF0084FF) : Colors.white12,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                        icon: const Icon(Icons.near_me_rounded),
+                        label: const Text(
+                          '🎯 Định vị & Xem đường đi',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        onPressed: isValid && parsedCoord != null
+                            ? () async {
+                                Navigator.pop(ctx);
+                                final coord = parsedCoord!;
+                                final place = await _searchService.reverseGeocode(coord);
+                                _onPlaceClicked(place);
+                              }
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1219,11 +1495,64 @@ class _MapScreenState extends State<MapScreen> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.close_rounded, color: Colors.white54),
-                  onPressed: () => setState(() => _viewMode = 0),
+                  onPressed: () {
+                    setState(() {
+                      _viewMode = 0;
+                      _selectedPlace = null;
+                    });
+                    _updateDestinationMarker();
+                  },
                 ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.gps_fixed_rounded, color: Color(0xFF00F0FF), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tọa độ: ${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12, fontFamily: 'monospace'),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(
+                        text: '${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}',
+                      ));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Đã sao chép tọa độ GPS vào bộ nhớ tạm'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      child: Row(
+                        children: [
+                          Icon(Icons.copy_rounded, color: Color(0xFF00F0FF), size: 14),
+                          SizedBox(width: 4),
+                          Text(
+                            'Sao chép',
+                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
@@ -1236,7 +1565,13 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                     icon: const Icon(Icons.close_rounded, size: 18),
                     label: const Text('Đóng', style: TextStyle(fontWeight: FontWeight.bold)),
-                    onPressed: () => setState(() => _viewMode = 0),
+                    onPressed: () {
+                      setState(() {
+                        _viewMode = 0;
+                        _selectedPlace = null;
+                      });
+                      _updateDestinationMarker();
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1809,6 +2144,7 @@ class _MapScreenState extends State<MapScreen> {
                   _routes = [];
                   _selectedPlace = null;
                 });
+                _updateDestinationMarker();
               },
               child: const Icon(Icons.close_rounded, size: 24),
             ),
@@ -1956,27 +2292,4 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
-}
-
-class _TrianglePainter extends CustomPainter {
-  final Color color;
-  _TrianglePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path();
-    path.moveTo(0, 0);
-    path.lineTo(size.width, 0);
-    path.lineTo(size.width / 2, size.height);
-    path.close();
-
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
