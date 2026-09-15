@@ -231,11 +231,23 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
         Coordinator()
     }
 
-    public class Coordinator: NSObject {
-        #if canImport(MapLibre)
+    #if canImport(MapLibre)
+    public class Coordinator: NSObject, MLNMapViewDelegate {
         weak var mapView: MLNMapView?
         private var polylineAnnotation: MLNPolyline?
         private var destinationAnnotation: MLNPointAnnotation?
+
+        public func mapView(_ mapView: MLNMapView, strokeColorForShapeAnnotation annotation: MLNShape) -> UIColor {
+            return UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 1.0)
+        }
+
+        public func mapView(_ mapView: MLNMapView, lineWidthForPolylineAnnotation annotation: MLNPolyline) -> CGFloat {
+            return 6.0
+        }
+
+        public func mapView(_ mapView: MLNMapView, alphaForShapeAnnotation annotation: MLNShape) -> CGFloat {
+            return 0.95
+        }
 
         func update(route: NavRoute?, destination: CLLocationCoordinate2D?, userLocation: CLLocationCoordinate2D?, isNavigating: Bool) {
             guard let mapView = mapView else { return }
@@ -276,6 +288,8 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
                 mapView.userTrackingMode = .followWithHeading
             }
         }
-        #endif
     }
+    #else
+    public class Coordinator: NSObject {}
+    #endif
 }

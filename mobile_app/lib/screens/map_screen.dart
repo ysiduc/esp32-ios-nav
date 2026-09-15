@@ -572,6 +572,7 @@ class _MapScreenState extends State<MapScreen> {
               _updateDestinationMarker();
             },
             onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
+            onMapLongClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
             onCameraIdle: () {
               // When camera stops moving, update stream frame
             },
@@ -1552,7 +1553,23 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.touch_app_outlined, size: 13, color: Colors.white54),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      'Chạm hoặc giữ bất kỳ điểm nào trên bản đồ để chỉnh lại vị trí ghim',
+                      style: TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(

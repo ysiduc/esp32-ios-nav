@@ -714,6 +714,31 @@ class SearchService {
     final cleanQuery = query.trim();
     if (cleanQuery.isEmpty) return [];
 
+    // Check if query is a direct coordinate (e.g., "20.976077, 105.835849" or "20.976077 105.835849")
+    final coordMatch = RegExp(r'^(-?\d{1,3}\.\d+)[,\s]+(-?\d{1,3}\.\d+)$').firstMatch(cleanQuery);
+    if (coordMatch != null) {
+      final lat = double.tryParse(coordMatch.group(1)!);
+      final lon = double.tryParse(coordMatch.group(2)!);
+      if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+        final point = LatLng(lat, lon);
+        final rev = await reverseGeocode(point);
+        return [
+          MapPlace(
+            name: rev.name.isNotEmpty && rev.name != 'Vị trí đã ghim'
+                ? rev.name
+                : 'Tọa độ: ${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)}',
+            displayName: rev.displayName.isNotEmpty
+                ? rev.displayName
+                : 'Tọa độ: ${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)}',
+            coordinate: point,
+            type: 'coordinate',
+            category: 'pin',
+            distanceMeters: nearLocation != null ? const Distance().as(LengthUnit.Meter, nearLocation, point) : null,
+          )
+        ];
+      }
+    }
+
     final unaccented = removeDiacritics(cleanQuery).toLowerCase();
     final strippedCity = stripCitySuffix(cleanQuery);
     final strippedCityUnaccented = removeDiacritics(strippedCity).toLowerCase();
@@ -775,6 +800,7 @@ class SearchService {
     // Step 3: Concurrently Query Photon (OSM POIs/Streets) & MapTiler
     // -------------------------------------------------------------
     final futures = <Future<List<MapPlace>>>[];
+    final cityHint = _detectCityHint(nearLocation);
 
     // A. Photon Search (Very rich OpenStreetMap coverage for Vietnamese POIs, restaurants, schools, addresses)
     futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
@@ -784,12 +810,21 @@ class SearchService {
     if (streetNamePart != null && streetNamePart.isNotEmpty && streetNamePart != strippedCity) {
       futures.add(_executePhotonQuery(streetNamePart, nearLocation: nearLocation));
     }
+    if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
+      futures.add(_executePhotonQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
+    }
 
     // B. MapTiler Search (Official administrative areas & major streets)
     if (MapboxConfig.isConfigured) {
       futures.add(_executeMapboxQuery(cleanQuery, nearLocation: nearLocation));
       if (strippedCity != cleanQuery) {
         futures.add(_executeMapboxQuery(strippedCity, nearLocation: nearLocation));
+      }
+      if (streetNamePart != null && streetNamePart.isNotEmpty && streetNamePart != strippedCity) {
+        futures.add(_executeMapboxQuery(streetNamePart, nearLocation: nearLocation));
+      }
+      if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
+        futures.add(_executeMapboxQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
       }
     }
 
@@ -804,10 +839,11 @@ class SearchService {
       }
     }
 
-    // If query had a house number, synthesize top-ranked house number places
+    // If query had a house number, synthesize top-ranked house number places accurately
     if (houseNumber != null) {
-      final streetsToSynthesize = mergedResults.toList();
-      for (final p in streetsToSynthesize) {
+      final unaccentedStreet = streetNamePart != null ? removeDiacritics(streetNamePart).toLowerCase() : '';
+
+      final matchingStreets = mergedResults.where((p) {
         final isStreet = p.type == 'street' ||
             p.type == 'residential' ||
             p.type == 'secondary' ||
@@ -824,25 +860,60 @@ class SearchService {
             p.displayName.toLowerCase().contains('phố') ||
             p.displayName.toLowerCase().contains('đường');
 
-        if (isStreet && !p.name.contains(houseNumber)) {
-          final customName = 'Số $houseNumber ${p.name}';
-          final customDisplay = p.displayName.contains(p.name)
-              ? p.displayName.replaceFirst(p.name, customName)
-              : '$customName, ${p.displayName}';
-
-          mergedResults.insert(
-            0,
-            MapPlace(
-              name: customName,
-              displayName: customDisplay,
-              coordinate: p.coordinate,
-              type: 'house',
-              category: 'building',
-              distanceMeters: p.distanceMeters,
-            ),
-          );
-          break; // Only synthesize the top matched street
+        if (!isStreet) return false;
+        if (unaccentedStreet.isNotEmpty) {
+          final pNameUn = removeDiacritics(p.name).toLowerCase();
+          final pDispUn = removeDiacritics(p.displayName).toLowerCase();
+          return pNameUn.contains(unaccentedStreet) || pDispUn.contains(unaccentedStreet);
         }
+        return true;
+      }).toList();
+
+      if (matchingStreets.isNotEmpty) {
+        MapPlace bestStreet = matchingStreets.first;
+
+        if (nearLocation != null) {
+          const distCalc = Distance();
+          matchingStreets.sort((a, b) {
+            final dA = distCalc.as(LengthUnit.Meter, nearLocation, a.coordinate);
+            final dB = distCalc.as(LengthUnit.Meter, nearLocation, b.coordinate);
+            return dA.compareTo(dB);
+          });
+
+          final closestDist = distCalc.as(LengthUnit.Meter, nearLocation, matchingStreets.first.coordinate);
+          // If user is within 500m of this street corridor, the closest segment to user is the most accurate reference
+          if (closestDist <= 500) {
+            bestStreet = matchingStreets.first;
+          } else {
+            bestStreet = _estimateStreetPosition(matchingStreets, houseNumber);
+          }
+        } else {
+          bestStreet = _estimateStreetPosition(matchingStreets, houseNumber);
+        }
+
+        final baseStreetName = bestStreet.name.replaceAll(RegExp(r'^Số\s+\w+\s+'), '');
+        final customName = 'Số $houseNumber $baseStreetName';
+        final customDisplay = bestStreet.displayName.contains(bestStreet.name)
+            ? bestStreet.displayName.replaceFirst(bestStreet.name, customName)
+            : '$customName, ${bestStreet.displayName}';
+
+        double? dist;
+        if (nearLocation != null) {
+          const distCalc = Distance();
+          dist = distCalc.as(LengthUnit.Meter, nearLocation, bestStreet.coordinate);
+        }
+
+        mergedResults.insert(
+          0,
+          MapPlace(
+            name: customName,
+            displayName: customDisplay,
+            coordinate: bestStreet.coordinate,
+            type: 'house',
+            category: 'building',
+            distanceMeters: dist,
+          ),
+        );
       }
     }
 
@@ -1151,5 +1222,32 @@ class SearchService {
       displayName: 'Tọa độ: ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
       coordinate: location,
     );
+  }
+
+  String? _detectCityHint(LatLng? nearLocation) {
+    if (nearLocation == null) return null;
+    final lat = nearLocation.latitude;
+    final lon = nearLocation.longitude;
+    if (lat >= 20.5 && lat <= 21.6 && lon >= 105.3 && lon <= 106.3) {
+      return 'Hà Nội';
+    } else if (lat >= 10.3 && lat <= 11.3 && lon >= 106.2 && lon <= 107.2) {
+      return 'Hồ Chí Minh';
+    } else if (lat >= 15.8 && lat <= 16.3 && lon >= 107.9 && lon <= 108.5) {
+      return 'Đà Nẵng';
+    }
+    return null;
+  }
+
+  MapPlace _estimateStreetPosition(List<MapPlace> segments, String houseNumStr) {
+    if (segments.length == 1) return segments.first;
+    final num = int.tryParse(RegExp(r'^\d+').firstMatch(houseNumStr)?.group(0) ?? '') ?? 1;
+
+    // Sort by latitude (North-South in Vietnam)
+    final sorted = List<MapPlace>.from(segments)..sort((a, b) => a.coordinate.latitude.compareTo(b.coordinate.latitude));
+
+    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 25%, 150 -> 75%, 200+ -> 100%)
+    final double ratio = (num / 200.0).clamp(0.0, 1.0);
+    final targetIndex = ((sorted.length - 1) * ratio).round();
+    return sorted[targetIndex];
   }
 }

@@ -21,7 +21,7 @@ let package = Package(
         // MapLibre Native for iOS: High-performance vector tile rendering
         .package(
             url: "https://github.com/maplibre/maplibre-gl-native-distribution.git",
-            from: "5.13.0"
+            from: "6.21.2"
         ),
     ],
     targets: [
