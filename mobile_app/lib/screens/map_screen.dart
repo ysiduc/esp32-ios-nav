@@ -84,8 +84,15 @@ class _MapScreenState extends State<MapScreen> {
         }
       };
 
-      // Auto-start headless 20-30 FPS live map stream
+      // Auto-start headless live map stream and sync current theme
       final streamService = Provider.of<EspStreamService>(context, listen: false);
+      if (_currentTheme == MapThemeMode.dark || _currentTheme == MapThemeMode.navigationNight) {
+        streamService.streamMapStyle = 'streets-v2-dark';
+      } else if (_currentTheme == MapThemeMode.satellite) {
+        streamService.streamMapStyle = 'hybrid';
+      } else {
+        streamService.streamMapStyle = 'streets-v2';
+      }
       if (!streamService.isStreaming) {
         streamService.startStreaming();
       }

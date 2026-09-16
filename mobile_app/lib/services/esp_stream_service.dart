@@ -41,7 +41,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
-  String _streamMapStyle = 'streets-v2';
+  String _streamMapStyle = 'streets-v2-dark';
   String get streamMapStyle => _streamMapStyle;
   set streamMapStyle(String val) {
     if (_streamMapStyle != val) {
@@ -263,19 +263,25 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final apiKey = MapboxConfig.maptilerApiKey;
       final style = _streamMapStyle;
+      final isDark = style.contains('dark');
       final ext = style == 'hybrid' ? 'jpg' : 'png';
+
       final url = apiKey.isNotEmpty
           ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
-          : 'https://tile.openstreetmap.org/$z/$x/$y.png';
+          : (isDark
+              ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
+              : 'https://tile.openstreetmap.org/$z/$x/$y.png');
 
       var response = await http.get(
         Uri.parse(url),
         headers: {'User-Agent': 'ESP32NavApp/2.0'},
       ).timeout(const Duration(seconds: 4));
 
-      // Fallback to OSM standard tile if MapTiler failed or rate-limited
+      // Fallback: CartoDB Dark (for dark cockpit) or OSM standard
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        final fallbackUrl = 'https://tile.openstreetmap.org/$z/$x/$y.png';
+        final fallbackUrl = isDark
+            ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
+            : 'https://tile.openstreetmap.org/$z/$x/$y.png';
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'ESP32NavApp/2.0'},
@@ -384,9 +390,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       canvas.drawLine(const Offset(0, -160), const Offset(0, 160), radarPaint);
     }
 
-    // Draw Route Polyline ONLY when user is actively navigating or simulating
-    final isNav = (navManager?.isNavigating ?? false) || (navManager?.isSimulating ?? false);
-    final points = (isNav && activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
+    // Draw Route Polyline whenever an active route exists (preview or active navigation)
+    final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
         ? activeRoute.polylinePoints
         : <LatLng>[];
 

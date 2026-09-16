@@ -87,6 +87,25 @@ class NavigationManager extends ChangeNotifier {
     });
   }
 
+  LocationSettings _buildLocationSettings({
+    LocationAccuracy accuracy = LocationAccuracy.bestForNavigation,
+    int distanceFilter = 2,
+  }) {
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return AppleSettings(
+        accuracy: accuracy,
+        distanceFilter: distanceFilter,
+        pauseLocationUpdatesAutomatically: false,
+        showBackgroundLocationIndicator: true,
+        allowBackgroundLocationUpdates: true,
+      );
+    }
+    return LocationSettings(
+      accuracy: accuracy,
+      distanceFilter: distanceFilter,
+    );
+  }
+
   Future<void> _initGps() async {
     try {
       LocationPermission permission = await Geolocator.checkPermission();
@@ -103,7 +122,7 @@ class NavigationManager extends ChangeNotifier {
 
         // Immediately start continuous high-accuracy location updates for map & search
         _positionStream?.cancel();
-        const settings = LocationSettings(
+        final settings = _buildLocationSettings(
           accuracy: LocationAccuracy.high,
           distanceFilter: 2,
         );
@@ -137,8 +156,8 @@ class NavigationManager extends ChangeNotifier {
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
 
-    // Start location tracking
-    const locationSettings = LocationSettings(
+    // Start location tracking with iOS background execution enabled
+    final locationSettings = _buildLocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 2, // 2 meters
     );
