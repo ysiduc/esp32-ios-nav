@@ -2,6 +2,7 @@
 #define DISPLAY_UI_H
 
 #include <Arduino.h>
+#include <SPIFFS.h>
 
 #if defined(DISPLAY_OLED_SSD1306)
 #include <U8g2lib.h>
@@ -11,10 +12,13 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #elif defined(DISPLAY_TFT_ST7789)
 #include <TFT_eSPI.h>
 #include <U8g2_for_TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 extern U8g2_for_TFT_eSPI u8f;
 
 extern TFT_eSPI tft;
 #endif
+
+#include "icons.h"
 
 enum DisplayState {
   STATE_PAIRING_WAIT,
@@ -44,6 +48,7 @@ struct NavStateData {
   char songArtist[32] = "";
   uint8_t routePointCount = 0;
   RoutePoint routePoints[32];
+  int16_t heading = 0;
 };
 
 struct AncsPopupData {
@@ -85,7 +90,7 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false) {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, int16_t head = 0) {
     if (_navData.isNavigating != isNav) {
       _needFullRedraw = true;
     }
@@ -95,16 +100,27 @@ public:
     _navData.speedKmh = speed;
     _navData.etaMinutes = eta;
     _navData.isNavigating = isNav;
+    _navData.heading = head;
 
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
-    if (arrival != nullptr && strlen(arrival) > 0) {
-      strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
-      _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
-    }
     if (clock != nullptr && strlen(clock) > 0) {
       strncpy(_navData.currentTime, clock, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+    }
+    if (arrival != nullptr && strlen(arrival) > 0 && strcmp(arrival, "18:26") != 0) {
+      strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
+      _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+    } else if (clock != nullptr && strlen(clock) > 0) {
+      int ch = 0, cm = 0;
+      if (sscanf(clock, "%d:%d", &ch, &cm) == 2) {
+        int totalMin = ch * 60 + cm + eta;
+        int arrH = (totalMin / 60) % 24;
+        int arrM = totalMin % 60;
+        snprintf(_navData.arrivalTime, sizeof(_navData.arrivalTime), "%02d:%02d", arrH, arrM);
+      } else {
+        strncpy(_navData.arrivalTime, "18:26", sizeof(_navData.arrivalTime) - 1);
+      }
     }
     if (battery > 0 && battery <= 100) {
       _navData.batteryLevel = battery;
@@ -124,13 +140,13 @@ public:
   }
 
   void setSongInfo(const char* song, const char* artist) {
-    if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0 && strcmp(song, "Waiting For You") != 0) {
+    if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0) {
       strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
       _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
     } else if (song == nullptr || strlen(song) == 0 || strcmp(song, "CHUA PHAT NHAC") == 0) {
       _navData.songTitle[0] = '\0';
     }
-    if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0 && strcmp(artist, "MONO") != 0) {
+    if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0) {
       strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
       _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
     } else if (artist == nullptr || strlen(artist) == 0) {
@@ -169,6 +185,25 @@ public:
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
     _popupData.expireMillis = millis() + 6000;
     _currentState = STATE_POPUP_SMS;
+    _needFullRedraw = true;
+  }
+
+  void dismissAlert() {
+    if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+      _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _needFullRedraw = true;
+    }
+  }
+
+  bool isCallActive() const {
+    return _currentState == STATE_POPUP_CALL;
+  }
+
+  const char* getCallerName() const {
+    return _popupData.title;
+  }
+
+  void forceRedraw() {
     _needFullRedraw = true;
   }
 
@@ -221,7 +256,63 @@ private:
     u8f.print(str);
   }
 
+  void _drawThickLine(int x1, int y1, int x2, int y2, uint16_t color, int width = 1) {
+    if (width <= 1) {
+      tft.drawLine(x1, y1, x2, y2, color);
+      return;
+    }
+    if (width == 2) {
+      tft.drawLine(x1, y1, x2, y2, color);
+      if (abs(x2 - x1) > abs(y2 - y1)) {
+        tft.drawLine(x1, y1 + 1, x2, y2 + 1, color);
+      } else {
+        tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
+      }
+      return;
+    }
+    tft.drawLine(x1, y1, x2, y2, color);
+    if (abs(x2 - x1) > abs(y2 - y1)) {
+      tft.drawLine(x1, y1 - 1, x2, y2 - 1, color);
+      tft.drawLine(x1, y1 + 1, x2, y2 + 1, color);
+    } else {
+      tft.drawLine(x1 - 1, y1, x2 - 1, y2, color);
+      tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
+    }
+  }
+
   void _drawPairingScreenTft() {
+    if (SPIFFS.exists("/bg_wait.jpg")) {
+      File f = SPIFFS.open("/bg_wait.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 500) {
+          JRESULT res = TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+          if (res == JDR_OK) {
+            // Top status bar overlay
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.drawString("* ysiduc", 10, 4, 2);
+            char batStr[16];
+            snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+            tft.drawString(batStr, 270, 4, 2);
+
+            // Bottom Glass Banner
+            uint16_t cBarBg = tft.color565(11, 17, 26);
+            tft.fillRoundRect(20, 202, 280, 32, 8, cBarBg);
+            tft.drawRoundRect(20, 202, 280, 32, 8, TFT_CYAN);
+            _drawCentreUtf8String("CHỜ KẾT NỐI BLUETOOTH...", 160, 208, TFT_CYAN, cBarBg);
+            return;
+          } else {
+            Serial.printf("[SPIFFS] /bg_wait.jpg decode failed (rc=%d), removing corrupt file.\n", res);
+            SPIFFS.remove("/bg_wait.jpg");
+          }
+        } else {
+          Serial.println("[SPIFFS] /bg_wait.jpg incomplete (<500B), removing.");
+          SPIFFS.remove("/bg_wait.jpg");
+        }
+      }
+    }
+
     tft.fillScreen(TFT_BLACK);
 
     // Top Status bar (Header: * ysiduc | Current Clock | Battery)
@@ -332,131 +423,231 @@ private:
     }
   }
 
-  /// Draw High-Definition Realistic Standby Vector Map when JPEG stream is inactive
+  /// Draw High-Definition Simplified Vector Navigation Map
   void _renderStandbyVectorMap() {
-    uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
-    uint16_t cAsphalt = tft.color565(26, 36, 50);   // Real Road Asphalt Casing
-    uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Neon Cyan Route
-    uint16_t cGlow = tft.color565(0, 100, 160);     // Outer Route Glow
-    uint16_t cRadar = tft.color565(20, 32, 48);     // Subtle Radar Grid Rings
-    uint16_t cPill = tft.color565(15, 23, 36);      // HUD Glass Pill
-
-    // 1. Map container box & border
-    tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
-    tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
-
-    int cx = 78;
-    int cy = 155;
-
-    // 2. Concentric Distance Radar Range Rings (50m, 100m scale)
-    tft.drawCircle(cx, cy, 45, cRadar);
-    tft.drawCircle(cx, cy, 90, cRadar);
-    tft.drawFastHLine(cx - 65, cy, 130, cRadar);
-    tft.drawFastVLine(cx, cy - 110, 170, cRadar);
-
-    // Subtle scale labels
-    tft.setTextColor(tft.color565(71, 85, 105), cMapBg);
-    tft.drawString("50m", cx + 47, cy - 8, 1);
-    tft.drawString("100m", cx + 70, cy - 8, 1);
-
-    // 3. Dynamic Vector Route: Draw Real Road Corridor from GPS Route Points
-    if (_navData.routePointCount >= 2) {
-      int ptsX[32];
-      int ptsY[32];
-      for (uint8_t i = 0; i < _navData.routePointCount; i++) {
-        ptsX[i] = constrain(cx + _navData.routePoints[i].dx, 10, 144);
-        ptsY[i] = constrain(cy - _navData.routePoints[i].dy, 30, 224);
-      }
-
-      // Pass 1: Wide Asphalt Road Corridor Bed (Width ~10px)
-      for (uint8_t i = 0; i < _navData.routePointCount; i++) {
-        tft.fillCircle(ptsX[i], ptsY[i], 5, cAsphalt);
-      }
-      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
-        for (int off = -5; off <= 5; off++) {
-          tft.drawLine(ptsX[i-1] + off, ptsY[i-1], ptsX[i] + off, ptsY[i], cAsphalt);
-          tft.drawLine(ptsX[i-1], ptsY[i-1] + off, ptsX[i], ptsY[i] + off, cAsphalt);
+    if (!_navData.isNavigating && SPIFFS.exists("/bg_map.jpg")) {
+      File f = SPIFFS.open("/bg_map.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 500) {
+          extern bool g_clipMapOnly;
+          g_clipMapOnly = true;
+          JRESULT res = TJpgDec.drawFsJpg(6, 26, "/bg_map.jpg");
+          g_clipMapOnly = false;
+          if (res == JDR_OK) {
+            tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
+            return;
+          } else {
+            Serial.printf("[SPIFFS] /bg_map.jpg decode failed (rc=%d), removing corrupt file.\n", res);
+            SPIFFS.remove("/bg_map.jpg");
+          }
+        } else {
+          Serial.println("[SPIFFS] /bg_map.jpg incomplete (<500B), removing.");
+          SPIFFS.remove("/bg_map.jpg");
         }
       }
-
-      // Pass 2: Glowing Route Center (Width ~4px)
-      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
-        // Outer cyan glow
-        tft.drawLine(ptsX[i-1] - 2, ptsY[i-1], ptsX[i] - 2, ptsY[i], cGlow);
-        tft.drawLine(ptsX[i-1] + 2, ptsY[i-1], ptsX[i] + 2, ptsY[i], cGlow);
-        tft.drawLine(ptsX[i-1], ptsY[i-1] - 2, ptsX[i], ptsY[i] - 2, cGlow);
-        tft.drawLine(ptsX[i-1], ptsY[i-1] + 2, ptsX[i], ptsY[i] + 2, cGlow);
-
-        // Core bright cyan
-        tft.drawLine(ptsX[i-1] - 1, ptsY[i-1], ptsX[i] - 1, ptsY[i], cRoute);
-        tft.drawLine(ptsX[i-1], ptsY[i-1], ptsX[i], ptsY[i], cRoute);
-        tft.drawLine(ptsX[i-1] + 1, ptsY[i-1], ptsX[i] + 1, ptsY[i], cRoute);
-      }
-
-      // Destination Target Flag at end of path
-      int last = _navData.routePointCount - 1;
-      tft.fillCircle(ptsX[last], ptsY[last], 5, TFT_YELLOW);
-      tft.fillCircle(ptsX[last], ptsY[last], 2, TFT_WHITE);
-    } else {
-      // Fallback Smooth Curved Corridor based on turnCode
-      int endX = cx;
-      int endY = 48;
-      if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
-        endX = 22; endY = 95; // Turn Left
-      } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
-        endX = 134; endY = 95; // Turn Right
-      }
-
-      // Draw corridor from (cx, 220) to (cx, 130) to (endX, endY)
-      for (int off = -5; off <= 5; off++) {
-        tft.drawLine(cx + off, 220, cx + off, 130, cAsphalt);
-        tft.drawLine(cx + off, 130, endX + off, endY, cAsphalt);
-      }
-      tft.fillCircle(cx, 130, 5, cAsphalt);
-      tft.fillCircle(endX, endY, 5, cAsphalt);
-
-      // Core cyan route
-      tft.drawLine(cx, 220, cx, 130, cRoute);
-      tft.drawLine(cx - 1, 220, cx - 1, 130, cRoute);
-      tft.drawLine(cx + 1, 220, cx + 1, 130, cRoute);
-      tft.drawLine(cx, 130, endX, endY, cRoute);
-      tft.drawLine(cx - 1, 130, endX - 1, endY, cRoute);
-      tft.drawLine(cx + 1, 130, endX + 1, endY, cRoute);
-
-      tft.fillCircle(endX, endY, 4, TFT_YELLOW);
-      tft.fillCircle(endX, endY, 2, TFT_WHITE);
     }
 
-    // 4. Vehicle Cockpit Indicator (Chevron at cx, cy pointing straight UP)
-    tft.drawCircle(cx, cy, 14, tft.color565(0, 100, 160));
-    tft.drawCircle(cx, cy, 22, tft.color565(0, 50, 90));
+    // -------------------------------------------------------------------------
+    // CLEAN RECTANGULAR VECTOR NAVIGATION MAP (Automotive / Motorcycle GPS HUD)
+    // -------------------------------------------------------------------------
+    uint16_t cMapBg       = tft.color565(11, 17, 26);    // Deep Dark Slate Navy (#0B111A)
+    uint16_t cCardBorder  = tft.color565(32, 45, 61);    // Card edge outline (#202D3D)
+    uint16_t cBlockLine   = tft.color565(22, 31, 44);    // Dim background city blocks (#161F2C)
+    uint16_t cRoadBed     = tft.color565(30, 41, 59);    // Asphalt Road Bed / Outer Casing (#1E293B)
+    uint16_t cRoadSurface = tft.color565(51, 65, 85);    // Secondary / Inactive Road Surface (#334155)
+    uint16_t cRouteGlow   = tft.color565(0, 100, 140);   // Route Outer Glow / Casing
+    uint16_t cRouteActive = TFT_CYAN;                    // Brilliant Neon Route (#00F0FF)
 
-    // Arrowhead pointing UP
-    tft.fillTriangle(cx, cy - 10, cx - 7, cy + 7, cx + 7, cy + 7, TFT_CYAN);
-    tft.fillCircle(cx, cy + 1, 2, TFT_WHITE);
+    // 1. Clear & Draw Entire Left Rectangular Container Card (x: 4..152, y: 24..236)
+    tft.drawRoundRect(4, 24, 148, 212, 12, cCardBorder);
+    tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
 
-    // 5. Live HUD Pill Overlay at Top of Minimap
-    tft.fillRoundRect(10, 30, 136, 26, 6, cPill);
-    tft.drawRoundRect(10, 30, 136, 26, 6, tft.color565(30, 48, 72));
+    // Coordinate Anchors
+    const int minX = 7, maxX = 149;
+    const int minY = 27, maxY = 233;
+    const int cx = 78;
 
     if (_navData.isNavigating) {
-      _drawMiniTurnIcon(22, 43, _navData.turnCode);
+      // -----------------------------------------------------------------------
+      // ACTIVE NAVIGATION MODE: Vehicle, Ahead Road Corridor, Intersection & Turn
+      // -----------------------------------------------------------------------
+      const int cy = 175; // Vehicle location placed at lower 1/3 for wide ahead view
 
-      char distBuf[16];
-      if (_navData.distMeters >= 1000) {
-        snprintf(distBuf, sizeof(distBuf), "%.1fkm", _navData.distMeters / 1000.0);
-      } else {
-        snprintf(distBuf, sizeof(distBuf), "%dm", _navData.distMeters);
+      // Determine Maneuver Intersection Y coordinate
+      int turnY = cy - 75; // ~100px (75px ahead of vehicle)
+      if (_navData.distMeters < 80) {
+        turnY = cy - 40;   // Turn is imminent (~135px)
+      } else if (_navData.distMeters > 350) {
+        turnY = cy - 90;   // Turn is further up ahead (~85px)
       }
-      tft.setTextColor(tft.color565(250, 204, 21), cPill);
-      tft.drawString(distBuf, 34, 35, 2);
 
-      tft.fillCircle(136, 43, 3, TFT_GREEN);
+      // A. Subtle Neighborhood City Blocks & Grid Layout (Dim slate)
+      for (int gy = 45; gy <= 215; gy += 42) {
+        tft.drawFastHLine(minX + 2, gy, 140, cBlockLine);
+      }
+      for (int gx = 25; gx <= 135; gx += 38) {
+        tft.drawFastVLine(gx, minY + 2, 204, cBlockLine);
+      }
+
+      // B. Background Crossing Streets & Avenues (Road Layout / Bố cục mạng lưới đường)
+      int crossY2 = turnY - 45;
+      if (crossY2 > minY + 10) {
+        _drawThickLine(minX + 6, crossY2, maxX - 6, crossY2, cRoadSurface, 2);
+      }
+      // Minor side alleys
+      _drawThickLine(minX + 8, cy + 28, maxX - 8, cy + 28, cRoadSurface, 2);
+      _drawThickLine(32, turnY, 32, cy + 28, cRoadSurface, 2);
+      _drawThickLine(124, turnY, 124, cy + 28, cRoadSurface, 2);
+
+      // C. Major Intersection Cross Street through turnY
+      _drawThickLine(minX + 4, turnY, maxX - 4, turnY, cRoadBed, 6);
+      _drawThickLine(minX + 4, turnY, maxX - 4, turnY, cRoadSurface, 2);
+
+      // D. Main Approach Road Corridor from bottom through vehicle to intersection
+      _drawThickLine(cx, maxY - 2, cx, turnY, cRoadBed, 8);
+      _drawThickLine(cx, maxY - 2, cx, turnY, cRoadSurface, 3);
+
+      // E. Straight continuation past intersection
+      _drawThickLine(cx, turnY, cx, minY + 6, cRoadBed, 6);
+      _drawThickLine(cx, turnY, cx, minY + 6, cRoadSurface, 2);
+
+      // F. Render Active Route Corridor & Turn Direction (Real GPS Points or Maneuver)
+      if (_navData.routePointCount >= 2) {
+        // DYNAMIC GPS ROUTE POINTS
+        int px[32];
+        int py[32];
+        for (uint8_t i = 0; i < _navData.routePointCount; i++) {
+          px[i] = constrain(cx + _navData.routePoints[i].dx, minX + 4, maxX - 4);
+          py[i] = constrain(cy - _navData.routePoints[i].dy, minY + 4, maxY - 4);
+        }
+
+        // 1. Asphalt casing along GPS route
+        for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+          _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteGlow, 5);
+        }
+        // 2. Active glowing core line
+        for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+          _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteActive, 3);
+        }
+
+        // 3. Turn target waypoint node at vertex
+        if (_navData.routePointCount > 1) {
+          int tx = px[1];
+          int ty = py[1];
+          tft.drawCircle(tx, ty, 6, cRouteActive);
+          tft.drawCircle(tx, ty, 5, cRouteActive);
+          tft.fillCircle(tx, ty, 2, TFT_WHITE);
+        }
+      } else {
+        // PROCEDURAL ROUTE CORRIDOR FROM MANEUVER (hướng đi & hướng rẽ)
+        // 1. Approach route to intersection
+        _drawThickLine(cx, cy, cx, turnY, cRouteGlow, 5);
+        _drawThickLine(cx, cy, cx, turnY, cRouteActive, 3);
+
+        // Direction arrow along approach
+        int midY = (cy + turnY) / 2;
+        tft.fillTriangle(cx, midY - 6, cx - 4, midY, cx + 4, midY, cRouteActive);
+
+        // 2. Turn branch based on turnCode
+        if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
+          // TURN LEFT: Branch turns into left cross street
+          _drawThickLine(cx, turnY, minX + 12, turnY, cRouteGlow, 5);
+          _drawThickLine(cx, turnY, minX + 12, turnY, cRouteActive, 3);
+          tft.fillTriangle(minX + 18, turnY, minX + 26, turnY - 5, minX + 26, turnY + 5, cRouteActive);
+
+        } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
+          // TURN RIGHT: Branch turns into right cross street
+          _drawThickLine(cx, turnY, maxX - 12, turnY, cRouteGlow, 5);
+          _drawThickLine(cx, turnY, maxX - 12, turnY, cRouteActive, 3);
+          tft.fillTriangle(maxX - 18, turnY, maxX - 26, turnY - 5, maxX - 26, turnY + 5, cRouteActive);
+
+        } else if (_navData.turnCode == 4) {
+          // U-TURN
+          _drawThickLine(cx, turnY, cx - 22, turnY, cRouteActive, 3);
+          _drawThickLine(cx - 22, turnY, cx - 22, cy - 20, cRouteActive, 3);
+          tft.fillTriangle(cx - 22, cy - 14, cx - 27, cy - 22, cx - 17, cy - 22, cRouteActive);
+
+        } else if (_navData.turnCode == 8) {
+          // ROUNDABOUT
+          tft.drawCircle(cx, turnY, 14, cRouteActive);
+          tft.drawCircle(cx, turnY, 13, cRouteActive);
+          tft.fillCircle(cx, turnY, 6, cMapBg);
+          tft.fillTriangle(cx + 8, turnY - 14, cx + 16, turnY - 8, cx + 8, turnY - 2, cRouteActive);
+
+        } else {
+          // STRAIGHT / KEEP AHEAD
+          _drawThickLine(cx, turnY, cx, minY + 10, cRouteGlow, 5);
+          _drawThickLine(cx, turnY, cx, minY + 10, cRouteActive, 3);
+          tft.fillTriangle(cx, minY + 14, cx - 4, minY + 22, cx + 4, minY + 22, cRouteActive);
+        }
+
+        // Waypoint Node at the intersection (Turn Maneuver Location)
+        tft.drawCircle(cx, turnY, 6, cRouteActive);
+        tft.drawCircle(cx, turnY, 5, cRouteActive);
+        tft.fillCircle(cx, turnY, 2, TFT_WHITE);
+      }
+
+      // G. User Vehicle Location & Travel Direction Puck at (cx, cy)
+      // Heading Beam (Cyan light casting forward)
+      tft.fillTriangle(cx, cy - 18, cx - 10, cy + 2, cx + 10, cy + 2, tft.color565(0, 48, 68));
+      // Outer Halo Ring
+      tft.drawCircle(cx, cy, 7, TFT_WHITE);
+      tft.drawCircle(cx, cy, 6, cRouteActive);
+      tft.fillCircle(cx, cy, 4, cMapBg);
+      // Aerodynamic Forward Direction Chevron
+      tft.fillTriangle(cx, cy - 8, cx - 4, cy - 1, cx + 4, cy - 1, TFT_WHITE);
+
     } else {
-      tft.setTextColor(tft.color565(148, 163, 184), cPill);
-      tft.drawCentreString("CHEDO CHO - GPS", 78, 35, 1);
-      tft.fillCircle(136, 43, 3, TFT_CYAN);
+      // -----------------------------------------------------------------------
+      // STANDBY MODE: Clean Road Grid + Center Location Puck
+      // -----------------------------------------------------------------------
+      const int cy = 135;
+
+      // Arterial Avenue (Curved realistic avenue through neighborhood)
+      _drawThickLine(minX + 8, cy + 60, cx - 10, cy + 15, cRoadBed, 6);
+      _drawThickLine(cx - 10, cy + 15, cx + 35, cy - 35, cRoadBed, 6);
+      _drawThickLine(cx + 35, cy - 35, maxX - 8, cy - 65, cRoadBed, 6);
+      _drawThickLine(minX + 8, cy + 60, cx - 10, cy + 15, cRoadSurface, 2);
+      _drawThickLine(cx - 10, cy + 15, cx + 35, cy - 35, cRoadSurface, 2);
+      _drawThickLine(cx + 35, cy - 35, maxX - 8, cy - 65, cRoadSurface, 2);
+
+      // Main Central Road
+      _drawThickLine(cx, maxY - 4, cx, minY + 4, cRoadBed, 6);
+      _drawThickLine(cx, maxY - 4, cx, minY + 4, cRoadSurface, 2);
+
+      // Crossing Streets & Block outlines
+      _drawThickLine(minX + 4, cy - 30, maxX - 4, cy - 30, cRoadSurface, 2);
+      _drawThickLine(minX + 4, cy + 30, maxX - 4, cy + 30, cRoadSurface, 2);
+      _drawThickLine(30, minY + 4, 30, maxY - 4, cBlockLine, 1);
+      _drawThickLine(126, minY + 4, 126, maxY - 4, cBlockLine, 1);
+
+      // Vehicle Standby Puck at Center
+      tft.fillCircle(cx, cy, 8, tft.color565(0, 48, 68));
+      tft.drawCircle(cx, cy, 7, cRouteActive);
+      tft.drawCircle(cx, cy, 6, TFT_WHITE);
+      tft.fillCircle(cx, cy, 3, TFT_CYAN);
+      tft.fillTriangle(cx, cy - 10, cx - 4, cy - 3, cx + 4, cy - 3, TFT_WHITE);
     }
+
+    // -------------------------------------------------------------------------
+    // MINIMALIST MAP OVERLAYS (No bulky pills, keeping entire map unobstructed)
+    // -------------------------------------------------------------------------
+    // Top-Left: Minimalist Compass North Indicator
+    tft.setTextColor(TFT_CYAN, cMapBg);
+    tft.drawString("N", 12, 30, 2);
+    tft.fillTriangle(26, 31, 23, 39, 29, 39, TFT_CYAN);
+
+    // Top-Right: Live GPS Status Dot
+    tft.fillCircle(140, 36, 3, _navData.isNavigating ? TFT_GREEN : TFT_CYAN);
+
+    // Bottom-Right: Subtle Map Scale Bar
+    tft.setTextColor(tft.color565(100, 116, 139), cMapBg);
+    tft.drawString("50m", 102, 222, 1);
+    tft.drawFastHLine(124, 226, 20, tft.color565(100, 116, 139));
+    tft.drawFastVLine(124, 223, 7, tft.color565(100, 116, 139));
+    tft.drawFastVLine(144, 223, 7, tft.color565(100, 116, 139));
   }
 
   void _renderTft(bool isStreamingActive) {
@@ -543,7 +734,7 @@ private:
     // Marquee Song Title & Artist: Only wipe the scrolling text area strictly inside x: 72..232
     tft.fillRect(72, 0, 160, 22, TFT_BLACK);
 
-    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
     if (hasSong) {
       String fullSong = String("♫ ") + _navData.songTitle;
       if (strlen(_navData.songArtist) > 0) {
@@ -593,7 +784,7 @@ private:
       tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
       tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
 
-      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
+      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
 
       if (hasSong) {
         // Clear inner text area of media card strictly inside x: 166..308
@@ -693,13 +884,17 @@ private:
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
       tft.fillRect(164, 136, 146, 78, cCardBg);
 
-      // Sub-labels (y: 146)
-      _drawUtf8String("Dự kiến", 168, 146, cDimGrey, cCardBg);
+      // Sub-labels (y: 144)
+      _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
 
       tft.setTextColor(cSubText, cCardBg);
       char totDistStr[16];
-      snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
-      tft.drawRightString(totDistStr, 304, 146, 2);
+      if (_navData.totalDistMeters >= 1000) {
+        snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+      } else {
+        snprintf(totDistStr, sizeof(totDistStr), "%dm", _navData.totalDistMeters);
+      }
+      tft.drawRightString(totDistStr, 304, 144, 2);
 
       // Main values (y: 166)
       tft.setTextColor(TFT_CYAN, cCardBg);
@@ -707,8 +902,14 @@ private:
 
       tft.setTextColor(TFT_GREEN, cCardBg);
       char etaStr[16];
-      snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
-      tft.drawRightString(etaStr, 304, 166, 4);
+      if (_navData.etaMinutes >= 60) {
+        int h = _navData.etaMinutes / 60;
+        int m = _navData.etaMinutes % 60;
+        snprintf(etaStr, sizeof(etaStr), "%dh%02d", h, m);
+      } else {
+        snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+      }
+      tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
     }
   }
 #endif
