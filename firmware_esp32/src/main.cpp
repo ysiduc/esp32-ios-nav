@@ -9,14 +9,11 @@
 #include "ams_service.h"
 #include "ancs_service.h"
 
-// WiFi SoftAP Streaming Server (ESP32 broadcasts "ysiduc navi", Pass: "00000000", IP 192.168.4.1)
-static WiFiServer wifiServer(8080);
-static bool wifiConnected = false;
-
-// WebSocket Client for iPhone Hotspot (IP 172.20.10.1:8080)
+// Pure WiFi STA Client for iPhone Hotspot (IP 172.20.10.1:8080)
 static WebSocketsClient webSocketClient;
 static bool wsConnected = false;
 static bool staConnected = false;
+
 
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
@@ -168,11 +165,13 @@ void processJsonPacket(const char* jsonStr) {
     }
     if (pNavChar != nullptr && bleConnected) {
       String staIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "none";
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"ssid\":\"ysiduc navi\",\"hotspot\":\"#ysiduc\"}";
+      String statusStr = (WiFi.status() == WL_CONNECTED) ? "connected" : "connecting";
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"" + statusStr + "\",\"mode\":\"STA\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"hotspot\":\"#ysiduc\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
     return;
+
   } else if (typeStr == "CALL") {
 
     const char* name = doc["title"] | "Cuoc goi den";
@@ -447,17 +446,9 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  // 3. Start WiFi in Dual Mode (AP + STA):
-  // STA mode: Connects to iPhone Personal Hotspot (SSID: "#ysiduc", Pass: "00000000")
-  // AP mode: Fallback SoftAP (SSID: "ysiduc navi", Pass: "00000000")
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.setSleep(false);
-  bool apOk = WiFi.softAP("ysiduc navi", "00000000", 1, 0, 4);
-  if (apOk) {
-    Serial.printf("[WiFi AP] SoftAP started! SSID: 'ysiduc navi', Pass: '00000000', IP: %s\n", WiFi.softAPIP().toString().c_str());
-    wifiServer.begin();
-    wifiConnected = true;
-  }
+  // 3. Start WiFi in Pure Station Mode (STA only - ESP32 connects to iPhone Hotspot, no SoftAP)
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence in ESP-IDF!
 
   // Connect to iPhone Personal Hotspot
   Serial.println("[WiFi STA] Connecting to iPhone Hotspot ('#ysiduc')...");
@@ -469,10 +460,8 @@ void setup() {
   webSocketClient.setReconnectInterval(2000);
   webSocketClient.enableHeartbeat(15000, 3000, 2);
 
-  Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for Hotspot (172.20.10.1) & SoftAP + AMS & ANCS!");
+  Serial.println("[BLE & WiFi STA] ESP32-S3 Navi ready for Hotspot (172.20.10.1) + AMS & ANCS!");
 }
-
-static WiFiClient persistentStreamClient;
 
 void loop() {
   // 0. Manage iPhone Hotspot STA connection & WebSocket loop
@@ -492,87 +481,7 @@ void loop() {
     }
   }
 
-  // 1. Handle incoming WiFi Stream Client (Persistent or Chunked TCP stream)
-  if (wifiConnected) {
-
-    if (wifiServer.hasClient()) {
-      WiFiClient newClient = wifiServer.available();
-      if (newClient) {
-        if (persistentStreamClient && persistentStreamClient.connected()) {
-          persistentStreamClient.stop();
-        }
-        persistentStreamClient = newClient;
-        persistentStreamClient.setNoDelay(true);
-      }
-    }
-
-    if (persistentStreamClient && persistentStreamClient.connected()) {
-      int avail = persistentStreamClient.available();
-      if (avail > 0) {
-        static uint8_t tcpBuf[24576];
-        size_t bytesRead = 0;
-        unsigned long tcpTimeout = millis() + 400;
-
-        // Check if magic header 0xAA 0xBB is present (packet length prefixed)
-        if (avail >= 4 && persistentStreamClient.peek() == 0xAA) {
-          uint8_t peekHdr[4];
-          persistentStreamClient.read(peekHdr, 4);
-          if (peekHdr[0] == 0xAA && peekHdr[1] == 0xBB) {
-            uint16_t frameLen = ((uint16_t)peekHdr[2] << 8) | peekHdr[3];
-            if (frameLen > 0 && frameLen <= sizeof(tcpBuf)) {
-              size_t readSoFar = 0;
-              while (persistentStreamClient.connected() && millis() < tcpTimeout && readSoFar < frameLen) {
-                int canRead = persistentStreamClient.available();
-                if (canRead > 0) {
-                  int r = persistentStreamClient.read(tcpBuf + readSoFar, min((size_t)canRead, frameLen - readSoFar));
-                  readSoFar += r;
-                  tcpTimeout = millis() + 150;
-                } else {
-                  delay(1);
-                }
-              }
-              if (readSoFar == frameLen && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
-                uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-                memcpy(nextBuf, tcpBuf, frameLen);
-                activeRenderBuf = nextBuf;
-                activeRenderBufLen = frameLen;
-                newFrameAvailable = true;
-              }
-            }
-          }
-        }
-
-        // Fallback: Raw JPEG or JSON without length header
-        if (!newFrameAvailable && persistentStreamClient.available() > 0) {
-          while (persistentStreamClient.connected() && millis() < tcpTimeout && bytesRead < sizeof(tcpBuf)) {
-            int canRead = persistentStreamClient.available();
-            if (canRead > 0) {
-              int r = persistentStreamClient.read(tcpBuf + bytesRead, min((size_t)canRead, sizeof(tcpBuf) - bytesRead));
-              bytesRead += r;
-              tcpTimeout = millis() + 100;
-              if (bytesRead >= 2 && tcpBuf[bytesRead - 2] == 0xFF && tcpBuf[bytesRead - 1] == 0xD9) {
-                break;
-              }
-            } else {
-              delay(1);
-            }
-          }
-          if (bytesRead > 2 && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
-            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-            memcpy(nextBuf, tcpBuf, bytesRead);
-            activeRenderBuf = nextBuf;
-            activeRenderBufLen = bytesRead;
-            newFrameAvailable = true;
-          } else if (bytesRead > 2 && tcpBuf[0] == '{') {
-            tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
-            processJsonPacket((char*)tcpBuf);
-          }
-        }
-      }
-    }
-  }
-
-  // 2. Decode & push new JPEG Map Frame safely on the Main thread
+  // 1. Decode & push new JPEG Map Frame safely on the Main thread
   if (newFrameAvailable) {
     newFrameAvailable = false;
     lastFrameTime = millis();
@@ -585,9 +494,10 @@ void loop() {
     #endif
   }
 
-  // 3. Update HUD and status UI
+  // 2. Update HUD and status UI
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
+
 
   // 4. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
