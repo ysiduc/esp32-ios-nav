@@ -1737,13 +1737,48 @@ class StandbyVectorMapPainter extends CustomPainter {
   final NavigationManager navManager;
   StandbyVectorMapPainter({required this.navManager});
 
-  void _drawRoad(Canvas canvas, Offset p1, Offset p2, Color color, double width) {
+  void _drawCasedRoad(Canvas canvas, Offset p1, Offset p2, double roadWidth, double borderWidth, Color asphalt, Color border) {
     canvas.drawLine(
       p1,
       p2,
       Paint()
-        ..color = color
-        ..strokeWidth = width
+        ..color = border
+        ..strokeWidth = roadWidth + borderWidth * 2
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      p1,
+      p2,
+      Paint()
+        ..color = asphalt
+        ..strokeWidth = roadWidth
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  void _drawRouteLine(Canvas canvas, Offset p1, Offset p2, Color glow, Color active) {
+    canvas.drawLine(
+      p1,
+      p2,
+      Paint()
+        ..color = glow
+        ..strokeWidth = 6.0
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      p1,
+      p2,
+      Paint()
+        ..color = active
+        ..strokeWidth = 4.0
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      p1,
+      p2,
+      Paint()
+        ..color = Colors.white
+        ..strokeWidth = 1.2
         ..strokeCap = StrokeCap.round,
     );
   }
@@ -1753,194 +1788,307 @@ class StandbyVectorMapPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
     final cx = w / 2.0;
-    final cy = h * 0.60; // Vehicle anchor position
 
-    // 1. Container Background (Deep Dark Slate Navy)
-    const mapBg = Color(0xFF0B111A);
-    const majorRoad = Colors.white;
-    const majorCasing = Color(0xFF1E3046);
-    const minorRoad = Color(0xFFCBD5E1);
-    const subRoad = Color(0xFF94A3B8);
-    const routeGlow = Color(0xFF006496);
-    const routeActive = Color(0xFF00F0FF);
+    // 1. Color Palette: Garmin / Apple Maps HUD Dark Slate Navy
+    const cMapBg       = Color(0xFF0B111A);
+    const cRadarRing   = Color(0xFF142030);
+    const cRadarText   = Color(0xFF3C5069);
+    const cAsphaltBed  = Color(0xFF1C2636);
+    const cRoadBorder  = Color(0xFF374B64);
+    const cRouteGlow   = Color(0xFF0078B4);
+    const cRouteActive = Color(0xFF00F0FF);
+    const cYellowBadge = Color(0xFFFACC15);
 
+    // Background Card
     canvas.drawRRect(
       RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, w, h), const Radius.circular(10)),
-      Paint()..color = mapBg,
+      Paint()..color = cMapBg,
     );
 
-    // -------------------------------------------------------------------------
-    // 2. ĐƯỜNG LỚN (Right Arterial Avenue - Prominent Diagonal Curved White Boulevard)
-    // -------------------------------------------------------------------------
-    _drawRoad(canvas, Offset(cx + 20, 6),   Offset(cx + 26, 45),  majorCasing, 5.5);
-    _drawRoad(canvas, Offset(cx + 26, 45),  Offset(cx + 38, 95),  majorCasing, 5.5);
-    _drawRoad(canvas, Offset(cx + 38, 95),  Offset(cx + 52, 145), majorCasing, 5.5);
-    _drawRoad(canvas, Offset(cx + 52, 145), Offset(cx + 64, h - 6), majorCasing, 5.5);
-
-    _drawRoad(canvas, Offset(cx + 20, 6),   Offset(cx + 26, 45),  majorRoad, 3.2);
-    _drawRoad(canvas, Offset(cx + 26, 45),  Offset(cx + 38, 95),  majorRoad, 3.2);
-    _drawRoad(canvas, Offset(cx + 38, 95),  Offset(cx + 52, 145), majorRoad, 3.2);
-    _drawRoad(canvas, Offset(cx + 52, 145), Offset(cx + 64, h - 6), majorRoad, 3.2);
-
-    // -------------------------------------------------------------------------
-    // 3. NGÕ NGÁCH BÊN PHẢI (Dense Side Alleys Branching Right from Arterial Avenue)
-    // -------------------------------------------------------------------------
-    _drawRoad(canvas, Offset(cx + 23, 30),  Offset(w - 4, 34),  minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 29, 65),  Offset(w - 4, 70),  minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 36, 92),  Offset(w - 4, 100), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 44, 122), Offset(w - 4, 130), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 50, 150), Offset(w - 4, 158), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 58, 178), Offset(w - 4, 185), minorRoad, 2.0);
-
-    // Lower right alley loop
-    _drawRoad(canvas, Offset(cx + 52, 145), Offset(cx + 42, 185), subRoad, 2.0);
-    _drawRoad(canvas, Offset(cx + 42, 185), Offset(cx + 64, h - 6), subRoad, 2.0);
-
-    // -------------------------------------------------------------------------
-    // 4. TRỤC ĐƯỜNG ĐANG ĐI (Central Navigation Road Corridor)
-    // -------------------------------------------------------------------------
-    _drawRoad(canvas, Offset(cx, h - 4),  Offset(cx, cy + 22), majorRoad, 3.2);
-    _drawRoad(canvas, Offset(cx, cy + 22), Offset(cx - 2, 65), majorRoad, 3.2);
-    _drawRoad(canvas, Offset(cx - 2, 65),  Offset(cx - 3, 6),  minorRoad, 2.0);
-
-    // -------------------------------------------------------------------------
-    // 5. ĐƯỜNG NHÁNH NỐI TRỤC GIỮA & ĐƯỜNG LỚN (Cross-Connectors to Arterial Avenue)
-    // -------------------------------------------------------------------------
-    _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx + 28, 60),  majorRoad, 3.0);
-    _drawRoad(canvas, Offset(cx, 100),    Offset(cx + 38, 98),  minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx, 150),    Offset(cx + 52, 145), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx, 182),    Offset(cx + 60, 178), minorRoad, 2.0);
-
-    // -------------------------------------------------------------------------
-    // 6. NGÕ NGÁCH & MẠNG LƯỚI ĐƯỜNG BÊN TRÁI (Left Side Alleys & Blocks)
-    // -------------------------------------------------------------------------
-    // A. Main turn road branch to the left:
-    _drawRoad(canvas, Offset(cx - 2, 65),  Offset(cx - 38, 72), majorRoad, 3.0);
-    _drawRoad(canvas, Offset(cx - 38, 72), Offset(cx - 46, 98), majorRoad, 3.0);
-    _drawRoad(canvas, Offset(cx - 46, 98), Offset(4, 108),      minorRoad, 2.0);
-
-    // B. Upper-left alleys and blocks:
-    _drawRoad(canvas, Offset(cx - 24, 68), Offset(cx - 25, 36), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 25, 36), Offset(cx - 52, 38), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 52, 38), Offset(4, 32),       minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 25, 36), Offset(cx - 26, 6),  minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 42, 37), Offset(cx - 43, 60), minorRoad, 2.0);
-
-    // C. Mid-left network:
-    _drawRoad(canvas, Offset(cx, 100),     Offset(cx - 32, 104), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 32, 104), Offset(cx - 46, 98),  minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 34, 104), Offset(cx - 35, 138), minorRoad, 2.0);
-
-    // D. Lower-left network:
-    _drawRoad(canvas, Offset(cx, 150),      Offset(cx - 28, 158), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 28, 158), Offset(cx - 52, 152), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 52, 152), Offset(4, 160),       minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 28, 158), Offset(cx - 30, h - 8), minorRoad, 2.0);
-    _drawRoad(canvas, Offset(cx - 30, 185), Offset(10, 195),      minorRoad, 2.0);
-
     final isNav = navManager.isNavigating;
-    final turnCode = navManager.currentStep?.turnCode ?? 0;
 
-    // -------------------------------------------------------------------------
-    // 7. TUYẾN DẪN ĐƯỜNG ACTIVE (Neon Cyan Navigation Corridor & Maneuver)
-    // -------------------------------------------------------------------------
     if (isNav) {
-      // A. Approach path from vehicle to intersection
-      _drawRoad(canvas, Offset(cx, cy), Offset(cx - 2, 65), routeGlow, 5.5);
-      _drawRoad(canvas, Offset(cx, cy), Offset(cx - 2, 65), routeActive, 3.2);
+      // -----------------------------------------------------------------------
+      // ACTIVE NAVIGATION MODE: Real Route Geometry, Actual Turn & Road Corridor
+      // -----------------------------------------------------------------------
+      final cy = h * 0.72; // Vehicle anchor position at lower 1/3 (matching ESP32 cy=175)
 
-      // Forward direction chevron along approach path
-      final fwdTip = Path()
-        ..moveTo(cx - 1, cy - 24)
-        ..lineTo(cx - 5, cy - 17)
-        ..lineTo(cx + 3, cy - 17)
-        ..close();
-      canvas.drawPath(fwdTip, Paint()..color = routeActive);
+      // 2. Concentric Distance Range Rings (50m, 100m)
+      final ringPaint = Paint()
+        ..color = cRadarRing
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+      canvas.drawCircle(Offset(cx, cy), 38.0, ringPaint);
+      canvas.drawCircle(Offset(cx, cy), 74.0, ringPaint);
+      canvas.drawCircle(Offset(cx, cy), 110.0, ringPaint);
+      canvas.drawLine(Offset(cx - 65, cy), Offset(cx + 65, cy), ringPaint);
+      canvas.drawLine(Offset(cx, 12), Offset(cx, h - 12), ringPaint);
 
-      // B. Turn branch based on turnCode
-      if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
-        // TURN LEFT: Follow left road
-        _drawRoad(canvas, Offset(cx - 2, 65),  Offset(cx - 38, 72), routeGlow, 5.5);
-        _drawRoad(canvas, Offset(cx - 2, 65),  Offset(cx - 38, 72), routeActive, 3.2);
-        _drawRoad(canvas, Offset(cx - 38, 72), Offset(cx - 46, 98), routeActive, 3.2);
+      final r50Tp = TextPainter(
+        text: const TextSpan(text: '50m', style: TextStyle(color: cRadarText, fontSize: 8)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      r50Tp.paint(canvas, Offset(cx + 41, cy - 8));
 
-        final lTip = Path()
-          ..moveTo(cx - 44, 88)
-          ..lineTo(cx - 38, 82)
-          ..lineTo(cx - 38, 94)
-          ..close();
-        canvas.drawPath(lTip, Paint()..color = routeActive);
+      final r100Tp = TextPainter(
+        text: const TextSpan(text: '100m', style: TextStyle(color: cRadarText, fontSize: 8)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      r100Tp.paint(canvas, Offset(cx + 77, cy - 8));
 
-      } else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
-        // TURN RIGHT: Follow connector into arterial avenue
-        _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx + 28, 60), routeGlow, 5.5);
-        _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx + 28, 60), routeActive, 3.2);
-        _drawRoad(canvas, Offset(cx + 28, 60), Offset(cx + 38, 95), routeActive, 3.2);
-
-        final rTip = Path()
-          ..moveTo(cx + 34, 78)
-          ..lineTo(cx + 28, 72)
-          ..lineTo(cx + 28, 84)
-          ..close();
-        canvas.drawPath(rTip, Paint()..color = routeActive);
-
-      } else if (turnCode == 4) {
-        // U-TURN: Loop around median
-        _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx - 24, 65), routeActive, 3.2);
-        _drawRoad(canvas, Offset(cx - 24, 65), Offset(cx - 24, cy - 10), routeActive, 3.2);
-
-      } else if (turnCode == 8) {
-        // ROUNDABOUT
-        canvas.drawCircle(Offset(cx - 2, 65), 14.0, Paint()..color = routeActive..style = PaintingStyle.stroke..strokeWidth = 2.5);
-
-      } else {
-        // STRAIGHT / KEEP AHEAD
-        _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx - 3, 6), routeGlow, 5.5);
-        _drawRoad(canvas, Offset(cx - 2, 65), Offset(cx - 3, 6), routeActive, 3.2);
-      }
-
-      // C. Maneuver Target Waypoint Node at Intersection (cx - 2, 65) -> Cyan Concentric Ring
-      canvas.drawCircle(Offset(cx - 2, 65), 7.0, Paint()..color = routeActive..style = PaintingStyle.stroke..strokeWidth = 2.0);
-      canvas.drawCircle(Offset(cx - 2, 65), 2.0, Paint()..color = Colors.white);
-
-      // D. Draw forward route points from GPS if valid and advancing forward
       final upcomingPts = navManager.computeUpcomingRoutePoints();
+
       if (upcomingPts.length >= 2) {
-        Offset lastPt = Offset(cx, cy);
+        // Collect points clamped to canvas
+        final pts = <Offset>[];
+        pts.add(Offset(cx, cy));
+
         for (int i = 1; i < upcomingPts.length; i++) {
-          if (upcomingPts[i][1] < -5) continue; // Skip backwards points
+          if (upcomingPts[i][1] < -5) continue;
           final px = (cx + upcomingPts[i][0]).clamp(8.0, w - 8.0);
-          final py = (cy - upcomingPts[i][1]).clamp(10.0, h - 10.0);
-          final curPt = Offset(px, py);
-          _drawRoad(canvas, lastPt, curPt, routeActive, 3.2);
-          lastPt = curPt;
+          final py = (cy - upcomingPts[i][1]).clamp(12.0, h - 8.0);
+          pts.add(Offset(px, py));
         }
+
+        if (pts.length >= 2) {
+          // Road behind vehicle extending to bottom
+          _drawCasedRoad(canvas, Offset(cx, cy), Offset(cx, h - 4), 12.0, 2.0, cAsphaltBed, cRoadBorder);
+
+          // Pass 1 & 2: Cased Asphalt Road Bed along actual route
+          for (int i = 1; i < pts.length; i++) {
+            _drawCasedRoad(canvas, pts[i - 1], pts[i], 12.0, 2.0, cAsphaltBed, cRoadBorder);
+          }
+
+          // Pass 3: Detect upcoming turn intersection & draw Cross Street
+          int turnIdx = 1;
+          double maxDeflection = 0;
+          for (int i = 1; i < pts.length - 1; i++) {
+            final v1x = pts[i].dx - pts[i - 1].dx;
+            final v1y = pts[i].dy - pts[i - 1].dy;
+            final v2x = pts[i + 1].dx - pts[i].dx;
+            final v2y = pts[i + 1].dy - pts[i].dy;
+            final cross = (v1x * v2y - v1y * v2x).abs();
+            if (cross > 80) {
+              turnIdx = i;
+              break;
+            }
+            if (cross > maxDeflection) {
+              maxDeflection = cross;
+              turnIdx = i;
+            }
+          }
+
+          final tx = pts[turnIdx].dx;
+          final ty = pts[turnIdx].dy;
+
+          // Draw cross street crossing through the intersection
+          _drawCasedRoad(
+            canvas,
+            Offset((tx - 36).clamp(8.0, w - 8.0), ty),
+            Offset((tx + 36).clamp(8.0, w - 8.0), ty),
+            10.0,
+            2.0,
+            cAsphaltBed,
+            cRoadBorder,
+          );
+
+          // Pass 4: Glowing Neon Navigation Route Core
+          for (int i = 1; i < pts.length; i++) {
+            _drawRouteLine(canvas, pts[i - 1], pts[i], cRouteGlow, cRouteActive);
+          }
+
+          // Pass 5: Direction Chevrons along route segments
+          for (int i = 1; i < pts.length; i++) {
+            final mx = (pts[i - 1].dx + pts[i].dx) / 2;
+            final my = (pts[i - 1].dy + pts[i].dy) / 2;
+            final dx = pts[i].dx - pts[i - 1].dx;
+            final dy = pts[i].dy - pts[i - 1].dy;
+            final chPath = Path();
+            if (dy.abs() > dx.abs()) {
+              if (dy < -6) {
+                // Going UP
+                chPath
+                  ..moveTo(mx, my - 5)
+                  ..lineTo(mx - 3, my + 1)
+                  ..lineTo(mx + 3, my + 1)
+                  ..close();
+                canvas.drawPath(chPath, Paint()..color = Colors.white);
+              }
+            } else {
+              if (dx < -6) {
+                // Going LEFT
+                chPath
+                  ..moveTo(mx - 5, my)
+                  ..lineTo(mx + 1, my - 3)
+                  ..lineTo(mx + 1, my + 3)
+                  ..close();
+                canvas.drawPath(chPath, Paint()..color = Colors.white);
+              } else if (dx > 6) {
+                // Going RIGHT
+                chPath
+                  ..moveTo(mx + 5, my)
+                  ..lineTo(mx - 1, my - 3)
+                  ..lineTo(mx - 1, my + 3)
+                  ..close();
+                canvas.drawPath(chPath, Paint()..color = Colors.white);
+              }
+            }
+          }
+
+          // Pass 6: Maneuver Waypoint Node at upcoming turn
+          canvas.drawCircle(Offset(tx, ty), 7.0, Paint()..color = cRouteActive..style = PaintingStyle.stroke..strokeWidth = 2.0);
+          canvas.drawCircle(Offset(tx, ty), 2.0, Paint()..color = Colors.white);
+        }
+      } else {
+        // Fallback: Dynamic Real Intersection Corridor from turnCode and distMeters
+        final dist = navManager.distanceToNextManeuver;
+        final turnFactor = (dist.clamp(0.0, 400.0) / 400.0);
+        final turnY = (cy - (38.0 + (115.0 - 38.0) * turnFactor)).clamp(24.0, cy - 35.0);
+
+        // A. Main Approach Road Bed
+        _drawCasedRoad(canvas, Offset(cx, h - 4), Offset(cx, turnY), 12.0, 2.0, cAsphaltBed, cRoadBorder);
+
+        // B. Cross Street at Intersection
+        _drawCasedRoad(canvas, Offset(10, turnY), Offset(w - 10, turnY), 10.0, 2.0, cAsphaltBed, cRoadBorder);
+
+        // C. Straight continuation road past intersection
+        _drawCasedRoad(canvas, Offset(cx, turnY), Offset(cx, 16), 8.0, 2.0, cAsphaltBed, cRoadBorder);
+
+        // D. Active Navigation Route
+        _drawRouteLine(canvas, Offset(cx, cy), Offset(cx, turnY), cRouteGlow, cRouteActive);
+
+        // Direction arrow along approach
+        final midY = (cy + turnY) / 2;
+        final fwdArrow = Path()
+          ..moveTo(cx, midY - 6)
+          ..lineTo(cx - 4, midY + 1)
+          ..lineTo(cx + 4, midY + 1)
+          ..close();
+        canvas.drawPath(fwdArrow, Paint()..color = Colors.white);
+
+        // Turn branch based on turnCode
+        final turnCode = navManager.currentStep?.turnCode ?? 0;
+        if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
+          // TURN LEFT (90 deg turn onto cross street)
+          _drawRouteLine(canvas, Offset(cx, turnY), Offset(18, turnY), cRouteGlow, cRouteActive);
+          final leftTip = Path()
+            ..moveTo(18, turnY)
+            ..lineTo(26, turnY - 5)
+            ..lineTo(26, turnY + 5)
+            ..close();
+          canvas.drawPath(leftTip, Paint()..color = Colors.white);
+
+        } else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
+          // TURN RIGHT (90 deg turn onto cross street)
+          _drawRouteLine(canvas, Offset(cx, turnY), Offset(w - 18, turnY), cRouteGlow, cRouteActive);
+          final rightTip = Path()
+            ..moveTo(w - 18, turnY)
+            ..lineTo(w - 26, turnY - 5)
+            ..lineTo(w - 26, turnY + 5)
+            ..close();
+          canvas.drawPath(rightTip, Paint()..color = Colors.white);
+
+        } else if (turnCode == 4) {
+          // U-TURN
+          canvas.drawLine(Offset(cx, turnY), Offset(cx - 22, turnY), Paint()..color = cRouteActive..strokeWidth = 4.0..strokeCap = StrokeCap.round);
+          canvas.drawLine(Offset(cx - 22, turnY), Offset(cx - 22, cy - 10), Paint()..color = cRouteActive..strokeWidth = 4.0..strokeCap = StrokeCap.round);
+
+        } else if (turnCode == 8) {
+          // ROUNDABOUT
+          canvas.drawCircle(Offset(cx, turnY), 14.0, Paint()..color = cRouteActive..style = PaintingStyle.stroke..strokeWidth = 3.0);
+
+        } else {
+          // STRAIGHT / KEEP AHEAD
+          _drawRouteLine(canvas, Offset(cx, turnY), Offset(cx, 16), cRouteGlow, cRouteActive);
+          final straightTip = Path()
+            ..moveTo(cx, 18)
+            ..lineTo(cx - 4, 25)
+            ..lineTo(cx + 4, 25)
+            ..close();
+          canvas.drawPath(straightTip, Paint()..color = Colors.white);
+        }
+
+        // Maneuver Waypoint Node at Intersection
+        canvas.drawCircle(Offset(cx, turnY), 7.0, Paint()..color = cRouteActive..style = PaintingStyle.stroke..strokeWidth = 2.0);
+        canvas.drawCircle(Offset(cx, turnY), 2.0, Paint()..color = Colors.white);
       }
+
+      // 4. Vehicle Navigation Location Puck (at cx, cy pointing straight UP)
+      canvas.drawCircle(Offset(cx, cy), 14.0, Paint()..color = const Color(0xFF003250));
+      canvas.drawCircle(Offset(cx, cy), 8.0, Paint()..color = cRouteActive);
+      canvas.drawCircle(Offset(cx, cy), 8.0, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.5);
+      canvas.drawCircle(Offset(cx, cy), 3.0, Paint()..color = Colors.cyanAccent);
+
+      // Aerodynamic forward arrow tip pointing UP
+      final puckTip = Path()
+        ..moveTo(cx, cy - 10)
+        ..lineTo(cx - 4, cy - 3)
+        ..lineTo(cx + 4, cy - 3)
+        ..close();
+      canvas.drawPath(puckTip, Paint()..color = Colors.white);
+
+      // 5. Bottom-Left Turn Distance Badge (e.g. "205m" in yellow)
+      final distM = navManager.distanceToNextManeuver.round();
+      final distStr = distM >= 1000 ? '${(distM / 1000.0).toStringAsFixed(1)}km' : '${distM}m';
+      final badgeTp = TextPainter(
+        text: TextSpan(
+          text: distStr,
+          style: const TextStyle(color: cYellowBadge, fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      badgeTp.paint(canvas, Offset(12, h - 22));
+
+    } else {
+      // -----------------------------------------------------------------------
+      // STANDBY / IDLE MODE: Clean Crossroad Intersection & Center Location Puck
+      // -----------------------------------------------------------------------
+      final cy = h * 0.55;
+
+      // Range rings
+      final ringPaint = Paint()
+        ..color = cRadarRing
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+      canvas.drawCircle(Offset(cx, cy), 45.0, ringPaint);
+      canvas.drawCircle(Offset(cx, cy), 85.0, ringPaint);
+
+      // North-South Central Road
+      _drawCasedRoad(canvas, Offset(cx, h - 6), Offset(cx, 6), 12.0, 2.0, cAsphaltBed, cRoadBorder);
+
+      // East-West Crossroad
+      _drawCasedRoad(canvas, Offset(6, cy), Offset(w - 6, cy), 12.0, 2.0, cAsphaltBed, cRoadBorder);
+
+      // Standby Location Puck
+      canvas.drawCircle(Offset(cx, cy), 12.0, Paint()..color = const Color(0xFF003250));
+      canvas.drawCircle(Offset(cx, cy), 7.0, Paint()..color = cRouteActive);
+      canvas.drawCircle(Offset(cx, cy), 7.0, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.5);
+
+      final standbyTip = Path()
+        ..moveTo(cx, cy - 9)
+        ..lineTo(cx - 4, cy - 2)
+        ..lineTo(cx + 4, cy - 2)
+        ..close();
+      canvas.drawPath(standbyTip, Paint()..color = Colors.white);
+
+      final standbyTp = TextPainter(
+        text: const TextSpan(
+          text: 'CHẾ ĐỘ CHỜ',
+          style: TextStyle(color: cRadarText, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      standbyTp.paint(canvas, Offset(cx - standbyTp.width / 2, h - 22));
     }
 
     // -------------------------------------------------------------------------
-    // 8. VỊ TRÍ HIỆN TẠI (User Vehicle Location Pin at cx, cy -> Exact White Concentric Ring as in Image 2)
-    // -------------------------------------------------------------------------
-    canvas.drawCircle(Offset(cx, cy), 7.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.8);
-    canvas.drawCircle(Offset(cx, cy), 3.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.2);
-    canvas.drawCircle(Offset(cx, cy), 1.5, Paint()..color = Colors.white);
-
-    // Forward direction pointer tip pointing straight UP
-    final tip = Path()
-      ..moveTo(cx, cy - 11)
-      ..lineTo(cx - 4, cy - 4)
-      ..lineTo(cx + 4, cy - 4)
-      ..close();
-    canvas.drawPath(tip, Paint()..color = Colors.white);
-
-    // -------------------------------------------------------------------------
-    // 9. HỌA TIẾT PHỤ TỐI GIẢN (No bulky pills, keeping entire map unobstructed)
+    // MINIMALIST OVERLAYS (No bulky pills, keeping entire map unobstructed)
     // -------------------------------------------------------------------------
     // Top-Left: Minimalist Compass North Indicator
     final compassTp = TextPainter(
       text: const TextSpan(
         text: 'N ▲',
-        style: TextStyle(color: routeActive, fontSize: 10, fontWeight: FontWeight.bold),
+        style: TextStyle(color: cRouteActive, fontSize: 10, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -1950,14 +2098,14 @@ class StandbyVectorMapPainter extends CustomPainter {
     canvas.drawCircle(
       Offset(w - 14, 14),
       3.5,
-      Paint()..color = isNav ? const Color(0xFF22C55E) : routeActive,
+      Paint()..color = isNav ? const Color(0xFF22C55E) : cRouteActive,
     );
 
     // Bottom-Right: Subtle Map Scale Bar
     final scaleTp = TextPainter(
       text: const TextSpan(
         text: '50m ──',
-        style: TextStyle(color: Color(0xFF64748B), fontSize: 8, fontWeight: FontWeight.w600),
+        style: TextStyle(color: cRadarText, fontSize: 8, fontWeight: FontWeight.w600),
       ),
       textDirection: TextDirection.ltr,
     )..layout();

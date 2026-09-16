@@ -422,10 +422,14 @@ class NavigationManager extends ChangeNotifier {
     }
 
     // 2. Rotate to align with vehicle heading so ahead is always UP on handlebars
-    final hRad = _currentHeading * (math.pi / 180.0);
+    final hRad = effectiveHeading * (math.pi / 180.0);
     final cosH = math.cos(hRad);
     final sinH = math.sin(hRad);
     final cosLat = math.cos(curLoc.latitude * (math.pi / 180.0));
+
+    // Adaptive scale so upcoming maneuver fits perfectly in the upper middle of the display
+    final dist = distanceToNextManeuver;
+    final scale = dist <= 120 ? 0.70 : (dist <= 300 ? 0.48 : 0.32);
 
     // Anchor point: Vehicle itself [0, 0]
     upcomingPts.add([0, 0]);
@@ -441,9 +445,8 @@ class NavigationManager extends ChangeNotifier {
       final xRel = dEast * cosH - dNorth * sinH;
       final yRel = dNorth * cosH + dEast * sinH;
 
-      // Scale: 0.8 pixel per meter
-      final sx = (xRel * 0.8).round().clamp(-125, 125);
-      final sy = (yRel * 0.8).round().clamp(-125, 125);
+      final sx = (xRel * scale).round().clamp(-125, 125);
+      final sy = (yRel * scale).round().clamp(-125, 125);
 
       // Only track points advancing forward or sideways, not backwards behind handlebars
       if (sy < -5 && upcomingPts.length > 1) continue;
@@ -480,7 +483,7 @@ class NavigationManager extends ChangeNotifier {
       totalSteps: _activeRoute!.steps.length,
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
-      heading: _currentHeading.round(),
+      heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
       batteryLevel: 89,
@@ -512,7 +515,7 @@ class NavigationManager extends ChangeNotifier {
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
-      heading: _currentHeading.round(),
+      heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
       batteryLevel: 89,

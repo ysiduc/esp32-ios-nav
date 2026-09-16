@@ -261,22 +261,15 @@ private:
       tft.drawLine(x1, y1, x2, y2, color);
       return;
     }
-    if (width == 2) {
-      tft.drawLine(x1, y1, x2, y2, color);
-      if (abs(x2 - x1) > abs(y2 - y1)) {
-        tft.drawLine(x1, y1 + 1, x2, y2 + 1, color);
-      } else {
-        tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
-      }
-      return;
-    }
-    tft.drawLine(x1, y1, x2, y2, color);
+    int halfW = width / 2;
     if (abs(x2 - x1) > abs(y2 - y1)) {
-      tft.drawLine(x1, y1 - 1, x2, y2 - 1, color);
-      tft.drawLine(x1, y1 + 1, x2, y2 + 1, color);
+      for (int d = -halfW; d <= halfW; d++) {
+        tft.drawLine(x1, y1 + d, x2, y2 + d, color);
+      }
     } else {
-      tft.drawLine(x1 - 1, y1, x2 - 1, y2, color);
-      tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
+      for (int d = -halfW; d <= halfW; d++) {
+        tft.drawLine(x1 + d, y1, x2 + d, y2, color);
+      }
     }
   }
 
@@ -423,7 +416,7 @@ private:
     }
   }
 
-  /// Draw High-Definition Simplified Vector Navigation Map (Detailed Street Network matching Image 2)
+  /// Draw High-Definition Real Vector Navigation Map (True Route Geometry & Corridor)
   void _renderStandbyVectorMap() {
     if (!_navData.isNavigating && SPIFFS.exists("/bg_map.jpg")) {
       File f = SPIFFS.open("/bg_map.jpg", "r");
@@ -450,15 +443,15 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // ULTRA-DETAILED VECTOR ROAD NETWORK (Rectangular card, exact replica of Image 2)
+    // TRUE-TO-LIFE VECTOR NAVIGATION MAP (Garmin / Apple Maps HUD Style)
     // -------------------------------------------------------------------------
     uint16_t cMapBg       = tft.color565(11, 17, 26);    // Deep Dark Slate Navy (#0B111A)
     uint16_t cCardBorder  = tft.color565(32, 45, 61);    // Card edge outline (#202D3D)
-    uint16_t cMajorRoad   = TFT_WHITE;                   // Bright White Arterial Avenue & Core Roads (#FFFFFF)
-    uint16_t cMajorCasing = tft.color565(30, 48, 70);    // Dark Casing for Major Road (#1E3046)
-    uint16_t cMinorRoad   = tft.color565(203, 213, 225); // Crisp Light Slate Alleys (#CBD5E1)
-    uint16_t cSubRoad     = tft.color565(148, 163, 184); // Secondary Alleys (#94A3B8)
-    uint16_t cRouteGlow   = tft.color565(0, 100, 150);   // Route Outer Glow
+    uint16_t cRadarRing   = tft.color565(20, 32, 48);    // Distance Range Rings (#142030)
+    uint16_t cRadarText   = tft.color565(60, 80, 105);   // Scale labels (#3C5069)
+    uint16_t cAsphaltBed  = tft.color565(28, 38, 54);    // Real Road Asphalt Bed (#1C2636)
+    uint16_t cRoadBorder  = tft.color565(55, 75, 100);   // Crisp Road Casing Border (#374B64)
+    uint16_t cRouteGlow   = tft.color565(0, 120, 180);   // Route Outer Glow (#0078B4)
     uint16_t cRouteActive = TFT_CYAN;                    // Brilliant Neon Cyan Route (#00F0FF)
 
     // 1. Clear & Fill Entire Left Rectangular Container Card (x: 4..152, y: 24..236)
@@ -469,157 +462,232 @@ private:
     const int minX = 7, maxX = 149;
     const int minY = 27, maxY = 233;
     const int cx = 78;
-    const int cy = 145; // Vehicle anchor position
 
-    // -------------------------------------------------------------------------
-    // 2. ĐƯỜNG LỚN (Right Arterial Avenue - Prominent Diagonal Curved White Boulevard)
-    // -------------------------------------------------------------------------
-    // Dark outer casing for prominent road hierarchy (width 5)
-    _drawThickLine(cx + 20, minY + 6, cx + 26, 60,       cMajorCasing, 5);
-    _drawThickLine(cx + 26, 60,       cx + 38, 110,      cMajorCasing, 5);
-    _drawThickLine(cx + 38, 110,      cx + 52, 165,      cMajorCasing, 5);
-    _drawThickLine(cx + 52, 165,      cx + 64, maxY - 6, cMajorCasing, 5);
-
-    // Bright white core (width 3)
-    _drawThickLine(cx + 20, minY + 6, cx + 26, 60,       cMajorRoad, 3);
-    _drawThickLine(cx + 26, 60,       cx + 38, 110,      cMajorRoad, 3);
-    _drawThickLine(cx + 38, 110,      cx + 52, 165,      cMajorRoad, 3);
-    _drawThickLine(cx + 52, 165,      cx + 64, maxY - 6, cMajorRoad, 3);
-
-    // -------------------------------------------------------------------------
-    // 3. NGÕ NGÁCH BÊN PHẢI (Dense Side Alleys Branching Right from Arterial Avenue)
-    // -------------------------------------------------------------------------
-    _drawThickLine(cx + 23, 45,  maxX - 4, 48,  cMinorRoad, 2);
-    _drawThickLine(cx + 29, 78,  maxX - 4, 82,  cMinorRoad, 2);
-    _drawThickLine(cx + 36, 105, maxX - 4, 112, cMinorRoad, 2);
-    _drawThickLine(cx + 44, 138, maxX - 4, 144, cMinorRoad, 2);
-    _drawThickLine(cx + 50, 168, maxX - 4, 174, cMinorRoad, 2);
-    _drawThickLine(cx + 58, 198, maxX - 4, 204, cMinorRoad, 2);
-
-    // Lower right branching alley network
-    _drawThickLine(cx + 52, 165, cx + 42, 210,      cSubRoad, 2);
-    _drawThickLine(cx + 42, 210, cx + 64, maxY - 6, cSubRoad, 2);
-
-    // -------------------------------------------------------------------------
-    // 4. TRỤC ĐƯỜNG ĐANG ĐI (Central Navigation Road Corridor)
-    // -------------------------------------------------------------------------
-    _drawThickLine(cx, maxY - 4, cx, cy + 25,     cMajorRoad, 3);
-    _drawThickLine(cx, cy + 25,  cx - 2, 75,      cMajorRoad, 3);
-    _drawThickLine(cx - 2, 75,   cx - 3, minY + 6, cMinorRoad, 2);
-
-    // -------------------------------------------------------------------------
-    // 5. ĐƯỜNG NHÁNH NỐI TRỤC GIỮA & ĐƯỜNG LỚN (Cross-Connectors to Arterial Avenue)
-    // -------------------------------------------------------------------------
-    _drawThickLine(cx - 2, 75, cx + 28, 70,  cMajorRoad, 3);
-    _drawThickLine(cx, 112,    cx + 38, 110, cMinorRoad, 2);
-    _drawThickLine(cx, 170,    cx + 52, 165, cMinorRoad, 2);
-    _drawThickLine(cx, 204,    cx + 60, 200, cMinorRoad, 2);
-
-    // -------------------------------------------------------------------------
-    // 6. NGÕ NGÁCH & MẠNG LƯỚI ĐƯỜNG BÊN TRÁI (Left Side Alleys & Blocks)
-    // -------------------------------------------------------------------------
-    // A. Main turn road branch to the left:
-    _drawThickLine(cx - 2, 75,   cx - 38, 82,  cMajorRoad, 3);
-    _drawThickLine(cx - 38, 82,  cx - 46, 110, cMajorRoad, 3);
-    _drawThickLine(cx - 46, 110, minX + 4, 120, cMinorRoad, 2);
-
-    // B. Upper-left alleys and blocks:
-    _drawThickLine(cx - 24, 78, cx - 25, 42,       cMinorRoad, 2);
-    _drawThickLine(cx - 25, 42, cx - 52, 44,       cMinorRoad, 2);
-    _drawThickLine(cx - 52, 44, minX + 4, 38,      cMinorRoad, 2);
-    _drawThickLine(cx - 25, 42, cx - 26, minY + 6, cMinorRoad, 2);
-    _drawThickLine(cx - 42, 43, cx - 43, 70,       cMinorRoad, 2);
-
-    // C. Mid-left network:
-    _drawThickLine(cx, 112,     cx - 32, 116, cMinorRoad, 2);
-    _drawThickLine(cx - 32, 116, cx - 46, 110, cMinorRoad, 2);
-    _drawThickLine(cx - 34, 116, cx - 35, 155, cMinorRoad, 2);
-
-    // D. Lower-left network:
-    _drawThickLine(cx, 170,      cx - 28, 178,     cMinorRoad, 2);
-    _drawThickLine(cx - 28, 178, cx - 52, 172,     cMinorRoad, 2);
-    _drawThickLine(cx - 52, 172, minX + 4, 180,    cMinorRoad, 2);
-    _drawThickLine(cx - 28, 178, cx - 30, maxY - 8, cMinorRoad, 2);
-    _drawThickLine(cx - 30, 204, minX + 10, 214,   cMinorRoad, 2);
-
-    // -------------------------------------------------------------------------
-    // 7. TUYẾN DẪN ĐƯỜNG ACTIVE (Neon Cyan Navigation Corridor & Maneuver)
-    // -------------------------------------------------------------------------
     if (_navData.isNavigating) {
-      // A. Approach path from vehicle to intersection
-      _drawThickLine(cx, cy, cx - 2, 75, cRouteGlow, 5);
-      _drawThickLine(cx, cy, cx - 2, 75, cRouteActive, 3);
+      // -----------------------------------------------------------------------
+      // ACTIVE NAVIGATION MODE: Real Route Geometry, Actual Turn & Road Corridor
+      // -----------------------------------------------------------------------
+      const int cy = 175; // Vehicle anchor position at lower 1/3
 
-      // Forward direction chevron along approach path
-      tft.fillTriangle(cx - 1, cy - 26, cx - 5, cy - 19, cx + 3, cy - 19, cRouteActive);
+      // 2. Concentric Distance Range Rings (50m, 100m, 150m perspective)
+      tft.drawCircle(cx, cy, 38, cRadarRing);
+      tft.drawCircle(cx, cy, 74, cRadarRing);
+      tft.drawCircle(cx, cy, 110, cRadarRing);
+      tft.drawFastHLine(cx - 65, cy, 130, cRadarRing);
+      tft.drawFastVLine(cx, minY + 6, maxY - minY - 12, cRadarRing);
 
-      // B. Turn branch based on turnCode
-      if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
-        // TURN LEFT: Follow left road
-        _drawThickLine(cx - 2, 75,  cx - 38, 82,  cRouteGlow, 5);
-        _drawThickLine(cx - 2, 75,  cx - 38, 82,  cRouteActive, 3);
-        _drawThickLine(cx - 38, 82, cx - 46, 110, cRouteActive, 3);
-        tft.fillTriangle(cx - 44, 98, cx - 38, 92, cx - 38, 104, cRouteActive);
+      tft.setTextColor(cRadarText, cMapBg);
+      tft.drawString("50m", cx + 41, cy - 8, 1);
+      tft.drawString("100m", cx + 77, cy - 8, 1);
 
-      } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
-        // TURN RIGHT: Follow connector into arterial avenue
-        _drawThickLine(cx - 2, 75, cx + 28, 70,  cRouteGlow, 5);
-        _drawThickLine(cx - 2, 75, cx + 28, 70,  cRouteActive, 3);
-        _drawThickLine(cx + 28, 70, cx + 38, 110, cRouteActive, 3);
-        tft.fillTriangle(cx + 34, 88, cx + 28, 82, cx + 28, 94, cRouteActive);
-
-      } else if (_navData.turnCode == 4) {
-        // U-TURN: Loop around median
-        _drawThickLine(cx - 2, 75, cx - 24, 75, cRouteActive, 3);
-        _drawThickLine(cx - 24, 75, cx - 24, cy - 10, cRouteActive, 3);
-        tft.fillTriangle(cx - 24, cy - 5, cx - 29, cy - 14, cx - 19, cy - 14, cRouteActive);
-
-      } else if (_navData.turnCode == 8) {
-        // ROUNDABOUT
-        tft.drawCircle(cx - 2, 75, 14, cRouteActive);
-        tft.drawCircle(cx - 2, 75, 13, cRouteActive);
-        tft.fillCircle(cx - 2, 75, 6, cMapBg);
-        tft.fillTriangle(cx + 6, 61, cx + 14, 67, cx + 6, 73, cRouteActive);
-
-      } else {
-        // STRAIGHT / KEEP AHEAD
-        _drawThickLine(cx - 2, 75, cx - 3, minY + 8, cRouteGlow, 5);
-        _drawThickLine(cx - 2, 75, cx - 3, minY + 8, cRouteActive, 3);
-        tft.fillTriangle(cx - 3, 40, cx - 7, 47, cx + 1, 47, cRouteActive);
-      }
-
-      // C. Maneuver Target Waypoint Node at Intersection (cx - 2, 75) -> Exact Cyan Concentric Ring as in Image 2
-      tft.drawCircle(cx - 2, 75, 7, cRouteActive);
-      tft.drawCircle(cx - 2, 75, 6, cRouteActive);
-      tft.fillCircle(cx - 2, 75, 2, TFT_WHITE);
-
-      // D. Draw forward route points from GPS if valid and advancing forward
+      // 3. Render Real Navigation Route & Cross Streets
       if (_navData.routePointCount >= 2) {
-        int lastX = cx;
-        int lastY = cy;
+        // Collect valid forward-advancing GPS waypoints
+        int px[32], py[32];
+        px[0] = cx;
+        py[0] = cy;
+        uint8_t count = 1;
+
         for (uint8_t i = 1; i < _navData.routePointCount; i++) {
           if (_navData.routePoints[i].dy < -5) continue; // Skip backwards points
-          int px = constrain(cx + _navData.routePoints[i].dx, minX + 4, maxX - 4);
-          int py = constrain(cy - _navData.routePoints[i].dy, minY + 6, maxY - 6);
-          _drawThickLine(lastX, lastY, px, py, cRouteActive, 3);
-          lastX = px;
-          lastY = py;
+          px[count] = constrain(cx + _navData.routePoints[i].dx, minX + 6, maxX - 6);
+          py[count] = constrain(cy - _navData.routePoints[i].dy, minY + 8, maxY - 4);
+          count++;
         }
+
+        if (count >= 2) {
+          // Road behind vehicle extending to bottom of card
+          _drawThickLine(cx, cy, cx, maxY - 4, cRoadBorder, 16);
+          _drawThickLine(cx, cy, cx, maxY - 4, cAsphaltBed, 12);
+
+          // Pass 1: Road Border Casings along actual route
+          for (uint8_t i = 1; i < count; i++) {
+            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRoadBorder, 16);
+            tft.fillCircle(px[i], py[i], 8, cRoadBorder);
+          }
+          tft.fillCircle(px[0], py[0], 8, cRoadBorder);
+
+          // Pass 2: Asphalt Road Bed along actual route
+          for (uint8_t i = 1; i < count; i++) {
+            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cAsphaltBed, 12);
+            tft.fillCircle(px[i], py[i], 6, cAsphaltBed);
+          }
+          tft.fillCircle(px[0], py[0], 6, cAsphaltBed);
+
+          // Pass 3: Detect upcoming turn intersection & draw Cross Street
+          int turnIdx = 1;
+          int32_t maxDeflection = 0;
+          for (uint8_t i = 1; i < count - 1; i++) {
+            int32_t v1x = px[i] - px[i - 1];
+            int32_t v1y = py[i] - py[i - 1];
+            int32_t v2x = px[i + 1] - px[i];
+            int32_t v2y = py[i + 1] - py[i];
+            int32_t cross = abs(v1x * v2y - v1y * v2x);
+            if (cross > 80) {
+              turnIdx = i;
+              break;
+            }
+            if (cross > maxDeflection) {
+              maxDeflection = cross;
+              turnIdx = i;
+            }
+          }
+          int tx = px[turnIdx];
+          int ty = py[turnIdx];
+
+          // Draw cross street crossing through the intersection
+          _drawThickLine(constrain(tx - 36, minX + 4, maxX - 4), ty, constrain(tx + 36, minX + 4, maxX - 4), ty, cRoadBorder, 14);
+          _drawThickLine(constrain(tx - 36, minX + 4, maxX - 4), ty, constrain(tx + 36, minX + 4, maxX - 4), ty, cAsphaltBed, 10);
+
+          // Pass 4: Glowing Neon Navigation Route Core
+          for (uint8_t i = 1; i < count; i++) {
+            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteGlow, 6);
+          }
+          for (uint8_t i = 1; i < count; i++) {
+            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteActive, 4);
+            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], TFT_WHITE, 1);
+            tft.fillCircle(px[i], py[i], 2, cRouteActive);
+          }
+
+          // Pass 5: Direction Chevrons along route segments
+          for (uint8_t i = 1; i < count; i++) {
+            int mx = (px[i - 1] + px[i]) / 2;
+            int my = (py[i - 1] + py[i]) / 2;
+            int dx = px[i] - px[i - 1];
+            int dy = py[i] - py[i - 1];
+            if (abs(dy) > abs(dx)) {
+              if (dy < -6) { // Going UP
+                tft.fillTriangle(mx, my - 5, mx - 3, my + 1, mx + 3, my + 1, TFT_WHITE);
+              }
+            } else {
+              if (dx < -6) { // Going LEFT
+                tft.fillTriangle(mx - 5, my, mx + 1, my - 3, mx + 1, my + 3, TFT_WHITE);
+              } else if (dx > 6) { // Going RIGHT
+                tft.fillTriangle(mx + 5, my, mx - 1, my - 3, mx - 1, my + 3, TFT_WHITE);
+              }
+            }
+          }
+
+          // Pass 6: Maneuver Waypoint Node at the upcoming turn
+          tft.drawCircle(tx, ty, 7, cRouteActive);
+          tft.drawCircle(tx, ty, 6, cRouteActive);
+          tft.fillCircle(tx, ty, 2, TFT_WHITE);
+        }
+      } else {
+        // Fallback: Dynamic Real Intersection Corridor from turnCode and distMeters
+        int turnY = constrain(cy - map(_navData.distMeters, 0, 400, 38, 115), minY + 20, cy - 35);
+
+        // A. Main Approach Road Bed
+        _drawThickLine(cx, maxY - 4, cx, turnY, cRoadBorder, 16);
+        _drawThickLine(cx, maxY - 4, cx, turnY, cAsphaltBed, 12);
+
+        // B. Cross Street at Intersection
+        _drawThickLine(minX + 6, turnY, maxX - 6, turnY, cRoadBorder, 14);
+        _drawThickLine(minX + 6, turnY, maxX - 6, turnY, cAsphaltBed, 10);
+
+        // C. Straight continuation road past intersection
+        _drawThickLine(cx, turnY, cx, minY + 8, cRoadBorder, 12);
+        _drawThickLine(cx, turnY, cx, minY + 8, cAsphaltBed, 8);
+
+        // D. Active Navigation Route
+        _drawThickLine(cx, cy, cx, turnY, cRouteGlow, 6);
+        _drawThickLine(cx, cy, cx, turnY, cRouteActive, 4);
+        _drawThickLine(cx, cy, cx, turnY, TFT_WHITE, 1);
+
+        // Direction arrow along approach
+        int midY = (cy + turnY) / 2;
+        tft.fillTriangle(cx, midY - 6, cx - 4, midY + 1, cx + 4, midY + 1, TFT_WHITE);
+
+        // Turn branch based on turnCode
+        if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
+          // TURN LEFT (90 deg turn onto cross street)
+          _drawThickLine(cx, turnY, minX + 14, turnY, cRouteGlow, 6);
+          _drawThickLine(cx, turnY, minX + 14, turnY, cRouteActive, 4);
+          _drawThickLine(cx, turnY, minX + 14, turnY, TFT_WHITE, 1);
+          tft.fillTriangle(minX + 18, turnY, minX + 26, turnY - 5, minX + 26, turnY + 5, TFT_WHITE);
+
+        } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
+          // TURN RIGHT (90 deg turn onto cross street)
+          _drawThickLine(cx, turnY, maxX - 14, turnY, cRouteGlow, 6);
+          _drawThickLine(cx, turnY, maxX - 14, turnY, cRouteActive, 4);
+          _drawThickLine(cx, turnY, maxX - 14, turnY, TFT_WHITE, 1);
+          tft.fillTriangle(maxX - 18, turnY, maxX - 26, turnY - 5, maxX - 26, turnY + 5, TFT_WHITE);
+
+        } else if (_navData.turnCode == 4) {
+          // U-TURN
+          _drawThickLine(cx, turnY, cx - 22, turnY, cRouteActive, 4);
+          _drawThickLine(cx - 22, turnY, cx - 22, cy - 10, cRouteActive, 4);
+          tft.fillTriangle(cx - 22, cy - 4, cx - 27, cy - 12, cx - 17, cy - 12, TFT_WHITE);
+
+        } else if (_navData.turnCode == 8) {
+          // ROUNDABOUT
+          tft.drawCircle(cx, turnY, 14, cRouteActive);
+          tft.drawCircle(cx, turnY, 13, cRouteActive);
+          tft.fillCircle(cx, turnY, 6, cMapBg);
+
+        } else {
+          // STRAIGHT / KEEP AHEAD
+          _drawThickLine(cx, turnY, cx, minY + 10, cRouteGlow, 6);
+          _drawThickLine(cx, turnY, cx, minY + 10, cRouteActive, 4);
+          _drawThickLine(cx, turnY, cx, minY + 10, TFT_WHITE, 1);
+          tft.fillTriangle(cx, minY + 12, cx - 4, minY + 19, cx + 4, minY + 19, TFT_WHITE);
+        }
+
+        // Maneuver Waypoint Node at Intersection
+        tft.drawCircle(cx, turnY, 7, cRouteActive);
+        tft.drawCircle(cx, turnY, 6, cRouteActive);
+        tft.fillCircle(cx, turnY, 2, TFT_WHITE);
       }
+
+      // 4. Vehicle Navigation Location Puck (at cx, cy = 175 pointing UP)
+      tft.drawCircle(cx, cy, 14, tft.color565(0, 50, 80));
+      tft.fillCircle(cx, cy, 8, cRouteActive);
+      tft.drawCircle(cx, cy, 8, TFT_WHITE);
+      tft.drawCircle(cx, cy, 7, TFT_WHITE);
+      tft.fillCircle(cx, cy, 3, TFT_CYAN);
+      // Aerodynamic forward arrow tip pointing UP
+      tft.fillTriangle(cx, cy - 10, cx - 4, cy - 3, cx + 4, cy - 3, TFT_WHITE);
+
+      // 5. Bottom-Left Turn Distance Badge (e.g. "205m" in yellow)
+      char distBadge[16];
+      if (_navData.distMeters >= 1000) {
+        snprintf(distBadge, sizeof(distBadge), "%.1fkm", _navData.distMeters / 1000.0);
+      } else {
+        snprintf(distBadge, sizeof(distBadge), "%dm", _navData.distMeters);
+      }
+      tft.setTextColor(tft.color565(250, 204, 21), cMapBg);
+      tft.drawString(distBadge, 12, maxY - 16, 2);
+
+    } else {
+      // -----------------------------------------------------------------------
+      // STANDBY / IDLE MODE: Clean Crossroad Intersection & Center Location Puck
+      // -----------------------------------------------------------------------
+      const int cy = 130;
+
+      // Range rings
+      tft.drawCircle(cx, cy, 45, cRadarRing);
+      tft.drawCircle(cx, cy, 85, cRadarRing);
+
+      // North-South Central Road
+      _drawThickLine(cx, maxY - 4, cx, minY + 4, cRoadBorder, 16);
+      _drawThickLine(cx, maxY - 4, cx, minY + 4, cAsphaltBed, 12);
+
+      // East-West Crossroad
+      _drawThickLine(minX + 4, cy, maxX - 4, cy, cRoadBorder, 16);
+      _drawThickLine(minX + 4, cy, maxX - 4, cy, cAsphaltBed, 12);
+
+      // Standby Location Puck
+      tft.drawCircle(cx, cy, 12, tft.color565(0, 50, 80));
+      tft.fillCircle(cx, cy, 7, cRouteActive);
+      tft.drawCircle(cx, cy, 7, TFT_WHITE);
+      tft.fillTriangle(cx, cy - 9, cx - 4, cy - 2, cx + 4, cy - 2, TFT_WHITE);
+
+      tft.setTextColor(cRadarText, cMapBg);
+      tft.drawCentreString("CHẾ ĐỘ CHỜ", cx, maxY - 20, 2);
     }
 
     // -------------------------------------------------------------------------
-    // 8. VỊ TRÍ HIỆN TẠI (User Vehicle Location Pin at cx, cy -> Exact White Concentric Ring as in Image 2)
-    // -------------------------------------------------------------------------
-    tft.drawCircle(cx, cy, 7, TFT_WHITE);
-    tft.drawCircle(cx, cy, 6, TFT_WHITE);
-    tft.drawCircle(cx, cy, 3, TFT_WHITE);
-    tft.fillCircle(cx, cy, 1, TFT_WHITE);
-    // Forward direction pointer tip pointing straight UP
-    tft.fillTriangle(cx, cy - 11, cx - 4, cy - 4, cx + 4, cy - 4, TFT_WHITE);
-
-    // -------------------------------------------------------------------------
-    // 9. HỌA TIẾT PHỤ TỐI GIẢN (No bulky pills, keeping entire map unobstructed)
+    // MINIMALIST OVERLAYS (No bulky pills, keeping entire map unobstructed)
     // -------------------------------------------------------------------------
     // Top-Left: Minimalist Compass North Indicator
     tft.setTextColor(TFT_CYAN, cMapBg);
@@ -630,11 +698,11 @@ private:
     tft.fillCircle(142, 34, 3, _navData.isNavigating ? TFT_GREEN : TFT_CYAN);
 
     // Bottom-Right: Subtle Map Scale Bar
-    tft.setTextColor(tft.color565(100, 116, 139), cMapBg);
+    tft.setTextColor(cRadarText, cMapBg);
     tft.drawString("50m", 102, 222, 1);
-    tft.drawFastHLine(124, 226, 20, tft.color565(100, 116, 139));
-    tft.drawFastVLine(124, 223, 7,  tft.color565(100, 116, 139));
-    tft.drawFastVLine(144, 223, 7,  tft.color565(100, 116, 139));
+    tft.drawFastHLine(124, 226, 20, cRadarText);
+    tft.drawFastVLine(124, 223, 7,  cRadarText);
+    tft.drawFastVLine(144, 223, 7,  cRadarText);
   }
 
   void _renderTft(bool isStreamingActive) {
