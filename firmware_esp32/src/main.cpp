@@ -8,16 +8,9 @@
 #include "ams_service.h"
 #include "ancs_service.h"
 
-// WiFi Streaming Server for Background/Screen-Off Navigation
+// WiFi SoftAP Streaming Server (ESP32 broadcasts "ysiduc navi", Pass: "00000000", IP 192.168.4.1)
 static WiFiServer wifiServer(8080);
 static bool wifiConnected = false;
-static bool wifiConnecting = false;
-static unsigned long wifiConnectStartTime = 0;
-static String wifiSsid = "";
-static String wifiPass = "";
-static bool wifiTriggerConnect = false;
-static String pendingWifiSsid = "";
-static String pendingWifiPass = "";
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -231,16 +224,11 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         }
         display.forceRedraw();
         return;
-      } else if (typeStr == "WIFI_CONFIG") {
-        String ssid = String(doc["ssid"] | "");
-        String pass = String(doc["pass"] | "");
-        ssid.trim();
-        pass.trim();
-        Serial.printf("[WiFi] Received hotspot config: SSID='%s'\n", ssid.c_str());
-        if (ssid.length() > 0) {
-          pendingWifiSsid = ssid;
-          pendingWifiPass = pass;
-          wifiTriggerConnect = true;
+      } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
+        if (pNavChar != nullptr && bleConnected) {
+          String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"port\":8080,\"ssid\":\"ysiduc navi\",\"pass\":\"00000000\"}";
+          pNavChar->setValue(resp.c_str());
+          pNavChar->notify();
         }
         return;
       } else if (typeStr == "CALL") {
@@ -380,61 +368,22 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS + WiFi Hotspot!");
+  // 3. Start WiFi SoftAP for iPhone Connection (SSID: "ysiduc navi", Pass: "00000000")
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+  bool apOk = WiFi.softAP("ysiduc navi", "00000000", 1, 0, 4);
+  if (apOk) {
+    Serial.printf("[WiFi AP] SoftAP started! SSID: 'ysiduc navi', Pass: '00000000'\n");
+    Serial.printf("[WiFi AP] ESP32 IP: %s\n", WiFi.softAPIP().toString().c_str());
+    wifiServer.begin();
+    wifiConnected = true;
+  }
+
+  Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for 20 FPS JPEG stream over SoftAP ('ysiduc navi') + AMS & ANCS!");
 }
 
 void loop() {
-  // 0. Handle Asynchronous WiFi Connection Trigger
-  if (wifiTriggerConnect) {
-    wifiTriggerConnect = false;
-    wifiConnecting = true;
-    wifiConnected = false;
-    wifiConnectStartTime = millis();
-    wifiSsid = pendingWifiSsid;
-    wifiPass = pendingWifiPass;
-
-    Serial.printf("[WiFi] Initiating connection to iPhone Hotspot: '%s'...\n", wifiSsid.c_str());
-
-    if (pNavChar != nullptr && bleConnected) {
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connecting\"}";
-      pNavChar->setValue(resp.c_str());
-      pNavChar->notify();
-    }
-
-    WiFi.disconnect(true);
-    delay(50);
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false); // CRITICAL: Disable modem sleep for rock-solid iPhone Hotspot connection
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(wifiSsid.c_str(), (wifiPass.length() > 0) ? wifiPass.c_str() : nullptr);
-  }
-
-  // Monitor WiFi Connection State (iPhone Personal Hotspot)
-  if (wifiConnecting) {
-    wl_status_t st = WiFi.status();
-    if (st == WL_CONNECTED) {
-      wifiConnecting = false;
-      wifiConnected = true;
-      Serial.printf("[WiFi] CONNECTED to iPhone Hotspot! Local IP: %s\n", WiFi.localIP().toString().c_str());
-      wifiServer.begin();
-
-      if (pNavChar != nullptr && bleConnected) {
-        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"port\":8080}";
-        pNavChar->setValue(resp.c_str());
-        pNavChar->notify();
-      }
-    } else if (millis() - wifiConnectStartTime > 30000) {
-      wifiConnecting = false;
-      Serial.println("[WiFi] Connection timeout after 30s!");
-      if (pNavChar != nullptr && bleConnected) {
-        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"failed\"}";
-        pNavChar->setValue(resp.c_str());
-        pNavChar->notify();
-      }
-    }
-  }
-
-  // 1. Handle incoming WiFi Stream Client (Allows background / screen-off streaming from iPhone)
+  // 1. Handle incoming WiFi Stream Client (Allows high-speed streaming from iPhone)
   if (wifiConnected) {
     WiFiClient client = wifiServer.available();
     if (client) {

@@ -53,12 +53,15 @@ class BleService extends ChangeNotifier {
   StreamSubscription? _adapterStateSubscription;
   StreamSubscription? _connectionSubscription;
   Timer? _heartbeatTimer;
+  Timer? _wifiProbeTimer;
   DateTime _lastTxTime = DateTime.now();
 
-  // ESP32 WiFi Hotspot Streaming State
-  String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected', 'failed'
+  // ESP32 WiFi SoftAP Streaming State (Default: ysiduc navi / 192.168.4.1:8080)
+  String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
   String? _wifiIp;
   int _wifiPort = 8080;
+  final String _wifiSsid = 'ysiduc navi';
+  final String _wifiPass = '00000000';
 
   // Getters
   bool get isScanning => _isScanning;
@@ -71,10 +74,41 @@ class BleService extends ChangeNotifier {
   String get wifiStatus => _wifiStatus;
   String? get wifiIp => _wifiIp;
   int get wifiPort => _wifiPort;
+  String get wifiSsid => _wifiSsid;
+  String get wifiPass => _wifiPass;
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
   BleService() {
     _initBle();
+    _startWifiProbe();
+  }
+
+  void _startWifiProbe() {
+    _wifiProbeTimer?.cancel();
+    _wifiProbeTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      probeEsp32Wifi();
+    });
+  }
+
+  /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080
+  Future<void> probeEsp32Wifi() async {
+    try {
+      final socket = await Socket.connect('192.168.4.1', 8080, timeout: const Duration(milliseconds: 500));
+      socket.destroy();
+      if (_wifiStatus != 'connected') {
+        _wifiStatus = 'connected';
+        _wifiIp = '192.168.4.1';
+        _wifiPort = 8080;
+        _addLog('Đã kết nối Wi-Fi ESP32: ysiduc navi (192.168.4.1:8080)', isTx: false);
+        notifyListeners();
+      }
+    } catch (_) {
+      if (_wifiStatus == 'connected') {
+        _wifiStatus = 'disconnected';
+        _wifiIp = null;
+        notifyListeners();
+      }
+    }
   }
 
   void _initBle() {
@@ -512,6 +546,7 @@ class BleService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _wifiProbeTimer?.cancel();
     _heartbeatTimer?.cancel();
     _scanSubscription?.cancel();
     _adapterStateSubscription?.cancel();

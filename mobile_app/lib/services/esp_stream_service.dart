@@ -78,12 +78,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
-      // When connected via iPhone WiFi Hotspot, continue streaming even with screen off!
-      // If only on BLE, stop timer to conserve phone battery
-      if (!bleService.isWifiConnected) {
-        _streamTimer?.cancel();
-        _streamTimer = null;
-      }
+      // When screen is off / locked, stop high-rate Wi-Fi JPEG stream to conserve phone battery and thermal load.
+      // NavigationManager continues pushing low-energy BLE telemetry (turns, distance, street name, speed, ETA) smoothly!
+      _streamTimer?.cancel();
+      _streamTimer = null;
     }
   }
 
@@ -327,16 +325,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final apiKey = MapboxConfig.maptilerApiKey;
       String url;
       if (isGoong) {
-        // High-definition clean vector-based raster tiles with ZERO watermark & Vietnamese labels
+        // High-definition clean vector-based raster tiles with bright sky-blue water & white roads (Goong style)
         url = isDark
             ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=$apiKey&language=vi'
-            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
+            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
       } else {
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
             : (isDark
                 ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
+                : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
       }
 
       var response = await http.get(
@@ -348,7 +346,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isDark
             ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
-            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY';
+            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY';
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'ESP32NavApp/2.0'},
