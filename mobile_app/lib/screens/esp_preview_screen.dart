@@ -1737,362 +1737,200 @@ class StandbyVectorMapPainter extends CustomPainter {
   final NavigationManager navManager;
   StandbyVectorMapPainter({required this.navManager});
 
+  void _drawRoad(Canvas canvas, Offset p1, Offset p2, Color color, double width) {
+    canvas.drawLine(
+      p1,
+      p2,
+      Paint()
+        ..color = color
+        ..strokeWidth = width
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
     final cx = w / 2.0;
-    final cy = h * 0.72;
+    final cy = h * 0.52;
+    final R = (w / 2.0) - 6.0;
 
-    // 1. Deep Dark Navy-Slate Background
-    final bgPaint = Paint()..color = const Color(0xFF0B1018);
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
+    // 1. Outer Container Background
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF000000));
 
-    // 2. TERRAIN LAYER A: Natural River / Waterway (e.g. Sông Lừ)
-    final riverPaint = Paint()..color = const Color(0xFF0D3B66);
-    final riverShorePaint = Paint()
-      ..color = const Color(0xFF1A5B8C)
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
+    // 2. Circular Viewport Clipping & Background
+    canvas.save();
+    final circlePath = Path()..addOval(Rect.fromCircle(center: Offset(cx, cy), radius: R));
+    canvas.clipPath(circlePath);
 
-    final riverPath = Path()
-      ..moveTo(0, h * 0.35)
-      ..quadraticBezierTo(w * 0.25, h * 0.50, w * 0.20, h * 0.78)
-      ..lineTo(0, h * 0.88)
-      ..close();
-    canvas.drawPath(riverPath, riverPaint);
+    canvas.drawPaint(Paint()..color = const Color(0xFF0F172A)); // Deep Dark Slate
 
-    final riverShore = Path()
-      ..moveTo(0, h * 0.35)
-      ..quadraticBezierTo(w * 0.25, h * 0.50, w * 0.20, h * 0.78)
-      ..lineTo(w * 0.08, h);
-    canvas.drawPath(riverShore, riverShorePaint);
+    const roadWhite = Color(0xFFFFFFFF);
+    const roadSlate = Color(0xFFCBD5E1);
 
-    // 3. TERRAIN LAYER B: Parks & Green Belts
-    final greenPaint = Paint()..color = const Color(0xFF0B2518);
-    final greenBorderPaint = Paint()
-      ..color = const Color(0xFF143825)
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
+    // 3. Right Arterial Avenue (Prominent Curved White Road from reference photo)
+    _drawRoad(canvas, Offset(cx + 20, cy - 64), Offset(cx + 26, cy - 35), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx + 26, cy - 35), Offset(cx + 38, cy + 5),  roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx + 38, cy + 5),  Offset(cx + 52, cy + 40), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx + 52, cy + 40), Offset(cx + 62, cy + 56), roadWhite, 3.5);
 
-    final park1 = RRect.fromRectAndRadius(const Rect.fromLTWH(4, 32, 28, 36), const Radius.circular(4));
-    canvas.drawRRect(park1, greenPaint);
-    canvas.drawRRect(park1, greenBorderPaint);
+    // Side Alleys Branching Right from Arterial Avenue
+    _drawRoad(canvas, Offset(cx + 34, cy - 8),  Offset(cx + 58, cy - 5),  roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 42, cy + 14), Offset(cx + 62, cy + 18), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 48, cy + 32), Offset(cx + 64, cy + 36), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 54, cy + 48), Offset(cx + 65, cy + 50), roadSlate, 2.0);
 
-    final park2 = RRect.fromRectAndRadius(Rect.fromLTWH(w - 46, h * 0.70, 42, 45), const Radius.circular(6));
-    canvas.drawRRect(park2, greenPaint);
-    canvas.drawRRect(park2, greenBorderPaint);
+    // 4. Main Central Road Corridor
+    _drawRoad(canvas, Offset(cx,     cy + 55), Offset(cx,     cy + 22), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx,     cy + 22), Offset(cx - 2, cy - 22), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx - 2, cy - 22), Offset(cx - 3, cy - 64), roadWhite, 3.5);
 
-    // Tree canopy accent dots inside parks
-    final treePaint = Paint()..color = const Color(0xFF205535);
-    canvas.drawCircle(const Offset(14, 45), 2.5, treePaint);
-    canvas.drawCircle(const Offset(22, 54), 2.5, treePaint);
-    canvas.drawCircle(Offset(w - 28, h * 0.76), 3.0, treePaint);
-    canvas.drawCircle(Offset(w - 16, h * 0.84), 3.0, treePaint);
+    // 5. Maneuver Intersection at (cx - 2, cy - 22)
+    // Left Branch:
+    _drawRoad(canvas, Offset(cx - 2,  cy - 22), Offset(cx - 38, cy - 14), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx - 38, cy - 14), Offset(cx - 46, cy + 8),  roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx - 46, cy + 8),  Offset(cx - 64, cy + 18), roadSlate, 2.0);
+    // Right Branch:
+    _drawRoad(canvas, Offset(cx - 2,  cy - 22), Offset(cx + 28, cy - 35), roadWhite, 3.5);
+    _drawRoad(canvas, Offset(cx + 28, cy - 35), Offset(cx + 34, cy - 62), roadSlate, 2.0);
 
-    // 4. URBAN LAYER: Architectural Building Footprints (A4, A5, N26A)
-    final blockPaint = Paint()..color = const Color(0xFF141D28);
-    final blockBorderPaint = Paint()
-      ..color = const Color(0xFF243040)
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
-    final blockRoofPaint = Paint()..color = const Color(0xFF1D2838);
+    // 6. Dense Side Streets & Alleys on the Left
+    _drawRoad(canvas, Offset(cx - 22, cy - 18), Offset(cx - 24, cy - 42), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 24, cy - 42), Offset(cx - 50, cy - 40), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 50, cy - 40), Offset(cx - 62, cy - 46), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 24, cy - 42), Offset(cx - 25, cy - 62), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 40, cy - 41), Offset(cx - 41, cy - 24), roadSlate, 2.0);
 
-    // Block 1 (Top-right A5)
-    final b1 = RRect.fromRectAndRadius(Rect.fromLTWH(w - 56, 38, 50, 32), const Radius.circular(3));
-    canvas.drawRRect(b1, blockPaint);
-    canvas.drawRRect(b1, blockBorderPaint);
-    canvas.drawRect(Rect.fromLTWH(w - 52, 42, 42, 6), blockRoofPaint);
+    _drawRoad(canvas, Offset(cx,      cy + 6),  Offset(cx - 32, cy + 10), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 32, cy + 10), Offset(cx - 46, cy + 8),  roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 34, cy + 10), Offset(cx - 35, cy + 32), roadSlate, 2.0);
 
-    // Block 2 (Mid-right A4)
-    final b2 = RRect.fromRectAndRadius(Rect.fromLTWH(w - 52, 80, 46, 30), const Radius.circular(3));
-    canvas.drawRRect(b2, blockPaint);
-    canvas.drawRRect(b2, blockBorderPaint);
+    _drawRoad(canvas, Offset(cx,      cy + 32), Offset(cx - 28, cy + 42), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 28, cy + 42), Offset(cx - 50, cy + 36), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 50, cy + 36), Offset(cx - 64, cy + 46), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx - 28, cy + 42), Offset(cx - 30, cy + 58), roadSlate, 2.0);
 
-    // Block 3 (Mid-right N26A)
-    final b3 = RRect.fromRectAndRadius(Rect.fromLTWH(w - 54, 120, 48, 28), const Radius.circular(3));
-    canvas.drawRRect(b3, blockPaint);
-    canvas.drawRRect(b3, blockBorderPaint);
-    canvas.drawRect(Rect.fromLTWH(w - 50, 124, 40, 6), blockRoofPaint);
+    // 7. Dense Side Streets & Alleys on the Right
+    _drawRoad(canvas, Offset(cx,      cy - 4),  Offset(cx + 24, cy - 7),  roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 6,  cy + 18), Offset(cx + 28, cy + 2),  roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 28, cy + 2),  Offset(cx + 38, cy + 4),  roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 12, cy + 35), Offset(cx + 34, cy + 18), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 34, cy + 18), Offset(cx + 42, cy + 22), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 16, cy + 50), Offset(cx + 38, cy + 34), roadSlate, 2.0);
+    _drawRoad(canvas, Offset(cx + 38, cy + 34), Offset(cx + 48, cy + 42), roadSlate, 2.0);
 
-    // Block 4 (Lower-right Villas)
-    final b4 = RRect.fromRectAndRadius(Rect.fromLTWH(w - 48, h - 30, 44, 24), const Radius.circular(3));
-    canvas.drawRRect(b4, blockPaint);
-    canvas.drawRRect(b4, blockBorderPaint);
-
-    // Block 5 (Lower-left Settlement)
-    final b5 = RRect.fromRectAndRadius(Rect.fromLTWH(36, h * 0.82, 28, 36), const Radius.circular(3));
-    canvas.drawRRect(b5, blockPaint);
-    canvas.drawRRect(b5, blockBorderPaint);
-
-    // 5. ROAD NETWORK & INTERSECTIONS
-    final secCasingPaint = Paint()..color = const Color(0xFF182230);
-    final secRoadPaint = Paint()..color = const Color(0xFF243246);
-    final zebraPaint = Paint()..color = const Color(0xFF9EAFC2)..strokeWidth = 1.5;
-
-    // Cross Street 1 (Major 4-way Intersection, y ~ 114)
-    canvas.drawRect(Rect.fromLTWH(0, 108, w, 14), secCasingPaint);
-    canvas.drawRect(Rect.fromLTWH(0, 110, w, 10), secRoadPaint);
-
-    // Bridge barrier over river on left
-    canvas.drawLine(const Offset(0, 108), const Offset(36, 108), Paint()..color = const Color(0xFF5A728E)..strokeWidth = 2);
-    canvas.drawLine(const Offset(0, 122), const Offset(36, 122), Paint()..color = const Color(0xFF5A728E)..strokeWidth = 2);
-
-    // Pedestrian Zebra Crosswalk at Intersection
-    for (double zx = cx - 18; zx <= cx - 10; zx += 2.5) {
-      canvas.drawLine(Offset(zx, 110), Offset(zx, 120), zebraPaint);
-    }
-    for (double zx = cx + 10; zx <= cx + 18; zx += 2.5) {
-      canvas.drawLine(Offset(zx, 110), Offset(zx, 120), zebraPaint);
-    }
-
-    // Cross Street 2 (Secondary Angle Avenue, y ~ 70)
-    canvas.drawRect(Rect.fromLTWH(38, 68, w - 38, 10), secCasingPaint);
-    canvas.drawRect(Rect.fromLTWH(38, 70, w - 38, 6), secRoadPaint);
-
-    // Alley 3 (Lower connection, y ~ 174)
-    canvas.drawRect(const Rect.fromLTWH(32, 172, 54, 8), secCasingPaint);
-    canvas.drawRect(const Rect.fromLTWH(32, 174, 54, 4), secRoadPaint);
-
-    // Concentric Radar Distance Rings (50m, 100m)
-    final radarPaint = Paint()
-      ..color = const Color(0xFF142030)
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
-    canvas.drawCircle(Offset(cx, cy), 45, radarPaint);
-    canvas.drawCircle(Offset(cx, cy), 90, radarPaint);
-    canvas.drawLine(Offset(cx - 65, cy), Offset(cx + 65, cy), radarPaint);
-    canvas.drawLine(Offset(cx, cy - 110), Offset(cx, cy + 60), radarPaint);
-
-    // 6. Dynamic Vector Route Corridor
-    final points = navManager.computeUpcomingRoutePoints();
     final isNav = navManager.isNavigating;
     final turnCode = navManager.currentStep?.turnCode ?? 0;
 
-    if (points.length >= 2) {
-      final path = Path();
-      for (int i = 0; i < points.length; i++) {
-        final px = (cx + points[i][0]).clamp(8.0, w - 8.0);
-        final py = (cy - points[i][1]).clamp(28.0, h - 10.0);
-        if (i == 0) {
-          path.moveTo(px, py);
-        } else {
-          path.lineTo(px, py);
-        }
-      }
+    // 8. Active Route Highlight
+    if (isNav) {
+      const cyanColor = Color(0xFF00F0FF);
+      _drawRoad(canvas, Offset(cx, cy + 22), Offset(cx - 2, cy - 22), cyanColor, 3.5);
 
-      // Asphalt casing (Width 14px)
-      final asphaltPaint = Paint()
-        ..color = const Color(0xFF1D2837)
-        ..strokeWidth = 14.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, asphaltPaint);
-
-      // Inner road surface (Width 10px)
-      final surfacePaint = Paint()
-        ..color = const Color(0xFF2D3D52)
-        ..strokeWidth = 10.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, surfacePaint);
-
-      // Electric Cyan glow (Width 6px)
-      final glowPaint = Paint()
-        ..color = const Color(0xFF0077B6).withAlpha(200)
-        ..strokeWidth = 6.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, glowPaint);
-
-      // Vibrant core cyan (Width 3px)
-      final corePaint = Paint()
-        ..color = const Color(0xFF00F0FF)
-        ..strokeWidth = 3.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(path, corePaint);
-
-      // White flow chevrons
-      for (int i = 1; i < points.length; i++) {
-        final mx = ((cx + points[i - 1][0] + cx + points[i][0]) / 2.0).clamp(8.0, w - 8.0);
-        final my = ((cy - points[i - 1][1] + cy - points[i][1]) / 2.0).clamp(28.0, h - 10.0);
-        canvas.drawCircle(Offset(mx, my), 2.0, Paint()..color = Colors.white);
-      }
-
-      // Destination target flag/dot at last point
-      final last = points.last;
-      final endX = (cx + last[0]).clamp(8.0, w - 8.0);
-      final endY = (cy - last[1]).clamp(28.0, h - 10.0);
-      canvas.drawCircle(Offset(endX, endY), 6, Paint()..color = const Color(0xFFEF4444));
-      canvas.drawCircle(Offset(endX, endY), 3.5, Paint()..color = const Color(0xFFFACC15));
-      canvas.drawCircle(Offset(endX, endY), 1.5, Paint()..color = Colors.white);
-    } else {
-      // Fallback smooth road corridor
-      double endX = cx;
-      double endY = 48.0;
       if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
-        endX = 22.0;
-        endY = 95.0;
+        _drawRoad(canvas, Offset(cx - 2,  cy - 22), Offset(cx - 38, cy - 14), cyanColor, 3.5);
+        _drawRoad(canvas, Offset(cx - 38, cy - 14), Offset(cx - 46, cy + 8),  cyanColor, 3.5);
       } else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
-        endX = w - 22.0;
-        endY = 95.0;
+        _drawRoad(canvas, Offset(cx - 2,  cy - 22), Offset(cx + 28, cy - 35), cyanColor, 3.5);
+      } else {
+        _drawRoad(canvas, Offset(cx - 2,  cy - 22), Offset(cx - 3,  cy - 64), cyanColor, 3.5);
       }
 
-      final curvePath = Path()
-        ..moveTo(cx, h)
-        ..lineTo(cx, 130)
-        ..lineTo(endX, endY);
-
-      canvas.drawPath(
-        curvePath,
-        Paint()
-          ..color = const Color(0xFF1D2837)
-          ..strokeWidth = 14.0
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..style = PaintingStyle.stroke,
-      );
-      canvas.drawPath(
-        curvePath,
-        Paint()
-          ..color = const Color(0xFF2D3D52)
-          ..strokeWidth = 10.0
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..style = PaintingStyle.stroke,
-      );
-      canvas.drawPath(
-        curvePath,
-        Paint()
-          ..color = const Color(0xFF0077B6).withAlpha(200)
-          ..strokeWidth = 6.0
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..style = PaintingStyle.stroke,
-      );
-      canvas.drawPath(
-        curvePath,
-        Paint()
-          ..color = const Color(0xFF00F0FF)
-          ..strokeWidth = 3.0
-          ..strokeCap = StrokeCap.round
-          ..strokeJoin = StrokeJoin.round
-          ..style = PaintingStyle.stroke,
-      );
-      canvas.drawCircle(Offset(endX, endY), 5, Paint()..color = const Color(0xFFEF4444));
-      canvas.drawCircle(Offset(endX, endY), 3, Paint()..color = const Color(0xFFFACC15));
-      canvas.drawCircle(Offset(endX, endY), 1.5, Paint()..color = Colors.white);
+      // Waypoint Target Node at intersection (cx - 2, cy - 22) -> Cyan Concentric Ring
+      canvas.drawCircle(Offset(cx - 2, cy - 22), 6.5, Paint()..color = cyanColor..style = PaintingStyle.stroke..strokeWidth = 2.0);
+      canvas.drawCircle(Offset(cx - 2, cy - 22), 2.0, Paint()..color = Colors.white);
     }
 
-    // 7. Floating Maneuver Turn Badge on Road Surface
-    if (isNav && navManager.distanceToNextManeuver > 0) {
-      final badgeX = (turnCode == 6 || turnCode == 5 || turnCode == 7)
-          ? 36.0
-          : ((turnCode == 2 || turnCode == 1 || turnCode == 3) ? w - 36.0 : cx);
-      const badgeY = 110.0;
-      final badgeRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(badgeX, badgeY), width: 46, height: 18),
-        const Radius.circular(4),
-      );
-      canvas.drawRRect(badgeRect, Paint()..color = const Color(0xFF121A28));
-      canvas.drawRRect(
-        badgeRect,
-        Paint()
-          ..color = const Color(0xFFFACC15)
-          ..strokeWidth = 1.0
-          ..style = PaintingStyle.stroke,
-      );
-      final distM = navManager.distanceToNextManeuver.round();
-      final tp = TextPainter(
-        text: TextSpan(
-          text: distM >= 1000 ? '${(distM / 1000.0).toStringAsFixed(1)}k' : '${distM}m',
-          style: const TextStyle(color: Color(0xFFFACC15), fontSize: 10, fontWeight: FontWeight.bold),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(badgeX - (tp.width / 2), badgeY - (tp.height / 2)));
-    }
+    // 9. User Vehicle Location Pin at (cx, cy + 22) -> White Concentric Ring
+    canvas.drawCircle(Offset(cx, cy + 22), 7.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2.0);
+    canvas.drawCircle(Offset(cx, cy + 22), 3.0, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 1.5);
+    canvas.drawCircle(Offset(cx, cy + 22), 1.2, Paint()..color = Colors.white);
+    final pinPath = Path()
+      ..moveTo(cx, cy + 12)
+      ..lineTo(cx - 4, cy + 16)
+      ..lineTo(cx + 4, cy + 16)
+      ..close();
+    canvas.drawPath(pinPath, Paint()..color = Colors.white);
 
-    // 8. North Compass Rose (Top-Right Corner)
-    final compassCenter = Offset(w - 18, 42);
-    canvas.drawCircle(compassCenter, 9, Paint()..color = const Color(0xFF0F1724));
+    canvas.restore(); // Restore clipping
+
+    // 10. Re-stroke Crisp White Outer Circular Frame Ring
     canvas.drawCircle(
-      compassCenter,
-      9,
+      Offset(cx, cy),
+      R,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+
+    // 11. Top Overlay: Maneuver Distance or Heading Pill (y: 6..28)
+    final topPillRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(8, 6, w - 16, 24),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(topPillRect, Paint()..color = const Color(0xFF0F1724));
+    canvas.drawRRect(
+      topPillRect,
       Paint()
         ..color = const Color(0xFF283850)
         ..strokeWidth = 1.0
         ..style = PaintingStyle.stroke,
     );
-    final northPath = Path()
-      ..moveTo(compassCenter.dx, compassCenter.dy - 7)
-      ..lineTo(compassCenter.dx - 2.5, compassCenter.dy)
-      ..lineTo(compassCenter.dx + 2.5, compassCenter.dy)
-      ..close();
-    canvas.drawPath(northPath, Paint()..color = Colors.redAccent);
-    final southPath = Path()
-      ..moveTo(compassCenter.dx, compassCenter.dy + 7)
-      ..lineTo(compassCenter.dx - 2.5, compassCenter.dy)
-      ..lineTo(compassCenter.dx + 2.5, compassCenter.dy)
-      ..close();
-    canvas.drawPath(southPath, Paint()..color = Colors.white54);
 
-    // 9. Vehicle Chevron at cx, cy pointing straight UP
-    final chevronPath = Path()
-      ..moveTo(cx, cy - 10)
-      ..lineTo(cx + 7, cy + 7)
-      ..lineTo(cx, cy + 3)
-      ..lineTo(cx - 7, cy + 7)
-      ..close();
-    canvas.drawCircle(Offset(cx, cy), 16, Paint()..color = const Color(0xFF00F0FF).withAlpha(30));
-    canvas.drawCircle(Offset(cx, cy), 24, Paint()..color = const Color(0xFF00F0FF).withAlpha(15));
-    canvas.drawPath(chevronPath, Paint()..color = const Color(0xFF00F0FF));
-    canvas.drawCircle(Offset(cx, cy + 2), 2, Paint()..color = Colors.white);
-
-    // 10. Top HUD Glass Pill Overlay
-    final pillRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(8, 6, w - 16, 26),
-      const Radius.circular(6),
-    );
-    canvas.drawRRect(pillRect, Paint()..color = const Color(0xFF0F1724));
-    canvas.drawRRect(
-      pillRect,
-      Paint()
-        ..color = const Color(0xFF1E3048)
-        ..strokeWidth = 1.0
-        ..style = PaintingStyle.stroke,
-    );
-
-    // Pill Content
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
     if (isNav) {
       final distM = navManager.distanceToNextManeuver.round();
       final distStr = distM >= 1000 ? '${(distM / 1000.0).toStringAsFixed(1)}km' : '${distM}m';
-      final stName = navManager.currentStep?.streetName ?? 'Dẫn đường';
-      final cleanSt = stName.length > 10 ? '${stName.substring(0, 10)}..' : stName;
       textPainter.text = TextSpan(
-        children: [
-          TextSpan(text: '➤  $distStr', style: const TextStyle(color: Color(0xFFFACC15), fontSize: 11, fontWeight: FontWeight.bold)),
-          const TextSpan(text: ' • ', style: TextStyle(color: Colors.white24, fontSize: 11)),
-          TextSpan(text: cleanSt, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-        ],
+        text: '➤  $distStr',
+        style: const TextStyle(color: Color(0xFFFACC15), fontSize: 11, fontWeight: FontWeight.bold),
       );
     } else {
       textPainter.text = const TextSpan(
         text: 'CHẾ ĐỘ CHỜ - GPS',
-        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontWeight: FontWeight.bold),
+        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 10, fontWeight: FontWeight.bold),
       );
     }
     textPainter.layout();
-    textPainter.paint(canvas, const Offset(14, 12));
+    textPainter.paint(canvas, const Offset(14, 11));
 
-    // GPS Status Dot
-    canvas.drawCircle(Offset(w - 18, 19), 3, Paint()..color = isNav ? const Color(0xFF22C55E) : const Color(0xFF00F0FF));
+    // Status Dot
+    canvas.drawCircle(
+      Offset(w - 18, 18),
+      3,
+      Paint()..color = isNav ? const Color(0xFF22C55E) : const Color(0xFF00F0FF),
+    );
+
+    // 12. Bottom Overlay: Street Name Pill (y: h - 30..h - 6)
+    final btmPillRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(8, h - 28, w - 16, 24),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(btmPillRect, Paint()..color = const Color(0xFF0B111A));
+    canvas.drawRRect(
+      btmPillRect,
+      Paint()
+        ..color = const Color(0xFF1E293B)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke,
+    );
+
+    final stName = isNav ? (navManager.currentStep?.streetName ?? 'Lộ trình') : 'SẴN SÀNG';
+    final cleanSt = stName.length > 14 ? '${stName.substring(0, 14)}..' : stName;
+    final btmTp = TextPainter(
+      text: TextSpan(
+        text: cleanSt.toUpperCase(),
+        style: TextStyle(
+          color: isNav ? const Color(0xFFFACC15) : const Color(0xFF22C55E),
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    btmTp.paint(canvas, Offset(cx - (btmTp.width / 2), h - 22));
   }
 
   @override
