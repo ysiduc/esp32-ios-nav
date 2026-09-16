@@ -245,6 +245,7 @@ class MapPlace {
   final String? type;
   final String? category;
   final double? distanceMeters;
+  final String? placeId;
 
   MapPlace({
     required this.displayName,
@@ -253,6 +254,7 @@ class MapPlace {
     this.type,
     this.category,
     this.distanceMeters,
+    this.placeId,
   });
 
   factory MapPlace.fromJson(Map<String, dynamic> json, {LatLng? userLocation}) {

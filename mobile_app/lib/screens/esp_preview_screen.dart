@@ -547,7 +547,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
             const SizedBox(height: 14),
 
-            // MapTiler Minimap Style Switcher
+            // Goong Map / MapTiler Minimap Style Switcher
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -564,12 +564,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'MAPTILER MINIMAP',
+                          'BẢN ĐỒ MINIMAP ESP32',
                           style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                         ),
                         SizedBox(height: 2),
                         Text(
-                          'Style bản đồ thu nhỏ gửi sang ESP32',
+                          'Nguồn map & style gửi sang ESP32',
                           style: TextStyle(color: Colors.white54, fontSize: 10),
                         ),
                       ],
@@ -582,8 +582,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF00F0FF)),
                     style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                     items: const [
-                      DropdownMenuItem(value: 'streets-v2', child: Text('Streets v2')),
-                      DropdownMenuItem(value: 'streets-v2-dark', child: Text('Dark v2 (Đêm)')),
+                      DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN (Mặc định)')),
+                      DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
+                      DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
+                      DropdownMenuItem(value: 'streets-v2-dark', child: Text('MapTiler Dark')),
                       DropdownMenuItem(value: 'hybrid', child: Text('Hybrid (Vệ tinh)')),
                     ],
                     onChanged: (val) {

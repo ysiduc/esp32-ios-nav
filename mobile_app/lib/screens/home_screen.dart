@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
+import '../services/navigation_manager.dart';
 import 'ble_screen.dart';
 import 'esp_preview_screen.dart';
 import 'map_screen.dart';
@@ -24,24 +25,28 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final bleService = context.watch<BleService>();
+    final navManager = context.watch<NavigationManager>();
+    final isNavigating = navManager.isNavigating;
 
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
         children: _screens,
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF161B22),
-          border: const Border(top: BorderSide(color: Colors.white12, width: 0.8)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withAlpha(120),
-              blurRadius: 15,
-              offset: const Offset(0, -3),
-            ),
-          ],
-        ),
+      bottomNavigationBar: isNavigating
+          ? null
+          : Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF161B22),
+                border: const Border(top: BorderSide(color: Colors.white12, width: 0.8)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(120),
+                    blurRadius: 15,
+                    offset: const Offset(0, -3),
+                  ),
+                ],
+              ),
         child: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (index) {

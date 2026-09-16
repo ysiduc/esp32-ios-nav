@@ -774,11 +774,15 @@ class SearchService {
     final seenKeys = <String>{};
 
     void addPlace(MapPlace p) {
-      final key = '${p.name}_${p.coordinate.latitude.toStringAsFixed(4)}_${p.coordinate.longitude.toStringAsFixed(4)}'.toLowerCase();
+      final key = (p.placeId != null && p.placeId!.isNotEmpty)
+          ? 'goong_id_${p.placeId}'
+          : '${p.name}_${p.coordinate.latitude.toStringAsFixed(4)}_${p.coordinate.longitude.toStringAsFixed(4)}'.toLowerCase();
       if (!seenKeys.contains(key)) {
         seenKeys.add(key);
-        // Calculate distance if not set
-        if (p.distanceMeters == null && nearLocation != null) {
+        // Calculate distance only if coordinate is valid (non-zero)
+        if (p.distanceMeters == null &&
+            nearLocation != null &&
+            (p.coordinate.latitude != 0 || p.coordinate.longitude != 0)) {
           const distanceCalculator = Distance();
           final dist = distanceCalculator.as(LengthUnit.Meter, nearLocation, p.coordinate);
           mergedResults.add(MapPlace(
@@ -788,6 +792,7 @@ class SearchService {
             type: p.type,
             category: p.category,
             distanceMeters: dist,
+            placeId: p.placeId,
           ));
         } else {
           mergedResults.add(p);

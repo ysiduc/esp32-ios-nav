@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
+import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
@@ -14,6 +15,9 @@ import 'navigation_manager.dart';
 class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   BleService bleService;
   NavigationManager? navManager;
+
+  /// Optional hook to take live vector snapshots from MapLibre Goong map
+  Future<Uint8List?> Function({int? width, int? height})? mapSnapshotProvider;
 
   bool _isStreaming = false;
   bool _isCapturing = false;
@@ -41,7 +45,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
-  String _streamMapStyle = 'streets-v2-dark';
+  String _streamMapStyle = GoongConfig.isConfigured ? 'goong-streets' : 'streets-v2';
   String get streamMapStyle => _streamMapStyle;
   set streamMapStyle(String val) {
     if (_streamMapStyle != val) {
@@ -150,6 +154,27 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
+
+      // 0. Check live vector snapshot from MapLibre Goong map if provider hooked
+      if (mapSnapshotProvider != null) {
+        try {
+          final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
+          if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
+            final decoded = img.decodeImage(snapshotBytes);
+            if (decoded != null) {
+              final jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
+              _latestJpegBytes = jpegBytes;
+              _frameSizeKb = (jpegBytes.length / 1024).round();
+              _frameCount++;
+              _framesInCurrentSec++;
+              _dispatchTransmission(jpegBytes);
+              notifyListeners();
+              _isCapturing = false;
+              return;
+            }
+          }
+        } catch (_) {}
+      }
 
       // Pre-fetch surrounding tiles asynchronously at high-detail zoom 17
       _prefetchSurroundingTiles(userPos, 17);
@@ -261,27 +286,36 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _fetchTileImage(String key, int x, int y, int z) async {
     _pendingTileFetches.add(key);
     try {
-      final apiKey = MapboxConfig.maptilerApiKey;
       final style = _streamMapStyle;
       final isDark = style.contains('dark');
+      final isGoong = style.contains('goong');
       final ext = style == 'hybrid' ? 'jpg' : 'png';
 
-      final url = apiKey.isNotEmpty
-          ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
-          : (isDark
-              ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
-              : 'https://tile.openstreetmap.org/$z/$x/$y.png');
+      String url;
+      if (isGoong) {
+        // Goong Map style: Crisp light Apple Maps / Voyager or Carto Dark
+        url = isDark
+            ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
+            : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png';
+      } else {
+        final apiKey = MapboxConfig.maptilerApiKey;
+        url = apiKey.isNotEmpty
+            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
+            : (isDark
+                ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
+                : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png');
+      }
 
       var response = await http.get(
         Uri.parse(url),
         headers: {'User-Agent': 'ESP32NavApp/2.0'},
       ).timeout(const Duration(seconds: 4));
 
-      // Fallback: CartoDB Dark (for dark cockpit) or OSM standard
+      // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isDark
             ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
-            : 'https://tile.openstreetmap.org/$z/$x/$y.png';
+            : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png';
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'ESP32NavApp/2.0'},
@@ -319,8 +353,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double distToTurn,
     required double speedKmh,
   }) {
-    // 1. Background Fill: Dark Navy Cyber Slate (#0B111A)
-    final bgPaint = Paint()..color = const Color(0xFF0B111A);
+    final isDark = _streamMapStyle.contains('dark');
+
+    // 1. Background Fill: Clean Light Cream for Apple Maps (#F5F4F0) or Dark Navy (#0B111A)
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF5F4F0);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle screen anchor (lower center: x=72, y=140)
@@ -367,10 +403,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // High-visibility Cyber Blueprint Grid if tiles still loading
+    // High-visibility Blueprint Grid if tiles still loading
     if (!tilesDrawn) {
       final gridPaint = Paint()
-        ..color = const Color(0xFF1E2D42)
+        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFE2E0D8)
         ..strokeWidth = 1.0;
       for (double gx = -200; gx <= 200; gx += 28) {
         canvas.drawLine(Offset(gx, -200), Offset(gx, 200), gridPaint);
@@ -381,7 +417,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       // Dynamic radar range rings & axes
       final radarPaint = Paint()
-        ..color = const Color(0xFF00F0FF).withAlpha(50)
+        ..color = (isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF)).withAlpha(50)
         ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke;
       canvas.drawCircle(Offset.zero, 45, radarPaint);
@@ -416,17 +452,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // Route Outer Glow / Casing
-      final glowPaint = Paint()
-        ..color = const Color(0xFF003D66)
-        ..strokeWidth = 9.0
+      final casingPaint = Paint()
+        ..color = isDark ? const Color(0xFF003D66) : const Color(0xFF0051B3)
+        ..strokeWidth = 8.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
-      canvas.drawPath(routePath, glowPaint);
+      canvas.drawPath(routePath, casingPaint);
 
-      // Route Core Cyan
+      // Route Core: Apple Maps Vibrant Blue (#007AFF) or Neon Cyan (#00F0FF)
       final corePaint = Paint()
-        ..color = const Color(0xFF00F0FF)
+        ..color = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF)
         ..strokeWidth = 5.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -437,13 +473,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.restore();
 
     // 2. Navigation Vehicle Indicator (Stationary at center cx, cy pointing UP)
+    final vehicleColor = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF);
     final radarRing = Paint()
-      ..color = const Color(0xFF0084FF).withAlpha(60)
+      ..color = vehicleColor.withAlpha(50)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(Offset(cx, cy), 15, radarRing);
 
     final vehicleBg = Paint()
-      ..color = const Color(0xFF0084FF)
+      ..color = vehicleColor
       ..style = PaintingStyle.fill;
     canvas.drawCircle(Offset(cx, cy), 9, vehicleBg);
 

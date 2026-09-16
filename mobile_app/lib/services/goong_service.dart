@@ -7,7 +7,18 @@ import '../models/route_model.dart';
 
 /// Dịch vụ Goong Map: Tìm kiếm địa điểm, Geocoding & Tính toán đường đi (Routing)
 class GoongService {
+  // Bộ nhớ đệm (In-Memory Cache) tối ưu quota Goong API (1000 requests/ngày cho 3-4 người dùng)
+  static final Map<String, List<MapPlace>> _autocompleteCache = {};
+  static final Map<String, MapPlace> _detailCache = {};
+  static final Map<String, MapPlace> _reverseGeocodeCache = {};
+  static final Map<String, NavRoute> _directionsCache = {};
+
   /// 1. Tìm kiếm địa điểm & Gợi ý (Place AutoComplete)
+  /// TỐI ƯU HÓA:
+  /// - Dùng cache kết quả truy vấn.
+  /// - TUYỆT ĐỐI KHÔNG lặp gọi 5 lần Place Detail như trước (tránh tiêu tốn 300+ requests).
+  /// - Chỉ trả về danh sách gợi ý kèm `placeId`, khi nào người dùng bấm chọn địa chỉ cụ thể
+  ///   mới gọi Place Detail 1 lần duy nhất!
   Future<List<MapPlace>> searchPlaces(
     String query, {
     LatLng? nearLocation,
@@ -15,7 +26,13 @@ class GoongService {
   }) async {
     if (!GoongConfig.hasRestApiKey) return [];
     final clean = query.trim();
-    if (clean.isEmpty) return [];
+    if (clean.length < 2) return [];
+
+    final cacheKey =
+        '${clean.toLowerCase()}_${nearLocation?.latitude.toStringAsFixed(2)}_${nearLocation?.longitude.toStringAsFixed(2)}';
+    if (_autocompleteCache.containsKey(cacheKey)) {
+      return _autocompleteCache[cacheKey]!;
+    }
 
     try {
       var urlStr =
@@ -33,28 +50,24 @@ class GoongService {
 
       final places = <MapPlace>[];
 
-      // Lấy tọa độ chi tiết cho 5 kết quả hàng đầu qua Place Detail
-      final topPredictions = predictions.take(5);
-      for (final p in topPredictions) {
+      for (final p in predictions) {
         final placeId = p['place_id'] as String?;
         final description = p['description'] as String? ?? '';
         final structFormatting = p['structured_formatting'] as Map<String, dynamic>?;
         final mainText = structFormatting?['main_text'] as String? ?? description.split(',').first;
+        final secondaryText = structFormatting?['secondary_text'] as String? ?? '';
 
-        if (placeId != null && placeId.isNotEmpty) {
-          final detailPlace = await getPlaceDetail(
-            placeId,
-            fallbackName: mainText,
-            fallbackDisplay: description,
-            userLocation: nearLocation,
-          );
-          if (detailPlace != null) {
-            places.add(detailPlace);
-            continue;
-          }
-        }
+        places.add(MapPlace(
+          displayName: description,
+          name: mainText,
+          coordinate: const LatLng(0, 0), // Tọa độ tải lười (lazy) khi người dùng ấn vào
+          placeId: placeId,
+          type: 'place',
+          category: secondaryText.isNotEmpty ? secondaryText : 'Địa điểm',
+        ));
       }
 
+      _autocompleteCache[cacheKey] = places;
       return places;
     } catch (e) {
       debugPrint('[GoongService] searchPlaces error: $e');
@@ -63,6 +76,7 @@ class GoongService {
   }
 
   /// 2. Lấy tọa độ chi tiết của địa điểm (Place Detail)
+  /// Được gọi duy nhất 1 lần khi người dùng CHỌN địa điểm từ danh sách gợi ý.
   Future<MapPlace?> getPlaceDetail(
     String placeId, {
     String? fallbackName,
@@ -70,6 +84,10 @@ class GoongService {
     LatLng? userLocation,
   }) async {
     if (!GoongConfig.hasRestApiKey) return null;
+    if (_detailCache.containsKey(placeId)) {
+      return _detailCache[placeId]!;
+    }
+
     try {
       final url = Uri.parse('${GoongConfig.placeDetailUrl}?place_id=$placeId&api_key=${GoongConfig.restApiKey}');
       final res = await http.get(url).timeout(const Duration(seconds: 6));
@@ -95,14 +113,17 @@ class GoongService {
           dist = distCalc.as(LengthUnit.Meter, userLocation, coord);
         }
 
-        return MapPlace(
+        final place = MapPlace(
           displayName: formattedAddress,
           name: name,
           coordinate: coord,
+          placeId: placeId,
           type: 'place',
           category: 'place',
           distanceMeters: dist,
         );
+        _detailCache[placeId] = place;
+        return place;
       }
       return null;
     } catch (e) {
@@ -114,6 +135,11 @@ class GoongService {
   /// 3. Định vị ngược từ Tọa độ GPS ra Tên & Địa chỉ (Reverse Geocoding)
   Future<MapPlace?> reverseGeocode(LatLng point) async {
     if (!GoongConfig.hasRestApiKey) return null;
+    final cacheKey = '${point.latitude.toStringAsFixed(4)},${point.longitude.toStringAsFixed(4)}';
+    if (_reverseGeocodeCache.containsKey(cacheKey)) {
+      return _reverseGeocodeCache[cacheKey]!;
+    }
+
     try {
       final url = Uri.parse(
           '${GoongConfig.geocodeUrl}?latlng=${point.latitude},${point.longitude}&api_key=${GoongConfig.restApiKey}');
@@ -128,13 +154,15 @@ class GoongService {
       final formattedAddress = first['formatted_address'] as String? ?? 'Vị trí đã chọn';
       final name = first['name'] as String? ?? formattedAddress.split(',').first;
 
-      return MapPlace(
+      final place = MapPlace(
         displayName: formattedAddress,
         name: name,
         coordinate: point,
         type: 'address',
         category: 'place',
       );
+      _reverseGeocodeCache[cacheKey] = place;
+      return place;
     } catch (e) {
       debugPrint('[GoongService] reverseGeocode error: $e');
       return null;
@@ -149,6 +177,13 @@ class GoongService {
     String vehicle = 'bike',
   }) async {
     if (!GoongConfig.hasRestApiKey) return null;
+    final cacheKey =
+        '${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
+        '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$vehicle';
+    if (_directionsCache.containsKey(cacheKey)) {
+      return _directionsCache[cacheKey]!;
+    }
+
     try {
       final url = Uri.parse(
         '${GoongConfig.directionUrl}?origin=${start.latitude},${start.longitude}'
@@ -204,13 +239,15 @@ class GoongService {
         ));
       }
 
-      return NavRoute(
+      final route = NavRoute(
         totalDistanceMeters: distanceVal,
         totalDurationSeconds: durationVal,
         polylinePoints: polylinePoints,
         steps: steps,
         summary: leg['summary'] as String? ?? 'Lộ trình Goong Map ($vehicle)',
       );
+      _directionsCache[cacheKey] = route;
+      return route;
     } catch (e) {
       debugPrint('[GoongService] calculateRoute error: $e');
       return null;
