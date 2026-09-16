@@ -1863,6 +1863,7 @@ class StandbyVectorMapPainter extends CustomPainter {
           int turnIdx = 1;
           double maxDeflection = 0;
           for (int i = 1; i < pts.length - 1; i++) {
+            if (cy - pts[i].dy < 16) continue; // Must be ahead of vehicle
             final v1x = pts[i].dx - pts[i - 1].dx;
             final v1y = pts[i].dy - pts[i - 1].dy;
             final v2x = pts[i + 1].dx - pts[i].dx;
@@ -1876,6 +1877,10 @@ class StandbyVectorMapPainter extends CustomPainter {
               maxDeflection = cross;
               turnIdx = i;
             }
+          }
+
+          if (cy - pts[turnIdx].dy < 16 && pts.length > 2) {
+            turnIdx = pts.length ~/ 2;
           }
 
           final tx = pts[turnIdx].dx;

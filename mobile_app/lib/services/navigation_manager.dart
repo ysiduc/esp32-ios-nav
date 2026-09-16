@@ -72,7 +72,8 @@ class NavigationManager extends ChangeNotifier {
       }
       final targetIdx = (closestIdx + 1 < points.length) ? closestIdx + 1 : closestIdx;
       if (targetIdx != closestIdx) {
-        return distanceCalc.bearing(_currentLocation!, points[targetIdx]);
+        final b = distanceCalc.bearing(points[closestIdx], points[targetIdx]);
+        return (b + 360.0) % 360.0;
       }
     }
     return _currentHeading;
@@ -431,13 +432,14 @@ class NavigationManager extends ChangeNotifier {
     final dist = distanceToNextManeuver;
     final scale = dist <= 120 ? 0.70 : (dist <= 300 ? 0.48 : 0.32);
 
-    // Anchor point: Vehicle itself [0, 0]
+    // Anchor point: Vehicle on the road itself [0, 0]
+    final roadAnchor = points[closestIdx];
     upcomingPts.add([0, 0]);
 
     for (int i = closestIdx + 1; i < points.length && upcomingPts.length < 24; i++) {
       final pt = points[i];
-      final dNorth = (pt.latitude - curLoc.latitude) * 111139.0;
-      final dEast = (pt.longitude - curLoc.longitude) * 111139.0 * cosLat;
+      final dNorth = (pt.latitude - roadAnchor.latitude) * 111139.0;
+      final dEast = (pt.longitude - roadAnchor.longitude) * 111139.0 * cosLat;
 
       // Coordinate transformation:
       // xRel (right) = dEast * cos(H) - dNorth * sin(H)

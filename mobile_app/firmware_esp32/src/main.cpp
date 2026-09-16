@@ -1,9 +1,16 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
+#include <WiFi.h>
+#include <WiFiServer.h>
+#include <WiFiClient.h>
 #include "display_ui.h"
 #include "ams_service.h"
 #include "ancs_service.h"
+
+// WiFi SoftAP Streaming Server (ESP32 broadcasts "ysiduc navi", Pass: "00000000", IP 192.168.4.1)
+static WiFiServer wifiServer(8080);
+static bool wifiConnected = false;
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -27,8 +34,10 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* 
 TFT_eSPI tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
 #include <TJpg_Decoder.h>
+bool g_clipMapOnly = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
-  if (y >= tft.height() || x >= 154) return 1;
+  if (y >= tft.height() || x >= tft.width()) return 1;
+  if (g_clipMapOnly && x >= 154) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
@@ -74,18 +83,18 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
                   desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
 
-    // Increase supervision timeout to 1000 (10 seconds) to prevent auto-disconnects when idle in background
-    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 1000);
-
     AppleMediaService::connHandle = desc->conn_handle;
     AppleMediaService::lastCheckTime = millis();
     AppleNotificationService::connHandle = desc->conn_handle;
     AppleNotificationService::lastCheckTime = millis();
 
-    // If already encrypted/bonded, immediately trigger AMS & ANCS discovery
+    // Configure BLE connection parameters for flawless WiFi coexistence
+    // (Interval 30-50ms, Supervision timeout 6000ms = 6 seconds so WiFi RF scan never drops BLE)
+    pServer->updateConnParams(desc->conn_handle, 24, 40, 0, 600);
+
+    // If already encrypted/bonded, immediately trigger ANCS sequential discovery (which chains to AMS)
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting AMS & ANCS discovery...");
-      AppleMediaService::onEncrypted(desc->conn_handle);
+      Serial.println("[BLE] Link already encrypted. Starting ANCS sequential discovery...");
       AppleNotificationService::onEncrypted(desc->conn_handle);
     } else {
       // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
@@ -101,7 +110,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
-      AppleMediaService::onEncrypted(desc->conn_handle);
       AppleNotificationService::onEncrypted(desc->conn_handle);
     }
   }
@@ -121,106 +129,201 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // =========================================================================
 static uint8_t expectedBleChunkIdx = 0;
 
+// Unified JSON Packet Processing for both BLE and WiFi TCP
+void processJsonPacket(const char* jsonStr) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) return;
+
+  String typeStr = String(doc["type"] | "");
+  if (typeStr == "PING") {
+    if (doc["clock"].is<const char*>()) {
+      curClock = String(doc["clock"].as<const char*>());
+    }
+    if (doc["bat"].is<uint8_t>()) {
+      curBattery = doc["bat"].as<uint8_t>();
+    }
+    return;
+  } else if (typeStr == "DEL_BG") {
+    String target = String(doc["target"] | "all");
+    if (target == "wait" || target == "all") {
+      if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
+    }
+    if (target == "map" || target == "all") {
+      if (SPIFFS.exists("/bg_map.jpg")) SPIFFS.remove("/bg_map.jpg");
+    }
+    display.forceRedraw();
+    return;
+  } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"port\":8080,\"ssid\":\"ysiduc navi\",\"pass\":\"00000000\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+    return;
+  } else if (typeStr == "CALL") {
+    const char* name = doc["title"] | "Cuoc goi den";
+    const char* msg = doc["msg"] | "Cuoc goi den tu iPhone";
+    // If ANCS already set a caller name from iOS native system, do NOT overwrite with generic "Cuoc goi den"
+    if (display.isCallActive() && strcmp(display.getCallerName(), "Cuoc goi den") != 0 && strcmp(name, "Cuoc goi den") == 0) {
+      return;
+    }
+    popupTitle = name;
+    popupMsg = msg;
+    popupType = "CALL";
+    popupExpire = millis() + 10000;
+    display.showCallAlert(name, popupMsg.c_str());
+    return;
+  } else if (typeStr == "SMS") {
+    const char* sender = doc["title"] | "Tin nhan";
+    const char* content = doc["msg"] | "Thong bao moi";
+    popupTitle = sender;
+    popupMsg = content;
+    popupType = "SMS";
+    popupExpire = millis() + 8000;
+    display.showSmsAlert(sender, content);
+    return;
+  } else if (typeStr == "CALL_END") {
+    popupType = "NONE";
+    popupExpire = 0;
+    display.dismissAlert();
+    return;
+  } else if (typeStr == "CALL_ACTIVE") {
+    const char* name = doc["title"] | "Dang nghe may";
+    popupTitle = name;
+    popupType = "CALL_ACTIVE";
+    popupExpire = millis() + 5000;
+    display.showCallAlert(name, "Dang nghe may");
+    return;
+  }
+
+  curTurn = doc["turn"] | curTurn;
+  curDist = doc["dist"] | curDist;
+  curTotalDist = doc["tot_dist"] | doc["tot"] | curTotalDist;
+  curSpeed = doc["speed"] | curSpeed;
+  curEta = doc["eta"] | curEta;
+  if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
+  if (doc["arrival"].is<const char*>()) {
+    curArrival = String((const char*)doc["arrival"]);
+  } else if (doc["arr"].is<const char*>()) {
+    curArrival = String((const char*)doc["arr"]);
+  }
+  if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
+  if (doc["bat"].is<int>()) curBattery = doc["bat"];
+  if (doc["head"].is<int>()) curHeading = doc["head"];
+
+  // Dynamically calculate curArrival if not explicitly provided or if still default
+  if (curArrival == "18:26" || curArrival.length() == 0) {
+    int ch = 0, cm = 0;
+    if (sscanf(curClock.c_str(), "%d:%d", &ch, &cm) == 2) {
+      int totalMin = ch * 60 + cm + curEta;
+      int arrH = (totalMin / 60) % 24;
+      int arrM = totalMin % 60;
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%02d:%02d", arrH, arrM);
+      curArrival = String(buf);
+    }
+  }
+
+  RoutePoint parsedPts[32];
+  uint8_t parsedPtCount = 0;
+  if (doc["pts"].is<JsonArray>()) {
+    JsonArray arr = doc["pts"].as<JsonArray>();
+    for (JsonVariant v : arr) {
+      if (parsedPtCount >= 32) break;
+      if (v.is<JsonArray>() && v.size() >= 2) {
+        parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
+        parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
+        parsedPtCount++;
+      }
+    }
+  }
+
+  bool isNav = (doc["nav"] | 0) == 1;
+  display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curHeading);
+
+  if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
+    String curSong = String(doc["song"] | "");
+    String curArtist = String(doc["artist"] | "");
+    if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC") {
+      display.setSongInfo(curSong.c_str(), curArtist.c_str());
+    }
+  }
+}
+
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) return;
 
-    // 1. Check for Binary Chunked JPEG Packet (Magic 0xAA 0xBB from iPhone Stream)
-    if (value.length() >= 5 && (uint8_t)value[0] == 0xAA && (uint8_t)value[1] == 0xBB) {
-      uint8_t frameId = (uint8_t)value[2];
-      uint8_t totalChunks = (uint8_t)value[3];
-      uint8_t chunkIdx = (uint8_t)value[4];
+    // 1. Check for Binary Chunked JPEG Packet:
+    // Magic 0xAA 0xBB: Live streaming JPEG frame (RAM)
+    // Magic 0xAA 0xBC: Uploading custom background for Bluetooth pairing screen (/bg_wait.jpg)
+    // Magic 0xAA 0xBD: Uploading custom background for map waiting/idle screen (/bg_map.jpg)
+    if (value.length() >= 5 && (uint8_t)value[0] == 0xAA) {
+      uint8_t magic2 = (uint8_t)value[1];
+      if (magic2 == 0xBB) {
+        uint8_t frameId = (uint8_t)value[2];
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
 
-      if (chunkIdx == 0) {
-        currentBleFrameId = frameId;
-        expectedBleChunkIdx = 0;
-        bleJpegBytesReceived = 0;
-      }
-
-      if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
-        size_t payloadLen = value.length() - 5;
-        if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
-          memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
-          bleJpegBytesReceived += payloadLen;
-          expectedBleChunkIdx++;
+        if (chunkIdx == 0) {
+          currentBleFrameId = frameId;
+          expectedBleChunkIdx = 0;
+          bleJpegBytesReceived = 0;
         }
 
-        if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
-          // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
-          if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
-            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-            memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
-            activeRenderBuf = nextBuf;
-            activeRenderBufLen = bleJpegBytesReceived;
-            newFrameAvailable = true;
+        if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
+          size_t payloadLen = value.length() - 5;
+          if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
+            memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+            bleJpegBytesReceived += payloadLen;
+            expectedBleChunkIdx++;
+          }
+
+          if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
+            // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
+            if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
+              uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+              memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
+              activeRenderBuf = nextBuf;
+              activeRenderBufLen = bleJpegBytesReceived;
+              newFrameAvailable = true;
+            }
           }
         }
+        return;
+      } else if (magic2 == 0xBC || magic2 == 0xBD) {
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
+        size_t payloadLen = value.length() - 5;
+        const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg" : "/bg_map.jpg";
+
+        static File bgUploadFile;
+        if (chunkIdx == 0) {
+          if (SPIFFS.exists(targetPath)) SPIFFS.remove(targetPath);
+          bgUploadFile = SPIFFS.open(targetPath, FILE_WRITE);
+          Serial.printf("[SPIFFS] Started uploading %s (%d chunks)\n", targetPath, totalChunks);
+        }
+
+        if (bgUploadFile) {
+          bgUploadFile.write((const uint8_t*)value.data() + 5, payloadLen);
+        }
+
+        if (chunkIdx == totalChunks - 1) {
+          if (bgUploadFile) {
+            bgUploadFile.flush();
+            bgUploadFile.close();
+            Serial.printf("[SPIFFS] Finished uploading %s! Saved to flash.\n", targetPath);
+          }
+          display.forceRedraw();
+        }
+        return;
       }
-      return;
     }
 
     // 2. JSON Notification or Navigation Telemetry
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, value.c_str());
-
-    if (!error) {
-      String typeStr = String(doc["type"] | "");
-      if (typeStr == "CALL") {
-        const char* name = doc["title"] | "Cuoc goi den";
-        popupTitle = name;
-        popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
-        popupType = "CALL";
-        popupExpire = millis() + 10000;
-        display.showCallAlert(name, popupMsg.c_str());
-        return;
-      } else if (typeStr == "SMS") {
-        const char* sender = doc["title"] | "Tin nhan";
-        const char* content = doc["msg"] | "Thong bao moi";
-        popupTitle = sender;
-        popupMsg = content;
-        popupType = "SMS";
-        popupExpire = millis() + 8000;
-        display.showSmsAlert(sender, content);
-        return;
-      }
-
-      curTurn = doc["turn"] | 0;
-      curDist = doc["dist"] | 0;
-      curTotalDist = doc["tot_dist"] | doc["tot"] | 0;
-      curSpeed = doc["speed"] | 0;
-      curEta = doc["eta"] | 0;
-      curStreet = String(doc["street"] | "CAU SONG LU");
-      curArrival = String(doc["arrival"] | "18:26");
-      curClock = String(doc["clock"] | "18:25");
-      curBattery = doc["bat"] | 89;
-      if (doc["head"].is<int>()) curHeading = doc["head"];
-
-      RoutePoint parsedPts[32];
-      uint8_t parsedPtCount = 0;
-      if (doc["pts"].is<JsonArray>()) {
-        JsonArray arr = doc["pts"].as<JsonArray>();
-        for (JsonVariant v : arr) {
-          if (parsedPtCount >= 32) break;
-          if (v.is<JsonArray>() && v.size() >= 2) {
-            parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
-            parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
-            parsedPtCount++;
-          }
-        }
-      }
-
-      bool isNav = (doc["nav"] | 0) == 1;
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
-
-      if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
-        String curSong = String(doc["song"] | "");
-        String curArtist = String(doc["artist"] | "");
-        if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC" && curSong != "Waiting For You") {
-          display.setSongInfo(curSong.c_str(), curArtist.c_str());
-        }
-      }
-    }
+    processJsonPacket(value.c_str());
   }
 };
 
@@ -232,21 +335,32 @@ void setup() {
   delay(200);
   Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUC ST7789 20 FPS) ===");
 
-  // 1. Start Display
-  display.init();
+  // 0. Mount SPIFFS Filesystem for Custom Background Images
+  if (!SPIFFS.begin(true)) {
+    Serial.println("[SPIFFS] Mount failed, formatted partition.");
+  } else {
+    Serial.println("[SPIFFS] Filesystem mounted successfully.");
+  }
+
+  // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
   TJpgDec.setSwapBytes(true);
   TJpgDec.setCallback(tft_output);
   #endif
 
+  // 2. Start Display (safe to render SPIFFS JPEGs)
+  display.init();
+
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
   NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
-  // Security Auth & Bonding for iOS (Required by Apple Media Service)
+  // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
   AppleMediaService::init();
   AppleNotificationService::init();
@@ -257,7 +371,9 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC |
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC |
+    NIMBLE_PROPERTY::NOTIFY
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();
@@ -271,9 +387,10 @@ void setup() {
   advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setAdvertisementData(advData);
 
-  // Scan Response Data with Apple Media Service Solicitation (18 bytes)
+  // Scan Response Data with Apple Notification Center Service (ANCS) Solicitation (18 bytes)
+  // This triggers the native iOS prompt: "Allow ESP32-S3 Navi to display iPhone notifications?"
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.addData((char*)amsSolicitData, sizeof(amsSolicitData));
+  scanResponseData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -281,26 +398,120 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS!");
+  // 3. Start WiFi SoftAP for iPhone Connection (SSID: "ysiduc navi", Pass: "00000000")
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+  bool apOk = WiFi.softAP("ysiduc navi", "00000000", 1, 0, 4);
+  if (apOk) {
+    Serial.printf("[WiFi AP] SoftAP started! SSID: 'ysiduc navi', Pass: '00000000'\n");
+    Serial.printf("[WiFi AP] ESP32 IP: %s\n", WiFi.softAPIP().toString().c_str());
+    wifiServer.begin();
+    wifiConnected = true;
+  }
+
+  Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for 20 FPS JPEG stream over SoftAP ('ysiduc navi') + AMS & ANCS!");
 }
 
+static WiFiClient persistentStreamClient;
+
 void loop() {
-  // 1. Decode & push new JPEG Map Frame safely on the Main thread
+  // 1. Handle incoming WiFi Stream Client (Persistent or Chunked TCP stream)
+  if (wifiConnected) {
+    if (wifiServer.hasClient()) {
+      WiFiClient newClient = wifiServer.available();
+      if (newClient) {
+        if (persistentStreamClient && persistentStreamClient.connected()) {
+          persistentStreamClient.stop();
+        }
+        persistentStreamClient = newClient;
+        persistentStreamClient.setNoDelay(true);
+      }
+    }
+
+    if (persistentStreamClient && persistentStreamClient.connected()) {
+      int avail = persistentStreamClient.available();
+      if (avail > 0) {
+        static uint8_t tcpBuf[24576];
+        size_t bytesRead = 0;
+        unsigned long tcpTimeout = millis() + 400;
+
+        // Check if magic header 0xAA 0xBB is present (packet length prefixed)
+        if (avail >= 4 && persistentStreamClient.peek() == 0xAA) {
+          uint8_t peekHdr[4];
+          persistentStreamClient.read(peekHdr, 4);
+          if (peekHdr[0] == 0xAA && peekHdr[1] == 0xBB) {
+            uint16_t frameLen = ((uint16_t)peekHdr[2] << 8) | peekHdr[3];
+            if (frameLen > 0 && frameLen <= sizeof(tcpBuf)) {
+              size_t readSoFar = 0;
+              while (persistentStreamClient.connected() && millis() < tcpTimeout && readSoFar < frameLen) {
+                int canRead = persistentStreamClient.available();
+                if (canRead > 0) {
+                  int r = persistentStreamClient.read(tcpBuf + readSoFar, min((size_t)canRead, frameLen - readSoFar));
+                  readSoFar += r;
+                  tcpTimeout = millis() + 150;
+                } else {
+                  delay(1);
+                }
+              }
+              if (readSoFar == frameLen && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
+                uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+                memcpy(nextBuf, tcpBuf, frameLen);
+                activeRenderBuf = nextBuf;
+                activeRenderBufLen = frameLen;
+                newFrameAvailable = true;
+              }
+            }
+          }
+        }
+
+        // Fallback: Raw JPEG or JSON without length header
+        if (!newFrameAvailable && persistentStreamClient.available() > 0) {
+          while (persistentStreamClient.connected() && millis() < tcpTimeout && bytesRead < sizeof(tcpBuf)) {
+            int canRead = persistentStreamClient.available();
+            if (canRead > 0) {
+              int r = persistentStreamClient.read(tcpBuf + bytesRead, min((size_t)canRead, sizeof(tcpBuf) - bytesRead));
+              bytesRead += r;
+              tcpTimeout = millis() + 100;
+              if (bytesRead >= 2 && tcpBuf[bytesRead - 2] == 0xFF && tcpBuf[bytesRead - 1] == 0xD9) {
+                break;
+              }
+            } else {
+              delay(1);
+            }
+          }
+          if (bytesRead > 2 && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
+            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+            memcpy(nextBuf, tcpBuf, bytesRead);
+            activeRenderBuf = nextBuf;
+            activeRenderBufLen = bytesRead;
+            newFrameAvailable = true;
+          } else if (bytesRead > 2 && tcpBuf[0] == '{') {
+            tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
+            processJsonPacket((char*)tcpBuf);
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Decode & push new JPEG Map Frame safely on the Main thread
   if (newFrameAvailable) {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
     if (activeRenderBufLen > 100) {
+      g_clipMapOnly = true;
       TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      g_clipMapOnly = false;
     }
     #endif
   }
 
-  // 2. Update HUD and status UI
+  // 3. Update HUD and status UI
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
 
-  // 3. Periodic check for Apple Media Service & ANCS discovery
+  // 4. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
   AppleNotificationService::checkPeriodic();
 

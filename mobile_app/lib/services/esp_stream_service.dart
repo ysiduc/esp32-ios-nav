@@ -39,7 +39,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
   final Map<String, ui.Image> _tileCache = {};
+  final Map<String, img.Image> _cpuTileCache = {};
   final Set<String> _pendingTileFetches = {};
+
+  // Persistent TCP Socket for continuous screen-off background streaming
+  Socket? _persistentWifiSocket;
 
   // Getters
   bool get isStreaming => _isStreaming;
@@ -55,6 +59,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _streamMapStyle = val;
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
+      _cpuTileCache.clear();
       _lastPrefetchPos = null;
       notifyListeners();
     }
@@ -68,6 +73,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _minimapZoom = clamped;
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
+      _cpuTileCache.clear();
       _lastPrefetchPos = null;
       notifyListeners();
     }
@@ -106,9 +112,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     stopStreaming();
+    _persistentWifiSocket?.destroy();
+    _persistentWifiSocket = null;
     _pauseTimer?.cancel();
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
+    _cpuTileCache.clear();
     super.dispose();
   }
 
@@ -152,15 +161,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: smooth 20 FPS. In background (screen locked): cool 4 FPS to prevent heating
-    final effectiveFps = _isForeground ? _targetFps : 4;
+    // In foreground: smooth 20 FPS. In background (screen locked): cool 3 FPS to prevent heating while keeping ESP32 refreshed
+    final effectiveFps = _isForeground ? _targetFps : 3;
     final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
     });
   }
 
-  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS
+  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS (with Pure CPU Background Support)
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle || (!_isForeground && !bleService.isWifiConnected)) return;
@@ -170,81 +179,78 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       const int w = 144;
       const int h = 208;
 
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
-
-      // Extract current navigation telemetry
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double heading = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
-      // 0. Check live vector snapshot from MapLibre Goong map if provider hooked
-      if (mapSnapshotProvider != null) {
+      // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
+      _prefetchSurroundingTiles(userPos, _minimapZoom);
+
+      Uint8List? jpegBytes;
+
+      // 0. Check live vector snapshot from MapLibre Goong map if provider hooked (foreground only)
+      if (_isForeground && mapSnapshotProvider != null) {
         try {
           final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
           if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
             final decoded = img.decodeImage(snapshotBytes);
             if (decoded != null) {
-              final jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
-              _latestJpegBytes = jpegBytes;
-              _frameSizeKb = (jpegBytes.length / 1024).round();
-              _frameCount++;
-              _framesInCurrentSec++;
-              _dispatchTransmission(jpegBytes);
-              notifyListeners();
-              _isCapturing = false;
-              return;
+              jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
             }
           }
         } catch (_) {}
       }
 
-      // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
-      _prefetchSurroundingTiles(userPos, _minimapZoom);
+      // 1. In Foreground: Try high-speed GPU Canvas rendering
+      if (jpegBytes == null && _isForeground) {
+        try {
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
 
-      // 1. Draw Real Map Canvas (< 0.5ms)
-      _drawRealMapCanvas(
-        canvas: canvas,
-        w: w.toDouble(),
-        h: h.toDouble(),
-        userPos: userPos,
-        headingDeg: heading,
-        activeRoute: activeRoute,
-        distToTurn: distToTurn,
-        speedKmh: speedKmh,
-      );
+          _drawRealMapCanvas(
+            canvas: canvas,
+            w: w.toDouble(),
+            h: h.toDouble(),
+            userPos: userPos,
+            headingDeg: heading,
+            activeRoute: activeRoute,
+            distToTurn: distToTurn,
+            speedKmh: speedKmh,
+          );
 
-      final picture = recorder.endRecording();
-      ui.Image? image;
-      ByteData? byteData;
-      try {
-        image = await picture.toImage(w, h);
-        byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      } catch (_) {
-        // If app is in background or screen is locked, iOS disables Metal GPU context.
-        // Handled cleanly: ESP32 seamlessly displays the ultra-detailed vector map.
-      } finally {
-        image?.dispose();
-        picture.dispose();
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(w, h);
+          final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+          image.dispose();
+          picture.dispose();
+
+          if (byteData != null) {
+            final rawBytes = byteData.buffer.asUint8List();
+            final imgImage = img.Image.fromBytes(
+              width: w,
+              height: h,
+              bytes: rawBytes.buffer,
+              order: img.ChannelOrder.rgba,
+            );
+            jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
+          }
+        } catch (_) {
+          // Fall through to CPU renderer below if Metal GPU context is suspended
+        }
       }
 
-      if (byteData == null) {
+      // 2. In Background (Screen locked / App minimized) or if GPU failed:
+      // PURE CPU SOFTWARE MAP RENDERER (0% GPU, 100% Reliable in Background!)
+      if (jpegBytes == null) {
+        jpegBytes = _renderCpuMapFrame(w, h);
+      }
+
+      if (jpegBytes == null) {
         _isCapturing = false;
         return;
       }
-
-      final rawBytes = byteData.buffer.asUint8List();
-
-      // 2. Direct Fast In-Memory JPEG Encoding (144x208 with high efficiency quality ~1.3KB)
-      final imgImage = img.Image.fromBytes(
-        width: w,
-        height: h,
-        bytes: rawBytes.buffer,
-        order: img.ChannelOrder.rgba,
-      );
-      final jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
 
       _latestJpegBytes = jpegBytes;
       _frameSizeKb = (jpegBytes.length / 1024).round();
@@ -269,6 +275,122 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Pure CPU Software Map Renderer (Runs 100% in CPU RAM without Metal GPU, perfect for background)
+  Uint8List? _renderCpuMapFrame(int w, int h) {
+    try {
+      final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
+      final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
+      final activeRoute = navManager?.activeRoute;
+      final int zoom = _minimapZoom;
+      final isDark = _streamMapStyle.contains('dark');
+
+      final double n = math.pow(2.0, zoom).toDouble();
+      final double latRad = userPos.latitude * (math.pi / 180.0);
+      final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
+      final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
+
+      final int centerTileX = (worldX / 256.0).floor();
+      final int centerTileY = (worldY / 256.0).floor();
+      final double subTileX = worldX - (centerTileX * 256.0);
+      final double subTileY = worldY - (centerTileY * 256.0);
+
+      // Create a 280x280 CPU patch centered on user
+      const int patchSize = 280;
+      final patch = img.Image(width: patchSize, height: patchSize);
+      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(235, 240, 240, 255);
+      img.fill(patch, color: bgColor);
+
+      const double patchCenter = patchSize / 2.0;
+
+      // Composite 3x3 surrounding tiles
+      for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+          final tx = centerTileX + dx;
+          final ty = centerTileY + dy;
+          final key = '$zoom/$tx/$ty';
+          final tileImg = _cpuTileCache[key];
+          if (tileImg != null) {
+            final int dstX = (patchCenter + (dx * 256.0) - subTileX).round();
+            final int dstY = (patchCenter + (dy * 256.0) - subTileY).round();
+            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY);
+          }
+        }
+      }
+
+      // Rotate patch by -headingDeg so ahead is UP
+      img.Image rotatedPatch = patch;
+      if (headingDeg.abs() > 0.5) {
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg);
+      }
+
+      // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
+      final int rotCx = rotatedPatch.width ~/ 2;
+      final int rotCy = rotatedPatch.height ~/ 2;
+      final int cropX = rotCx - (w ~/ 2);
+      final int cropY = rotCy - (h * 0.67).round();
+
+      final frame = img.copyCrop(
+        rotatedPatch,
+        x: cropX,
+        y: cropY,
+        width: w,
+        height: h,
+      );
+
+      // Draw active route polyline on frame
+      if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
+        final pts = activeRoute.polylinePoints;
+        final hRad = headingDeg * (math.pi / 180.0);
+        final cosH = math.cos(hRad);
+        final sinH = math.sin(hRad);
+        final cosLat = math.cos(userPos.latitude * (math.pi / 180.0));
+
+        final screenPts = <img.Point>[];
+        final double metersPerPixel = 156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
+        final double scale = 1.0 / metersPerPixel;
+
+        for (int i = 0; i < pts.length; i++) {
+          final dNorth = (pts[i].latitude - userPos.latitude) * 111139.0;
+          final dEast = (pts[i].longitude - userPos.longitude) * 111139.0 * cosLat;
+          final xRel = dEast * cosH - dNorth * sinH;
+          final yRel = dNorth * cosH + dEast * sinH;
+          final sx = (72 + xRel * scale).round();
+          final sy = ((h * 0.67) - yRel * scale).round();
+          if (sx >= -50 && sx <= w + 50 && sy >= -50 && sy <= h + 50) {
+            screenPts.add(img.Point(sx, sy));
+          }
+        }
+
+        // Draw polyline segments
+        for (int i = 1; i < screenPts.length; i++) {
+          final x1 = screenPts[i - 1].x.toInt();
+          final y1 = screenPts[i - 1].y.toInt();
+          final x2 = screenPts[i].x.toInt();
+          final y2 = screenPts[i].y.toInt();
+          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(0, 110, 220, 255), thickness: 6);
+          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(0, 230, 255, 255), thickness: 4);
+          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(255, 255, 255, 255), thickness: 1);
+        }
+      }
+
+      // Draw Vehicle Location Puck at (72, 140) pointing straight UP
+      final int vx = 72;
+      final int vy = (h * 0.67).round();
+      img.fillCircle(frame, x: vx, y: vy, radius: 8, color: img.ColorRgba8(0, 130, 250, 255));
+      img.drawCircle(frame, x: vx, y: vy, radius: 8, color: img.ColorRgba8(255, 255, 255, 255));
+      img.fillCircle(frame, x: vx, y: vy, radius: 4, color: img.ColorRgba8(0, 230, 255, 255));
+      img.fillPolygon(frame, vertices: [
+        img.Point(vx, vy - 10),
+        img.Point(vx - 4, vy - 3),
+        img.Point(vx + 4, vy - 3),
+      ], color: img.ColorRgba8(255, 255, 255, 255));
+
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 65));
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _dispatchTransmission(Uint8List jpegBytes) {
     if (bleService.isWifiConnected && bleService.wifiIp != null) {
       if (!_isSendingWifi) {
@@ -283,7 +405,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   int _consecutiveWifiErrors = 0;
 
-  /// Send JPEG frame over WiFi TCP socket directly to ESP32 (screen-off background streaming)
+  /// Send JPEG frame over persistent WiFi TCP socket directly to ESP32 (screen-off background streaming)
   Future<void> _sendJpegOverWifi(Uint8List jpegBytes) async {
     final ip = bleService.wifiIp;
     final port = bleService.wifiPort;
@@ -291,14 +413,32 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _isSendingWifi = true;
 
     try {
-      final socket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 300));
-      socket.add(jpegBytes);
-      await socket.flush();
-      await socket.close();
+      if (_persistentWifiSocket == null) {
+        _persistentWifiSocket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 500));
+        _persistentWifiSocket!.setOption(SocketOption.tcpNoDelay, true);
+        _persistentWifiSocket!.done.then((_) {
+          _persistentWifiSocket = null;
+        }).catchError((_) {
+          _persistentWifiSocket = null;
+        });
+      }
+
+      final len = jpegBytes.length;
+      final packet = Uint8List(4 + len);
+      packet[0] = 0xAA;
+      packet[1] = 0xBB;
+      packet[2] = (len >> 8) & 0xFF;
+      packet[3] = len & 0xFF;
+      packet.setRange(4, 4 + len, jpegBytes);
+
+      _persistentWifiSocket!.add(packet);
+      await _persistentWifiSocket!.flush();
       _consecutiveWifiErrors = 0;
     } catch (_) {
+      _persistentWifiSocket?.destroy();
+      _persistentWifiSocket = null;
       _consecutiveWifiErrors++;
-      if (_consecutiveWifiErrors >= 3) {
+      if (_consecutiveWifiErrors >= 5) {
         bleService.setWifiDisconnected();
       }
     } finally {
@@ -388,13 +528,29 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-        final codec = await ui.instantiateImageCodec(response.bodyBytes);
-        final frame = await codec.getNextFrame();
-        _tileCache[key] = frame.image;
+        // 1. Decode for CPU background map rendering (0% GPU)
+        try {
+          final cpuImg = img.decodeImage(response.bodyBytes);
+          if (cpuImg != null) {
+            _cpuTileCache[key] = cpuImg;
+            if (_cpuTileCache.length > 100) {
+              _cpuTileCache.remove(_cpuTileCache.keys.first);
+            }
+          }
+        } catch (_) {}
 
-        if (_tileCache.length > 100) {
-          final firstKey = _tileCache.keys.first;
-          _tileCache.remove(firstKey)?.dispose();
+        // 2. Decode for Flutter GPU rendering (when app is in foreground)
+        if (_isForeground) {
+          try {
+            final codec = await ui.instantiateImageCodec(response.bodyBytes);
+            final frame = await codec.getNextFrame();
+            _tileCache[key] = frame.image;
+
+            if (_tileCache.length > 100) {
+              final firstKey = _tileCache.keys.first;
+              _tileCache.remove(firstKey)?.dispose();
+            }
+          } catch (_) {}
         }
 
         // Trigger immediate redraw so map is updated as soon as tile loads
@@ -622,6 +778,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _streamTimer = null;
     _pauseTimer?.cancel();
     _pauseTimer = null;
+    _persistentWifiSocket?.destroy();
+    _persistentWifiSocket = null;
     _actualFps = 0.0;
     notifyListeners();
   }

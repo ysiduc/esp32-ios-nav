@@ -518,6 +518,7 @@ private:
           int turnIdx = 1;
           int32_t maxDeflection = 0;
           for (uint8_t i = 1; i < count - 1; i++) {
+            if (cy - py[i] < 16) continue; // Must be ahead of vehicle, not on top of location puck
             int32_t v1x = px[i] - px[i - 1];
             int32_t v1y = py[i] - py[i - 1];
             int32_t v2x = px[i + 1] - px[i];
@@ -531,6 +532,9 @@ private:
               maxDeflection = cross;
               turnIdx = i;
             }
+          }
+          if (cy - py[turnIdx] < 16 && count > 2) {
+            turnIdx = count / 2;
           }
           int tx = px[turnIdx];
           int ty = py[turnIdx];

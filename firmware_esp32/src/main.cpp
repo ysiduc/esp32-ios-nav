@@ -412,33 +412,85 @@ void setup() {
   Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for 20 FPS JPEG stream over SoftAP ('ysiduc navi') + AMS & ANCS!");
 }
 
+static WiFiClient persistentStreamClient;
+
 void loop() {
-  // 1. Handle incoming WiFi Stream Client (Allows high-speed streaming from iPhone)
+  // 1. Handle incoming WiFi Stream Client (Persistent or Chunked TCP stream)
   if (wifiConnected) {
-    WiFiClient client = wifiServer.available();
-    if (client) {
-      static uint8_t tcpBuf[24576];
-      size_t bytesRead = 0;
-      unsigned long tcpTimeout = millis() + 400;
-      while (client.connected() && millis() < tcpTimeout && bytesRead < sizeof(tcpBuf)) {
-        int avail = client.available();
-        if (avail > 0) {
-          int r = client.read(tcpBuf + bytesRead, min((size_t)avail, sizeof(tcpBuf) - bytesRead));
-          bytesRead += r;
-          tcpTimeout = millis() + 100;
+    if (wifiServer.hasClient()) {
+      WiFiClient newClient = wifiServer.available();
+      if (newClient) {
+        if (persistentStreamClient && persistentStreamClient.connected()) {
+          persistentStreamClient.stop();
+        }
+        persistentStreamClient = newClient;
+        persistentStreamClient.setNoDelay(true);
+      }
+    }
+
+    if (persistentStreamClient && persistentStreamClient.connected()) {
+      int avail = persistentStreamClient.available();
+      if (avail > 0) {
+        static uint8_t tcpBuf[24576];
+        size_t bytesRead = 0;
+        unsigned long tcpTimeout = millis() + 400;
+
+        // Check if magic header 0xAA 0xBB is present (packet length prefixed)
+        if (avail >= 4 && persistentStreamClient.peek() == 0xAA) {
+          uint8_t peekHdr[4];
+          persistentStreamClient.read(peekHdr, 4);
+          if (peekHdr[0] == 0xAA && peekHdr[1] == 0xBB) {
+            uint16_t frameLen = ((uint16_t)peekHdr[2] << 8) | peekHdr[3];
+            if (frameLen > 0 && frameLen <= sizeof(tcpBuf)) {
+              size_t readSoFar = 0;
+              while (persistentStreamClient.connected() && millis() < tcpTimeout && readSoFar < frameLen) {
+                int canRead = persistentStreamClient.available();
+                if (canRead > 0) {
+                  int r = persistentStreamClient.read(tcpBuf + readSoFar, min((size_t)canRead, frameLen - readSoFar));
+                  readSoFar += r;
+                  tcpTimeout = millis() + 150;
+                } else {
+                  delay(1);
+                }
+              }
+              if (readSoFar == frameLen && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
+                uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+                memcpy(nextBuf, tcpBuf, frameLen);
+                activeRenderBuf = nextBuf;
+                activeRenderBufLen = frameLen;
+                newFrameAvailable = true;
+              }
+            }
+          }
+        }
+
+        // Fallback: Raw JPEG or JSON without length header
+        if (!newFrameAvailable && persistentStreamClient.available() > 0) {
+          while (persistentStreamClient.connected() && millis() < tcpTimeout && bytesRead < sizeof(tcpBuf)) {
+            int canRead = persistentStreamClient.available();
+            if (canRead > 0) {
+              int r = persistentStreamClient.read(tcpBuf + bytesRead, min((size_t)canRead, sizeof(tcpBuf) - bytesRead));
+              bytesRead += r;
+              tcpTimeout = millis() + 100;
+              if (bytesRead >= 2 && tcpBuf[bytesRead - 2] == 0xFF && tcpBuf[bytesRead - 1] == 0xD9) {
+                break;
+              }
+            } else {
+              delay(1);
+            }
+          }
+          if (bytesRead > 2 && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
+            uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+            memcpy(nextBuf, tcpBuf, bytesRead);
+            activeRenderBuf = nextBuf;
+            activeRenderBufLen = bytesRead;
+            newFrameAvailable = true;
+          } else if (bytesRead > 2 && tcpBuf[0] == '{') {
+            tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
+            processJsonPacket((char*)tcpBuf);
+          }
         }
       }
-      if (bytesRead > 2 && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
-        uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-        memcpy(nextBuf, tcpBuf, bytesRead);
-        activeRenderBuf = nextBuf;
-        activeRenderBufLen = bytesRead;
-        newFrameAvailable = true;
-      } else if (bytesRead > 2 && tcpBuf[0] == '{') {
-        tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
-        processJsonPacket((char*)tcpBuf);
-      }
-      client.stop();
     }
   }
 
