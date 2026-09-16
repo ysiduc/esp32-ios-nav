@@ -223,7 +223,7 @@ void processJsonPacket(const char* jsonStr) {
   }
 
   bool isNav = (doc["nav"] | 0) == 1;
-  display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
+  display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curHeading);
 
   if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
     String curSong = String(doc["song"] | "");

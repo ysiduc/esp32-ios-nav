@@ -48,6 +48,7 @@ struct NavStateData {
   char songArtist[32] = "";
   uint8_t routePointCount = 0;
   RoutePoint routePoints[32];
+  int16_t heading = 0;
 };
 
 struct AncsPopupData {
@@ -89,7 +90,7 @@ public:
 #endif
   }
 
-  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false) {
+  void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, int16_t head = 0) {
     if (_navData.isNavigating != isNav) {
       _needFullRedraw = true;
     }
@@ -99,6 +100,7 @@ public:
     _navData.speedKmh = speed;
     _navData.etaMinutes = eta;
     _navData.isNavigating = isNav;
+    _navData.heading = head;
 
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
@@ -413,71 +415,173 @@ private:
       }
     }
 
-    uint16_t cMapBg = tft.color565(11, 17, 26);     // Dark Cyber Navy
-    uint16_t cAsphalt = tft.color565(26, 36, 50);   // Real Road Asphalt Casing
-    uint16_t cRoute = tft.color565(0, 240, 255);    // Vibrant Neon Cyan Route
-    uint16_t cGlow = tft.color565(0, 100, 160);     // Outer Route Glow
-    uint16_t cRadar = tft.color565(20, 32, 48);     // Subtle Radar Grid Rings
-    uint16_t cPill = tft.color565(15, 23, 36);      // HUD Glass Pill
+    // -------------------------------------------------------------------------
+    // ULTRA-DETAILED REALISTIC VECTOR MAP (Dark Apple Maps / Goong Map Engine)
+    // -------------------------------------------------------------------------
+    uint16_t cMapBg       = tft.color565(11, 16, 24);    // Deep dark navy-slate
+    uint16_t cWater       = tft.color565(14, 52, 92);    // Sông Lừ / River deep cyan-blue
+    uint16_t cWaterShore  = tft.color565(22, 78, 130);   // River bank / shoreline ripple
+    uint16_t cGreen       = tft.color565(13, 30, 22);    // Parks & green belts
+    uint16_t cGreenBorder = tft.color565(20, 48, 34);    // Green park perimeter
+    uint16_t cBlock       = tft.color565(18, 26, 38);    // Urban building footprint
+    uint16_t cBlockBorder = tft.color565(28, 40, 58);    // Building 3D outline
+    uint16_t cBlockRoof   = tft.color565(24, 34, 48);    // Building roof bevel
+    uint16_t cSecRoad     = tft.color565(22, 32, 46);    // Secondary road surface
+    uint16_t cSecCasing   = tft.color565(15, 22, 32);    // Secondary road casing
+    uint16_t cAsphalt     = tft.color565(28, 40, 58);    // Main road asphalt casing
+    uint16_t cSurface     = tft.color565(38, 52, 74);    // Main road smooth surface
+    uint16_t cLaneMark    = tft.color565(130, 150, 175); // Dashed white lane markings & zebra
+    uint16_t cRouteHalo   = tft.color565(0, 110, 185);   // Vibrant electric route halo
+    uint16_t cRouteCore   = tft.color565(0, 240, 255);   // Neon cyan core route
+    uint16_t cRadar       = tft.color565(18, 28, 42);    // Radar distance range rings
+    uint16_t cPill        = tft.color565(12, 20, 32);    // HUD glass pill
 
-    // 1. Map container box & border
+    // 1. Base Canvas Container
     tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
     tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
 
     int cx = 78;
     int cy = 155;
 
-    // 2. Concentric Distance Radar Range Rings (50m, 100m scale)
+    // 2. Natural River / Waterway (e.g. Sông Lừ)
+    // Blue water body flowing diagonally and along the flank
+    tft.fillTriangle(6, 75, 34, 108, 6, 120, cWater);
+    tft.fillRect(6, 85, 26, 35, cWater);
+    tft.fillTriangle(6, 120, 34, 108, 30, 168, cWater);
+    tft.fillTriangle(6, 120, 30, 168, 12, 185, cWater);
+    tft.fillRect(8, 172, 22, 48, cWater);
+    // Shoreline ripple lines
+    tft.drawLine(34, 108, 30, 168, cWaterShore);
+    tft.drawLine(35, 109, 31, 169, cWaterShore);
+    tft.drawLine(30, 172, 30, 225, cWaterShore);
+    tft.drawLine(31, 172, 31, 225, cWaterShore);
+
+    // 3. Parks & Green Belts
+    // Riverside Park (x: 8..34, y: 32..65)
+    tft.fillRoundRect(8, 32, 26, 32, 4, cGreen);
+    tft.drawRoundRect(8, 32, 26, 32, 4, cGreenBorder);
+    tft.fillCircle(16, 44, 2, tft.color565(32, 85, 52));
+    tft.fillCircle(24, 52, 2, tft.color565(32, 85, 52));
+    // Urban Park (x: 104..142, y: 155..198)
+    tft.fillRoundRect(104, 155, 38, 42, 6, cGreen);
+    tft.drawRoundRect(104, 155, 38, 42, 6, cGreenBorder);
+    tft.fillCircle(116, 168, 2, tft.color565(32, 85, 52));
+    tft.fillCircle(128, 178, 3, tft.color565(32, 85, 52));
+
+    // 4. Urban Building Footprint Blocks (e.g. A4, A5, N26A)
+    // Block 1 (Top-Right Apartment Complex A5)
+    tft.fillRoundRect(90, 36, 48, 30, 3, cBlock);
+    tft.drawRoundRect(90, 36, 48, 30, 3, cBlockBorder);
+    tft.fillRect(94, 40, 40, 5, cBlockRoof);
+    // Block 2 (Mid-Right Residential Plot A4)
+    tft.fillRoundRect(96, 78, 44, 28, 3, cBlock);
+    tft.drawRoundRect(96, 78, 44, 28, 3, cBlockBorder);
+    tft.drawFastHLine(100, 92, 36, cBlockBorder);
+    // Block 3 (Mid-Right High-Rise N26A)
+    tft.fillRoundRect(94, 118, 46, 26, 3, cBlock);
+    tft.drawRoundRect(94, 118, 46, 26, 3, cBlockBorder);
+    tft.fillRect(98, 122, 38, 5, cBlockRoof);
+    // Block 4 (Lower-Right Villa Block)
+    tft.fillRoundRect(98, 206, 42, 20, 3, cBlock);
+    tft.drawRoundRect(98, 206, 42, 20, 3, cBlockBorder);
+    // Block 5 (Lower-Left Settlement)
+    tft.fillRoundRect(36, 185, 26, 35, 3, cBlock);
+    tft.drawRoundRect(36, 185, 26, 35, 3, cBlockBorder);
+
+    // 5. Road Network & Intersections
+    // Cross Street 1 (Major 4-way Intersection, ~45m ahead at y = 114)
+    tft.fillRect(8, 108, 138, 13, cSecCasing);
+    tft.fillRect(8, 110, 138, 9, cSecRoad);
+    // Concrete bridge railings over river on left flank (x: 8 to 36)
+    tft.drawFastHLine(8, 108, 28, tft.color565(95, 115, 140));
+    tft.drawFastHLine(8, 120, 28, tft.color565(95, 115, 140));
+    // Pedestrian Zebra Crosswalk at Intersection
+    for (int zx = 60; zx <= 68; zx += 2) {
+      tft.drawFastVLine(zx, 110, 9, cLaneMark);
+    }
+    for (int zx = 88; zx <= 96; zx += 2) {
+      tft.drawFastVLine(zx, 110, 9, cLaneMark);
+    }
+
+    // Cross Street 2 (Secondary Avenue at y = 72)
+    tft.fillRect(40, 68, 106, 9, cSecCasing);
+    tft.fillRect(40, 70, 106, 6, cSecRoad);
+
+    // Residential Alley 3 (Lower connection at y = 175)
+    tft.fillRect(34, 172, 50, 7, cSecCasing);
+    tft.fillRect(34, 174, 50, 4, cSecRoad);
+
+    // Distance Range Radar Rings (50m, 100m)
     tft.drawCircle(cx, cy, 45, cRadar);
     tft.drawCircle(cx, cy, 90, cRadar);
     tft.drawFastHLine(cx - 65, cy, 130, cRadar);
     tft.drawFastVLine(cx, cy - 110, 170, cRadar);
+    tft.setTextColor(tft.color565(60, 76, 98), cMapBg);
+    tft.drawString("50m", cx + 47, cy - 7, 1);
+    tft.drawString("100m", cx + 70, cy - 7, 1);
 
-    // Subtle scale labels
-    tft.setTextColor(tft.color565(71, 85, 105), cMapBg);
-    tft.drawString("50m", cx + 47, cy - 8, 1);
-    tft.drawString("100m", cx + 70, cy - 8, 1);
-
-    // 3. Dynamic Vector Route: Draw Real Road Corridor from GPS Route Points
+    // 6. Dynamic Vector Route Corridor
     if (_navData.routePointCount >= 2) {
       int ptsX[32];
       int ptsY[32];
       for (uint8_t i = 0; i < _navData.routePointCount; i++) {
-        ptsX[i] = constrain(cx + _navData.routePoints[i].dx, 10, 144);
-        ptsY[i] = constrain(cy - _navData.routePoints[i].dy, 30, 224);
+        ptsX[i] = constrain(cx + _navData.routePoints[i].dx, 12, 142);
+        ptsY[i] = constrain(cy - _navData.routePoints[i].dy, 32, 224);
       }
 
-      // Pass 1: Wide Asphalt Road Corridor Bed (Width ~10px)
+      // Pass 1: Wide Asphalt Roadbed (Width ~14px)
       for (uint8_t i = 0; i < _navData.routePointCount; i++) {
-        tft.fillCircle(ptsX[i], ptsY[i], 5, cAsphalt);
+        tft.fillCircle(ptsX[i], ptsY[i], 7, cAsphalt);
       }
       for (uint8_t i = 1; i < _navData.routePointCount; i++) {
-        for (int off = -5; off <= 5; off++) {
+        for (int off = -6; off <= 6; off++) {
           tft.drawLine(ptsX[i-1] + off, ptsY[i-1], ptsX[i] + off, ptsY[i], cAsphalt);
           tft.drawLine(ptsX[i-1], ptsY[i-1] + off, ptsX[i], ptsY[i] + off, cAsphalt);
         }
       }
 
-      // Pass 2: Glowing Route Center (Width ~4px)
+      // Pass 2: Inner Smooth Road Surface (Width ~10px)
+      for (uint8_t i = 0; i < _navData.routePointCount; i++) {
+        tft.fillCircle(ptsX[i], ptsY[i], 5, cSurface);
+      }
       for (uint8_t i = 1; i < _navData.routePointCount; i++) {
-        // Outer cyan glow
-        tft.drawLine(ptsX[i-1] - 2, ptsY[i-1], ptsX[i] - 2, ptsY[i], cGlow);
-        tft.drawLine(ptsX[i-1] + 2, ptsY[i-1], ptsX[i] + 2, ptsY[i], cGlow);
-        tft.drawLine(ptsX[i-1], ptsY[i-1] - 2, ptsX[i], ptsY[i] - 2, cGlow);
-        tft.drawLine(ptsX[i-1], ptsY[i-1] + 2, ptsX[i], ptsY[i] + 2, cGlow);
-
-        // Core bright cyan
-        tft.drawLine(ptsX[i-1] - 1, ptsY[i-1], ptsX[i] - 1, ptsY[i], cRoute);
-        tft.drawLine(ptsX[i-1], ptsY[i-1], ptsX[i], ptsY[i], cRoute);
-        tft.drawLine(ptsX[i-1] + 1, ptsY[i-1], ptsX[i] + 1, ptsY[i], cRoute);
+        for (int off = -4; off <= 4; off++) {
+          tft.drawLine(ptsX[i-1] + off, ptsY[i-1], ptsX[i] + off, ptsY[i], cSurface);
+          tft.drawLine(ptsX[i-1], ptsY[i-1] + off, ptsX[i], ptsY[i] + off, cSurface);
+        }
       }
 
-      // Destination Target Flag at end of path
+      // Pass 3: Route Halo (Width ~6px)
+      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+        for (int off = -2; off <= 2; off++) {
+          tft.drawLine(ptsX[i-1] + off, ptsY[i-1], ptsX[i] + off, ptsY[i], cRouteHalo);
+          tft.drawLine(ptsX[i-1], ptsY[i-1] + off, ptsX[i], ptsY[i] + off, cRouteHalo);
+        }
+      }
+
+      // Pass 4: Brilliant Neon Cyan Core Route (Width ~3px)
+      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+        tft.drawLine(ptsX[i-1], ptsY[i-1], ptsX[i], ptsY[i], cRouteCore);
+        tft.drawLine(ptsX[i-1] - 1, ptsY[i-1], ptsX[i] - 1, ptsY[i], cRouteCore);
+        tft.drawLine(ptsX[i-1] + 1, ptsY[i-1], ptsX[i] + 1, ptsY[i], cRouteCore);
+        tft.drawLine(ptsX[i-1], ptsY[i-1] - 1, ptsX[i], ptsY[i] - 1, cRouteCore);
+        tft.drawLine(ptsX[i-1], ptsY[i-1] + 1, ptsX[i], ptsY[i] + 1, cRouteCore);
+      }
+
+      // Pass 5: White Directional Traffic Flow Chevrons (Every ~25px)
+      for (uint8_t i = 1; i < _navData.routePointCount; i++) {
+        int mx = (ptsX[i-1] + ptsX[i]) / 2;
+        int my = (ptsY[i-1] + ptsY[i]) / 2;
+        tft.fillCircle(mx, my, 2, TFT_WHITE);
+      }
+
+      // Pass 6: Destination Pin
       int last = _navData.routePointCount - 1;
-      tft.fillCircle(ptsX[last], ptsY[last], 5, TFT_YELLOW);
+      tft.fillCircle(ptsX[last], ptsY[last], 6, TFT_RED);
+      tft.fillCircle(ptsX[last], ptsY[last], 4, TFT_YELLOW);
       tft.fillCircle(ptsX[last], ptsY[last], 2, TFT_WHITE);
     } else {
-      // Fallback Smooth Curved Corridor based on turnCode
+      // Fallback Smooth Curved Corridor
       int endX = cx;
       int endY = 48;
       if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
@@ -486,40 +590,67 @@ private:
         endX = 134; endY = 95; // Turn Right
       }
 
-      // Draw corridor from (cx, 220) to (cx, 130) to (endX, endY)
-      for (int off = -5; off <= 5; off++) {
+      // Asphalt base
+      for (int off = -7; off <= 7; off++) {
         tft.drawLine(cx + off, 220, cx + off, 130, cAsphalt);
         tft.drawLine(cx + off, 130, endX + off, endY, cAsphalt);
       }
-      tft.fillCircle(cx, 130, 5, cAsphalt);
-      tft.fillCircle(endX, endY, 5, cAsphalt);
+      // Road surface
+      for (int off = -5; off <= 5; off++) {
+        tft.drawLine(cx + off, 220, cx + off, 130, cSurface);
+        tft.drawLine(cx + off, 130, endX + off, endY, cSurface);
+      }
+      // Cyan Halo & Core
+      for (int off = -2; off <= 2; off++) {
+        tft.drawLine(cx + off, 220, cx + off, 130, cRouteHalo);
+        tft.drawLine(cx + off, 130, endX + off, endY, cRouteHalo);
+      }
+      tft.drawLine(cx, 220, cx, 130, cRouteCore);
+      tft.drawLine(cx - 1, 220, cx - 1, 130, cRouteCore);
+      tft.drawLine(cx + 1, 220, cx + 1, 130, cRouteCore);
+      tft.drawLine(cx, 130, endX, endY, cRouteCore);
+      tft.drawLine(cx - 1, 130, endX - 1, endY, cRouteCore);
+      tft.drawLine(cx + 1, 130, endX + 1, endY, cRouteCore);
 
-      // Core cyan route
-      tft.drawLine(cx, 220, cx, 130, cRoute);
-      tft.drawLine(cx - 1, 220, cx - 1, 130, cRoute);
-      tft.drawLine(cx + 1, 220, cx + 1, 130, cRoute);
-      tft.drawLine(cx, 130, endX, endY, cRoute);
-      tft.drawLine(cx - 1, 130, endX - 1, endY, cRoute);
-      tft.drawLine(cx + 1, 130, endX + 1, endY, cRoute);
-
-      tft.fillCircle(endX, endY, 4, TFT_YELLOW);
-      tft.fillCircle(endX, endY, 2, TFT_WHITE);
+      tft.fillCircle(endX, endY, 5, TFT_RED);
+      tft.fillCircle(endX, endY, 3, TFT_YELLOW);
+      tft.fillCircle(endX, endY, 1, TFT_WHITE);
     }
 
-    // 4. Vehicle Cockpit Indicator (Chevron at cx, cy pointing straight UP)
-    tft.drawCircle(cx, cy, 14, tft.color565(0, 100, 160));
-    tft.drawCircle(cx, cy, 22, tft.color565(0, 50, 90));
+    // 7. Maneuver Turn Badge Floating on Road Surface (if navigating)
+    if (_navData.isNavigating && _navData.distMeters > 0) {
+      int badgeX = (_navData.turnCode == 6 || _navData.turnCode == 5 || _navData.turnCode == 7) ? 38 : ((_navData.turnCode == 2 || _navData.turnCode == 1 || _navData.turnCode == 3) ? 104 : cx);
+      int badgeY = 110;
+      tft.fillRoundRect(badgeX - 22, badgeY - 10, 44, 18, 4, tft.color565(18, 26, 40));
+      tft.drawRoundRect(badgeX - 22, badgeY - 10, 44, 18, 4, tft.color565(250, 204, 21));
+      char mBuf[12];
+      snprintf(mBuf, sizeof(mBuf), "%dm", _navData.distMeters < 999 ? _navData.distMeters : 999);
+      tft.setTextColor(tft.color565(250, 204, 21), tft.color565(18, 26, 40));
+      tft.drawCentreString(mBuf, badgeX, badgeY - 5, 1);
+    }
 
-    // Arrowhead pointing UP
+    // 8. Vehicle Cockpit Indicator (Precision Chevron at cx, cy pointing straight UP)
+    tft.drawCircle(cx, cy, 14, tft.color565(0, 110, 185));
+    tft.drawCircle(cx, cy, 22, tft.color565(0, 50, 90));
+    // High-contrast vehicle chevron
+    tft.fillTriangle(cx, cy - 11, cx - 8, cy + 8, cx + 8, cy + 8, tft.color565(0, 70, 140)); // shadow
     tft.fillTriangle(cx, cy - 10, cx - 7, cy + 7, cx + 7, cy + 7, TFT_CYAN);
     tft.fillCircle(cx, cy + 1, 2, TFT_WHITE);
 
-    // 5. Live HUD Pill Overlay at Top of Minimap
-    tft.fillRoundRect(10, 30, 136, 26, 6, cPill);
-    tft.drawRoundRect(10, 30, 136, 26, 6, tft.color565(30, 48, 72));
+    // 9. North Compass Rose (Top-Right Corner at x: 136, y: 38)
+    tft.fillCircle(136, 38, 8, tft.color565(15, 23, 36));
+    tft.drawCircle(136, 38, 8, tft.color565(40, 56, 78));
+    tft.fillTriangle(136, 32, 134, 38, 138, 38, TFT_RED);
+    tft.fillTriangle(136, 44, 134, 38, 138, 38, tft.color565(120, 140, 160));
+    tft.setTextColor(TFT_RED, tft.color565(15, 23, 36));
+    tft.drawString("N", 134, 30, 1);
+
+    // 10. Live HUD Pill Overlay at Top of Minimap
+    tft.fillRoundRect(10, 28, 136, 24, 6, cPill);
+    tft.drawRoundRect(10, 28, 136, 24, 6, tft.color565(36, 52, 76));
 
     if (_navData.isNavigating) {
-      _drawMiniTurnIcon(22, 43, _navData.turnCode);
+      _drawMiniTurnIcon(22, 40, _navData.turnCode);
 
       char distBuf[16];
       if (_navData.distMeters >= 1000) {
@@ -528,13 +659,20 @@ private:
         snprintf(distBuf, sizeof(distBuf), "%dm", _navData.distMeters);
       }
       tft.setTextColor(tft.color565(250, 204, 21), cPill);
-      tft.drawString(distBuf, 34, 35, 2);
+      tft.drawString(distBuf, 34, 33, 2);
 
-      tft.fillCircle(136, 43, 3, TFT_GREEN);
+      // Clean street name preview on right of pill
+      tft.setTextColor(TFT_WHITE, cPill);
+      char cleanSt[14];
+      strncpy(cleanSt, _navData.streetName, 12);
+      cleanSt[12] = '\0';
+      tft.drawString(cleanSt, 74, 34, 1);
+
+      tft.fillCircle(136, 40, 3, TFT_GREEN);
     } else {
       tft.setTextColor(tft.color565(148, 163, 184), cPill);
-      tft.drawCentreString("CHEDO CHO - GPS", 78, 35, 1);
-      tft.fillCircle(136, 43, 3, TFT_CYAN);
+      tft.drawCentreString("CHEDO CHO - GPS", 78, 33, 1);
+      tft.fillCircle(136, 40, 3, TFT_CYAN);
     }
   }
 

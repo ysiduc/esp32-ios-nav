@@ -217,10 +217,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       );
 
       final picture = recorder.endRecording();
-      final ui.Image image = await picture.toImage(w, h);
-      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      image.dispose();
-      picture.dispose();
+      ui.Image? image;
+      ByteData? byteData;
+      try {
+        image = await picture.toImage(w, h);
+        byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      } catch (_) {
+        // If app is in background or screen is locked, iOS disables Metal GPU context.
+        // Handled cleanly: ESP32 seamlessly displays the ultra-detailed vector map.
+      } finally {
+        image?.dispose();
+        picture.dispose();
+      }
 
       if (byteData == null) {
         _isCapturing = false;

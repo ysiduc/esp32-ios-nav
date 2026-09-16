@@ -108,6 +108,9 @@ class EspNavPayload {
       'clock': phoneClock,
       'bat': batteryLevel,
     };
+    if (heading != 0) {
+      map['head'] = heading;
+    }
     if (sanitizedSong.isNotEmpty) {
       map['song'] = sanitizedSong.length > 14 ? sanitizedSong.substring(0, 14) : sanitizedSong;
     }
@@ -115,16 +118,19 @@ class EspNavPayload {
       map['artist'] = sanitizedArtist.length > 10 ? sanitizedArtist.substring(0, 10) : sanitizedArtist;
     }
     if (routePoints != null && routePoints!.isNotEmpty) {
-      map['pts'] = routePoints!.take(5).toList();
+      final pts = routePoints!.take(14).toList();
+      map['pts'] = pts;
+      String result = jsonEncode(map);
+      // Dynamically trim points from end if exceeding 180 bytes (ATT MTU safe threshold), keeping as many points as possible!
+      while (result.length > 180 && pts.length > 2) {
+        pts.removeLast();
+        map['pts'] = pts;
+        result = jsonEncode(map);
+      }
+      return result;
     }
 
-    String result = jsonEncode(map);
-    // If payload with points exceeds 165 bytes (ATT MTU safe threshold), strip pts to guarantee delivery of nav state
-    if (result.length > 165 && map.containsKey('pts')) {
-      map.remove('pts');
-      result = jsonEncode(map);
-    }
-    return result;
+    return jsonEncode(map);
   }
 
   /// Compact Binary Protocol format (Header: 0xAA, 0x55)
