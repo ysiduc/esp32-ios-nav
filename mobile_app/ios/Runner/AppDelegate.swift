@@ -2,12 +2,16 @@ import Flutter
 import UIKit
 import MediaPlayer
 import CallKit
+import CoreLocation
+import MapKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var mediaChannel: FlutterMethodChannel?
   private var callChannel: FlutterMethodChannel?
+  private var locationChannel: FlutterMethodChannel?
   private var isChannelSetup = false
+
 
   // CallKit observer - theo dõi cuộc gọi
   private var callObserver: CXCallObserver?
@@ -72,9 +76,51 @@ import CallKit
       result(FlutterMethodNotImplemented)
     }
 
+    // ─── 3. Location Channel (Background Survival & MKMapSnapshotter) ────
+    locationChannel = FlutterMethodChannel(
+      name: "com.ysiduc.esp32_nav/location",
+      binaryMessenger: binaryMessenger
+    )
+    locationChannel?.setMethodCallHandler { [weak self] (call, result) in
+      switch call.method {
+      case "startBackgroundNavigation":
+        NavigationLocationManager.shared.start()
+        result(true)
+      case "stopBackgroundNavigation":
+        NavigationLocationManager.shared.stop()
+        result(true)
+      case "renderMapSnapshot":
+        guard let args = call.arguments as? [String: Any],
+              let lat = args["lat"] as? Double,
+              let lng = args["lng"] as? Double else {
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing lat/lng", details: nil))
+          return
+        }
+        let width = (args["width"] as? Double) ?? 144.0
+        let height = (args["height"] as? Double) ?? 208.0
+        let spanMeters = (args["spanMeters"] as? Double) ?? 300.0
+
+        MapStreamer.shared.renderSnapshot(
+          coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng),
+          width: width,
+          height: height,
+          spanMeters: spanMeters
+        ) { jpegData in
+          if let data = jpegData {
+            result(FlutterStandardTypedData(bytes: data))
+          } else {
+            result(nil)
+          }
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     // Khởi động CallKit observer
     setupCallObserver()
   }
+
 
   // ─── CallKit Observer Setup ───────────────────────────────────────────────
   private func setupCallObserver() {
@@ -275,3 +321,83 @@ class MediaRemoteObserver {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Navigation Location Manager (Background Survival & Blue Bar Indicator)
+// ─────────────────────────────────────────────────────────────────────────────
+class NavigationLocationManager: NSObject, CLLocationManagerDelegate {
+  static let shared = NavigationLocationManager()
+  let locationManager = CLLocationManager()
+  private var isRunning = false
+
+  override init() {
+    super.init()
+    locationManager.delegate = self
+    locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+  }
+
+  func start() {
+    guard !isRunning else { return }
+    isRunning = true
+
+    if locationManager.authorizationStatus == .notDetermined {
+      locationManager.requestAlwaysAuthorization()
+    }
+
+    // Crucial settings for iOS background execution:
+    // Shows the active blue navigation bar/pill, preventing iOS from suspending CPU or killing Wi-Fi
+    locationManager.allowsBackgroundLocationUpdates = true
+    locationManager.showsBackgroundLocationIndicator = true
+    locationManager.pausesLocationUpdatesAutomatically = false
+
+    locationManager.startUpdatingLocation()
+  }
+
+  func stop() {
+    guard isRunning else { return }
+    isRunning = false
+    locationManager.showsBackgroundLocationIndicator = false
+    locationManager.stopUpdatingLocation()
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    // Keeps background thread alive
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - MapStreamer (MKMapSnapshotter for Off-Screen Background Map Rendering)
+// ─────────────────────────────────────────────────────────────────────────────
+class MapStreamer {
+  static let shared = MapStreamer()
+
+  func renderSnapshot(
+    coordinate: CLLocationCoordinate2D,
+    width: Double = 144.0,
+    height: Double = 208.0,
+    spanMeters: Double = 300.0,
+    completion: @escaping (Data?) -> Void
+  ) {
+    let options = MKMapSnapshotter.Options()
+    options.coordinateRegion = MKCoordinateRegion(
+      center: coordinate,
+      latitudinalMeters: spanMeters,
+      longitudinalMeters: spanMeters
+    )
+    options.size = CGSize(width: width, height: height)
+    options.scale = 1.0 // 1.0x scale for lightweight JPEG
+
+    let snapshotter = MKMapSnapshotter(options: options)
+    snapshotter.start(on: DispatchQueue.global(qos: .userInitiated)) { snapshot, error in
+      guard let snapshot = snapshot, error == nil else {
+        completion(nil)
+        return
+      }
+
+      let image = snapshot.image
+      let jpegData = image.jpegData(compressionQuality: 0.40)
+      completion(jpegData)
+    }
+  }
+}
+

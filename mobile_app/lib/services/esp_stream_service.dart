@@ -4,7 +4,9 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
 import '../config/goong_config.dart';
@@ -42,8 +44,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, img.Image> _cpuTileCache = {};
   final Set<String> _pendingTileFetches = {};
 
-  // Persistent TCP Socket for continuous screen-off background streaming
+  // Persistent TCP Socket for continuous screen-off background streaming (SoftAP mode)
   Socket? _persistentWifiSocket;
+
+  // WebSocket Server for iPhone Hotspot Master (IP 172.20.10.1:8080)
+  HttpServer? _wsServer;
+  final Set<WebSocket> _wsClients = {};
+  bool get isWebSocketConnected => _wsClients.isNotEmpty;
+  int get wsClientCount => _wsClients.length;
 
   // Getters
   bool get isStreaming => _isStreaming;
@@ -81,6 +89,45 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
+    _startWebSocketServer();
+  }
+
+  /// Start internal HTTP/WebSocket server listening on port 8080
+  /// When iPhone Personal Hotspot is active, iPhone IP is 172.20.10.1:8080
+  Future<void> _startWebSocketServer() async {
+    if (_wsServer != null) return;
+    try {
+      _wsServer = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+      _wsServer!.listen((HttpRequest request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          try {
+            final socket = await WebSocketTransformer.upgrade(request);
+            _wsClients.add(socket);
+            notifyListeners();
+
+            socket.listen(
+              (data) {
+                // Incoming messages from ESP32 client
+              },
+              onDone: () {
+                _wsClients.remove(socket);
+                notifyListeners();
+              },
+              onError: (_) {
+                _wsClients.remove(socket);
+                notifyListeners();
+              },
+            );
+          } catch (_) {}
+        } else {
+          request.response.statusCode = HttpStatus.ok;
+          request.response.write("ESP32 Hotspot Stream Server Active\n");
+          await request.response.close();
+        }
+      });
+    } catch (_) {
+      // Ignored if port already in use or in test environment
+    }
   }
 
   void updateReferences(BleService newBle, NavigationManager newNav) {
@@ -98,10 +145,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // If Wi-Fi is connected, throttle to cool 4 FPS to prevent device heating
-      if (_isStreaming && bleService.isWifiConnected) {
+      // If Wi-Fi (SoftAP) or Hotspot WebSocket is active, throttle to 4 FPS to prevent device heating
+      if (_isStreaming && (bleService.isWifiConnected || _wsClients.isNotEmpty)) {
         _startTimer();
-      } else if (!bleService.isWifiConnected && !(navManager?.isNavigating ?? false)) {
+      } else if (!bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) {
         _streamTimer?.cancel();
         _streamTimer = null;
       }
@@ -114,12 +161,21 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     stopStreaming();
     _persistentWifiSocket?.destroy();
     _persistentWifiSocket = null;
+    for (final ws in _wsClients) {
+      try {
+        ws.close();
+      } catch (_) {}
+    }
+    _wsClients.clear();
+    _wsServer?.close(force: true);
+    _wsServer = null;
     _pauseTimer?.cancel();
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
     _cpuTileCache.clear();
     super.dispose();
   }
+
 
   /// Pause streaming temporarily (e.g. during map search or routing) to give 100% CPU to UI
   void pauseStreamingFor(Duration duration) {
@@ -242,10 +298,31 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // 2. In Background (Screen locked / App minimized) or if GPU failed:
-      // PURE CPU SOFTWARE MAP RENDERER (0% GPU, 100% Reliable in Background!)
+      // Option A: Try native iOS MKMapSnapshotter off-screen renderer
+      if (jpegBytes == null && Platform.isIOS) {
+        try {
+          final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
+          final res = await const MethodChannel('com.ysiduc.esp32_nav/location').invokeMethod<Uint8List>(
+            'renderMapSnapshot',
+            {
+              'lat': userPos.latitude,
+              'lng': userPos.longitude,
+              'width': w.toDouble(),
+              'height': h.toDouble(),
+              'spanMeters': 300.0,
+            },
+          );
+          if (res != null && res.isNotEmpty) {
+            jpegBytes = res;
+          }
+        } catch (_) {}
+      }
+
+      // Option B: Pure CPU Software Map Renderer (0% GPU, 100% Reliable in Background!)
       if (jpegBytes == null) {
         jpegBytes = _renderCpuMapFrame(w, h);
       }
+
 
       if (jpegBytes == null) {
         _isCapturing = false;
@@ -392,16 +469,42 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _dispatchTransmission(Uint8List jpegBytes) {
+    // 1. WebSocket Broadcast to iPhone Hotspot client (ESP32)
+    if (_wsClients.isNotEmpty) {
+      for (final client in _wsClients.toList()) {
+        try {
+          client.add(jpegBytes);
+        } catch (_) {
+          _wsClients.remove(client);
+        }
+      }
+    }
+
+    // 2. Persistent TCP Socket to ESP32 (SoftAP mode 192.168.4.1)
     if (bleService.isWifiConnected && bleService.wifiIp != null) {
       if (!_isSendingWifi) {
         _sendJpegOverWifi(jpegBytes);
       }
-    } else {
+    } else if (_wsClients.isEmpty) {
+      // 3. Fallback: BLE Chunks
       if (!_isSendingBle) {
         _sendJpegOverBle(jpegBytes);
       }
     }
   }
+
+  /// Broadcast JSON telemetry to connected WebSocket clients (ESP32)
+  void broadcastTelemetry(String jsonStr) {
+    if (_wsClients.isEmpty) return;
+    for (final client in _wsClients.toList()) {
+      try {
+        client.add(jsonStr);
+      } catch (_) {
+        _wsClients.remove(client);
+      }
+    }
+  }
+
 
   int _consecutiveWifiErrors = 0;
 

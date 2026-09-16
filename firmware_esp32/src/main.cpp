@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiServer.h>
 #include <WiFiClient.h>
+#include <WebSocketsClient.h>
 #include "display_ui.h"
 #include "ams_service.h"
 #include "ancs_service.h"
@@ -11,6 +12,12 @@
 // WiFi SoftAP Streaming Server (ESP32 broadcasts "ysiduc navi", Pass: "00000000", IP 192.168.4.1)
 static WiFiServer wifiServer(8080);
 static bool wifiConnected = false;
+
+// WebSocket Client for iPhone Hotspot (IP 172.20.10.1:8080)
+static WebSocketsClient webSocketClient;
+static bool wsConnected = false;
+static bool staConnected = false;
+
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -155,13 +162,19 @@ void processJsonPacket(const char* jsonStr) {
     display.forceRedraw();
     return;
   } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
+    if (doc["ssid"].is<const char*>() && doc["pass"].is<const char*>()) {
+      Serial.printf("[WiFi STA] Reconnecting with SSID: %s\n", doc["ssid"].as<const char*>());
+      WiFi.begin(doc["ssid"].as<const char*>(), doc["pass"].as<const char*>());
+    }
     if (pNavChar != nullptr && bleConnected) {
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"port\":8080,\"ssid\":\"ysiduc navi\",\"pass\":\"00000000\"}";
+      String staIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "none";
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"ssid\":\"ysiduc navi\",\"hotspot\":\"#ysiduc\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
     return;
   } else if (typeStr == "CALL") {
+
     const char* name = doc["title"] | "Cuoc goi den";
     const char* msg = doc["msg"] | "Cuoc goi den tu iPhone";
     // If ANCS already set a caller name from iOS native system, do NOT overwrite with generic "Cuoc goi den"
@@ -251,7 +264,43 @@ void processJsonPacket(const char* jsonStr) {
   }
 }
 
+// WebSocket Event Handler for iPhone Hotspot stream
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      wsConnected = false;
+      Serial.println("[WebSocket] Disconnected from iPhone Hotspot!");
+      break;
+    case WStype_CONNECTED:
+      wsConnected = true;
+      Serial.printf("[WebSocket] Connected to iPhone Hotspot Server: %s\n", (const char*)payload);
+      break;
+    case WStype_TEXT:
+      if (length > 0) {
+        processJsonPacket((const char*)payload);
+      }
+      break;
+    case WStype_BIN:
+      if (length > 100 && payload[0] == 0xFF && payload[1] == 0xD8) {
+        uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+        if (length <= sizeof(renderBufA)) {
+          memcpy(nextBuf, payload, length);
+          activeRenderBuf = nextBuf;
+          activeRenderBufLen = length;
+          newFrameAvailable = true;
+        }
+      }
+      break;
+    case WStype_ERROR:
+      Serial.printf("[WebSocket] Error occurred, len=%d\n", length);
+      break;
+    default:
+      break;
+  }
+}
+
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
+
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) return;
@@ -398,25 +447,54 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  // 3. Start WiFi SoftAP for iPhone Connection (SSID: "ysiduc navi", Pass: "00000000")
-  WiFi.mode(WIFI_AP);
+  // 3. Start WiFi in Dual Mode (AP + STA):
+  // STA mode: Connects to iPhone Personal Hotspot (SSID: "#ysiduc", Pass: "00000000")
+  // AP mode: Fallback SoftAP (SSID: "ysiduc navi", Pass: "00000000")
+  WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
   bool apOk = WiFi.softAP("ysiduc navi", "00000000", 1, 0, 4);
   if (apOk) {
-    Serial.printf("[WiFi AP] SoftAP started! SSID: 'ysiduc navi', Pass: '00000000'\n");
-    Serial.printf("[WiFi AP] ESP32 IP: %s\n", WiFi.softAPIP().toString().c_str());
+    Serial.printf("[WiFi AP] SoftAP started! SSID: 'ysiduc navi', Pass: '00000000', IP: %s\n", WiFi.softAPIP().toString().c_str());
     wifiServer.begin();
     wifiConnected = true;
   }
 
-  Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for 20 FPS JPEG stream over SoftAP ('ysiduc navi') + AMS & ANCS!");
+  // Connect to iPhone Personal Hotspot
+  Serial.println("[WiFi STA] Connecting to iPhone Hotspot ('#ysiduc')...");
+  WiFi.begin("#ysiduc", "00000000");
+
+  // Configure WebSocket Client to connect to iPhone Hotspot Server (default 172.20.10.1:8080)
+  webSocketClient.begin("172.20.10.1", 8080, "/");
+  webSocketClient.onEvent(webSocketEvent);
+  webSocketClient.setReconnectInterval(2000);
+  webSocketClient.enableHeartbeat(15000, 3000, 2);
+
+  Serial.println("[BLE & WiFi] ESP32-S3 Navi ready for Hotspot (172.20.10.1) & SoftAP + AMS & ANCS!");
 }
 
 static WiFiClient persistentStreamClient;
 
 void loop() {
+  // 0. Manage iPhone Hotspot STA connection & WebSocket loop
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!staConnected) {
+      staConnected = true;
+      IPAddress gw = WiFi.gatewayIP();
+      Serial.printf("[WiFi STA] Connected to iPhone Hotspot! ESP32 IP: %s, Gateway: %s\n",
+                    WiFi.localIP().toString().c_str(), gw.toString().c_str());
+      webSocketClient.begin(gw.toString().c_str(), 8080, "/");
+    }
+    webSocketClient.loop();
+  } else {
+    if (staConnected) {
+      staConnected = false;
+      Serial.println("[WiFi STA] Disconnected from iPhone Hotspot. Reconnecting...");
+    }
+  }
+
   // 1. Handle incoming WiFi Stream Client (Persistent or Chunked TCP stream)
   if (wifiConnected) {
+
     if (wifiServer.hasClient()) {
       WiFiClient newClient = wifiServer.available();
       if (newClient) {

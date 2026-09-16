@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/esp_payload.dart';
@@ -175,9 +177,28 @@ class NavigationManager extends ChangeNotifier {
     }
   }
 
+  static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
+
+  void _enableBackgroundNavigation() {
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('startBackgroundNavigation');
+      } catch (_) {}
+    }
+  }
+
+  void _disableBackgroundNavigation() {
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('stopBackgroundNavigation');
+      } catch (_) {}
+    }
+  }
+
   /// Start Real-World Turn-by-Turn Navigation with GPS
   void startNavigation(NavRoute route) {
     stopNavigation();
+    _enableBackgroundNavigation();
     _activeRoute = route;
     _isNavigating = true;
     _isSimulating = false;
@@ -209,6 +230,7 @@ class NavigationManager extends ChangeNotifier {
   /// Start Simulation Mode (walks through polyline path automatically)
   void startSimulation(NavRoute route) {
     stopNavigation();
+    _enableBackgroundNavigation();
     _activeRoute = route;
     _isNavigating = true;
     _isSimulating = true;
@@ -530,6 +552,7 @@ class NavigationManager extends ChangeNotifier {
 
   /// Stop active navigation or simulation
   void stopNavigation() {
+    _disableBackgroundNavigation();
     _isNavigating = false;
     _isSimulating = false;
     _isRerouting = false;
