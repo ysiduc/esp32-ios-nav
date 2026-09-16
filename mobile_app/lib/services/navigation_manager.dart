@@ -19,6 +19,7 @@ class NavigationManager extends ChangeNotifier {
   bool _isSimulating = false;
   bool _isRerouting = false;
   NavRoute? _activeRoute;
+  NavRoute? _previewRoute;
   int _currentStepIndex = 0;
   LatLng? _currentLocation;
   double _currentSpeedKmh = 0.0;
@@ -42,6 +43,11 @@ class NavigationManager extends ChangeNotifier {
   bool get isSimulating => _isSimulating;
   bool get isRerouting => _isRerouting;
   NavRoute? get activeRoute => _activeRoute;
+  NavRoute? get previewRoute => _previewRoute;
+  void setPreviewRoute(NavRoute? route) {
+    _previewRoute = route;
+    notifyListeners();
+  }
   PhoneMediaService? get mediaService => _mediaService;
   int get currentStepIndex => _currentStepIndex;
   LatLng? get currentLocation => _currentLocation;
@@ -51,9 +57,10 @@ class NavigationManager extends ChangeNotifier {
     if (_currentHeading > 0.0 && _currentSpeedKmh >= 3.0) {
       return _currentHeading;
     }
-    if (_activeRoute != null && _activeRoute!.polylinePoints.length >= 2 && _currentLocation != null) {
+    final targetRoute = _activeRoute ?? _previewRoute;
+    if (targetRoute != null && targetRoute.polylinePoints.length >= 2 && _currentLocation != null) {
       const distanceCalc = Distance();
-      final points = _activeRoute!.polylinePoints;
+      final points = targetRoute.polylinePoints;
       int closestIdx = 0;
       double minD = double.infinity;
       for (int i = 0; i < points.length; i++) {

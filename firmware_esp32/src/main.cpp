@@ -15,6 +15,9 @@ static bool wifiConnecting = false;
 static unsigned long wifiConnectStartTime = 0;
 static String wifiSsid = "";
 static String wifiPass = "";
+static bool wifiTriggerConnect = false;
+static String pendingWifiSsid = "";
+static String pendingWifiPass = "";
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -91,6 +94,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     AppleMediaService::lastCheckTime = millis();
     AppleNotificationService::connHandle = desc->conn_handle;
     AppleNotificationService::lastCheckTime = millis();
+
+    // Configure BLE connection parameters for flawless WiFi coexistence
+    // (Interval 30-50ms, Supervision timeout 6000ms = 6 seconds so WiFi RF scan never drops BLE)
+    pServer->updateConnParams(desc->conn_handle, 24, 40, 0, 600);
 
     // If already encrypted/bonded, immediately trigger ANCS sequential discovery (which chains to AMS)
     if (desc->sec_state.encrypted) {
@@ -231,24 +238,9 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         pass.trim();
         Serial.printf("[WiFi] Received hotspot config: SSID='%s'\n", ssid.c_str());
         if (ssid.length() > 0) {
-          wifiSsid = ssid;
-          wifiPass = pass;
-          wifiConnected = false;
-          wifiConnecting = true;
-          wifiConnectStartTime = millis();
-
-          WiFi.mode(WIFI_STA);
-          WiFi.disconnect(false);
-          delay(100);
-          WiFi.setSleep(false); // CRITICAL: Disable modem sleep for rock-solid iPhone Hotspot connection
-          WiFi.setAutoReconnect(true);
-          WiFi.begin(wifiSsid.c_str(), (wifiPass.length() > 0) ? wifiPass.c_str() : nullptr);
-
-          if (pNavChar != nullptr) {
-            String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connecting\"}";
-            pNavChar->setValue(resp.c_str());
-            pNavChar->notify();
-          }
+          pendingWifiSsid = ssid;
+          pendingWifiPass = pass;
+          wifiTriggerConnect = true;
         }
         return;
       } else if (typeStr == "CALL") {
@@ -392,40 +384,49 @@ void setup() {
 }
 
 void loop() {
-  // 0. Monitor WiFi Connection State (iPhone Personal Hotspot)
+  // 0. Handle Asynchronous WiFi Connection Trigger
+  if (wifiTriggerConnect) {
+    wifiTriggerConnect = false;
+    wifiConnecting = true;
+    wifiConnected = false;
+    wifiConnectStartTime = millis();
+    wifiSsid = pendingWifiSsid;
+    wifiPass = pendingWifiPass;
+
+    Serial.printf("[WiFi] Initiating connection to iPhone Hotspot: '%s'...\n", wifiSsid.c_str());
+
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connecting\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+
+    WiFi.disconnect(true);
+    delay(50);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false); // CRITICAL: Disable modem sleep for rock-solid iPhone Hotspot connection
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(wifiSsid.c_str(), (wifiPass.length() > 0) ? wifiPass.c_str() : nullptr);
+  }
+
+  // Monitor WiFi Connection State (iPhone Personal Hotspot)
   if (wifiConnecting) {
     wl_status_t st = WiFi.status();
     if (st == WL_CONNECTED) {
       wifiConnecting = false;
       wifiConnected = true;
-      Serial.printf("[WiFi] Connected to iPhone Hotspot! Local IP: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] CONNECTED to iPhone Hotspot! Local IP: %s\n", WiFi.localIP().toString().c_str());
       wifiServer.begin();
 
-      if (pNavChar != nullptr) {
+      if (pNavChar != nullptr && bleConnected) {
         String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"port\":8080}";
-        pNavChar->setValue(resp.c_str());
-        pNavChar->notify();
-      }
-    } else if (st == WL_CONNECT_FAILED) {
-      wifiConnecting = false;
-      Serial.println("[WiFi] Connection failed: wrong password!");
-      if (pNavChar != nullptr) {
-        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"wrong_pass\"}";
-        pNavChar->setValue(resp.c_str());
-        pNavChar->notify();
-      }
-    } else if (st == WL_NO_SSID_AVAIL && (millis() - wifiConnectStartTime > 18000)) {
-      wifiConnecting = false;
-      Serial.println("[WiFi] SSID not found! iPhone 5GHz or Hotspot closed.");
-      if (pNavChar != nullptr) {
-        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"no_ssid\"}";
         pNavChar->setValue(resp.c_str());
         pNavChar->notify();
       }
     } else if (millis() - wifiConnectStartTime > 30000) {
       wifiConnecting = false;
       Serial.println("[WiFi] Connection timeout after 30s!");
-      if (pNavChar != nullptr) {
+      if (pNavChar != nullptr && bleConnected) {
         String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"failed\"}";
         pNavChar->setValue(resp.c_str());
         pNavChar->notify();

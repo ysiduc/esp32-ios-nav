@@ -283,14 +283,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final int cx = ((pos.longitude + 180.0) / 360.0 * n).floor();
     final int cy = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n).floor();
 
-    // If surrounding 9 tiles are already cached and position hasn't moved significantly, skip
+    // If surrounding 25 tiles are already cached and position hasn't moved significantly, skip
     if (_lastPrefetchPos != null) {
       final dLat = (pos.latitude - _lastPrefetchPos!.latitude).abs();
       final dLon = (pos.longitude - _lastPrefetchPos!.longitude).abs();
       if (dLat < 0.0003 && dLon < 0.0003) {
         bool allCached = true;
-        for (int dx = -1; dx <= 1; dx++) {
-          for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+          for (int dy = -2; dy <= 2; dy++) {
             if (!_tileCache.containsKey('$zoom/${cx + dx}/${cy + dy}')) {
               allCached = false;
               break;
@@ -303,8 +303,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _lastPrefetchPos = pos;
 
-    for (int dx = -1; dx <= 1; dx++) {
-      for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+      for (int dy = -2; dy <= 2; dy++) {
         final tx = cx + dx;
         final ty = cy + dy;
         final key = '$zoom/$tx/$ty';
@@ -327,16 +327,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final apiKey = MapboxConfig.maptilerApiKey;
       String url;
       if (isGoong) {
-        // High-definition clean vector-based raster tiles with ZERO watermark
+        // High-definition clean vector-based raster tiles with ZERO watermark & Vietnamese labels
         url = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=$apiKey'
-            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=$apiKey';
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=$apiKey&language=vi'
+            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
       } else {
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
             : (isDark
-                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
-                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY');
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
       }
 
       var response = await http.get(
@@ -360,12 +360,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final frame = await codec.getNextFrame();
         _tileCache[key] = frame.image;
 
-        if (_tileCache.length > 60) {
+        if (_tileCache.length > 100) {
           final firstKey = _tileCache.keys.first;
           _tileCache.remove(firstKey)?.dispose();
         }
 
-        // Trigger immediate redraw so black screen is updated with the real map as soon as tile loads!
+        // Trigger immediate redraw so map is updated as soon as tile loads
         _latestJpegBytes = null;
         notifyListeners();
       }
@@ -389,7 +389,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final isDark = _streamMapStyle.contains('dark');
 
     // 1. Background Fill: Clean Light Cream for Apple Maps / Goong (#F4F6F8) or Dark Navy (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF4F6F8);
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFEBF0F0);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle screen anchor (lower center: x=72, y=140)
@@ -416,8 +416,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.rotate(-headingRad);
 
     bool tilesDrawn = false;
-    for (int dx = -1; dx <= 1; dx++) {
-      for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -2; dx <= 2; dx++) {
+      for (int dy = -2; dy <= 2; dy++) {
         final tx = centerTileX + dx;
         final ty = centerTileY + dy;
         final key = '$zoom/$tx/$ty';
@@ -437,32 +437,23 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // High-visibility Blueprint Grid if tiles still loading
+    // High-visibility clean placeholder if tiles still downloading
     if (!tilesDrawn) {
       final gridPaint = Paint()
-        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFE2E0D8)
+        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFDDE3E3)
         ..strokeWidth = 1.0;
-      for (double gx = -200; gx <= 200; gx += 28) {
-        canvas.drawLine(Offset(gx, -200), Offset(gx, 200), gridPaint);
+      for (double gx = -220; gx <= 220; gx += 32) {
+        canvas.drawLine(Offset(gx, -220), Offset(gx, 220), gridPaint);
       }
-      for (double gy = -200; gy <= 200; gy += 28) {
-        canvas.drawLine(Offset(-200, gy), Offset(200, gy), gridPaint);
+      for (double gy = -220; gy <= 220; gy += 32) {
+        canvas.drawLine(Offset(-220, gy), Offset(220, gy), gridPaint);
       }
-
-      // Dynamic radar range rings & axes
-      final radarPaint = Paint()
-        ..color = (isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF)).withAlpha(50)
-        ..strokeWidth = 1.2
-        ..style = PaintingStyle.stroke;
-      canvas.drawCircle(Offset.zero, 45, radarPaint);
-      canvas.drawCircle(Offset.zero, 90, radarPaint);
-      canvas.drawLine(const Offset(-160, 0), const Offset(160, 0), radarPaint);
-      canvas.drawLine(const Offset(0, -160), const Offset(0, 160), radarPaint);
     }
 
-    // Draw Route Polyline whenever an active route exists (preview or active navigation)
-    final points = (activeRoute != null && activeRoute.polylinePoints.isNotEmpty)
-        ? activeRoute.polylinePoints
+    // Draw Route Polyline whenever an active route or preview route exists
+    final effectiveRoute = activeRoute ?? navManager?.previewRoute;
+    final points = (effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
+        ? effectiveRoute.polylinePoints
         : <LatLng>[];
 
     if (points.length >= 2) {
@@ -485,7 +476,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Route Outer Glow / Casing (Vibrant Apple Blue Casing)
+      // Route Outer Glow / Casing (Vibrant Apple Blue Casing #0051B3)
       final casingPaint = Paint()
         ..color = isDark ? const Color(0xFF003D66) : const Color(0xFF0051B3)
         ..strokeWidth = 8.5
@@ -502,6 +493,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
       canvas.drawPath(routePath, corePaint);
+
+      // Destination Pin on Route
+      final destPt = points.last;
+      final double destLatRad = destPt.latitude * (math.pi / 180.0);
+      final double destWorldX = (destPt.longitude + 180.0) / 360.0 * n * 256.0;
+      final double destWorldY = (1.0 - (math.log(math.tan(destLatRad) + 1.0 / math.cos(destLatRad)) / math.pi)) / 2.0 * n * 256.0;
+      final double dpx = destWorldX - worldX;
+      final double dpy = destWorldY - worldY;
+      if (dpx.abs() < 240 && dpy.abs() < 240) {
+        canvas.drawCircle(Offset(dpx, dpy), 8, Paint()..color = const Color(0xFFFF3B30));
+        canvas.drawCircle(Offset(dpx, dpy), 4, Paint()..color = Colors.white);
+      }
     }
 
     canvas.restore();

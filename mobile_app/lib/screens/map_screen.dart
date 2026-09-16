@@ -518,6 +518,7 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       if (routes.isNotEmpty) {
+        context.read<NavigationManager>().setPreviewRoute(routes.first);
         _fitRouteBounds(routes.first.polylinePoints);
         _updateRouteOnMap();
         _updateDestinationMarker();
@@ -1980,6 +1981,7 @@ class _MapScreenState extends State<MapScreen> {
                           setState(() {
                             _selectedRouteIndex = idx;
                           });
+                          context.read<NavigationManager>().setPreviewRoute(r);
                           _updateRouteOnMap();
                         },
                         child: AnimatedContainer(
