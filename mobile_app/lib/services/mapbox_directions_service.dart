@@ -38,23 +38,43 @@ class MapboxDirectionsService {
       final vehicle = (mode == 'driving') ? 'car' : 'bike';
       final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
       if (goongRoute != null) {
-        routes = [goongRoute];
+        routes.add(goongRoute.copyWith(
+          title: 'Tuyến Goong Map',
+          subtitle: 'Nhanh nhất (Tối ưu giao thông VN)',
+          isFastest: true,
+        ));
       }
     }
 
-    if (routes.isEmpty && MapboxConfig.accessToken.isNotEmpty && !MapboxConfig.accessToken.startsWith('YOUR_')) {
-      routes = await _fetchFromMapbox(start, destination, mode: mode);
-    }
-
-    // High-performance routing via OSRM (free, reliable, real road network)
-    if (routes.isEmpty) {
-      routes = await _osrmService.calculateMultipleRoutes(
+    // Bổ sung 1-2 lộ trình thay thế (Alternatives) từ OSRM để người dùng có nhiều lựa chọn
+    try {
+      final altRoutes = await _osrmService.calculateMultipleRoutes(
         start,
         destination,
         mode: mode,
         avoidTolls: avoidTolls,
         avoidHighways: avoidHighways,
       );
+      if (routes.isEmpty) {
+        routes.addAll(altRoutes);
+      } else {
+        for (int i = 0; i < altRoutes.length && routes.length < 3; i++) {
+          final alt = altRoutes[i];
+          final diffSec = (alt.totalDurationSeconds - routes.first.totalDurationSeconds).abs();
+          final diffDist = (alt.totalDistanceMeters - routes.first.totalDistanceMeters).abs();
+          if (diffSec > 60 || diffDist > 200) {
+            routes.add(alt.copyWith(
+              title: i == 0 ? 'Lộ trình qua đường lớn' : 'Lộ trình tránh đông',
+              subtitle: 'Lựa chọn thay thế ${routes.length}',
+            ));
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Fallback to Mapbox if available
+    if (routes.isEmpty && MapboxConfig.accessToken.isNotEmpty) {
+      routes = await _fetchFromMapbox(start, destination, mode: mode);
     }
 
     // Fallback: offline emergency route if remote servers fail

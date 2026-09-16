@@ -1893,7 +1893,88 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
 
-              const SizedBox(height: 14),
+              // Multi-route Choice Chips (Hiển thị các lộ trình khác nhau chuẩn Apple Maps)
+              if (_routes.length > 1) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 62,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _routes.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, idx) {
+                      final r = _routes[idx];
+                      final isSelected = idx == _selectedRouteIndex;
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedRouteIndex = idx;
+                          });
+                          _updateRouteOnMap();
+                        },
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected ? const Color(0xFF007AFF) : Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: isSelected ? const Color(0xFF007AFF) : Colors.black12,
+                              width: isSelected ? 2 : 1,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: isSelected
+                                    ? const Color(0xFF007AFF).withOpacity(0.3)
+                                    : Colors.black.withOpacity(0.04),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    r.formattedDuration,
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.white : const Color(0xFF1C1C1E),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    r.formattedDistance,
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.white.withOpacity(0.85) : Colors.black54,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                idx == 0 ? 'Nhanh nhất (Goong)' : 'Tuyến ${idx + 1}',
+                                style: TextStyle(
+                                  color: isSelected ? Colors.white.withOpacity(0.9) : const Color(0xFF34C759),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 12),
 
               // Bottom Route Action Card: Large Time Info + Big Green "ĐI" Button
               Container(
@@ -1922,9 +2003,15 @@ class _MapScreenState extends State<MapScreen> {
                             'Giờ đến: $arrivalStr · $distanceStr',
                             style: const TextStyle(fontSize: 13, color: Colors.black54),
                           ),
-                          const Text(
-                            'Nhanh nhất (Goong Map)',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF34C759)),
+                          Text(
+                            _selectedRouteIndex == 0
+                                ? 'Nhanh nhất (Goong Map)'
+                                : 'Lộ trình thay thế ${_selectedRouteIndex + 1}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _selectedRouteIndex == 0 ? const Color(0xFF34C759) : const Color(0xFF007AFF),
+                            ),
                           ),
                         ],
                       ),

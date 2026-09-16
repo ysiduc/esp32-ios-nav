@@ -13,6 +13,10 @@ class BleScreen extends StatefulWidget {
 class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
+  final TextEditingController _wifiSsidController = TextEditingController(text: 'iPhone');
+  final TextEditingController _wifiPassController = TextEditingController();
+  bool _obscureWifiPass = true;
+
   @override
   void initState() {
     super.initState();
@@ -22,6 +26,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
   @override
   void dispose() {
     _tabController.dispose();
+    _wifiSsidController.dispose();
+    _wifiPassController.dispose();
     super.dispose();
   }
 
@@ -151,6 +157,9 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             ],
           ),
         ),
+
+        // WiFi Hotspot Configuration Card for iPhone Hotspot connection
+        if (bleService.isConnected) _buildWifiConfigCard(bleService),
 
         // Apple ANCS Notification Guide Banner
         Container(
@@ -459,6 +468,265 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
       ),
       onPressed: isEnabled ? onPressed : null,
       child: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  Widget _buildWifiConfigCard(BleService bleService) {
+    final isWifi = bleService.isWifiConnected;
+    final isConnecting = bleService.wifiStatus == 'connecting';
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isWifi
+              ? const Color(0xFF05FFA1)
+              : (isConnecting ? Colors.amber : const Color(0xFF00F0FF).withAlpha(100)),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (isWifi
+                          ? const Color(0xFF05FFA1)
+                          : (isConnecting ? Colors.amber : const Color(0xFF00F0FF)))
+                      .withAlpha(40),
+                ),
+                child: Icon(
+                  isWifi
+                      ? Icons.wifi_rounded
+                      : (isConnecting ? Icons.wifi_find_rounded : Icons.wifi_tethering_rounded),
+                  color: isWifi
+                      ? const Color(0xFF05FFA1)
+                      : (isConnecting ? Colors.amber : const Color(0xFF00F0FF)),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isWifi
+                          ? 'WIFI HOTSPOT: ĐÃ KẾT NỐI'
+                          : (isConnecting ? 'ĐANG KẾT NỐI WIFI...' : 'KẾT NỐI WIFI HOTSPOT'),
+                      style: TextStyle(
+                        color: isWifi
+                            ? const Color(0xFF05FFA1)
+                            : (isConnecting ? Colors.amber : Colors.white),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isWifi
+                          ? 'IP: ${bleService.wifiIp}:${bleService.wifiPort} • Stream khi tắt màn hình'
+                          : (isConnecting
+                              ? 'Đang gửi cấu hình sang ESP32...'
+                              : 'Truyền bản đồ tốc độ cao & khi tắt màn hình'),
+                      style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isWifi
+                      ? Colors.white10
+                      : const Color(0xFF00F0FF).withAlpha(40),
+                  foregroundColor: isWifi ? Colors.white70 : const Color(0xFF00F0FF),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () => _showWifiConfigSheet(context, bleService),
+                child: Text(
+                  isWifi ? 'Đổi WiFi' : 'Cài đặt',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          if (isWifi) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF05FFA1).withAlpha(20),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_rounded, color: Color(0xFF05FFA1), size: 14),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Bản đồ & Lộ trình sẽ truyền qua WiFi kể cả khi iPhone khóa/tắt màn hình.',
+                      style: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showWifiConfigSheet(BuildContext context, BleService bleService) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF161B22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.wifi_tethering_rounded, color: Color(0xFF00F0FF), size: 24),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'Kết nối WiFi Hotspot iPhone',
+                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('📌 Các bước thực hiện:', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        SizedBox(height: 4),
+                        Text('1. Mở Cài đặt iPhone > Điểm phát sóng cá nhân > Bật "Cho phép người khác kết nối".', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
+                        SizedBox(height: 2),
+                        Text('2. Nhập chính xác Tên Hotspot (SSID) và Mật khẩu bên dưới rồi bấm "Gửi sang ESP32".', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
+                        SizedBox(height: 2),
+                        Text('3. ESP32 sẽ kết nối vào iPhone và stream bản đồ ngay cả khi tắt màn hình.', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 11.5)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('TÊN ĐIỂM PHÁT SÓNG (SSID)', style: TextStyle(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _wifiSsidController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Ví dụ: iPhone của Duc',
+                      hintStyle: const TextStyle(color: Colors.white30),
+                      filled: true,
+                      fillColor: const Color(0xFF0D1117),
+                      prefixIcon: const Icon(Icons.wifi, color: Color(0xFF00F0FF), size: 20),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('MẬT KHẨU WIFI', style: TextStyle(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _wifiPassController,
+                    obscureText: _obscureWifiPass,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Nhập mật khẩu Hotspot',
+                      hintStyle: const TextStyle(color: Colors.white30),
+                      filled: true,
+                      fillColor: const Color(0xFF0D1117),
+                      prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF00F0FF), size: 20),
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscureWifiPass ? Icons.visibility_off : Icons.visibility, color: Colors.white54, size: 20),
+                        onPressed: () {
+                          setModalState(() {
+                            _obscureWifiPass = !_obscureWifiPass;
+                          });
+                        },
+                      ),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00F0FF),
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () {
+                        final ssid = _wifiSsidController.text.trim();
+                        final pass = _wifiPassController.text.trim();
+                        if (ssid.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Vui lòng nhập tên WiFi (SSID)')),
+                          );
+                          return;
+                        }
+                        bleService.sendWifiConfig(ssid, pass);
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Đã gửi thông tin WiFi "$ssid" sang ESP32. Đang chờ kết nối...'),
+                            backgroundColor: const Color(0xFF161B22),
+                          ),
+                        );
+                      },
+                      child: const Text(
+                        'Gửi sang ESP32 để kết nối',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

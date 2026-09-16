@@ -1,9 +1,20 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
+#include <WiFi.h>
+#include <WiFiServer.h>
+#include <WiFiClient.h>
 #include "display_ui.h"
 #include "ams_service.h"
 #include "ancs_service.h"
+
+// WiFi Streaming Server for Background/Screen-Off Navigation
+static WiFiServer wifiServer(8080);
+static bool wifiConnected = false;
+static bool wifiConnecting = false;
+static unsigned long wifiConnectStartTime = 0;
+static String wifiSsid = "";
+static String wifiPass = "";
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
 static uint8_t bleRxBuf[24576];
@@ -213,6 +224,27 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
         }
         display.forceRedraw();
         return;
+      } else if (typeStr == "WIFI_CONFIG") {
+        const char* ssid = doc["ssid"] | "";
+        const char* pass = doc["pass"] | "";
+        Serial.printf("[WiFi] Received hotspot config: SSID='%s'\n", ssid);
+        if (strlen(ssid) > 0) {
+          wifiSsid = ssid;
+          wifiPass = pass;
+          WiFi.disconnect(true);
+          delay(50);
+          WiFi.mode(WIFI_STA);
+          WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+          wifiConnecting = true;
+          wifiConnectStartTime = millis();
+
+          if (pNavChar != nullptr) {
+            String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connecting\"}";
+            pNavChar->setValue(resp.c_str());
+            pNavChar->notify();
+          }
+        }
+        return;
       } else if (typeStr == "CALL") {
         const char* name = doc["title"] | "Cuoc goi den";
         popupTitle = name;
@@ -325,7 +357,7 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();
@@ -350,11 +382,93 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS!");
+  Serial.println("[BLE] ESP32-S3 Navi ready for 20 FPS JPEG stream + AMS & ANCS + WiFi Hotspot!");
 }
 
 void loop() {
-  // 1. Decode & push new JPEG Map Frame safely on the Main thread
+  // 0. Monitor WiFi Connection State (iPhone Personal Hotspot)
+  if (wifiConnecting) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnecting = false;
+      wifiConnected = true;
+      Serial.printf("[WiFi] Connected to iPhone Hotspot! Local IP: %s\n", WiFi.localIP().toString().c_str());
+      wifiServer.begin();
+
+      if (pNavChar != nullptr) {
+        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"port\":8080}";
+        pNavChar->setValue(resp.c_str());
+        pNavChar->notify();
+      }
+    } else if (millis() - wifiConnectStartTime > 15000) {
+      wifiConnecting = false;
+      Serial.println("[WiFi] Connection timeout!");
+      if (pNavChar != nullptr) {
+        String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"failed\"}";
+        pNavChar->setValue(resp.c_str());
+        pNavChar->notify();
+      }
+    }
+  }
+
+  // 1. Handle incoming WiFi Stream Client (Allows background / screen-off streaming from iPhone)
+  if (wifiConnected) {
+    WiFiClient client = wifiServer.available();
+    if (client) {
+      static uint8_t tcpBuf[24576];
+      size_t bytesRead = 0;
+      unsigned long tcpTimeout = millis() + 400;
+      while (client.connected() && millis() < tcpTimeout && bytesRead < sizeof(tcpBuf)) {
+        int avail = client.available();
+        if (avail > 0) {
+          int r = client.read(tcpBuf + bytesRead, min((size_t)avail, sizeof(tcpBuf) - bytesRead));
+          bytesRead += r;
+          tcpTimeout = millis() + 100;
+        }
+      }
+      if (bytesRead > 2 && tcpBuf[0] == 0xFF && tcpBuf[1] == 0xD8) {
+        uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+        memcpy(nextBuf, tcpBuf, bytesRead);
+        activeRenderBuf = nextBuf;
+        activeRenderBufLen = bytesRead;
+        newFrameAvailable = true;
+      } else if (bytesRead > 2 && tcpBuf[0] == '{') {
+        tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
+        StaticJsonDocument<1024> doc;
+        DeserializationError err = deserializeJson(doc, (char*)tcpBuf);
+        if (!err) {
+          curTurn = doc["turn"] | curTurn;
+          curDist = doc["dist"] | curDist;
+          curTotalDist = doc["tot_dist"] | doc["tot"] | curTotalDist;
+          curSpeed = doc["speed"] | curSpeed;
+          curEta = doc["eta"] | curEta;
+          if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
+          if (doc["arrival"].is<const char*>()) curArrival = String((const char*)doc["arrival"]);
+          if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
+          if (doc["bat"].is<int>()) curBattery = doc["bat"];
+          if (doc["head"].is<int>()) curHeading = doc["head"];
+
+          RoutePoint parsedPts[32];
+          uint8_t parsedPtCount = 0;
+          if (doc["pts"].is<JsonArray>()) {
+            JsonArray arr = doc["pts"].as<JsonArray>();
+            for (JsonVariant v : arr) {
+              if (parsedPtCount >= 32) break;
+              if (v.is<JsonArray>() && v.size() >= 2) {
+                parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
+                parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
+                parsedPtCount++;
+              }
+            }
+          }
+          bool isNav = (doc["nav"] | 0) == 1;
+          display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
+        }
+      }
+      client.stop();
+    }
+  }
+
+  // 2. Decode & push new JPEG Map Frame safely on the Main thread
   if (newFrameAvailable) {
     newFrameAvailable = false;
     lastFrameTime = millis();
@@ -367,11 +481,11 @@ void loop() {
     #endif
   }
 
-  // 2. Update HUD and status UI
+  // 3. Update HUD and status UI
   bool isStreaming = (millis() - lastFrameTime < 2500);
   display.update(isStreaming);
 
-  // 3. Periodic check for Apple Media Service & ANCS discovery
+  // 4. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
   AppleNotificationService::checkPeriodic();
 

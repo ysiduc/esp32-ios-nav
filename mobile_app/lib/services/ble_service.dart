@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/esp_payload.dart';
@@ -54,6 +55,11 @@ class BleService extends ChangeNotifier {
   Timer? _heartbeatTimer;
   DateTime _lastTxTime = DateTime.now();
 
+  // ESP32 WiFi Hotspot Streaming State
+  String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected', 'failed'
+  String? _wifiIp;
+  int _wifiPort = 8080;
+
   // Getters
   bool get isScanning => _isScanning;
   bool get isConnected => _isConnected;
@@ -62,6 +68,10 @@ class BleService extends ChangeNotifier {
   BluetoothDevice? get connectedDevice => _connectedDevice;
   List<BleDeviceItem> get discoveredDevices => List.unmodifiable(_discoveredDevices);
   List<BleLogItem> get logs => List.unmodifiable(_logs);
+  String get wifiStatus => _wifiStatus;
+  String? get wifiIp => _wifiIp;
+  int get wifiPort => _wifiPort;
+  bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
   BleService() {
     _initBle();
@@ -314,6 +324,19 @@ class BleService extends ChangeNotifier {
 
       if (_writeCharacteristic != null) {
         _addLog('Đã tìm thấy cổng GATT RX (${_writeCharacteristic!.uuid.str.substring(0, 8)}...)', isTx: false);
+        
+        // Listen for incoming notifications from ESP32 (e.g. WiFi connection status)
+        try {
+          if (_writeCharacteristic!.properties.notify) {
+            await _writeCharacteristic!.setNotifyValue(true);
+            _writeCharacteristic!.lastValueStream.listen((data) {
+              if (data.isNotEmpty) {
+                final str = utf8.decode(data, allowMalformed: true);
+                _handleIncomingBleMessage(str);
+              }
+            });
+          }
+        } catch (_) {}
       } else {
         _addLog('Không tìm thấy Characteristic ghi dữ liệu!', isError: true);
       }
@@ -323,13 +346,38 @@ class BleService extends ChangeNotifier {
   }
 
   /// Send Navigation Payload to ESP32
+  Future<bool> _sendJsonOverWifi(String jsonStr) async {
+    if (!isWifiConnected || wifiIp == null || wifiPort == 0) return false;
+    try {
+      final socket = await Socket.connect(wifiIp!, wifiPort, timeout: const Duration(milliseconds: 300));
+      socket.write(jsonStr);
+      await socket.flush();
+      await socket.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> sendNavPayload(EspNavPayload payload) async {
+    final jsonStr = payload.toJsonString();
+
+    // 1. If connected via WiFi Hotspot, stream telemetry smoothly over WiFi
+    if (isWifiConnected && wifiIp != null) {
+      final ok = await _sendJsonOverWifi(jsonStr);
+      if (ok) {
+        _lastTxTime = DateTime.now();
+        _addLog('TX [WiFi ${payload.turnCode}|${payload.distanceToTurn}m]: $jsonStr');
+        return true;
+      }
+    }
+
+    // 2. Fallback to BLE transmission
     if (!_isConnected || _writeCharacteristic == null) {
       return false;
     }
 
     try {
-      final jsonStr = payload.toJsonString();
       final bytes = utf8.encode(jsonStr);
 
       await _writeCharacteristic!.write(
@@ -338,7 +386,7 @@ class BleService extends ChangeNotifier {
       );
 
       _lastTxTime = DateTime.now();
-      _addLog('TX [${payload.turnCode}|${payload.distanceToTurn}m]: $jsonStr');
+      _addLog('TX [BLE ${payload.turnCode}|${payload.distanceToTurn}m]: $jsonStr');
       return true;
     } catch (e) {
       _addLog('Lỗi gửi BLE: $e', isError: true);
@@ -348,6 +396,17 @@ class BleService extends ChangeNotifier {
 
   /// Send custom raw JSON or string
   Future<bool> sendRawString(String text) async {
+    if (isWifiConnected && wifiIp != null) {
+      final ok = await _sendJsonOverWifi(text);
+      if (ok) {
+        _lastTxTime = DateTime.now();
+        if (!text.contains('"PING"')) {
+          _addLog('TX RAW [WiFi]: $text');
+        }
+        return true;
+      }
+    }
+
     if (!_isConnected || _writeCharacteristic == null) {
       _addLog('Chưa kết nối ESP32', isError: true);
       return false;
@@ -407,9 +466,43 @@ class BleService extends ChangeNotifier {
     _isConnecting = false;
     _connectedDevice = null;
     _writeCharacteristic = null;
-    _connectedDeviceName = null;
+    _wifiStatus = 'disconnected';
+    _wifiIp = null;
     _addLog('Đã ngắt kết nối BLE', isTx: false);
     notifyListeners();
+  }
+
+  /// Handle incoming BLE Notification from ESP32
+  void _handleIncomingBleMessage(String msg) {
+    try {
+      final json = jsonDecode(msg) as Map<String, dynamic>;
+      if (json['type'] == 'WIFI_STATUS') {
+        _wifiStatus = json['status'] as String? ?? 'disconnected';
+        _wifiIp = json['ip'] as String?;
+        _wifiPort = (json['port'] as num?)?.toInt() ?? 8080;
+        _addLog('ESP32 WiFi: $_wifiStatus (IP: $_wifiIp:$_wifiPort)', isTx: false);
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// Send iPhone Personal Hotspot WiFi Credentials to ESP32 over BLE
+  Future<bool> sendWifiConfig(String ssid, String pass) async {
+    if (!_isConnected || _writeCharacteristic == null) {
+      _addLog('Chưa kết nối BLE với ESP32', isError: true);
+      return false;
+    }
+
+    final payload = jsonEncode({
+      'type': 'WIFI_CONFIG',
+      'ssid': ssid.trim(),
+      'pass': pass.trim(),
+    });
+
+    _wifiStatus = 'connecting';
+    notifyListeners();
+    _addLog('Gửi cấu hình WiFi Hotspot: $ssid');
+    return await sendRawString(payload);
   }
 
   void clearLogs() {

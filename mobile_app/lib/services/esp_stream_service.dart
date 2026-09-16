@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -15,6 +16,11 @@ import 'navigation_manager.dart';
 class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   BleService bleService;
   NavigationManager? navManager;
+
+  bool _isSendingWifi = false;
+  ui.Image? _cachedGoongStaticRoute;
+  String? _cachedGoongRouteKey;
+  bool _isLoadingGoongStatic = false;
 
   /// Optional hook to take live vector snapshots from MapLibre Goong map
   Future<Uint8List?> Function({int? width, int? height})? mapSnapshotProvider;
@@ -75,8 +81,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
-      _streamTimer?.cancel();
-      _streamTimer = null;
+      // When connected via iPhone WiFi Hotspot, continue streaming even with screen off!
+      // If only on BLE, stop timer to conserve phone battery
+      if (!bleService.isWifiConnected) {
+        _streamTimer?.cancel();
+        _streamTimer = null;
+      }
     }
   }
 
@@ -85,6 +95,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     stopStreaming();
     _pauseTimer?.cancel();
+    _cachedGoongStaticRoute?.dispose();
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
     super.dispose();
@@ -97,7 +108,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _streamTimer = null;
     _pauseTimer?.cancel();
     _pauseTimer = Timer(duration, () {
-      if (_isStreaming && _isForeground && _streamTimer == null) {
+      if (_isStreaming && (_isForeground || bleService.isWifiConnected) && _streamTimer == null) {
         _startTimer();
       }
     });
@@ -138,7 +149,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 30 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
-    if (!_isStreaming || _isCapturing || !_isForeground) return;
+    // If connected to iPhone WiFi Hotspot, continue streaming even with screen off!
+    if (!_isStreaming || _isCapturing || (!_isForeground && !bleService.isWifiConnected)) return;
     _isCapturing = true;
 
     try {
@@ -174,6 +186,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             }
           }
         } catch (_) {}
+      }
+
+      // Check and fetch official Goong Static Route image once when route starts
+      if (activeRoute != null && GoongConfig.isConfigured) {
+        _checkAndLoadGoongStaticRoute(activeRoute);
       }
 
       // Pre-fetch surrounding tiles asynchronously at high-detail zoom 17
@@ -228,7 +245,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         notifyListeners();
       }
 
-      // 3. Decoupled Asynchronous Transmission (Does NOT block the 30 FPS timer)
+      // 3. Decoupled Asynchronous Transmission
       _dispatchTransmission(jpegBytes);
     } catch (_) {
     } finally {
@@ -237,8 +254,64 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _dispatchTransmission(Uint8List jpegBytes) {
-    if (_isSendingBle) return; // Non-blocking: skip if previous packet still transmitting
-    _sendJpegOverBle(jpegBytes);
+    if (bleService.isWifiConnected && bleService.wifiIp != null) {
+      if (!_isSendingWifi) {
+        _sendJpegOverWifi(jpegBytes);
+      }
+    } else {
+      if (!_isSendingBle) {
+        _sendJpegOverBle(jpegBytes);
+      }
+    }
+  }
+
+  /// Send JPEG frame over WiFi TCP socket directly to ESP32 (screen-off background streaming)
+  Future<void> _sendJpegOverWifi(Uint8List jpegBytes) async {
+    final ip = bleService.wifiIp;
+    final port = bleService.wifiPort;
+    if (ip == null || port == 0 || _isSendingWifi) return;
+    _isSendingWifi = true;
+
+    try {
+      final socket = await Socket.connect(ip, port, timeout: const Duration(milliseconds: 300));
+      socket.add(jpegBytes);
+      await socket.flush();
+      await socket.close();
+    } catch (_) {
+    } finally {
+      _isSendingWifi = false;
+    }
+  }
+
+  /// Fetch official Goong static route map image (called ONCE per route)
+  Future<void> _checkAndLoadGoongStaticRoute(NavRoute route) async {
+    if (!GoongConfig.isConfigured || route.polylinePoints.isEmpty) return;
+
+    final originPt = route.polylinePoints.first;
+    final destPt = route.polylinePoints.last;
+    final routeKey = '${originPt.latitude.toStringAsFixed(4)},${originPt.longitude.toStringAsFixed(4)}->${destPt.latitude.toStringAsFixed(4)},${destPt.longitude.toStringAsFixed(4)}';
+
+    if (_cachedGoongRouteKey == routeKey || _isLoadingGoongStatic) return;
+    _isLoadingGoongStatic = true;
+    _cachedGoongRouteKey = routeKey;
+
+    try {
+      final originStr = '${originPt.latitude},${originPt.longitude}';
+      final destStr = '${destPt.latitude},${destPt.longitude}';
+      final url = 'https://rsapi.goong.io/staticmap/route?origin=$originStr&destination=$destStr&vehicle=bike&width=144&height=208&color=%23007AFF&api_key=${GoongConfig.restApiKey}';
+
+      final res = await http.get(Uri.parse(url), headers: {'User-Agent': 'ESP32NavApp/2.0'}).timeout(const Duration(seconds: 4));
+      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+        final codec = await ui.instantiateImageCodec(res.bodyBytes);
+        final frame = await codec.getNextFrame();
+        _cachedGoongStaticRoute?.dispose();
+        _cachedGoongStaticRoute = frame.image;
+        notifyListeners();
+      }
+    } catch (_) {
+    } finally {
+      _isLoadingGoongStatic = false;
+    }
   }
 
   LatLng? _lastPrefetchPos;
@@ -291,19 +364,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final isGoong = style.contains('goong');
       final ext = style == 'hybrid' ? 'jpg' : 'png';
 
+      final apiKey = MapboxConfig.maptilerApiKey;
       String url;
       if (isGoong) {
-        // Goong Map style: Crisp light Apple Maps / Voyager or Carto Dark
+        // High-definition clean vector-based raster tiles with ZERO watermark
         url = isDark
-            ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
-            : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png';
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=$apiKey'
+            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=$apiKey';
       } else {
-        final apiKey = MapboxConfig.maptilerApiKey;
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
             : (isDark
-                ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
-                : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png');
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY');
       }
 
       var response = await http.get(
@@ -314,8 +387,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isDark
-            ? 'https://a.basemaps.cartocdn.com/rastertiles/dark_all/$z/$x/$y.png'
-            : 'https://a.basemaps.cartocdn.com/rastertiles/voyager_labels_under/$z/$x/$y.png';
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
+            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY';
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'ESP32NavApp/2.0'},
@@ -353,6 +426,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double distToTurn,
     required double speedKmh,
   }) {
+    // If official Goong static route image is available and stationary/overview mode, render Goong route
+    if (_cachedGoongStaticRoute != null && (speedKmh < 2.0 && distToTurn > 100)) {
+      canvas.drawImageRect(
+        _cachedGoongStaticRoute!,
+        Rect.fromLTWH(0, 0, _cachedGoongStaticRoute!.width.toDouble(), _cachedGoongStaticRoute!.height.toDouble()),
+        Rect.fromLTWH(0, 0, w, h),
+        Paint()..filterQuality = FilterQuality.medium,
+      );
+      return;
+    }
+
     final isDark = _streamMapStyle.contains('dark');
 
     // 1. Background Fill: Clean Light Cream for Apple Maps (#F5F4F0) or Dark Navy (#0B111A)
