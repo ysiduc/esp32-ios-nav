@@ -60,6 +60,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  int _minimapZoom = 17; // 14 to 18 (default 17 for detailed building polygons & POIs like Image 2)
+  int get minimapZoom => _minimapZoom;
+  set minimapZoom(int val) {
+    final clamped = val.clamp(14, 18);
+    if (_minimapZoom != clamped) {
+      _minimapZoom = clamped;
+      _tileCache.forEach((_, img) => img.dispose());
+      _tileCache.clear();
+      _lastPrefetchPos = null;
+      notifyListeners();
+    }
+  }
+
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
   }
@@ -78,10 +91,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
-      // When screen is off / locked, stop high-rate Wi-Fi JPEG stream to conserve phone battery and thermal load.
-      // NavigationManager continues pushing low-energy BLE telemetry (turns, distance, street name, speed, ETA) smoothly!
-      _streamTimer?.cancel();
-      _streamTimer = null;
+      // When app is in background or screen is locked:
+      // If Wi-Fi is connected OR navigation is active, CONTINUE streaming!
+      // Only stop stream timer if Wi-Fi is not connected and user is not navigating
+      if (!bleService.isWifiConnected && !(navManager?.isNavigating ?? false)) {
+        _streamTimer?.cancel();
+        _streamTimer = null;
+      }
     }
   }
 
@@ -182,8 +198,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      // Pre-fetch surrounding tiles asynchronously at high-detail zoom 16
-      _prefetchSurroundingTiles(userPos, 16);
+      // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
+      _prefetchSurroundingTiles(userPos, _minimapZoom);
 
       // 1. Draw Real Map Canvas (< 0.5ms)
       _drawRealMapCanvas(
@@ -394,8 +410,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final double cx = w / 2.0;
     final double cy = h * 0.67;
 
-    // Zoom level 16: Optimal street-level perspective with turns and landmarks
-    const int zoom = 16;
+    // Dynamic Zoom level (14 to 18): controlled via simulator screen slider
+    final int zoom = _minimapZoom;
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = userPos.latitude * (math.pi / 180.0);
     final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;

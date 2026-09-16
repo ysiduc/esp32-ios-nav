@@ -428,7 +428,7 @@ class NavigationManager extends ChangeNotifier {
   }
 
   void _pushNavigationDataToBle() {
-    if (!bleService.isConnected || _activeRoute == null) return;
+    if ((!bleService.isConnected && !bleService.isWifiConnected) || _activeRoute == null) return;
 
     final step = currentStep ?? _activeRoute!.steps.first;
     final upcomingPts = computeUpcomingRoutePoints();
@@ -463,7 +463,7 @@ class NavigationManager extends ChangeNotifier {
 
   /// Transmit preview / standby telemetry to ESP32 so display shows Clock, ysiduc & Song when not navigating
   void sendPreviewPayloadToEsp32() {
-    if (!bleService.isConnected) return;
+    if (!bleService.isConnected && !bleService.isWifiConnected) return;
     final now = DateTime.now();
     final h = now.hour.toString().padLeft(2, '0');
     final m = now.minute.toString().padLeft(2, '0');
@@ -499,6 +499,7 @@ class NavigationManager extends ChangeNotifier {
     _isSimulating = false;
     _isRerouting = false;
     _activeRoute = null; // Clear active route so minimap returns to standby mode!
+    _previewRoute = null; // Also clear preview route to completely remove old route
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
     _distanceToNextManeuver = 0.0;

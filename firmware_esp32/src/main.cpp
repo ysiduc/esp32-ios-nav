@@ -129,6 +129,106 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 // =========================================================================
 static uint8_t expectedBleChunkIdx = 0;
 
+// Unified JSON Packet Processing for both BLE and WiFi TCP
+void processJsonPacket(const char* jsonStr) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) return;
+
+  String typeStr = String(doc["type"] | "");
+  if (typeStr == "PING") {
+    if (doc["clock"].is<const char*>()) {
+      curClock = String(doc["clock"].as<const char*>());
+    }
+    if (doc["bat"].is<uint8_t>()) {
+      curBattery = doc["bat"].as<uint8_t>();
+    }
+    return;
+  } else if (typeStr == "DEL_BG") {
+    String target = String(doc["target"] | "all");
+    if (target == "wait" || target == "all") {
+      if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
+    }
+    if (target == "map" || target == "all") {
+      if (SPIFFS.exists("/bg_map.jpg")) SPIFFS.remove("/bg_map.jpg");
+    }
+    display.forceRedraw();
+    return;
+  } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"port\":8080,\"ssid\":\"ysiduc navi\",\"pass\":\"00000000\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+    return;
+  } else if (typeStr == "CALL") {
+    const char* name = doc["title"] | "Cuoc goi den";
+    popupTitle = name;
+    popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
+    popupType = "CALL";
+    popupExpire = millis() + 10000;
+    display.showCallAlert(name, popupMsg.c_str());
+    return;
+  } else if (typeStr == "SMS") {
+    const char* sender = doc["title"] | "Tin nhan";
+    const char* content = doc["msg"] | "Thong bao moi";
+    popupTitle = sender;
+    popupMsg = content;
+    popupType = "SMS";
+    popupExpire = millis() + 8000;
+    display.showSmsAlert(sender, content);
+    return;
+  } else if (typeStr == "CALL_END") {
+    popupType = "NONE";
+    popupExpire = 0;
+    display.dismissAlert();
+    return;
+  } else if (typeStr == "CALL_ACTIVE") {
+    const char* name = doc["title"] | "Dang nghe may";
+    popupTitle = name;
+    popupType = "CALL_ACTIVE";
+    popupExpire = millis() + 5000;
+    display.showCallAlert(name, "Dang nghe may");
+    return;
+  }
+
+  curTurn = doc["turn"] | curTurn;
+  curDist = doc["dist"] | curDist;
+  curTotalDist = doc["tot_dist"] | doc["tot"] | curTotalDist;
+  curSpeed = doc["speed"] | curSpeed;
+  curEta = doc["eta"] | curEta;
+  if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
+  if (doc["arrival"].is<const char*>()) curArrival = String((const char*)doc["arrival"]);
+  if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
+  if (doc["bat"].is<int>()) curBattery = doc["bat"];
+  if (doc["head"].is<int>()) curHeading = doc["head"];
+
+  RoutePoint parsedPts[32];
+  uint8_t parsedPtCount = 0;
+  if (doc["pts"].is<JsonArray>()) {
+    JsonArray arr = doc["pts"].as<JsonArray>();
+    for (JsonVariant v : arr) {
+      if (parsedPtCount >= 32) break;
+      if (v.is<JsonArray>() && v.size() >= 2) {
+        parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
+        parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
+        parsedPtCount++;
+      }
+    }
+  }
+
+  bool isNav = (doc["nav"] | 0) == 1;
+  display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
+
+  if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
+    String curSong = String(doc["song"] | "");
+    String curArtist = String(doc["artist"] | "");
+    if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC" && curSong != "Waiting For You") {
+      display.setSongInfo(curSong.c_str(), curArtist.c_str());
+    }
+  }
+}
+
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pCharacteristic) {
     std::string value = pCharacteristic->getValue();
@@ -201,103 +301,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
     }
 
     // 2. JSON Notification or Navigation Telemetry
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, value.c_str());
-
-    if (!error) {
-      String typeStr = String(doc["type"] | "");
-      if (typeStr == "PING") {
-        if (doc["clock"].is<const char*>()) {
-          curClock = String(doc["clock"].as<const char*>());
-        }
-        if (doc["bat"].is<uint8_t>()) {
-          curBattery = doc["bat"].as<uint8_t>();
-        }
-        return;
-      } else if (typeStr == "DEL_BG") {
-        String target = String(doc["target"] | "all");
-        if (target == "wait" || target == "all") {
-          if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
-        }
-        if (target == "map" || target == "all") {
-          if (SPIFFS.exists("/bg_map.jpg")) SPIFFS.remove("/bg_map.jpg");
-        }
-        display.forceRedraw();
-        return;
-      } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
-        if (pNavChar != nullptr && bleConnected) {
-          String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"ip\":\"192.168.4.1\",\"port\":8080,\"ssid\":\"ysiduc navi\",\"pass\":\"00000000\"}";
-          pNavChar->setValue(resp.c_str());
-          pNavChar->notify();
-        }
-        return;
-      } else if (typeStr == "CALL") {
-        const char* name = doc["title"] | "Cuoc goi den";
-        popupTitle = name;
-        popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
-        popupType = "CALL";
-        popupExpire = millis() + 10000;
-        display.showCallAlert(name, popupMsg.c_str());
-        return;
-      } else if (typeStr == "SMS") {
-        const char* sender = doc["title"] | "Tin nhan";
-        const char* content = doc["msg"] | "Thong bao moi";
-        popupTitle = sender;
-        popupMsg = content;
-        popupType = "SMS";
-        popupExpire = millis() + 8000;
-        display.showSmsAlert(sender, content);
-        return;
-      } else if (typeStr == "CALL_END") {
-        popupType = "NONE";
-        popupExpire = 0;
-        display.dismissAlert();
-        return;
-      } else if (typeStr == "CALL_ACTIVE") {
-        const char* name = doc["title"] | "Dang nghe may";
-        popupTitle = name;
-        popupType = "CALL_ACTIVE";
-        popupExpire = millis() + 5000;
-        display.showCallAlert(name, "Dang nghe may");
-        return;
-      }
-
-      curTurn = doc["turn"] | 0;
-      curDist = doc["dist"] | 0;
-      curTotalDist = doc["tot_dist"] | doc["tot"] | 0;
-      curSpeed = doc["speed"] | 0;
-      curEta = doc["eta"] | 0;
-      curStreet = String(doc["street"] | "CAU SONG LU");
-      curArrival = String(doc["arrival"] | "18:26");
-      curClock = String(doc["clock"] | "18:25");
-      curBattery = doc["bat"] | 89;
-      if (doc["head"].is<int>()) curHeading = doc["head"];
-
-      RoutePoint parsedPts[32];
-      uint8_t parsedPtCount = 0;
-      if (doc["pts"].is<JsonArray>()) {
-        JsonArray arr = doc["pts"].as<JsonArray>();
-        for (JsonVariant v : arr) {
-          if (parsedPtCount >= 32) break;
-          if (v.is<JsonArray>() && v.size() >= 2) {
-            parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
-            parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
-            parsedPtCount++;
-          }
-        }
-      }
-
-      bool isNav = (doc["nav"] | 0) == 1;
-      display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
-
-      if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
-        String curSong = String(doc["song"] | "");
-        String curArtist = String(doc["artist"] | "");
-        if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC" && curSong != "Waiting For You") {
-          display.setSongInfo(curSong.c_str(), curArtist.c_str());
-        }
-      }
-    }
+    processJsonPacket(value.c_str());
   }
 };
 
@@ -406,36 +410,7 @@ void loop() {
         newFrameAvailable = true;
       } else if (bytesRead > 2 && tcpBuf[0] == '{') {
         tcpBuf[min(bytesRead, sizeof(tcpBuf) - 1)] = '\0';
-        StaticJsonDocument<1024> doc;
-        DeserializationError err = deserializeJson(doc, (char*)tcpBuf);
-        if (!err) {
-          curTurn = doc["turn"] | curTurn;
-          curDist = doc["dist"] | curDist;
-          curTotalDist = doc["tot_dist"] | doc["tot"] | curTotalDist;
-          curSpeed = doc["speed"] | curSpeed;
-          curEta = doc["eta"] | curEta;
-          if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
-          if (doc["arrival"].is<const char*>()) curArrival = String((const char*)doc["arrival"]);
-          if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
-          if (doc["bat"].is<int>()) curBattery = doc["bat"];
-          if (doc["head"].is<int>()) curHeading = doc["head"];
-
-          RoutePoint parsedPts[32];
-          uint8_t parsedPtCount = 0;
-          if (doc["pts"].is<JsonArray>()) {
-            JsonArray arr = doc["pts"].as<JsonArray>();
-            for (JsonVariant v : arr) {
-              if (parsedPtCount >= 32) break;
-              if (v.is<JsonArray>() && v.size() >= 2) {
-                parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
-                parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
-                parsedPtCount++;
-              }
-            }
-          }
-          bool isNav = (doc["nav"] | 0) == 1;
-          display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav);
-        }
+        processJsonPacket((char*)tcpBuf);
       }
       client.stop();
     }

@@ -437,6 +437,102 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             const SizedBox(height: 16),
 
             // =========================================================
+            // Minimap Zoom Level Slider (14 to 18)
+            // Controls Map Detail on both Simulation Screen & ESP32
+            // =========================================================
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF131B26),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(100)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.zoom_in_rounded, color: Color(0xFF00F0FF), size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'TỶ LỆ PHÓNG TO MINIMAP',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00F0FF).withAlpha(30),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF00F0FF)),
+                        ),
+                        child: Text(
+                          'Zoom x${streamService.minimapZoom}',
+                          style: const TextStyle(
+                            color: Color(0xFF00F0FF),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    streamService.minimapZoom >= 17
+                        ? 'Độ chi tiết cao: Hiển thị toà nhà, khu dân cư, số nhà & POI (khớp ảnh chụp)'
+                        : 'Toàn cảnh: Hiển thị trục đường chính và các góc rẽ',
+                    style: TextStyle(
+                      color: streamService.minimapZoom >= 17 ? const Color(0xFF05FFA1) : Colors.white60,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: const Color(0xFF00F0FF),
+                      inactiveTrackColor: Colors.white12,
+                      thumbColor: const Color(0xFF00F0FF),
+                      overlayColor: const Color(0xFF00F0FF).withAlpha(40),
+                      trackHeight: 6,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+                    ),
+                    child: Slider(
+                      value: streamService.minimapZoom.toDouble(),
+                      min: 14.0,
+                      max: 18.0,
+                      divisions: 4,
+                      onChanged: (val) {
+                        streamService.minimapZoom = val.round();
+                      },
+                    ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildZoomPresetChip(streamService, 14, 'x14 Xa'),
+                      _buildZoomPresetChip(streamService, 15, 'x15 Vùng'),
+                      _buildZoomPresetChip(streamService, 16, 'x16 Chuẩn'),
+                      _buildZoomPresetChip(streamService, 17, 'x17 Chi tiết'),
+                      _buildZoomPresetChip(streamService, 18, 'x18 Cận cảnh'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // =========================================================
             // 1. EXACT 100% REPLICA OF TARGET DESIGN (320x240 Aspect)
             // =========================================================
             Center(
@@ -1600,6 +1696,32 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       default:
         return Icons.straight_rounded;
     }
+  }
+
+  Widget _buildZoomPresetChip(EspStreamService streamService, int zoomVal, String label) {
+    final isSelected = streamService.minimapZoom == zoomVal;
+    return InkWell(
+      onTap: () {
+        streamService.minimapZoom = zoomVal;
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF00F0FF) : const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isSelected ? const Color(0xFF00F0FF) : Colors.white10),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.black : Colors.white70,
+            fontSize: 10,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
   }
 }
 

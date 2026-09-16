@@ -61,6 +61,7 @@ class _MapScreenState extends State<MapScreen> {
   // 2: Route Comparison & Alternatives
   int _viewMode = 0;
   bool _isMuted = false;
+  bool _isDrivingZoomOverview = false;
   MapThemeMode _currentTheme = MapThemeMode.streets; // Apple / Goong Streets (clean light)
 
   List<MapPlace> _searchResults = [];
@@ -84,9 +85,9 @@ class _MapScreenState extends State<MapScreen> {
             ml.CameraUpdate.newCameraPosition(
               ml.CameraPosition(
                 target: ml.LatLng(loc.latitude, loc.longitude),
-                zoom: 17.5,
-                tilt: 50.0,
-                bearing: heading,
+                zoom: _isDrivingZoomOverview ? 14.5 : 17.5,
+                tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
+                bearing: _isDrivingZoomOverview ? 0.0 : heading,
               ),
             ),
           );
@@ -2295,6 +2296,42 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  void _toggleDrivingZoom(NavigationManager navManager) {
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    final pos = navManager.currentLocation ?? _userPosition;
+
+    setState(() {
+      _isDrivingZoomOverview = !_isDrivingZoomOverview;
+    });
+
+    if (_isDrivingZoomOverview) {
+      // Zoom OUT to route overview (2D top-down)
+      ctrl.animateCamera(
+        ml.CameraUpdate.newCameraPosition(
+          ml.CameraPosition(
+            target: ml.LatLng(pos.latitude, pos.longitude),
+            zoom: 14.5,
+            tilt: 0.0,
+            bearing: 0.0,
+          ),
+        ),
+      );
+    } else {
+      // Zoom IN to driver perspective (3D follow)
+      ctrl.animateCamera(
+        ml.CameraUpdate.newCameraPosition(
+          ml.CameraPosition(
+            target: ml.LatLng(pos.latitude, pos.longitude),
+            zoom: 17.5,
+            tilt: 50.0,
+            bearing: navManager.effectiveHeading,
+          ),
+        ),
+      );
+    }
+  }
+
   Widget _buildAppleActiveDrivingBottomHud(NavigationManager navManager, BleService bleService) {
     final etaMins = navManager.remainingEtaMinutes;
     final now = DateTime.now().add(Duration(minutes: etaMins));
@@ -2305,138 +2342,197 @@ class _MapScreenState extends State<MapScreen> {
     final durationUnit = hours > 0 ? 'giờ' : 'phút';
     final distanceKm = (navManager.remainingTotalDistance / 1000).toStringAsFixed(0);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.92),
-        borderRadius: BorderRadius.circular(36),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(36),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            child: Row(
-              children: [
-                // Column 1: ETA Clock
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        timeStr,
-                        style: const TextStyle(
-                          fontSize: 19,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1C1C1E),
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'đến',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF8E8E93),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        // Arrow Zoom In / Zoom Out button placed strictly ABOVE the red 'X' button!
+        Padding(
+          padding: const EdgeInsets.only(right: 20, bottom: 10),
+          child: GestureDetector(
+            onTap: () => _toggleDrivingZoom(navManager),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.92),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.12),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
                   ),
-                ),
-                // Column 2: Duration
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        durationStr,
-                        style: const TextStyle(
-                          fontSize: 21,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF007AFF),
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        durationUnit,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF8E8E93),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Column 3: Distance
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        distanceKm,
-                        style: const TextStyle(
-                          fontSize: 19,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1C1C1E),
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'km',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF8E8E93),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Red circular End Route button
-                GestureDetector(
-                  onTap: () {
-                    navManager.stopNavigation();
-                    setState(() {
-                      _viewMode = 0;
-                      _routes = [];
-                      _selectedPlace = null;
-                    });
-                    _updateDestinationMarker();
-                  },
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF3B30).withOpacity(0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close_rounded,
-                      color: Color(0xFFFF3B30),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Center(
+                    child: Icon(
+                      _isDrivingZoomOverview ? Icons.near_me_rounded : Icons.navigation_rounded,
+                      color: const Color(0xFF007AFF),
                       size: 24,
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),
-      ),
+
+        // Bottom Capsule Navigation HUD
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.92),
+            borderRadius: BorderRadius.circular(36),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 20,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(36),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                child: Row(
+                  children: [
+                    // Column 1: ETA Clock
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            timeStr,
+                            style: const TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1C1C1E),
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'đến',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8E8E93),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Column 2: Duration
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            durationStr,
+                            style: const TextStyle(
+                              fontSize: 21,
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFF007AFF),
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            durationUnit,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8E8E93),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Column 3: Distance
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            distanceKm,
+                            style: const TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1C1C1E),
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'km',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8E8E93),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Red circular End Route button - Clears route and restores clean map
+                    GestureDetector(
+                      onTap: () async {
+                        navManager.stopNavigation();
+                        navManager.setPreviewRoute(null);
+                        await _mapController?.clearLines();
+                        await _mapController?.clearCircles();
+                        setState(() {
+                          _viewMode = 0;
+                          _routes = [];
+                          _selectedPlace = null;
+                          _isDrivingZoomOverview = false;
+                        });
+                        _updateDestinationMarker();
+                        final pos = navManager.currentLocation ?? _userPosition;
+                        _mapController?.animateCamera(
+                          ml.CameraUpdate.newCameraPosition(
+                            ml.CameraPosition(
+                              target: ml.LatLng(pos.latitude, pos.longitude),
+                              zoom: 16.5,
+                              tilt: 0.0,
+                              bearing: 0.0,
+                            ),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFF3B30).withOpacity(0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.close_rounded,
+                          color: Color(0xFFFF3B30),
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
