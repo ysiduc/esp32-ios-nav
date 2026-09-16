@@ -177,20 +177,24 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
         Container(
           width: double.infinity,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: const Color(0xFF0F172A),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF38BDF8).withAlpha(60)),
+            border: Border.all(color: const Color(0xFF38BDF8).withAlpha(80)),
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.notifications_active_rounded, color: Color(0xFF38BDF8), size: 22),
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.notifications_active_rounded, color: Color(0xFF38BDF8), size: 22),
+              ),
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'Để hiện Tên/SĐT cuộc gọi & tin nhắn Zalo/SMS lên ESP32: Vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ESP32-S3 Navi" > Bật "Chia sẻ thông báo hệ thống".',
-                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5, height: 1.3),
+                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ESP32-S3 Navi" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5, height: 1.35),
                 ),
               ),
             ],

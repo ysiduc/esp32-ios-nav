@@ -163,8 +163,13 @@ void processJsonPacket(const char* jsonStr) {
     return;
   } else if (typeStr == "CALL") {
     const char* name = doc["title"] | "Cuoc goi den";
+    const char* msg = doc["msg"] | "Cuoc goi den tu iPhone";
+    // If ANCS already set a caller name from iOS native system, do NOT overwrite with generic "Cuoc goi den"
+    if (display.isCallActive() && strcmp(display.getCallerName(), "Cuoc goi den") != 0 && strcmp(name, "Cuoc goi den") == 0) {
+      return;
+    }
     popupTitle = name;
-    popupMsg = doc["msg"] | "Cuoc goi den tu iPhone";
+    popupMsg = msg;
     popupType = "CALL";
     popupExpire = millis() + 10000;
     display.showCallAlert(name, popupMsg.c_str());
@@ -223,7 +228,7 @@ void processJsonPacket(const char* jsonStr) {
   if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
     String curSong = String(doc["song"] | "");
     String curArtist = String(doc["artist"] | "");
-    if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC" && curSong != "Waiting For You") {
+    if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC") {
       display.setSongInfo(curSong.c_str(), curArtist.c_str());
     }
   }
@@ -334,9 +339,11 @@ void setup() {
   NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
-  // Security Auth & Bonding for iOS (Required by Apple Media Service)
-  NimBLEDevice::setSecurityAuth(true, false, true);
+  // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
+  NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
   AppleMediaService::init();
   AppleNotificationService::init();
@@ -347,7 +354,9 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC |
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC |
+    NIMBLE_PROPERTY::NOTIFY
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
   pNavService->start();

@@ -128,13 +128,13 @@ public:
   }
 
   void setSongInfo(const char* song, const char* artist) {
-    if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0 && strcmp(song, "Waiting For You") != 0) {
+    if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0) {
       strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
       _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
     } else if (song == nullptr || strlen(song) == 0 || strcmp(song, "CHUA PHAT NHAC") == 0) {
       _navData.songTitle[0] = '\0';
     }
-    if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0 && strcmp(artist, "MONO") != 0) {
+    if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0) {
       strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
       _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
     } else if (artist == nullptr || strlen(artist) == 0) {
@@ -181,6 +181,14 @@ public:
       _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       _needFullRedraw = true;
     }
+  }
+
+  bool isCallActive() const {
+    return _currentState == STATE_POPUP_CALL;
+  }
+
+  const char* getCallerName() const {
+    return _popupData.title;
   }
 
   void forceRedraw() {
@@ -614,7 +622,7 @@ private:
     // Marquee Song Title & Artist: Only wipe the scrolling text area strictly inside x: 72..232
     tft.fillRect(72, 0, 160, 22, TFT_BLACK);
 
-    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
     if (hasSong) {
       String fullSong = String("♫ ") + _navData.songTitle;
       if (strlen(_navData.songArtist) > 0) {
@@ -664,7 +672,7 @@ private:
       tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
       tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
 
-      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0 && strcmp(_navData.songTitle, "Waiting For You") != 0);
+      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
 
       if (hasSong) {
         // Clear inner text area of media card strictly inside x: 166..308

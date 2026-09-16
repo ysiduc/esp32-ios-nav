@@ -25,7 +25,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 10; // Cool, energy-efficient 10 FPS stream (saves phone battery & CPU)
+  int _targetFps = 20; // High-speed 20 FPS stream over Wi-Fi (throttled to 4 FPS in background)
   double _actualFps = 10.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -86,15 +86,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _isForeground = true;
-      if (_isStreaming && _streamTimer == null) {
+      if (_isStreaming) {
         _startTimer();
       }
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // If Wi-Fi is connected OR navigation is active, CONTINUE streaming!
-      // Only stop stream timer if Wi-Fi is not connected and user is not navigating
-      if (!bleService.isWifiConnected && !(navManager?.isNavigating ?? false)) {
+      // If Wi-Fi is connected, throttle to cool 4 FPS to prevent device heating
+      if (_isStreaming && bleService.isWifiConnected) {
+        _startTimer();
+      } else if (!bleService.isWifiConnected && !(navManager?.isNavigating ?? false)) {
         _streamTimer?.cancel();
         _streamTimer = null;
       }
@@ -124,16 +125,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Change target FPS (5 - 15)
+  /// Change target FPS (5 - 30)
   void setTargetFps(int fps) {
-    _targetFps = fps.clamp(5, 15);
+    _targetFps = fps.clamp(5, 30);
     if (_isStreaming && _isForeground) {
       startStreaming();
     }
     notifyListeners();
   }
 
-  /// Start High-Speed Headless 25-30 FPS JPEG Streaming
+  /// Start High-Speed Headless 20-30 FPS JPEG Streaming
   void startStreaming({GlobalKey? boundaryKey}) {
     stopStreaming();
     _isStreaming = true;
@@ -142,7 +143,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _actualFps = _targetFps.toDouble();
     _lastFpsUpdate = DateTime.now();
 
-    if (_isForeground) {
+    if (_isForeground || bleService.isWifiConnected) {
       _startTimer();
     }
 
@@ -151,16 +152,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    final intervalMs = (1000 / _targetFps).round();
+    // In foreground: smooth 20 FPS. In background (screen locked): cool 4 FPS to prevent heating
+    final effectiveFps = _isForeground ? _targetFps : 4;
+    final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
     });
   }
 
-  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 30 FPS
+  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
-    // If connected to iPhone WiFi Hotspot, continue streaming even with screen off!
-    if (!_isStreaming || _isCapturing || (!_isForeground && !bleService.isWifiConnected)) return;
+    // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
+    if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle || (!_isForeground && !bleService.isWifiConnected)) return;
     _isCapturing = true;
 
     try {
@@ -270,6 +273,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  int _consecutiveWifiErrors = 0;
+
   /// Send JPEG frame over WiFi TCP socket directly to ESP32 (screen-off background streaming)
   Future<void> _sendJpegOverWifi(Uint8List jpegBytes) async {
     final ip = bleService.wifiIp;
@@ -282,7 +287,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       socket.add(jpegBytes);
       await socket.flush();
       await socket.close();
+      _consecutiveWifiErrors = 0;
     } catch (_) {
+      _consecutiveWifiErrors++;
+      if (_consecutiveWifiErrors >= 3) {
+        bleService.setWifiDisconnected();
+      }
     } finally {
       _isSendingWifi = false;
     }

@@ -85,15 +85,27 @@ class BleService extends ChangeNotifier {
 
   void _startWifiProbe() {
     _wifiProbeTimer?.cancel();
-    _wifiProbeTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      probeEsp32Wifi();
+    _wifiProbeTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      // Only probe if currently disconnected to discover ESP32 AP without disrupting active streams
+      if (_wifiStatus != 'connected') {
+        probeEsp32Wifi();
+      }
     });
+  }
+
+  /// Reset WiFi status to disconnected when stream socket fails
+  void setWifiDisconnected() {
+    if (_wifiStatus == 'connected') {
+      _wifiStatus = 'disconnected';
+      _wifiIp = null;
+      notifyListeners();
+    }
   }
 
   /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080
   Future<void> probeEsp32Wifi() async {
     try {
-      final socket = await Socket.connect('192.168.4.1', 8080, timeout: const Duration(milliseconds: 500));
+      final socket = await Socket.connect('192.168.4.1', 8080, timeout: const Duration(milliseconds: 400));
       socket.destroy();
       if (_wifiStatus != 'connected') {
         _wifiStatus = 'connected';
@@ -379,34 +391,10 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Send Navigation Payload to ESP32
-  Future<bool> _sendJsonOverWifi(String jsonStr) async {
-    if (!isWifiConnected || wifiIp == null || wifiPort == 0) return false;
-    try {
-      final socket = await Socket.connect(wifiIp!, wifiPort, timeout: const Duration(milliseconds: 300));
-      socket.write(jsonStr);
-      await socket.flush();
-      await socket.close();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
+  /// Send Navigation Payload to ESP32 (ALWAYS via BLE per architecture)
   Future<bool> sendNavPayload(EspNavPayload payload) async {
     final jsonStr = payload.toJsonString();
 
-    // 1. If connected via WiFi Hotspot, stream telemetry smoothly over WiFi
-    if (isWifiConnected && wifiIp != null) {
-      final ok = await _sendJsonOverWifi(jsonStr);
-      if (ok) {
-        _lastTxTime = DateTime.now();
-        _addLog('TX [WiFi ${payload.turnCode}|${payload.distanceToTurn}m]: $jsonStr');
-        return true;
-      }
-    }
-
-    // 2. Fallback to BLE transmission
     if (!_isConnected || _writeCharacteristic == null) {
       return false;
     }
@@ -428,19 +416,8 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Send custom raw JSON or string
+  /// Send custom raw JSON or string (calls, songs, SMS, pings ALWAYS via BLE)
   Future<bool> sendRawString(String text) async {
-    if (isWifiConnected && wifiIp != null) {
-      final ok = await _sendJsonOverWifi(text);
-      if (ok) {
-        _lastTxTime = DateTime.now();
-        if (!text.contains('"PING"')) {
-          _addLog('TX RAW [WiFi]: $text');
-        }
-        return true;
-      }
-    }
-
     if (!_isConnected || _writeCharacteristic == null) {
       _addLog('Chưa kết nối ESP32', isError: true);
       return false;
