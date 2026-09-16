@@ -12,7 +12,8 @@ import '../services/phone_media_service.dart';
 import '../services/phone_call_service.dart';
 
 class EspPreviewScreen extends StatefulWidget {
-  const EspPreviewScreen({super.key});
+  final VoidCallback? onBackToMap;
+  const EspPreviewScreen({super.key, this.onBackToMap});
 
   @override
   State<EspPreviewScreen> createState() => _EspPreviewScreenState();
@@ -318,6 +319,17 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF131B26),
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF00F0FF)),
+          tooltip: 'Quay lại Bản đồ',
+          onPressed: () {
+            if (widget.onBackToMap != null) {
+              widget.onBackToMap!();
+            } else if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            }
+          },
+        ),
         title: const Row(
           children: [
             Icon(Icons.tv_rounded, color: Color(0xFF00F0FF)),

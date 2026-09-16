@@ -47,6 +47,29 @@ class NavigationManager extends ChangeNotifier {
   LatLng? get currentLocation => _currentLocation;
   double get currentSpeedKmh => _currentSpeedKmh;
   double get currentHeading => _currentHeading;
+  double get effectiveHeading {
+    if (_currentHeading > 0.0 && _currentSpeedKmh >= 3.0) {
+      return _currentHeading;
+    }
+    if (_activeRoute != null && _activeRoute!.polylinePoints.length >= 2 && _currentLocation != null) {
+      const distanceCalc = Distance();
+      final points = _activeRoute!.polylinePoints;
+      int closestIdx = 0;
+      double minD = double.infinity;
+      for (int i = 0; i < points.length; i++) {
+        final d = distanceCalc.as(LengthUnit.Meter, _currentLocation!, points[i]);
+        if (d < minD) {
+          minD = d;
+          closestIdx = i;
+        }
+      }
+      final targetIdx = (closestIdx + 1 < points.length) ? closestIdx + 1 : closestIdx;
+      if (targetIdx != closestIdx) {
+        return distanceCalc.bearing(_currentLocation!, points[targetIdx]);
+      }
+    }
+    return _currentHeading;
+  }
   double get distanceToNextManeuver => _distanceToNextManeuver;
   double get remainingTotalDistance => _remainingTotalDistance;
   int get remainingEtaMinutes => _remainingEtaMinutes;

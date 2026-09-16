@@ -25,7 +25,8 @@ enum MapThemeMode {
 }
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+  final VoidCallback? onOpenMenu;
+  const MapScreen({super.key, this.onOpenMenu});
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -741,7 +742,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
 
           // -----------------------------------------------------------
-          // 2. Weather Pill (Top-Left, Screenshot 1)
+          // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
           // -----------------------------------------------------------
           if (!isDriving)
             SafeArea(
@@ -749,7 +750,14 @@ class _MapScreenState extends State<MapScreen> {
                 alignment: Alignment.topLeft,
                 child: Padding(
                   padding: const EdgeInsets.only(left: 16.0, top: 8.0),
-                  child: _buildAppleWeatherPill(),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildMenuButton(context, bleService),
+                      const SizedBox(width: 8),
+                      _buildAppleWeatherPill(),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -918,6 +926,68 @@ class _MapScreenState extends State<MapScreen> {
               child: _buildAppleActiveDrivingBottomHud(navManager, bleService),
             ),
         ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // Apple Maps Top-Left 3-line Menu Button
+  // -------------------------------------------------------------
+  Widget _buildMenuButton(BuildContext context, BleService bleService) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          if (widget.onOpenMenu != null) {
+            widget.onOpenMenu!();
+          } else {
+            Scaffold.maybeOf(context)?.openDrawer();
+          }
+        },
+        borderRadius: BorderRadius.circular(22),
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: Colors.white.withAlpha(240),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(25),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
+            border: Border.all(
+              color: bleService.isConnected ? const Color(0xFF007AFF) : Colors.black12,
+              width: 1.2,
+            ),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              const Icon(
+                Icons.menu_rounded,
+                color: Color(0xFF1C1C1E),
+                size: 22,
+              ),
+              if (bleService.isConnected)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: bleService.isWifiConnected ? const Color(0xFF05FFA1) : const Color(0xFF007AFF),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

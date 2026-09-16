@@ -18,9 +18,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   NavigationManager? navManager;
 
   bool _isSendingWifi = false;
-  ui.Image? _cachedGoongStaticRoute;
-  String? _cachedGoongRouteKey;
-  bool _isLoadingGoongStatic = false;
 
   /// Optional hook to take live vector snapshots from MapLibre Goong map
   Future<Uint8List?> Function({int? width, int? height})? mapSnapshotProvider;
@@ -95,7 +92,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     stopStreaming();
     _pauseTimer?.cancel();
-    _cachedGoongStaticRoute?.dispose();
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
     super.dispose();
@@ -162,7 +158,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       // Extract current navigation telemetry
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
-      final double heading = navManager?.currentHeading ?? 0.0;
+      final double heading = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
@@ -188,13 +184,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      // Check and fetch official Goong Static Route image once when route starts
-      if (activeRoute != null && GoongConfig.isConfigured) {
-        _checkAndLoadGoongStaticRoute(activeRoute);
-      }
-
-      // Pre-fetch surrounding tiles asynchronously at high-detail zoom 17
-      _prefetchSurroundingTiles(userPos, 17);
+      // Pre-fetch surrounding tiles asynchronously at high-detail zoom 16
+      _prefetchSurroundingTiles(userPos, 16);
 
       // 1. Draw Real Map Canvas (< 0.5ms)
       _drawRealMapCanvas(
@@ -280,37 +271,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {
     } finally {
       _isSendingWifi = false;
-    }
-  }
-
-  /// Fetch official Goong static route map image (called ONCE per route)
-  Future<void> _checkAndLoadGoongStaticRoute(NavRoute route) async {
-    if (!GoongConfig.isConfigured || route.polylinePoints.isEmpty) return;
-
-    final originPt = route.polylinePoints.first;
-    final destPt = route.polylinePoints.last;
-    final routeKey = '${originPt.latitude.toStringAsFixed(4)},${originPt.longitude.toStringAsFixed(4)}->${destPt.latitude.toStringAsFixed(4)},${destPt.longitude.toStringAsFixed(4)}';
-
-    if (_cachedGoongRouteKey == routeKey || _isLoadingGoongStatic) return;
-    _isLoadingGoongStatic = true;
-    _cachedGoongRouteKey = routeKey;
-
-    try {
-      final originStr = '${originPt.latitude},${originPt.longitude}';
-      final destStr = '${destPt.latitude},${destPt.longitude}';
-      final url = 'https://rsapi.goong.io/staticmap/route?origin=$originStr&destination=$destStr&vehicle=bike&width=144&height=208&color=%23007AFF&api_key=${GoongConfig.restApiKey}';
-
-      final res = await http.get(Uri.parse(url), headers: {'User-Agent': 'ESP32NavApp/2.0'}).timeout(const Duration(seconds: 4));
-      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-        final codec = await ui.instantiateImageCodec(res.bodyBytes);
-        final frame = await codec.getNextFrame();
-        _cachedGoongStaticRoute?.dispose();
-        _cachedGoongStaticRoute = frame.image;
-        notifyListeners();
-      }
-    } catch (_) {
-    } finally {
-      _isLoadingGoongStatic = false;
     }
   }
 
@@ -426,28 +386,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double distToTurn,
     required double speedKmh,
   }) {
-    // If official Goong static route image is available and stationary/overview mode, render Goong route
-    if (_cachedGoongStaticRoute != null && (speedKmh < 2.0 && distToTurn > 100)) {
-      canvas.drawImageRect(
-        _cachedGoongStaticRoute!,
-        Rect.fromLTWH(0, 0, _cachedGoongStaticRoute!.width.toDouble(), _cachedGoongStaticRoute!.height.toDouble()),
-        Rect.fromLTWH(0, 0, w, h),
-        Paint()..filterQuality = FilterQuality.medium,
-      );
-      return;
-    }
-
     final isDark = _streamMapStyle.contains('dark');
 
-    // 1. Background Fill: Clean Light Cream for Apple Maps (#F5F4F0) or Dark Navy (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF5F4F0);
+    // 1. Background Fill: Clean Light Cream for Apple Maps / Goong (#F4F6F8) or Dark Navy (#0B111A)
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF4F6F8);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle screen anchor (lower center: x=72, y=140)
     final double cx = w / 2.0;
     final double cy = h * 0.67;
 
-    const int zoom = 17;
+    // Zoom level 16: Optimal street-level perspective with turns and landmarks
+    const int zoom = 16;
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = userPos.latitude * (math.pi / 180.0);
     final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
@@ -535,19 +485,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Route Outer Glow / Casing
+      // Route Outer Glow / Casing (Vibrant Apple Blue Casing)
       final casingPaint = Paint()
         ..color = isDark ? const Color(0xFF003D66) : const Color(0xFF0051B3)
-        ..strokeWidth = 8.0
+        ..strokeWidth = 8.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
       canvas.drawPath(routePath, casingPaint);
 
-      // Route Core: Apple Maps Vibrant Blue (#007AFF) or Neon Cyan (#00F0FF)
+      // Route Core: Apple Maps Vibrant Blue (#007AFF)
       final corePaint = Paint()
         ..color = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF)
-        ..strokeWidth = 5.0
+        ..strokeWidth = 5.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
@@ -556,30 +506,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
     canvas.restore();
 
-    // 2. Navigation Vehicle Indicator (Stationary at center cx, cy pointing UP)
+    // 2. Navigation Vehicle Indicator (Stationary at center cx, cy pointing straight UP)
     final vehicleColor = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF);
     final radarRing = Paint()
-      ..color = vehicleColor.withAlpha(50)
+      ..color = vehicleColor.withAlpha(45)
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 15, radarRing);
+    canvas.drawCircle(Offset(cx, cy), 16, radarRing);
 
     final vehicleBg = Paint()
       ..color = vehicleColor
       ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 9, vehicleBg);
+    canvas.drawCircle(Offset(cx, cy), 10, vehicleBg);
 
     final vehicleBorder = Paint()
       ..color = Colors.white
-      ..strokeWidth = 2.0
+      ..strokeWidth = 2.2
       ..style = PaintingStyle.stroke;
-    canvas.drawCircle(Offset(cx, cy), 9, vehicleBorder);
+    canvas.drawCircle(Offset(cx, cy), 10, vehicleBorder);
 
     // Direction Arrow pointing straight UP
     final arrowPath = ui.Path()
-      ..moveTo(cx, cy - 6)
-      ..lineTo(cx + 4, cy + 4)
-      ..lineTo(cx, cy + 2)
-      ..lineTo(cx - 4, cy + 4)
+      ..moveTo(cx, cy - 7)
+      ..lineTo(cx + 4.5, cy + 4)
+      ..lineTo(cx, cy + 1.5)
+      ..lineTo(cx - 4.5, cy + 4)
       ..close();
     final arrowPaint = Paint()
       ..color = Colors.white

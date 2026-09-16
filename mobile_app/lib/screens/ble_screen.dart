@@ -4,7 +4,8 @@ import '../models/esp_payload.dart';
 import '../services/ble_service.dart';
 
 class BleScreen extends StatefulWidget {
-  const BleScreen({super.key});
+  final VoidCallback? onBackToMap;
+  const BleScreen({super.key, this.onBackToMap});
 
   @override
   State<BleScreen> createState() => _BleScreenState();
@@ -40,6 +41,17 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
       appBar: AppBar(
         backgroundColor: const Color(0xFF161B22),
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF00F0FF)),
+          tooltip: 'Quay lại Bản đồ',
+          onPressed: () {
+            if (widget.onBackToMap != null) {
+              widget.onBackToMap!();
+            } else if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            }
+          },
+        ),
         title: const Row(
           children: [
             Icon(Icons.bluetooth_searching_rounded, color: Color(0xFF00F0FF)),
@@ -522,11 +534,21 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     Text(
                       isWifi
                           ? 'WIFI HOTSPOT: ĐÃ KẾT NỐI'
-                          : (isConnecting ? 'ĐANG KẾT NỐI WIFI...' : 'KẾT NỐI WIFI HOTSPOT'),
+                          : (isConnecting
+                              ? 'ĐANG KẾT NỐI WIFI...'
+                              : (bleService.wifiStatus == 'wrong_pass'
+                                  ? 'SAI MẬT KHẨU WIFI'
+                                  : (bleService.wifiStatus == 'no_ssid'
+                                      ? 'KHÔNG TÌM THẤY WIFI'
+                                      : 'KẾT NỐI WIFI HOTSPOT'))),
                       style: TextStyle(
                         color: isWifi
                             ? const Color(0xFF05FFA1)
-                            : (isConnecting ? Colors.amber : Colors.white),
+                            : (isConnecting
+                                ? Colors.amber
+                                : (bleService.wifiStatus == 'wrong_pass' || bleService.wifiStatus == 'no_ssid'
+                                    ? Colors.redAccent
+                                    : Colors.white)),
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
@@ -536,9 +558,18 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       isWifi
                           ? 'IP: ${bleService.wifiIp}:${bleService.wifiPort} • Stream khi tắt màn hình'
                           : (isConnecting
-                              ? 'Đang gửi cấu hình sang ESP32...'
-                              : 'Truyền bản đồ tốc độ cao & khi tắt màn hình'),
-                      style: const TextStyle(color: Colors.white54, fontSize: 11),
+                              ? 'Đang gửi cấu hình và chờ ESP32 kết nối...'
+                              : (bleService.wifiStatus == 'wrong_pass'
+                                  ? 'Bấm Cài đặt để nhập lại mật khẩu đúng'
+                                  : (bleService.wifiStatus == 'no_ssid'
+                                      ? 'Bật "Tối đa hóa tương thích" trên iPhone!'
+                                      : 'Truyền bản đồ tốc độ cao & khi tắt màn hình'))),
+                      style: TextStyle(
+                        color: (bleService.wifiStatus == 'wrong_pass' || bleService.wifiStatus == 'no_ssid')
+                            ? Colors.redAccent.withAlpha(220)
+                            : Colors.white54,
+                        fontSize: 11,
+                      ),
                     ),
                   ],
                 ),
@@ -631,18 +662,24 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     decoration: BoxDecoration(
                       color: const Color(0xFF0F172A),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white12),
+                      border: Border.all(color: Colors.amber.withAlpha(120)),
                     ),
                     child: const Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('📌 Các bước thực hiện:', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 16),
+                            SizedBox(width: 6),
+                            Text('LƯU Ý BẮT BUỘC ĐỂ KẾT NỐI IPHONE:', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                          ],
+                        ),
+                        SizedBox(height: 6),
+                        Text('1. Mở Cài đặt iPhone > Điểm phát sóng cá nhân > BẬT "Cho phép người khác kết nối".', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
                         SizedBox(height: 4),
-                        Text('1. Mở Cài đặt iPhone > Điểm phát sóng cá nhân > Bật "Cho phép người khác kết nối".', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
-                        SizedBox(height: 2),
-                        Text('2. Nhập chính xác Tên Hotspot (SSID) và Mật khẩu bên dưới rồi bấm "Gửi sang ESP32".', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
-                        SizedBox(height: 2),
-                        Text('3. ESP32 sẽ kết nối vào iPhone và stream bản đồ ngay cả khi tắt màn hình.', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 11.5)),
+                        Text('2. ⚠️ BẮT BUỘC: BẬT "Tối đa hóa khả năng tương thích" (Maximize Compatibility) để iPhone phát sóng 2.4GHz cho ESP32. Nếu không bật, ESP32 không thể kết nối!', style: TextStyle(color: Color(0xFF05FFA1), fontWeight: FontWeight.bold, fontSize: 11.5)),
+                        SizedBox(height: 4),
+                        Text('3. Giữ màn hình Điểm phát sóng cá nhân đang mở trên iPhone trong lúc ESP32 kết nối.', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
                       ],
                     ),
                   ),
