@@ -352,6 +352,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   children: [
                     _buildTestButton('➡️ Rẽ phải 150m', () {
                       final p = EspNavPayload(
+                        isNavigating: true,
                         turnCode: 2,
                         distanceToTurn: 150,
                         totalDistance: 3200,
@@ -366,6 +367,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     const SizedBox(width: 8),
                     _buildTestButton('⬅️ Rẽ trái 80m', () {
                       final p = EspNavPayload(
+                        isNavigating: true,
                         turnCode: 6,
                         distanceToTurn: 80,
                         totalDistance: 2100,
@@ -380,6 +382,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     const SizedBox(width: 8),
                     _buildTestButton('🔄 Vòng xuyến 300m', () {
                       final p = EspNavPayload(
+                        isNavigating: true,
                         turnCode: 8,
                         distanceToTurn: 300,
                         totalDistance: 1500,
@@ -394,6 +397,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     const SizedBox(width: 8),
                     _buildTestButton('🏁 Đã đến nơi', () {
                       final p = EspNavPayload(
+                        isNavigating: true,
                         turnCode: 9,
                         distanceToTurn: 0,
                         totalDistance: 0,

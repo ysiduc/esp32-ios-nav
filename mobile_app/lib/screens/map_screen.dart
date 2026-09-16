@@ -2340,7 +2340,11 @@ class _MapScreenState extends State<MapScreen> {
     final remMins = etaMins % 60;
     final durationStr = hours > 0 ? '$hours:${remMins.toString().padLeft(2, '0')}' : '$remMins';
     final durationUnit = hours > 0 ? 'giờ' : 'phút';
-    final distanceKm = (navManager.remainingTotalDistance / 1000).toStringAsFixed(0);
+    final totalMeters = navManager.remainingTotalDistance.round();
+    final distanceStr = totalMeters >= 1000
+        ? (totalMeters >= 10000 ? (totalMeters / 1000).toStringAsFixed(0) : (totalMeters / 1000).toStringAsFixed(1))
+        : '$totalMeters';
+    final distanceUnit = totalMeters >= 1000 ? 'km' : 'm';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -2465,7 +2469,7 @@ class _MapScreenState extends State<MapScreen> {
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Text(
-                            distanceKm,
+                            distanceStr,
                             style: const TextStyle(
                               fontSize: 19,
                               fontWeight: FontWeight.w800,
@@ -2474,9 +2478,9 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                           ),
                           const SizedBox(height: 2),
-                          const Text(
-                            'km',
-                            style: TextStyle(
+                          Text(
+                            distanceUnit,
+                            style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF8E8E93),
                               fontWeight: FontWeight.w500,

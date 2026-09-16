@@ -104,13 +104,23 @@ public:
 
     strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
     _navData.streetName[sizeof(_navData.streetName) - 1] = '\0';
-    if (arrival != nullptr && strlen(arrival) > 0) {
-      strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
-      _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
-    }
     if (clock != nullptr && strlen(clock) > 0) {
       strncpy(_navData.currentTime, clock, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+    }
+    if (arrival != nullptr && strlen(arrival) > 0 && strcmp(arrival, "18:26") != 0) {
+      strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
+      _navData.arrivalTime[sizeof(_navData.arrivalTime) - 1] = '\0';
+    } else if (clock != nullptr && strlen(clock) > 0) {
+      int ch = 0, cm = 0;
+      if (sscanf(clock, "%d:%d", &ch, &cm) == 2) {
+        int totalMin = ch * 60 + cm + eta;
+        int arrH = (totalMin / 60) % 24;
+        int arrM = totalMin % 60;
+        snprintf(_navData.arrivalTime, sizeof(_navData.arrivalTime), "%02d:%02d", arrH, arrM);
+      } else {
+        strncpy(_navData.arrivalTime, "18:26", sizeof(_navData.arrivalTime) - 1);
+      }
     }
     if (battery > 0 && battery <= 100) {
       _navData.batteryLevel = battery;
@@ -910,13 +920,17 @@ private:
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
       tft.fillRect(164, 136, 146, 78, cCardBg);
 
-      // Sub-labels (y: 146)
-      _drawUtf8String("Dự kiến", 168, 146, cDimGrey, cCardBg);
+      // Sub-labels (y: 144)
+      _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
 
       tft.setTextColor(cSubText, cCardBg);
       char totDistStr[16];
-      snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
-      tft.drawRightString(totDistStr, 304, 146, 2);
+      if (_navData.totalDistMeters >= 1000) {
+        snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+      } else {
+        snprintf(totDistStr, sizeof(totDistStr), "%dm", _navData.totalDistMeters);
+      }
+      tft.drawRightString(totDistStr, 304, 144, 2);
 
       // Main values (y: 166)
       tft.setTextColor(TFT_CYAN, cCardBg);
@@ -924,8 +938,14 @@ private:
 
       tft.setTextColor(TFT_GREEN, cCardBg);
       char etaStr[16];
-      snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
-      tft.drawRightString(etaStr, 304, 166, 4);
+      if (_navData.etaMinutes >= 60) {
+        int h = _navData.etaMinutes / 60;
+        int m = _navData.etaMinutes % 60;
+        snprintf(etaStr, sizeof(etaStr), "%dh%02d", h, m);
+      } else {
+        snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+      }
+      tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
     }
   }
 #endif

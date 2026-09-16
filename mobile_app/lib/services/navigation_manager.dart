@@ -338,16 +338,43 @@ class NavigationManager extends ChangeNotifier {
   void _updateRemainingMetrics() {
     if (_activeRoute == null || _currentLocation == null) return;
 
-    const distanceCalculator = Distance();
-    final endCoord = _activeRoute!.polylinePoints.last;
-    _remainingTotalDistance = distanceCalculator.as(
-      LengthUnit.Meter,
-      _currentLocation!,
-      endCoord,
-    );
+    final points = _activeRoute!.polylinePoints;
+    if (points.isEmpty) return;
 
-    final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 32.0;
-    _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
+    const distanceCalculator = Distance();
+
+    // In simulation mode, polyline progress index is already tracked
+    int closestIdx = _isSimulating ? _simulatedPolylineIndex : 0;
+
+    if (!_isSimulating) {
+      // Find the closest polyline point to user location
+      double minDist = double.infinity;
+      for (int i = 0; i < points.length; i++) {
+        final d = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[i]);
+        if (d < minDist) {
+          minDist = d;
+          closestIdx = i;
+        }
+      }
+    }
+
+    // Accumulate actual road polyline distance from closest point to end
+    double polylineDist = 0.0;
+    for (int i = closestIdx; i < points.length - 1; i++) {
+      polylineDist += distanceCalculator.as(LengthUnit.Meter, points[i], points[i + 1]);
+    }
+    final distToClosest = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[closestIdx]);
+    _remainingTotalDistance = distToClosest + polylineDist;
+
+    // Calculate accurate ETA based on initial route duration proportion
+    final totalMeters = _activeRoute!.totalDistanceMeters;
+    if (totalMeters > 0 && _activeRoute!.totalDurationSeconds > 0) {
+      final ratio = (_remainingTotalDistance / totalMeters).clamp(0.0, 1.0);
+      _remainingEtaMinutes = ((_activeRoute!.totalDurationSeconds / 60.0) * ratio).round().clamp(1, 999);
+    } else {
+      final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 32.0;
+      _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
+    }
   }
 
   String _currentSongTitle = '';

@@ -1513,8 +1513,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)}km' : '${dist}m';
     final street = step?.streetName.isNotEmpty == true ? step!.streetName : 'CẦU SÔNG LỪ';
     final speed = navManager.currentSpeedKmh.round();
-    final etaMins = navManager.remainingEtaMinutes > 0 ? navManager.remainingEtaMinutes : 11;
-    final totalDistKm = navManager.remainingTotalDistance > 0 ? (navManager.remainingTotalDistance / 1000).toStringAsFixed(1) : '5.9';
+    final etaMins = navManager.isNavigating
+        ? (navManager.remainingEtaMinutes > 0 ? navManager.remainingEtaMinutes : 1)
+        : (navManager.remainingEtaMinutes > 0 ? navManager.remainingEtaMinutes : 11);
+    final totalDistKm = navManager.remainingTotalDistance > 0
+        ? (navManager.remainingTotalDistance >= 1000
+            ? '${(navManager.remainingTotalDistance / 1000).toStringAsFixed(1)} km'
+            : '${navManager.remainingTotalDistance.round()} m')
+        : (navManager.isNavigating ? '0 m' : '5.9 km');
 
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalClock = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
@@ -1614,11 +1620,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '$totalDistKm km',
+                  totalDistKm,
                   style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontWeight: FontWeight.w600),
                 ),
                 Text(
-                  '$etaMins ph',
+                  etaMins >= 60
+                      ? '${etaMins ~/ 60}h${(etaMins % 60).toString().padLeft(2, '0')}'
+                      : '$etaMins ph',
                   style: const TextStyle(
                     color: Color(0xFF05FFA1),
                     fontSize: 15,

@@ -99,6 +99,7 @@ void main() {
       expect(jsonStr.contains('"turn":2'), isTrue);
       expect(jsonStr.contains('"dist":150'), isTrue);
       expect(jsonStr.contains('"street":"Duong Nguyen Trai"'), isTrue);
+      expect(jsonStr.contains('"arr":"${payload.arrivalTimeClock}"'), isTrue);
     });
   });
 }

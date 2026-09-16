@@ -203,10 +203,27 @@ void processJsonPacket(const char* jsonStr) {
   curSpeed = doc["speed"] | curSpeed;
   curEta = doc["eta"] | curEta;
   if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
-  if (doc["arrival"].is<const char*>()) curArrival = String((const char*)doc["arrival"]);
+  if (doc["arrival"].is<const char*>()) {
+    curArrival = String((const char*)doc["arrival"]);
+  } else if (doc["arr"].is<const char*>()) {
+    curArrival = String((const char*)doc["arr"]);
+  }
   if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
   if (doc["bat"].is<int>()) curBattery = doc["bat"];
   if (doc["head"].is<int>()) curHeading = doc["head"];
+
+  // Dynamically calculate curArrival if not explicitly provided or if still default
+  if (curArrival == "18:26" || curArrival.length() == 0) {
+    int ch = 0, cm = 0;
+    if (sscanf(curClock.c_str(), "%d:%d", &ch, &cm) == 2) {
+      int totalMin = ch * 60 + cm + curEta;
+      int arrH = (totalMin / 60) % 24;
+      int arrM = totalMin % 60;
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%02d:%02d", arrH, arrM);
+      curArrival = String(buf);
+    }
+  }
 
   RoutePoint parsedPts[32];
   uint8_t parsedPtCount = 0;

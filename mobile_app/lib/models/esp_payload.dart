@@ -103,6 +103,7 @@ class EspNavPayload {
       'dist': distanceToTurn,
       'tot': totalDistance,
       'eta': etaMinutes,
+      'arr': arrivalTimeClock,
       'street': sanitizedStreet.length > 18 ? sanitizedStreet.substring(0, 18) : sanitizedStreet,
       'speed': currentSpeed,
       'clock': phoneClock,
