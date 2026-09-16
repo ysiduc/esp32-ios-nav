@@ -524,7 +524,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       .withAlpha(40),
                 ),
                 child: Icon(
-                  isWifi ? Icons.wifi_rounded : Icons.wifi_tethering_rounded,
+                  isWifi ? Icons.wifi_tethering_rounded : Icons.wifi_tethering_off_rounded,
                   color: isWifi ? const Color(0xFF05FFA1) : const Color(0xFF00F0FF),
                   size: 20,
                 ),
@@ -536,8 +536,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   children: [
                     Text(
                       isWifi
-                          ? 'WIFI ESP32: ĐÃ KẾT NỐI'
-                          : 'WIFI PHÁT TỪ ESP32 (SOFTAP)',
+                          ? 'HOTSPOT IPHONE: ĐÃ KẾT NỐI'
+                          : 'ĐIỂM TRUY CẬP CÁ NHÂN (HOTSPOT)',
                       style: TextStyle(
                         color: isWifi ? const Color(0xFF05FFA1) : Colors.white,
                         fontSize: 13,
@@ -547,8 +547,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     const SizedBox(height: 2),
                     Text(
                       isWifi
-                          ? 'IP: 192.168.4.1:8080 • Stream JPEG mượt mà 10-15 FPS'
-                          : 'Tên: ysiduc navi • Mật khẩu: 00000000',
+                          ? 'IP: ${bleService.wifiIp}:${bleService.wifiPort} • Stream JPEG 20 FPS (Không ngắt ngầm)'
+                          : 'Tên: #ysiduc • Mật khẩu: 00000000',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 11,
@@ -593,8 +593,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                 Expanded(
                   child: Text(
                     isWifi
-                        ? 'Đang stream qua WiFi nội bộ. iPhone vẫn dùng 4G/5G bình thường để tải map & nhạc!'
-                        : 'Mở Cài đặt iPhone > Wi-Fi > Chọn kết nối "ysiduc navi" (pass: 00000000) 1 lần duy nhất.',
+                        ? 'ESP32 đang kết nối vào Hotspot của iPhone. Khi khóa màn hình hoặc chuyển app, iOS không ngắt Wi-Fi và vẫn stream bình thường!'
+                        : 'Bật Điểm truy cập cá nhân trên iPhone: Tên Hotspot "#ysiduc" (Pass: 00000000) để ESP32 tự động bắt Wi-Fi.',
                     style: TextStyle(
                       color: isWifi ? const Color(0xFF05FFA1) : Colors.white70,
                       fontSize: 11,
@@ -626,10 +626,10 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             children: [
               Row(
                 children: [
-                  const Icon(Icons.wifi_rounded, color: Color(0xFF00F0FF), size: 24),
+                  const Icon(Icons.wifi_tethering_rounded, color: Color(0xFF00F0FF), size: 24),
                   const SizedBox(width: 10),
                   const Text(
-                    'WiFi Phát Từ ESP32 (SoftAP)',
+                    'Điểm Truy Cập Cá Nhân (Hotspot)',
                     style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
                   ),
                   const Spacer(),
@@ -654,15 +654,15 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       children: [
                         Icon(Icons.wifi_password_rounded, color: Color(0xFF00F0FF), size: 20),
                         SizedBox(width: 8),
-                        Text('THÔNG TIN KẾT NỐI WIFI', style: TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold, fontSize: 12)),
+                        Text('CẤU HÌNH HOTSPOT TRÊN IPHONE', style: TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold, fontSize: 12)),
                       ],
                     ),
                     SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Tên WiFi (SSID):', style: TextStyle(color: Colors.white60, fontSize: 13)),
-                        Text('ysiduc navi', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                        Text('Tên Wi-Fi Hotspot:', style: TextStyle(color: Colors.white60, fontSize: 13)),
+                        Text('#ysiduc', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                       ],
                     ),
                     Divider(color: Colors.white12, height: 16),
@@ -677,8 +677,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Địa chỉ IP ESP32:', style: TextStyle(color: Colors.white60, fontSize: 13)),
-                        Text('192.168.4.1 : 8080', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        Text('Địa chỉ Gateway iPhone:', style: TextStyle(color: Colors.white60, fontSize: 13)),
+                        Text('172.20.10.1 : 8080', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                       ],
                     ),
                   ],
@@ -695,15 +695,13 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                 child: const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('💡 NGUYÊN LÝ HOẠT ĐỘNG THÔNG MINH:', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                    Text('💡 NGUYÊN LÝ HOẠT ĐỘNG KHÔNG BAO GIỜ MẤT KẾT NỐI:', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
                     SizedBox(height: 8),
-                    Text('1. iPhone chỉ cần vào Cài đặt > Wi-Fi và bấm kết nối "ysiduc navi" một lần duy nhất. Những lần sau sẽ tự động kết nối khi bật nguồn ESP32.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('1. iPhone bật 4G/5G và bật "Cho phép người khác kết nối" trong Điểm truy cập cá nhân.', style: TextStyle(color: Colors.white70, fontSize: 12)),
                     SizedBox(height: 6),
-                    Text('2. iPhone vẫn dùng 4G/5G bình thường để tải Goong Map, nghe nhạc, tra cứu đường đi.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('2. ESP32 tự động bắt Wi-Fi từ iPhone và mở luồng WebSocket để nhận ảnh bản đồ JPEG trực tiếp từ RAM.', style: TextStyle(color: Colors.white70, fontSize: 12)),
                     SizedBox(height: 6),
-                    Text('3. Khi màn hình bật: Stream bản đồ mượt mà 10-15 FPS qua Wi-Fi.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    SizedBox(height: 6),
-                    Text('4. Khi tắt màn hình (đút túi): Tự động tắt stream Wi-Fi để tiết kiệm pin và chuyển sang truyền chỉ đường qua Bluetooth (BLE).', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 12)),
+                    Text('3. Vì Wi-Fi này có kết nối 4G/5G thật, hệ điều hành iOS coi đây là kết nối Internet hợp lệ và KHÔNG BAO GIỜ tự ngắt Wi-Fi khi bạn khóa màn hình, chuyển app hay tắt máy.', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 12)),
                   ],
                 ),
               ),
@@ -717,11 +715,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     foregroundColor: Colors.black,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  onPressed: () {
-                    bleService.probeEsp32Wifi();
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('Kiểm tra kết nối ngay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Đã hiểu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 ),
               ),
             ],
@@ -731,5 +726,6 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
     );
   }
 }
+
 
 

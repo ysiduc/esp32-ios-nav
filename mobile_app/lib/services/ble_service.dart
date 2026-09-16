@@ -95,15 +95,39 @@ class BleService extends ChangeNotifier {
 
   /// Reset WiFi status to disconnected when stream socket fails
   void setWifiDisconnected() {
-    if (_wifiStatus == 'connected') {
+    if (_wifiStatus == 'connected' && _wifiIp != '172.20.10.1') {
       _wifiStatus = 'disconnected';
       _wifiIp = null;
       notifyListeners();
     }
   }
 
-  /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080
+  /// Mark Hotspot WebSocket stream active from iPhone
+  void setHotspotConnected(String ip, int port) {
+    _wifiStatus = 'connected';
+    _wifiIp = ip;
+    _wifiPort = port;
+    _addLog('Hotspot WebSocket: ESP32 đã kết nối vào iPhone ($ip:$port)', isTx: false);
+    notifyListeners();
+  }
+
+  /// Mark Hotspot WebSocket disconnected
+  void setHotspotDisconnected() {
+    if (_wifiIp == '172.20.10.1') {
+      _wifiStatus = 'disconnected';
+      _wifiIp = null;
+      _addLog('Hotspot WebSocket: ESP32 đã ngắt kết nối', isTx: false);
+      notifyListeners();
+    }
+  }
+
+  /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080 (fallback only)
   Future<void> probeEsp32Wifi() async {
+    // If currently connected via Hotspot WebSocket (172.20.10.1), keep connected
+    if (_wifiIp == '172.20.10.1' && _wifiStatus == 'connected') {
+      return;
+    }
+
     try {
       final socket = await Socket.connect('192.168.4.1', 8080, timeout: const Duration(milliseconds: 400));
       socket.destroy();
@@ -115,13 +139,14 @@ class BleService extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {
-      if (_wifiStatus == 'connected') {
+      if (_wifiStatus == 'connected' && _wifiIp != '172.20.10.1') {
         _wifiStatus = 'disconnected';
         _wifiIp = null;
         notifyListeners();
       }
     }
   }
+
 
   void _initBle() {
     try {

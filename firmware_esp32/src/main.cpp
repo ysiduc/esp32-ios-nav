@@ -465,13 +465,14 @@ void setup() {
 
 void loop() {
   // 0. Manage iPhone Hotspot STA connection & WebSocket loop
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
     if (!staConnected) {
       staConnected = true;
       IPAddress gw = WiFi.gatewayIP();
-      Serial.printf("[WiFi STA] Connected to iPhone Hotspot! ESP32 IP: %s, Gateway: %s\n",
-                    WiFi.localIP().toString().c_str(), gw.toString().c_str());
-      webSocketClient.begin(gw.toString().c_str(), 8080, "/");
+      String host = (gw != IPAddress(0, 0, 0, 0)) ? gw.toString() : "172.20.10.1";
+      Serial.printf("[WiFi STA] Connected to iPhone Hotspot! ESP32 IP: %s, Gateway: %s, Target: %s:8080\n",
+                    WiFi.localIP().toString().c_str(), gw.toString().c_str(), host.c_str());
+      webSocketClient.begin(host.c_str(), 8080, "/");
     }
     webSocketClient.loop();
   } else {
@@ -480,6 +481,7 @@ void loop() {
       Serial.println("[WiFi STA] Disconnected from iPhone Hotspot. Reconnecting...");
     }
   }
+
 
   // 1. Decode & push new JPEG Map Frame safely on the Main thread
   if (newFrameAvailable) {

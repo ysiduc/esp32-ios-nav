@@ -97,12 +97,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _startWebSocketServer() async {
     if (_wsServer != null) return;
     try {
-      _wsServer = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+      _wsServer = await HttpServer.bind(InternetAddress.anyIPv4, 8080, shared: true);
+      debugPrint('[WebSocket Server] Listening on 0.0.0.0:8080 (Hotspot 172.20.10.1:8080)');
       _wsServer!.listen((HttpRequest request) async {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           try {
             final socket = await WebSocketTransformer.upgrade(request);
             _wsClients.add(socket);
+            bleService.setHotspotConnected('172.20.10.1', 8080);
+            if (_latestJpegBytes != null) {
+              try {
+                socket.add(_latestJpegBytes!);
+              } catch (_) {}
+            }
             notifyListeners();
 
             socket.listen(
@@ -111,22 +118,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
               },
               onDone: () {
                 _wsClients.remove(socket);
+                if (_wsClients.isEmpty) {
+                  bleService.setHotspotDisconnected();
+                }
                 notifyListeners();
               },
               onError: (_) {
                 _wsClients.remove(socket);
+                if (_wsClients.isEmpty) {
+                  bleService.setHotspotDisconnected();
+                }
                 notifyListeners();
               },
             );
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[WebSocket Upgrade Error] $e');
+          }
         } else {
           request.response.statusCode = HttpStatus.ok;
           request.response.write("ESP32 Hotspot Stream Server Active\n");
           await request.response.close();
         }
       });
-    } catch (_) {
-      // Ignored if port already in use or in test environment
+    } catch (e) {
+      debugPrint('[WebSocket Server Error] $e');
     }
   }
 
@@ -145,8 +160,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // If Wi-Fi (SoftAP) or Hotspot WebSocket is active, throttle to 4 FPS to prevent device heating
-      if (_isStreaming && (bleService.isWifiConnected || _wsClients.isNotEmpty)) {
+      // Keep streaming if navigating or connected to WiFi/WebSocket
+      if (_isStreaming && (bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false))) {
         _startTimer();
       } else if (!bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) {
         _streamTimer?.cancel();
@@ -208,7 +223,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _actualFps = _targetFps.toDouble();
     _lastFpsUpdate = DateTime.now();
 
-    if (_isForeground || bleService.isWifiConnected) {
+    if (_isForeground || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false)) {
       _startTimer();
     }
 
@@ -228,7 +243,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS (with Pure CPU Background Support)
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
-    if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle || (!_isForeground && !bleService.isWifiConnected)) return;
+    if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
+    if (!_isForeground && !bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) return;
     _isCapturing = true;
 
     try {
