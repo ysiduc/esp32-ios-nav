@@ -445,6 +445,9 @@ class NavigationManager extends ChangeNotifier {
       final sx = (xRel * 0.8).round().clamp(-125, 125);
       final sy = (yRel * 0.8).round().clamp(-125, 125);
 
+      // Only track points advancing forward or sideways, not backwards behind handlebars
+      if (sy < -5 && upcomingPts.length > 1) continue;
+
       final last = upcomingPts.last;
       if ((sx - last[0]).abs() >= 4 || (sy - last[1]).abs() >= 4) {
         upcomingPts.add([sx, sy]);
