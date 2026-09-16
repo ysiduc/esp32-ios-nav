@@ -81,7 +81,7 @@ import MapKit
       name: "com.ysiduc.esp32_nav/location",
       binaryMessenger: binaryMessenger
     )
-    locationChannel?.setMethodCallHandler { [weak self] (call, result) in
+    locationChannel?.setMethodCallHandler { (call, result) in
       switch call.method {
       case "startBackgroundNavigation":
         NavigationLocationManager.shared.start()
@@ -379,7 +379,7 @@ class MapStreamer {
     completion: @escaping (Data?) -> Void
   ) {
     let options = MKMapSnapshotter.Options()
-    options.coordinateRegion = MKCoordinateRegion(
+    options.region = MKCoordinateRegion(
       center: coordinate,
       latitudinalMeters: spanMeters,
       longitudinalMeters: spanMeters
@@ -388,7 +388,7 @@ class MapStreamer {
     options.scale = 1.0 // 1.0x scale for lightweight JPEG
 
     let snapshotter = MKMapSnapshotter(options: options)
-    snapshotter.start(on: DispatchQueue.global(qos: .userInitiated)) { snapshot, error in
+    snapshotter.start(with: DispatchQueue.global(qos: .userInitiated)) { snapshot, error in
       guard let snapshot = snapshot, error == nil else {
         completion(nil)
         return
