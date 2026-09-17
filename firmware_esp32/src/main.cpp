@@ -122,12 +122,15 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedTime = millis();
     connParamsUpdated = false;
 
-    // If already encrypted, immediately trigger sequential discovery
+    // 1. Immediately discover and read Apple Current Time Service (CTS 0x1805 does NOT require encryption!)
+    AppleCurrentTimeService::startDiscovery(desc->conn_handle);
+
+    // 2. If already encrypted, immediately trigger AMS discovery
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting AMS/CTS/ANCS sequential discovery...");
+      Serial.println("[BLE] Link already encrypted. Starting AMS sequential discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
     } else {
-      Serial.println("[BLE] Link connected. Waiting for iOS to restore link encryption (ENC_CHANGE)...");
+      Serial.println("[BLE] Link connected. CTS querying time... Waiting for link encryption (ENC_CHANGE) for AMS/ANCS...");
     }
 
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
@@ -500,9 +503,11 @@ void setup() {
   AppleNotificationService::init();
   AppleCurrentTimeService::init();
 
-  // Restore last known battery level from flash storage
+  // Restore last known battery level and clock from flash storage
   prefs.begin("nav_state", true);
   uint8_t savedBat = prefs.getUChar("bat", 0);
+  uint8_t savedH = prefs.getUChar("clk_h", 255);
+  uint8_t savedM = prefs.getUChar("clk_m", 255);
   prefs.end();
   if (savedBat > 0 && savedBat <= 100) {
     curBattery = savedBat;
@@ -510,6 +515,11 @@ void setup() {
     curBattery = 85;
   }
   display.updateBattery(curBattery);
+
+  if (savedH < 24 && savedM < 60) {
+    display.setTime(savedH, savedM, 0);
+    Serial.printf("[NVS] Restored clock from flash: %02d:%02d\n", savedH, savedM);
+  }
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -635,6 +645,20 @@ void loop() {
         }
       }
     }
+  }
+
+  // 6. Save clock to NVS on minute change so it persists across power cycles
+  static uint8_t lastSavedH = 255;
+  static uint8_t lastSavedM = 255;
+  uint8_t curH = 0, curM = 0;
+  display.getClock(curH, curM);
+  if (curH != lastSavedH || curM != lastSavedM) {
+    lastSavedH = curH;
+    lastSavedM = curM;
+    prefs.begin("nav_state", false);
+    prefs.putUChar("clk_h", curH);
+    prefs.putUChar("clk_m", curM);
+    prefs.end();
   }
 
   delay(1);

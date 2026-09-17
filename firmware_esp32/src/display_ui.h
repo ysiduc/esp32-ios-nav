@@ -41,7 +41,7 @@ struct NavStateData {
   uint8_t etaMinutes = 1;
   char streetName[48] = "CAU SONG LU";
   char arrivalTime[16] = "18:26";
-  char currentTime[16] = "--:--";
+  char currentTime[16] = "12:00";
   uint8_t batteryLevel = 85;
   bool isConnected = false;
   bool isNavigating = false;
@@ -73,11 +73,11 @@ private:
   unsigned long _songScrollPauseUntil = 0;
   bool _isAppConnected = false;
   bool _pairingBgDrawn = false;
-  uint8_t _clockHour = 0;
+  uint8_t _clockHour = 12;
   uint8_t _clockMin = 0;
   uint8_t _clockSec = 0;
   unsigned long _lastClockTick = 0;
-  bool _clockValid = false;
+  bool _clockValid = true;
 
   // Cached state to eliminate right HUD blinking/flicker
   uint8_t _lastDrawnTurn = 255;
@@ -252,6 +252,8 @@ public:
     if (strcmp(_navData.currentTime, timeStr) != 0) {
       strncpy(_navData.currentTime, timeStr, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+      _lastDockClock[0] = '\0';
+      _needFullRedraw = true;
     }
   }
 
@@ -267,7 +269,14 @@ public:
   void updateBattery(uint8_t bat) {
     if (bat <= 100 && _navData.batteryLevel != bat) {
       _navData.batteryLevel = bat;
+      _lastDockBat = 255;
+      _needFullRedraw = true;
     }
+  }
+
+  void getClock(uint8_t &h, uint8_t &m) const {
+    h = _clockHour;
+    m = _clockMin;
   }
 
   void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
@@ -331,6 +340,7 @@ public:
           if (strcmp(_navData.currentTime, newTime) != 0) {
             strncpy(_navData.currentTime, newTime, sizeof(_navData.currentTime) - 1);
             _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+            _lastDockClock[0] = '\0';
             _needFullRedraw = true;
           }
         }
@@ -347,10 +357,17 @@ public:
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
     if (_currentState == STATE_PAIRING_WAIT) {
-      if (!_pairingBgDrawn || _needFullRedraw) {
+      if (!_pairingBgDrawn) {
         _drawPairingScreenTft();
         _lastRenderTime = millis();
         _needFullRedraw = false;
+      } else {
+        // Smoothly refresh dockbar (clock & battery) every 250ms or when requested
+        if (_needFullRedraw || millis() - _lastRenderTime > 250) {
+          _drawUnifiedDockbar(false);
+          _lastRenderTime = millis();
+          _needFullRedraw = false;
+        }
       }
       if (millis() - _lastSongScrollTime >= 35) {
         uint16_t cDockBg = tft.color565(8, 12, 18);

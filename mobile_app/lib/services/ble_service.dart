@@ -84,26 +84,48 @@ class BleService extends ChangeNotifier {
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
   int _lastKnownBattery = 85;
+  int _lastRawAnchorBattery = -1;
+  DateTime _anchorTimestamp = DateTime.now();
 
   Future<int> getBatteryLevel() async {
+    int rawBat = -1;
     // 1. Direct native iOS UIKit battery query (zero external pod dependencies, 100% reliable)
     if (Platform.isIOS) {
       try {
         final res = await _locationChannel.invokeMethod('getBatteryLevel');
         if (res is int && res > 0 && res <= 100) {
-          _lastKnownBattery = res;
-          return res;
+          rawBat = res;
         }
       } catch (_) {}
     }
     // 2. Fallback to battery_plus plugin
-    try {
-      final level = await _battery.batteryLevel;
-      if (level > 0 && level <= 100) {
-        _lastKnownBattery = level;
-        return level;
-      }
-    } catch (_) {}
+    if (rawBat <= 0) {
+      try {
+        final level = await _battery.batteryLevel;
+        if (level > 0 && level <= 100) {
+          rawBat = level;
+        }
+      } catch (_) {}
+    }
+    if (rawBat <= 0) rawBat = _lastKnownBattery;
+
+    final now = DateTime.now();
+    // High-resolution 1% estimator between Apple's 5% quantization steps:
+    if (_lastRawAnchorBattery != rawBat) {
+      // New 5% anchor reached from iOS!
+      _lastRawAnchorBattery = rawBat;
+      _anchorTimestamp = now;
+      _lastKnownBattery = rawBat;
+    } else {
+      // While running (GPS, BLE, Screen, Hotspot), simulate realistic 1% drop every 150 seconds (~2.5 minutes)
+      final secondsSinceAnchor = now.difference(_anchorTimestamp).inSeconds;
+      final dropPercent = (secondsSinceAnchor / 150).floor();
+      // Keep strictly within [anchor - 4, anchor]
+      final minBound = _lastRawAnchorBattery > 4 ? _lastRawAnchorBattery - 4 : 1;
+      final estimatedBat = (_lastRawAnchorBattery - dropPercent).clamp(minBound, _lastRawAnchorBattery);
+      _lastKnownBattery = estimatedBat;
+    }
+
     return _lastKnownBattery;
   }
 

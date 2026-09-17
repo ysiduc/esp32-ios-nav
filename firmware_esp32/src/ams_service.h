@@ -72,7 +72,7 @@ public:
     if (rc != 0) {
       Serial.printf("[AMS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
       isDiscovering = false;
-      AppleCurrentTimeService::startDiscovery(conn_hdl);
+      AppleNotificationService::startDiscovery(conn_hdl);
     }
   }
 
@@ -108,7 +108,7 @@ private:
     } else {
       Serial.printf("[AMS] Track subscription failed status=%d\n", error->status);
     }
-    AppleCurrentTimeService::startDiscovery(conn_handle);
+    AppleNotificationService::startDiscovery(conn_handle);
     return 0;
   }
 
@@ -120,12 +120,12 @@ private:
       if (rc != 0) {
         Serial.printf("[AMS] Failed to write trackSubCmd, rc=%d\n", rc);
         isDiscovering = false;
-        AppleCurrentTimeService::startDiscovery(conn_handle);
+        AppleNotificationService::startDiscovery(conn_handle);
       }
     } else {
       Serial.printf("[AMS] CCCD write failed status=%d\n", error->status);
       isDiscovering = false;
-      AppleCurrentTimeService::startDiscovery(conn_handle);
+      AppleNotificationService::startDiscovery(conn_handle);
     }
     return 0;
   }
@@ -139,13 +139,13 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_write_flat CCCD failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleCurrentTimeService::startDiscovery(conn_hdl);
+          AppleNotificationService::startDiscovery(conn_hdl);
         }
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
       if (!isSubscribed && isDiscovering) {
         isDiscovering = false;
-        AppleCurrentTimeService::startDiscovery(conn_hdl);
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -163,11 +163,11 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleCurrentTimeService::startDiscovery(conn_hdl);
+          AppleNotificationService::startDiscovery(conn_hdl);
         }
       } else {
         isDiscovering = false;
-        AppleCurrentTimeService::startDiscovery(conn_hdl);
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -184,12 +184,12 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleCurrentTimeService::startDiscovery(conn_hdl);
+          AppleNotificationService::startDiscovery(conn_hdl);
         }
       } else {
         Serial.println("[AMS] Service not found on this connection.");
         isDiscovering = false;
-        AppleCurrentTimeService::startDiscovery(conn_hdl);
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;

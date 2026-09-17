@@ -56,6 +56,7 @@ import AVFoundation
   private func setupChannels(binaryMessenger: FlutterBinaryMessenger) {
     guard !isChannelSetup else { return }
     isChannelSetup = true
+    UIDevice.current.isBatteryMonitoringEnabled = true
 
     // ─── 1. Media Channel (nhạc đang phát) ───────────────────────────────
     mediaChannel = FlutterMethodChannel(
