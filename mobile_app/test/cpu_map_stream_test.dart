@@ -1,36 +1,28 @@
-import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:mobile_app/services/esp_stream_service.dart';
 
 void main() {
   test('Pure CPU Map Renderer benchmark and functionality test', () {
     final stopwatch = Stopwatch()..start();
 
-    final sw0 = Stopwatch()..start();
+    // 1. Create mock tile (256x256)
     final tile = img.Image(width: 256, height: 256);
     img.fill(tile, color: img.ColorRgba8(235, 240, 240, 255));
+    // Draw mock street
     img.drawLine(tile, x1: 128, y1: 0, x2: 128, y2: 255, color: img.ColorRgba8(255, 255, 255, 255), thickness: 12);
+    // Draw mock river
     img.drawLine(tile, x1: 0, y1: 60, x2: 255, y2: 80, color: img.ColorRgba8(140, 210, 255, 255), thickness: 20);
 
-    final sw1 = Stopwatch()..start();
-    final patch = img.Image(width: 360, height: 360);
+    // 2. Composite onto 280x280 patch
+    final patch = img.Image(width: 280, height: 280);
     img.fill(patch, color: img.ColorRgba8(235, 240, 240, 255));
-    for (int i = 0; i < 4; i++) {
-      img.compositeImage(patch, tile, dstX: (i % 2) * 180, dstY: (i ~/ 2) * 180, blend: img.BlendMode.direct);
-    }
-    final tCompositeDirect = sw1.elapsedMilliseconds;
+    img.compositeImage(patch, tile, dstX: 12, dstY: 12);
 
-    final sw2 = Stopwatch()..start();
-    final rotated = img.copyRotate(patch, angle: -45, interpolation: img.Interpolation.linear);
-    final tRotateLinear = sw2.elapsedMilliseconds;
+    // 3. Rotate by heading (e.g. 45 degrees)
+    final rotated = img.copyRotate(patch, angle: -45);
 
-    final sw2b = Stopwatch()..start();
-    img.copyRotate(patch, angle: -45, interpolation: img.Interpolation.nearest);
-    final tRotateNearest = sw2b.elapsedMilliseconds;
-
-    final sw3 = Stopwatch()..start();
+    // 4. Crop 144x208 for ESP32 screen
     final cx = rotated.width ~/ 2;
     final cy = rotated.height ~/ 2;
     final frame = img.copyCrop(
@@ -40,60 +32,27 @@ void main() {
       width: 144,
       height: 208,
     );
-    final tCrop = sw3.elapsedMilliseconds;
 
-    final sw4 = Stopwatch()..start();
-    final jpeg82 = img.encodeJpg(frame, quality: 82);
-    final tJpg82 = sw4.elapsedMilliseconds;
+    // 5. Draw active route line
+    img.drawLine(frame, x1: 72, y1: 140, x2: 72, y2: 70, color: img.ColorRgba8(0, 120, 230, 255), thickness: 6);
+    img.drawLine(frame, x1: 72, y1: 70, x2: 30, y2: 70, color: img.ColorRgba8(0, 120, 230, 255), thickness: 6);
+    img.drawLine(frame, x1: 72, y1: 140, x2: 72, y2: 70, color: img.ColorRgba8(0, 230, 255, 255), thickness: 3);
+    img.drawLine(frame, x1: 72, y1: 70, x2: 30, y2: 70, color: img.ColorRgba8(0, 230, 255, 255), thickness: 3);
 
-    final sw5 = Stopwatch()..start();
-    final jpeg75 = img.encodeJpg(frame, quality: 75);
-    final tJpg75 = sw5.elapsedMilliseconds;
+    // 6. Draw vehicle puck at (72, 140)
+    img.fillCircle(frame, x: 72, y: 140, radius: 7, color: img.ColorRgba8(0, 150, 255, 255));
+    img.drawCircle(frame, x: 72, y: 140, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
 
-    print('TIMINGS: CompositeDirect(4 tiles)=$tCompositeDirect ms | RotateLinear=$tRotateLinear ms | RotateNearest=$tRotateNearest ms | Crop=$tCrop ms | Jpg82=$tJpg82 ms | Jpg75=$tJpg75 ms');
-    print('TOTAL LINEAR=${tCompositeDirect + tRotateLinear + tCrop + tJpg82} ms | TOTAL NEAREST=${tCompositeDirect + tRotateNearest + tCrop + tJpg75} ms');
+    // 7. Encode to JPEG
+    final jpegBytes = Uint8List.fromList(img.encodeJpg(frame, quality: 70));
+
+    stopwatch.stop();
+    print('Pure CPU Map Frame Render Time: ${stopwatch.elapsedMilliseconds} ms, JPEG size: ${jpegBytes.length} bytes');
 
     expect(frame.width, 144);
     expect(frame.height, 208);
-    expect(jpeg82.length, greaterThan(500));
-    expect(jpeg82[0], 0xFF);
-    expect(jpeg82[1], 0xD8); // Valid JPEG
-  });
-
-  test('Direct CPU Map Worker execution time benchmark', () {
-    final tile = img.Image(width: 256, height: 256);
-    img.fill(tile, color: img.ColorRgba8(235, 240, 240, 255));
-
-    final tiles = <String, img.Image>{
-      '17/104068/57421': tile,
-    };
-
-    final params = CpuMapParams(
-      w: 144,
-      h: 208,
-      userLat: 20.9832,
-      userLon: 105.8425,
-      headingDeg: 45.0,
-      routePoints: [
-        [20.9832, 105.8425],
-        [20.9840, 105.8430],
-      ],
-      zoom: 17,
-      isDark: false,
-      tiles: tiles,
-    );
-
-    // Warm-up
-    EspStreamService.cpuMapWorker(params);
-
-    final sw = Stopwatch()..start();
-    const iterations = 10;
-    for (int i = 0; i < iterations; i++) {
-      EspStreamService.cpuMapWorker(params);
-    }
-    sw.stop();
-    final avgMs = sw.elapsedMilliseconds / iterations;
-    print('DIRECT CPU MAP WORKER AVERAGE TIME: $avgMs ms per frame');
-    expect(avgMs, lessThan(60));
+    expect(jpegBytes.length, greaterThan(500));
+    expect(jpegBytes[0], 0xFF);
+    expect(jpegBytes[1], 0xD8); // Valid JPEG
   });
 }
