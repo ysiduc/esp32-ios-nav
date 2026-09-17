@@ -87,7 +87,12 @@ public:
   }
 
   static void checkPeriodic() {
-    // Handled in main loop sequentially
+    if (connHandle != 0 && !isSubscribed && !isDiscovering) {
+      if (millis() - lastCheckTime > 4000) {
+        lastCheckTime = millis();
+        startDiscovery(connHandle);
+      }
+    }
   }
 
   static int handleGapEvent(ble_gap_event *event, void *arg) {

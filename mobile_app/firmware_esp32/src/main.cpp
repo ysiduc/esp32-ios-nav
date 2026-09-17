@@ -100,6 +100,8 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 static bool connParamsUpdated = false;
+static bool ctsPendingDiscovery = false;
+static unsigned long ctsPendingDiscoveryTime = 0;
 
 // =========================================================================
 // 1. BLE Server Callbacks
@@ -122,10 +124,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedTime = millis();
     connParamsUpdated = false;
 
-    // 1. Immediately discover and read Apple Current Time Service (CTS 0x1805 does NOT require encryption!)
-    AppleCurrentTimeService::startDiscovery(desc->conn_handle);
+    // Delay CTS discovery by 400ms after connection so L2CAP channels & LL parameters stabilize
+    ctsPendingDiscovery = true;
+    ctsPendingDiscoveryTime = millis() + 400;
 
-    // 2. If already encrypted, immediately trigger AMS discovery
+    // If already encrypted, immediately trigger AMS discovery
     if (desc->sec_state.encrypted) {
       Serial.println("[BLE] Link already encrypted. Starting AMS sequential discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
@@ -148,6 +151,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     connParamsUpdated = false;
+    ctsPendingDiscovery = false;
     display.setBleConnected(false);
     display.setAppConnected(false);
     AppleMediaService::onDisconnected();
@@ -536,17 +540,24 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
 
-  // Custom Advertisement Data (22 bytes, NEVER truncated, full device name)
+  // 1. Primary Advertisement Data (Max 31 bytes):
+  // Flags: 3 bytes (0x02, 0x01, 0x06)
+  // ANCS 128-bit Service Solicitation: 18 bytes (0x11, 0x15, ...UUID...)
+  // Total = 21 bytes <= 31 bytes!
+  // Placing ANCS Solicitation in advData is REQUIRED by Apple for iOS Settings to recognize the accessory,
+  // trigger pairing, and display the "Allow iPhone Notifications" prompt!
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
-  advData.setName("ESP32-S3 Navi");
-  advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
+  advData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
   pAdvertising->setAdvertisementData(advData);
 
-  // Scan Response Data with Apple Notification Center Service (ANCS) Solicitation (18 bytes)
-  // This triggers the native iOS prompt: "Allow ESP32-S3 Navi to display iPhone notifications?"
+  // 2. Scan Response Data (Max 31 bytes):
+  // Complete Local Name: "ESP32-S3 Navi" (15 bytes)
+  // Custom Nav Service: 0xFFE0 (4 bytes)
+  // Total = 19 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
+  scanResponseData.setName("ESP32-S3 Navi");
+  scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -624,9 +635,19 @@ void loop() {
 
   // 3. Keep iOS native optimal connection parameters (7.2s timeout, 15-30ms interval)
 
-  // 4. Periodic Apple Time sync check
+  // Delayed CTS discovery execution
+  if (ctsPendingDiscovery && millis() >= ctsPendingDiscoveryTime) {
+    ctsPendingDiscovery = false;
+    if (bleConnected && bleConnectedHandle != 0) {
+      Serial.println("[BLE] Triggering delayed Apple Current Time Service discovery...");
+      AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
+    }
+  }
+
+  // 4. Periodic Apple Time & Media sync check
   if (bleConnected && bleConnectedHandle != 0) {
     AppleCurrentTimeService::checkPeriodic();
+    AppleMediaService::checkPeriodic();
   }
 
   // 5. Periodic real-time clock check from SNTP

@@ -80,9 +80,18 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0 && currentTimeValHandle != 0 && millis() - lastReadTime > 60000) {
-      lastReadTime = millis();
-      ble_gattc_read(connHandle, currentTimeValHandle, ctsPeriodicReadCb, NULL);
+    if (connHandle != 0) {
+      if (currentTimeValHandle != 0) {
+        if (millis() - lastReadTime > 60000) {
+          lastReadTime = millis();
+          ble_gattc_read(connHandle, currentTimeValHandle, ctsPeriodicReadCb, NULL);
+        }
+      } else if (!isDiscovering && !isSubscribed) {
+        if (millis() - lastCheckTime > 3000) {
+          lastCheckTime = millis();
+          startDiscovery(connHandle);
+        }
+      }
     }
   }
 

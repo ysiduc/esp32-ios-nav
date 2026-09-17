@@ -266,9 +266,38 @@ public:
     }
   }
 
+  uint8_t _lastRawBatAnchor = 255;
+  unsigned long _batAnchorTime = 0;
+
   void updateBattery(uint8_t bat) {
-    if (bat <= 100 && _navData.batteryLevel != bat) {
-      _navData.batteryLevel = bat;
+    if (bat > 100) return;
+
+    uint8_t finalBat = bat;
+
+    // If incoming bat is a multiple of 5 (iOS UIKit default 5% quantization):
+    if (bat > 0 && bat % 5 == 0) {
+      if (_lastRawBatAnchor != bat) {
+        _lastRawBatAnchor = bat;
+        _batAnchorTime = millis();
+        finalBat = bat;
+      } else {
+        // While running, simulate realistic 1% drop every 150s (~2.5 mins) between 5% anchors
+        unsigned long elapsed = millis() - _batAnchorTime;
+        uint8_t drop = elapsed / 150000;
+        if (drop > 4) drop = 4;
+        uint8_t minBound = _lastRawBatAnchor > 4 ? _lastRawBatAnchor - 4 : 1;
+        finalBat = (_lastRawBatAnchor >= drop) ? (_lastRawBatAnchor - drop) : minBound;
+        if (finalBat < minBound) finalBat = minBound;
+      }
+    } else {
+      // Direct granular reading from new app (e.g. 33, 34, 87)
+      _lastRawBatAnchor = bat;
+      _batAnchorTime = millis();
+      finalBat = bat;
+    }
+
+    if (_navData.batteryLevel != finalBat) {
+      _navData.batteryLevel = finalBat;
       _lastDockBat = 255;
       _needFullRedraw = true;
     }
