@@ -466,7 +466,7 @@ void setup() {
 
   // 3. Start WiFi in Pure Station Mode (STA only - ESP32 connects to iPhone Hotspot, no SoftAP)
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false); // Disables modem sleep for instant <2ms Wi-Fi packet latency
+  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence in ESP-IDF!
   WiFi.setAutoReconnect(true);
 
   // Connect to iPhone Personal Hotspot using loaded/configured credentials
