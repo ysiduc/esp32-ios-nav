@@ -81,6 +81,10 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
   return 0;
 }
 
+static uint16_t bleConnectedHandle = 0;
+static unsigned long bleConnectedTime = 0;
+static bool connParamsUpdated = false;
+
 // =========================================================================
 // 1. BLE Server Callbacks
 // =========================================================================
@@ -96,9 +100,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     AppleNotificationService::connHandle = desc->conn_handle;
     AppleNotificationService::lastCheckTime = millis();
 
-    // Configure BLE connection parameters for flawless WiFi coexistence
-    // (Interval 30-50ms, Supervision timeout 6000ms = 6 seconds so WiFi RF scan never drops BLE)
-    pServer->updateConnParams(desc->conn_handle, 24, 40, 0, 600);
+    bleConnectedHandle = desc->conn_handle;
+    bleConnectedTime = millis();
+    connParamsUpdated = false;
 
     // If already encrypted/bonded, immediately trigger ANCS sequential discovery (which chains to AMS)
     if (desc->sec_state.encrypted) {
@@ -124,6 +128,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
+    connParamsUpdated = false;
     display.setBleConnected(false);
     AppleMediaService::onDisconnected();
     AppleNotificationService::onDisconnected();
@@ -525,6 +530,14 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
+
+  // 3. Apple-compliant BLE Connection Parameter Update (Send >= 5s after connect so iOS accepts it)
+  if (bleConnected && !connParamsUpdated && (millis() - bleConnectedTime >= 5000)) {
+    connParamsUpdated = true;
+    // min_interval=36 (45ms), max_interval=48 (60ms), latency=4 (skip 4 events during WiFi bursts), timeout=600 (6.0s)
+    NimBLEDevice::getServer()->updateConnParams(bleConnectedHandle, 36, 48, 4, 600);
+    Serial.println("[BLE] Applied Apple-compliant Coex Connection Parameters (45-60ms, latency 4, timeout 6.0s)");
+  }
 
   // 4. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();

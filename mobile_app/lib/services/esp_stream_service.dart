@@ -525,6 +525,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (!_wsReadyForNextFrame && elapsedSinceLastWs < 90) {
         return; // Drop intermediate frame to prevent TCP buffer accumulation and latency!
       }
+      // Micro-gap flow control (at least 55ms between frames = max ~18 FPS):
+      // Leaves a clean ~30ms RF breather between Wi-Fi packets, allowing 2.4GHz radio to service BLE without dropouts!
+      if (elapsedSinceLastWs < 55) {
+        return;
+      }
 
       _wsReadyForNextFrame = false;
       _lastWsSendTime = now;

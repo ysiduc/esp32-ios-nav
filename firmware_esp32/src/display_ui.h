@@ -159,9 +159,13 @@ public:
       _needFullRedraw = true;
     }
     _navData.isConnected = connected;
+    // Only revert to STATE_PAIRING_WAIT if we are NOT actively navigating!
+    // Never interrupt the user's active navigation with a pairing screen if BLE has a momentary glitch.
     if (!connected && _currentState == STATE_NAVIGATION) {
-      _currentState = STATE_PAIRING_WAIT;
-      _needFullRedraw = true;
+      if (!_navData.isNavigating) {
+        _currentState = STATE_PAIRING_WAIT;
+        _needFullRedraw = true;
+      }
     } else if (connected && _currentState == STATE_PAIRING_WAIT) {
       _currentState = STATE_NAVIGATION;
       _needFullRedraw = true;
@@ -711,8 +715,13 @@ private:
 
   void _renderTft(bool isStreamingActive) {
     if (_currentState == STATE_PAIRING_WAIT) {
-      _drawPairingScreenTft();
-      return;
+      if (isStreamingActive || _navData.isNavigating) {
+        _currentState = STATE_NAVIGATION;
+        _needFullRedraw = true;
+      } else {
+        _drawPairingScreenTft();
+        return;
+      }
     }
 
     if (_currentState == STATE_POPUP_CALL) {
