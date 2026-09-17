@@ -184,11 +184,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // Keep streaming if navigating or connected via BLE / WiFi / WebSocket
-      if (_isStreaming && (bleService.isConnected || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false))) {
+      // Keep streaming continuously without dropping
+      if (_isStreaming) {
         _enableBackgroundKeepAlive();
         _startTimer();
-      } else if (!_isStreaming) {
+      } else {
         _streamTimer?.cancel();
         _streamTimer = null;
       }
@@ -258,8 +258,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: smooth 20 FPS. In background (screen locked): cool 3 FPS to prevent heating while keeping ESP32 refreshed
-    final effectiveFps = _isForeground ? _targetFps : 3;
+    // In foreground: smooth target FPS (14-20). In background (screen locked): steady 5 FPS (200ms) to ensure ESP32 watchdog never expires
+    final effectiveFps = _isForeground ? _targetFps : 5;
     final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
@@ -270,7 +270,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
-    if (!_isForeground && !bleService.isConnected && !bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) return;
     _isCapturing = true;
 
     try {
@@ -421,46 +420,38 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 81, 179, 255);
         final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
 
-        // 1. Outer Casing (thickness 8.5) with rounded caps
-        img.Point? prevPt;
+        final screenPts = <img.Point>[];
         for (final pt in pts) {
           final double ptLatRad = pt.latitude * (math.pi / 180.0);
           final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
           final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
           final int px = (patchCenter + (ptWorldX - worldX)).round();
           final int py = (patchCenter + (ptWorldY - worldY)).round();
-          final currPt = img.Point(px, py);
-
-          if (prevPt != null) {
-            if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
-                (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: casingColor, thickness: 8);
-              img.fillCircle(patch, x: px, y: py, radius: 4, color: casingColor);
-              img.fillCircle(patch, x: prevPt.x.toInt(), y: prevPt.y.toInt(), radius: 4, color: casingColor);
-            }
-          }
-          prevPt = currPt;
+          screenPts.add(img.Point(px, py));
         }
 
-        // 2. Vibrant Core (thickness 5.5) with rounded caps
-        prevPt = null;
-        for (final pt in pts) {
-          final double ptLatRad = pt.latitude * (math.pi / 180.0);
-          final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
-          final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
-          final int px = (patchCenter + (ptWorldX - worldX)).round();
-          final int py = (patchCenter + (ptWorldY - worldY)).round();
-          final currPt = img.Point(px, py);
-
-          if (prevPt != null) {
-            if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
-                (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: coreColor, thickness: 5);
-              img.fillCircle(patch, x: px, y: py, radius: 2, color: coreColor);
-              img.fillCircle(patch, x: prevPt.x.toInt(), y: prevPt.y.toInt(), radius: 2, color: coreColor);
-            }
+        // 1. Outer Casing (thickness 8) with rounded caps
+        for (int i = 0; i < screenPts.length - 1; i++) {
+          final p1 = screenPts[i];
+          final p2 = screenPts[i + 1];
+          if ((p1.x >= -30 && p1.x <= patchSize + 30 && p1.y >= -30 && p1.y <= patchSize + 30) ||
+              (p2.x >= -30 && p2.x <= patchSize + 30 && p2.y >= -30 && p2.y <= patchSize + 30)) {
+            img.drawLine(patch, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: casingColor, thickness: 8);
+            img.fillCircle(patch, x: p1.x.toInt(), y: p1.y.toInt(), radius: 4, color: casingColor);
+            img.fillCircle(patch, x: p2.x.toInt(), y: p2.y.toInt(), radius: 4, color: casingColor);
           }
-          prevPt = currPt;
+        }
+
+        // 2. Vibrant Core (thickness 5) with rounded caps
+        for (int i = 0; i < screenPts.length - 1; i++) {
+          final p1 = screenPts[i];
+          final p2 = screenPts[i + 1];
+          if ((p1.x >= -30 && p1.x <= patchSize + 30 && p1.y >= -30 && p1.y <= patchSize + 30) ||
+              (p2.x >= -30 && p2.x <= patchSize + 30 && p2.y >= -30 && p2.y <= patchSize + 30)) {
+            img.drawLine(patch, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: coreColor, thickness: 5);
+            img.fillCircle(patch, x: p1.x.toInt(), y: p1.y.toInt(), radius: 2, color: coreColor);
+            img.fillCircle(patch, x: p2.x.toInt(), y: p2.y.toInt(), radius: 2, color: coreColor);
+          }
         }
 
         // Draw destination pin if on patch
