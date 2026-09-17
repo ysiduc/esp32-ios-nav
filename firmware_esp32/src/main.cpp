@@ -122,14 +122,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnectedTime = millis();
     connParamsUpdated = false;
 
-    // If already encrypted/bonded, immediately trigger sequential discovery
+    // If already encrypted, immediately trigger sequential discovery
     if (desc->sec_state.encrypted) {
       Serial.println("[BLE] Link already encrypted. Starting AMS/CTS/ANCS sequential discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
     } else {
-      // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
-      int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
-      Serial.printf("[BLE] startSecurity returned: %d\n", secRc);
+      Serial.println("[BLE] Link connected. Waiting for iOS to restore link encryption (ENC_CHANGE)...");
     }
 
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
@@ -614,14 +612,7 @@ void loop() {
   display.update(isStreaming);
 
 
-  // 3. Apple-compliant BLE Connection Parameter Update (Send >= 5s after connect so iOS accepts it)
-  if (bleConnected && !connParamsUpdated && (millis() - bleConnectedTime >= 5000)) {
-    connParamsUpdated = true;
-    // Apple Accessory Design Guidelines (QA1931):
-    // min_interval: 24 (30ms), max_interval: 36 (45ms), latency: 0 (no missed events), timeout: 600 (6.0s)
-    NimBLEDevice::getServer()->updateConnParams(bleConnectedHandle, 24, 36, 0, 600);
-    Serial.println("[BLE] Applied Apple QA1931 Connection Parameters (30-45ms, latency 0, timeout 6.0s)");
-  }
+  // 3. Keep iOS native optimal connection parameters (7.2s timeout, 15-30ms interval)
 
   // 4. Periodic Apple Time sync check
   if (bleConnected && bleConnectedHandle != 0) {
