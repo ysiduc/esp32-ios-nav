@@ -42,6 +42,8 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* 
 #elif defined(DISPLAY_TFT_ST7789)
 TFT_eSPI tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
+TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
+U8g2_for_TFT_eSPI u8f_marquee;
 #include <TJpg_Decoder.h>
 bool g_clipMapOnly = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
@@ -84,6 +86,10 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
       // Re-encryption restored on bonded connection! Immediately trigger sequential discovery starting with AMS!
       AppleMediaService::onEncrypted(event->enc_change.conn_handle);
     }
+  }
+  if (event->type == BLE_GAP_EVENT_DISCONNECT) {
+    Serial.printf("[BLE] Disconnected event! reason=0x%04x (HCI 0x%02x)\n",
+                  event->disconnect.reason, event->disconnect.reason - 0x200);
   }
   AppleMediaService::handleGapEvent(event, arg);
   AppleNotificationService::handleGapEvent(event, arg);
@@ -587,9 +593,12 @@ void loop() {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
-    if (activeRenderBufLen > 100) {
+    // Only render live map when in Navigation mode (app connected via BLE)
+    if (activeRenderBufLen > 100 && display.isAppConnected()) {
       g_clipMapOnly = true;
+      tft.setViewport(6, 26, 144, 208, false);
       TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      tft.resetViewport();
       g_clipMapOnly = false;
     }
     #endif

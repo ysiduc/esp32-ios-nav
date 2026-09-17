@@ -14,8 +14,9 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #include <U8g2_for_TFT_eSPI.h>
 #include <TJpg_Decoder.h>
 extern U8g2_for_TFT_eSPI u8f;
-
 extern TFT_eSPI tft;
+extern TFT_eSprite marqueeSpr;
+extern U8g2_for_TFT_eSPI u8f_marquee;
 #endif
 
 #include "icons.h"
@@ -78,6 +79,20 @@ private:
   unsigned long _lastClockTick = 0;
   bool _clockValid = false;
 
+  // Cached state to eliminate right HUD blinking/flicker
+  uint8_t _lastDrawnTurn = 255;
+  uint16_t _lastDrawnDist = 65535;
+  uint8_t _lastDrawnSpeed = 255;
+  uint16_t _lastDrawnTotalDist = 65535;
+  uint8_t _lastDrawnEta = 255;
+  char _lastDrawnArrival[16] = "";
+  char _lastDrawnStreet[48] = "";
+  char _lastDrawnSong[48] = "";
+  char _lastDrawnArtist[32] = "";
+  char _lastDrawnBigClock[16] = "";
+  char _lastDockClock[16] = "";
+  uint8_t _lastDockBat = 255;
+
 public:
   void init() {
 #if defined(DISPLAY_OLED_SSD1306)
@@ -97,6 +112,13 @@ public:
     u8f.setFontMode(0);
     u8f.setFontDirection(0);
     u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+
+    marqueeSpr.createSprite(154, 24);
+    u8f_marquee.begin(marqueeSpr);
+    u8f_marquee.setFontMode(0);
+    u8f_marquee.setFontDirection(0);
+    u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
+
     _drawPairingScreenTft();
 #endif
   }
@@ -181,7 +203,6 @@ public:
     if (changed) {
       _songScrollOffset = 0;
       _songScrollPauseUntil = millis() + 1500;
-      _needFullRedraw = true;
     }
   }
 
@@ -231,7 +252,6 @@ public:
     if (strcmp(_navData.currentTime, timeStr) != 0) {
       strncpy(_navData.currentTime, timeStr, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-      _needFullRedraw = true;
     }
   }
 
@@ -247,7 +267,6 @@ public:
   void updateBattery(uint8_t bat) {
     if (bat <= 100 && _navData.batteryLevel != bat) {
       _navData.batteryLevel = bat;
-      _needFullRedraw = true;
     }
   }
 
@@ -332,7 +351,8 @@ public:
         _drawPairingScreenTft();
         _lastRenderTime = millis();
         _needFullRedraw = false;
-      } else if (_navData.songTitle[0] != '\0' && millis() - _lastSongScrollTime >= 35) {
+      }
+      if (millis() - _lastSongScrollTime >= 35) {
         uint16_t cDockBg = tft.color565(8, 12, 18);
         _renderDockbarSongMarquee(cDockBg);
       }
@@ -341,7 +361,8 @@ public:
         _renderTft(isStreamingActive);
         _lastRenderTime = millis();
         _needFullRedraw = false;
-      } else if (_navData.songTitle[0] != '\0' && millis() - _lastSongScrollTime >= 35) {
+      }
+      if (millis() - _lastSongScrollTime >= 35) {
         uint16_t cDockBg = tft.color565(8, 12, 18);
         _renderDockbarSongMarquee(cDockBg);
       }
@@ -399,37 +420,35 @@ private:
   }
 
   void _renderDockbarSongMarquee(uint16_t cDockBg) {
-    const int clipX = 70;
     const int clipW = 154;
-    const int clipY = 0;
     const int clipH = 24;
 
-    tft.fillRect(clipX, clipY, clipW, clipH, cDockBg);
+    marqueeSpr.fillSprite(cDockBg);
 
     if (_navData.songTitle[0] == '\0') {
+      marqueeSpr.pushSprite(70, 0);
       return;
     }
 
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
-    u8f.setForegroundColor(tft.color565(250, 204, 21));
-    u8f.setBackgroundColor(cDockBg);
+    u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f_marquee.setForegroundColor(tft.color565(250, 204, 21));
+    u8f_marquee.setBackgroundColor(cDockBg);
 
     String fullSong = String(_navData.songTitle);
     if (_navData.songArtist[0] != '\0' && strcmp(_navData.songArtist, "MO NHAC TREN IPHONE") != 0) {
       fullSong += " - " + String(_navData.songArtist);
     }
 
-    int songWidth = u8f.getUTF8Width(fullSong.c_str());
+    int songWidth = u8f_marquee.getUTF8Width(fullSong.c_str());
     if (songWidth <= clipW - 4) {
-      int cx = clipX + (clipW / 2);
-      _drawCentreUtf8String(fullSong.c_str(), cx, 4, tft.color565(250, 204, 21), cDockBg, u8g2_font_unifont_t_vietnamese1);
+      int cx = (clipW - songWidth) / 2;
+      u8f_marquee.setCursor(cx, 17);
+      u8f_marquee.print(fullSong.c_str());
       _songScrollOffset = 0;
       _songScrollPauseUntil = millis() + 1500;
     } else {
-      tft.setViewport(clipX, clipY, clipW, clipH, false);
-
       String sep = "   •   ";
-      int sepWidth = u8f.getUTF8Width(sep.c_str());
+      int sepWidth = u8f_marquee.getUTF8Width(sep.c_str());
       int totalLoopWidth = songWidth + sepWidth;
 
       if (millis() < _songScrollPauseUntil) {
@@ -443,15 +462,18 @@ private:
         }
       }
 
-      int drawX = clipX - _songScrollOffset;
-      _drawUtf8String(fullSong.c_str(), drawX, 4, tft.color565(250, 204, 21), cDockBg, u8g2_font_unifont_t_vietnamese1);
+      int drawX = -_songScrollOffset;
+      u8f_marquee.setCursor(drawX, 17);
+      u8f_marquee.print(fullSong.c_str());
 
-      if (drawX + songWidth < clipX + clipW) {
-        _drawUtf8String((sep + fullSong).c_str(), drawX + songWidth, 4, tft.color565(250, 204, 21), cDockBg, u8g2_font_unifont_t_vietnamese1);
+      if (drawX + songWidth < clipW) {
+        u8f_marquee.setCursor(drawX + songWidth, 17);
+        u8f_marquee.print((sep + fullSong).c_str());
       }
-
-      tft.resetViewport();
     }
+
+    // Push the pre-rendered sprite to screen in ONE fast burst: 0% flicker!
+    marqueeSpr.pushSprite(70, 0);
   }
 
   void _drawUnifiedDockbar(bool fullWipe = true) {
@@ -463,33 +485,49 @@ private:
       // Left: #ysiduc (Cyan)
       tft.setTextColor(TFT_CYAN, cDockBg);
       tft.drawString("#ysiduc", 8, 4, 2);
+
+      _lastDockClock[0] = '\0';
+      _lastDockBat = 255;
     }
 
-    // Right: Current Time
-    tft.setTextColor(TFT_WHITE, cDockBg);
-    tft.drawString(_navData.currentTime, 226, 4, 2);
-
-    // Right: Battery %
-    char batStr[16];
-    if (_navData.batteryLevel > 0 && _navData.batteryLevel <= 100) {
-      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    } else {
-      snprintf(batStr, sizeof(batStr), "85%%");
+    // Right: Current Time (only if changed or fullWipe)
+    if (fullWipe || strcmp(_lastDockClock, _navData.currentTime) != 0) {
+      strncpy(_lastDockClock, _navData.currentTime, sizeof(_lastDockClock) - 1);
+      tft.setTextColor(TFT_WHITE, cDockBg);
+      tft.setTextPadding(44);
+      tft.drawString(_navData.currentTime, 226, 4, 2);
+      tft.setTextPadding(0);
     }
-    uint16_t cBat = (_navData.batteryLevel > 0 && _navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
-    tft.setTextColor(cBat, cDockBg);
-    tft.drawRightString(batStr, 298, 4, 2);
 
-    // Right: Battery Icon
-    tft.drawRect(302, 7, 14, 10, cBat);
-    tft.fillRect(316, 10, 2, 4, cBat);
-    int fillW = constrain((_navData.batteryLevel * 10) / 100, 0, 10);
-    if (fillW > 0) {
-      tft.fillRect(304, 9, fillW, 6, cBat);
+    // Right: Battery % & Icon (only if changed or fullWipe)
+    if (fullWipe || _lastDockBat != _navData.batteryLevel) {
+      _lastDockBat = _navData.batteryLevel;
+      char batStr[16];
+      if (_navData.batteryLevel > 0 && _navData.batteryLevel <= 100) {
+        snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+      } else {
+        snprintf(batStr, sizeof(batStr), "85%%");
+      }
+      uint16_t cBat = (_navData.batteryLevel > 0 && _navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
+      tft.setTextColor(cBat, cDockBg);
+      tft.setTextPadding(36);
+      tft.drawRightString(batStr, 298, 4, 2);
+      tft.setTextPadding(0);
+
+      // Battery Icon
+      tft.drawRect(302, 7, 14, 10, cBat);
+      tft.fillRect(316, 10, 2, 4, cBat);
+      tft.fillRect(304, 9, 10, 6, cDockBg);
+      int fillW = constrain((_navData.batteryLevel * 10) / 100, 0, 10);
+      if (fillW > 0) {
+        tft.fillRect(304, 9, fillW, 6, cBat);
+      }
     }
 
     // Middle: Marquee Song Title
-    _renderDockbarSongMarquee(cDockBg);
+    if (fullWipe) {
+      _renderDockbarSongMarquee(cDockBg);
+    }
   }
 
   void _drawPairingScreenTft() {
@@ -941,10 +979,9 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // Detect Navigation Mode or Streaming State Transitions
-    if (_lastIsNavigating != _navData.isNavigating || _lastStreamingState != isStreamingActive) {
+    // Detect Navigation Mode Transitions
+    if (_lastIsNavigating != _navData.isNavigating) {
       _lastIsNavigating = _navData.isNavigating;
-      _lastStreamingState = isStreamingActive;
       _needFullRedraw = true;
     }
 
@@ -960,8 +997,20 @@ private:
       // Right Card Box Framework
       tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
       tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
+
+      // Invalidate all cached drawing state
+      _lastDrawnTurn = 255;
+      _lastDrawnDist = 65535;
+      _lastDrawnSpeed = 255;
+      _lastDrawnTotalDist = 65535;
+      _lastDrawnEta = 255;
+      _lastDrawnArrival[0] = '\0';
+      _lastDrawnStreet[0] = '\0';
+      _lastDrawnSong[0] = '\0';
+      _lastDrawnArtist[0] = '\0';
+      _lastDrawnBigClock[0] = '\0';
     } else {
-      // Partial updates: refresh dockbar
+      // Partial updates: refresh dockbar clock & battery
       _drawUnifiedDockbar(false);
     }
 
@@ -970,156 +1019,158 @@ private:
       _renderStandbyVectorMap();
     }
 
-    // 3. RIGHT 50%: HUD NAVIGATION OR STANDBY MUSIC DASHBOARD (x: 158, y: 24, w: 158, h: 212)
-    if (_needFullRedraw) {
-      tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
-      tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
-    }
-
     if (!_navData.isNavigating) {
       // =======================================================================
       // STANDBY / IDLE DASHBOARD MODE: Clock, ysiduc, Current Song & Artist
       // =======================================================================
       // A. Large Elegant Digital Clock (y: 32 to 58)
-      tft.setTextColor(TFT_WHITE, cCardBg);
-      tft.drawCentreString(_navData.currentTime, 237, 34, 4);
+      if (_needFullRedraw || strcmp(_lastDrawnBigClock, _navData.currentTime) != 0) {
+        strncpy(_lastDrawnBigClock, _navData.currentTime, sizeof(_lastDrawnBigClock) - 1);
+        tft.setTextColor(TFT_WHITE, cCardBg);
+        tft.setTextPadding(140);
+        tft.drawCentreString(_navData.currentTime, 237, 34, 4);
+        tft.setTextPadding(0);
+      }
 
       // B. ysiduc Driver / Status Tag (y: 64 to 86)
-      tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
-      tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
-      tft.setTextColor(TFT_CYAN, cPillBg);
-      tft.drawCentreString("* ysiduc", 237, 68, 2);
+      if (_needFullRedraw) {
+        tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
+        tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
+        tft.setTextColor(TFT_CYAN, cPillBg);
+        tft.drawCentreString("* ysiduc", 237, 68, 2);
+      }
 
       // C. Media / Music Player Card (y: 94 to 174)
-      tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
-      tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
-
       bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+      if (_needFullRedraw || strcmp(_lastDrawnSong, _navData.songTitle) != 0 || strcmp(_lastDrawnArtist, _navData.songArtist) != 0) {
+        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+        strncpy(_lastDrawnArtist, _navData.songArtist, sizeof(_lastDrawnArtist) - 1);
 
-      if (hasSong) {
-        // Clear inner text area of media card strictly inside x: 166..308
-        tft.fillRect(166, 114, 142, 34, cPillBg);
+        tft.fillRoundRect(164, 94, 146, 80, 8, cPillBg);
+        tft.drawRoundRect(164, 94, 146, 80, 8, tft.color565(30, 41, 59));
 
-        _drawUtf8String("[>] Đang phát", 172, 98, TFT_YELLOW, cPillBg);
+        if (hasSong) {
+          _drawUtf8String("[>] Đang phát", 172, 98, TFT_YELLOW, cPillBg);
+          _drawCentreUtf8String(_navData.songTitle, 237, 115, TFT_WHITE, cPillBg);
+          _drawCentreUtf8String(_navData.songArtist, 237, 133, cSubText, cPillBg);
 
-        // Song Title strictly clamped within 130px width, starting >= 170
-        String songStr = String(_navData.songTitle);
-        int songW = u8f.getUTF8Width(songStr.c_str());
-        if (songW <= 130) {
-          int startX = 237 - (songW / 2);
-          if (startX < 170) startX = 170;
-          _drawUtf8String(songStr.c_str(), startX, 115, TFT_WHITE, cPillBg);
-        } else {
-          String fullS = songStr + "       ";
-          int offset = (_songScrollTick / 2) % fullS.length();
-          String wrapped = fullS.substring(offset) + fullS.substring(0, offset);
-          while (wrapped.length() > 0 && u8f.getUTF8Width(wrapped.c_str()) > 130) {
-            wrapped = wrapped.substring(0, wrapped.length() - 1);
+          // Sound Equalizer Bars (active cyan)
+          uint16_t cEq = TFT_CYAN;
+          int eqHeights[] = {4, 10, 16, 12, 6, 14, 18, 8, 12, 6};
+          for (int b = 0; b < 10; b++) {
+            int bx = 188 + (b * 10);
+            int by = 166 - eqHeights[b];
+            tft.fillRect(bx, by, 5, eqHeights[b], cEq);
           }
-          _drawUtf8String(wrapped.c_str(), 170, 115, TFT_WHITE, cPillBg);
-        }
-
-        // Artist Name strictly clamped within 130px width, starting >= 170
-        String artistStr = String(_navData.songArtist);
-        int artistW = u8f.getUTF8Width(artistStr.c_str());
-        if (artistW <= 130) {
-          int startX = 237 - (artistW / 2);
-          if (startX < 170) startX = 170;
-          _drawUtf8String(artistStr.c_str(), startX, 133, cSubText, cPillBg);
         } else {
-          String fullA = artistStr + "       ";
-          int offset = (_songScrollTick / 2) % fullA.length();
-          String wrapped = fullA.substring(offset) + fullA.substring(0, offset);
-          while (wrapped.length() > 0 && u8f.getUTF8Width(wrapped.c_str()) > 130) {
-            wrapped = wrapped.substring(0, wrapped.length() - 1);
+          _drawUtf8String("[--] Chưa phát", 172, 98, cSubText, cPillBg);
+          _drawCentreUtf8String("Mở nhạc trên ĐT", 237, 115, cSubText, cPillBg);
+          _drawCentreUtf8String("Spotify / Apple Music", 237, 133, cDimGrey, cPillBg);
+
+          // Dim flat equalizer bars
+          uint16_t cDim = tft.color565(30, 41, 59);
+          for (int b = 0; b < 10; b++) {
+            int bx = 188 + (b * 10);
+            tft.fillRect(bx, 164, 5, 2, cDim);
           }
-          _drawUtf8String(wrapped.c_str(), 170, 133, cSubText, cPillBg);
-        }
-
-        // Sound Equalizer Bars (active cyan)
-        uint16_t cEq = TFT_CYAN;
-        int eqHeights[] = {4, 10, 16, 12, 6, 14, 18, 8, 12, 6};
-        for (int b = 0; b < 10; b++) {
-          int bx = 188 + (b * 10);
-          int by = 166 - eqHeights[b];
-          tft.fillRect(bx, by, 5, eqHeights[b], cEq);
-        }
-      } else {
-        _drawUtf8String("[--] Chưa phát", 172, 98, cSubText, cPillBg);
-        _drawCentreUtf8String("Mở nhạc trên ĐT", 237, 115, cSubText, cPillBg);
-        _drawCentreUtf8String("Spotify / Apple Music", 237, 133, cDimGrey, cPillBg);
-
-        // Dim flat equalizer bars
-        uint16_t cDim = tft.color565(30, 41, 59);
-        for (int b = 0; b < 10; b++) {
-          int bx = 188 + (b * 10);
-          tft.fillRect(bx, 164, 5, 2, cDim);
         }
       }
 
       // D. Bottom Status: "Sẵn sàng di chuyển" (y: 186)
-      _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
+      if (_needFullRedraw) {
+        _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
+      }
 
     } else {
       // =======================================================================
       // ACTIVE NAVIGATION MODE: Maneuver Icon + Distance + Speed + Street + ETA
       // =======================================================================
       // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
-      _drawManeuverArrow(164, 30, _navData.turnCode);
-
-      // Clear distance text area
-      tft.fillRect(216, 30, 94, 26, cCardBg);
-      tft.setTextColor(TFT_WHITE, cCardBg);
-      char distStr[16];
-      if (_navData.distMeters >= 1000) {
-        snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
-      } else {
-        snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
+      if (_needFullRedraw || _lastDrawnTurn != _navData.turnCode) {
+        _lastDrawnTurn = _navData.turnCode;
+        _drawManeuverArrow(164, 30, _navData.turnCode);
       }
-      tft.drawString(distStr, 218, 30, 4);
 
-      // Clear speed text area
-      tft.fillRect(216, 56, 94, 20, cCardBg);
-      tft.setTextColor(TFT_CYAN, cCardBg);
-      char spdStr[16];
-      snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
-      tft.drawString(spdStr, 218, 56, 2);
+      // Distance
+      if (_needFullRedraw || _lastDrawnDist != _navData.distMeters) {
+        _lastDrawnDist = _navData.distMeters;
+        tft.setTextColor(TFT_WHITE, cCardBg);
+        tft.setTextPadding(92);
+        char distStr[16];
+        if (_navData.distMeters >= 1000) {
+          snprintf(distStr, sizeof(distStr), "%.1f km", (float)_navData.distMeters / 1000.0);
+        } else {
+          snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
+        }
+        tft.drawString(distStr, 218, 30, 4);
+        tft.setTextPadding(0);
+      }
+
+      // Speed
+      if (_needFullRedraw || _lastDrawnSpeed != _navData.speedKmh) {
+        _lastDrawnSpeed = _navData.speedKmh;
+        tft.setTextColor(TFT_CYAN, cCardBg);
+        tft.setTextPadding(92);
+        char spdStr[16];
+        snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+        tft.drawString(spdStr, 218, 56, 2);
+        tft.setTextPadding(0);
+      }
 
       // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
-      tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
-      tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
-
-      _drawCentreUtf8String(_navData.streetName, 237, 97, TFT_YELLOW, cPillBg);
+      if (_needFullRedraw || strcmp(_lastDrawnStreet, _navData.streetName) != 0) {
+        strncpy(_lastDrawnStreet, _navData.streetName, sizeof(_lastDrawnStreet) - 1);
+        tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
+        tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
+        _drawCentreUtf8String(_navData.streetName, 237, 97, TFT_YELLOW, cPillBg);
+      }
 
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
-      tft.fillRect(164, 136, 146, 78, cCardBg);
-
-      // Sub-labels (y: 144)
-      _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
-
-      tft.setTextColor(cSubText, cCardBg);
-      char totDistStr[16];
-      if (_navData.totalDistMeters >= 1000) {
-        snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
-      } else {
-        snprintf(totDistStr, sizeof(totDistStr), "%dm", _navData.totalDistMeters);
+      if (_needFullRedraw) {
+        tft.fillRect(164, 136, 146, 78, cCardBg);
+        _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
       }
-      tft.drawRightString(totDistStr, 304, 144, 2);
 
-      // Main values (y: 166)
-      tft.setTextColor(TFT_CYAN, cCardBg);
-      tft.drawString(_navData.arrivalTime, 168, 166, 4);
-
-      tft.setTextColor(TFT_GREEN, cCardBg);
-      char etaStr[16];
-      if (_navData.etaMinutes >= 60) {
-        int h = _navData.etaMinutes / 60;
-        int m = _navData.etaMinutes % 60;
-        snprintf(etaStr, sizeof(etaStr), "%dh%02d", h, m);
-      } else {
-        snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+      // Total Distance
+      if (_needFullRedraw || _lastDrawnTotalDist != _navData.totalDistMeters) {
+        _lastDrawnTotalDist = _navData.totalDistMeters;
+        tft.setTextColor(cSubText, cCardBg);
+        tft.setTextPadding(70);
+        char totDistStr[16];
+        if (_navData.totalDistMeters >= 1000) {
+          snprintf(totDistStr, sizeof(totDistStr), "%.1f km", (float)_navData.totalDistMeters / 1000.0);
+        } else {
+          snprintf(totDistStr, sizeof(totDistStr), "%dm", _navData.totalDistMeters);
+        }
+        tft.drawRightString(totDistStr, 304, 144, 2);
+        tft.setTextPadding(0);
       }
-      tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
+
+      // Arrival Time
+      if (_needFullRedraw || strcmp(_lastDrawnArrival, _navData.arrivalTime) != 0) {
+        strncpy(_lastDrawnArrival, _navData.arrivalTime, sizeof(_lastDrawnArrival) - 1);
+        tft.setTextColor(TFT_CYAN, cCardBg);
+        tft.setTextPadding(68);
+        tft.drawString(_navData.arrivalTime, 168, 166, 4);
+        tft.setTextPadding(0);
+      }
+
+      // ETA Minutes
+      if (_needFullRedraw || _lastDrawnEta != _navData.etaMinutes) {
+        _lastDrawnEta = _navData.etaMinutes;
+        tft.setTextColor(TFT_GREEN, cCardBg);
+        tft.setTextPadding(68);
+        char etaStr[16];
+        if (_navData.etaMinutes >= 60) {
+          int h = _navData.etaMinutes / 60;
+          int m = _navData.etaMinutes % 60;
+          snprintf(etaStr, sizeof(etaStr), "%dh%02d", h, m);
+        } else {
+          snprintf(etaStr, sizeof(etaStr), "%d ph", _navData.etaMinutes);
+        }
+        tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
+        tft.setTextPadding(0);
+      }
     }
   }
 #endif

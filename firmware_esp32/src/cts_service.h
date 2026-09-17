@@ -77,10 +77,17 @@ public:
     Serial.println("[CTS] Device disconnected. Resetting CTS state.");
   }
 
+  static int ctsPeriodicReadCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    if (error->status == 0 && attr != nullptr && attr->om != nullptr) {
+      parseTimeBuffer(attr->om);
+    }
+    return 0;
+  }
+
   static void checkPeriodic() {
     if (connHandle != 0 && currentTimeValHandle != 0 && millis() - lastReadTime > 60000) {
       lastReadTime = millis();
-      ble_gattc_read(connHandle, currentTimeValHandle, ctsReadCb, NULL);
+      ble_gattc_read(connHandle, currentTimeValHandle, ctsPeriodicReadCb, NULL);
     }
   }
 
