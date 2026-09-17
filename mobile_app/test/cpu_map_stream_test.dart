@@ -2,6 +2,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:mobile_app/services/esp_stream_service.dart';
 
 void main() {
   test('Pure CPU Map Renderer benchmark and functionality test', () {
@@ -59,25 +60,40 @@ void main() {
     expect(jpeg82[1], 0xD8); // Valid JPEG
   });
 
-  test('Optimized pipeline benchmark in Isolate.run', () async {
+  test('Direct CPU Map Worker execution time benchmark', () {
     final tile = img.Image(width: 256, height: 256);
     img.fill(tile, color: img.ColorRgba8(235, 240, 240, 255));
 
+    final tiles = <String, img.Image>{
+      '17/104068/57421': tile,
+    };
+
+    final params = CpuMapParams(
+      w: 144,
+      h: 208,
+      userLat: 20.9832,
+      userLon: 105.8425,
+      headingDeg: 45.0,
+      routePoints: [
+        [20.9832, 105.8425],
+        [20.9840, 105.8430],
+      ],
+      zoom: 17,
+      isDark: false,
+      tiles: tiles,
+    );
+
+    // Warm-up
+    EspStreamService.cpuMapWorker(params);
+
     final sw = Stopwatch()..start();
-    final result = await Isolate.run(() {
-      const int patchSize = 320;
-      final patch = img.Image(width: patchSize, height: patchSize);
-      img.fill(patch, color: img.ColorRgba8(235, 240, 240, 255));
-      for (int i = 0; i < 4; i++) {
-        img.compositeImage(patch, tile, dstX: (i % 2) * 160, dstY: (i ~/ 2) * 160, blend: img.BlendMode.direct);
-      }
-      final rotated = img.copyRotate(patch, angle: -45, interpolation: img.Interpolation.linear);
-      final cx = rotated.width ~/ 2;
-      final cy = rotated.height ~/ 2;
-      final frame = img.copyCrop(rotated, x: cx - 72, y: cy - 140, width: 144, height: 208);
-      return img.encodeJpg(frame, quality: 76);
-    });
-    print('OPTIMIZED PIPELINE in Isolate.run: ${sw.elapsedMilliseconds} ms | Size: ${result.length} bytes');
-    expect(result.length, greaterThan(500));
+    const iterations = 10;
+    for (int i = 0; i < iterations; i++) {
+      EspStreamService.cpuMapWorker(params);
+    }
+    sw.stop();
+    final avgMs = sw.elapsedMilliseconds / iterations;
+    print('DIRECT CPU MAP WORKER AVERAGE TIME: $avgMs ms per frame');
+    expect(avgMs, lessThan(60));
   });
 }

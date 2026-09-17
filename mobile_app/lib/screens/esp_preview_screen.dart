@@ -1328,9 +1328,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               child: ValueListenableBuilder<Uint8List?>(
                 valueListenable: streamService.latestFrameNotifier,
                 builder: (context, frameBytes, _) {
-                  if (frameBytes != null) {
+                  final displayBytes = frameBytes ?? streamService.latestJpegBytes;
+                  if (displayBytes != null) {
                     return Image.memory(
-                      frameBytes,
+                      displayBytes,
                       fit: BoxFit.fill,
                       gaplessPlayback: true,
                     );
