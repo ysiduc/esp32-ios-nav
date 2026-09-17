@@ -8,7 +8,6 @@
 #include "nimble/nimble/host/include/host/ble_uuid.h"
 #include "nimble/porting/nimble/include/os/os_mbuf.h"
 #include "display_ui.h"
-#include "ancs_service.h"
 
 // Standard Current Time Service UUID: 0x1805
 static const ble_uuid16_t ctsServiceUUID = {
@@ -80,17 +79,10 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0) {
-      if (currentTimeValHandle != 0) {
-        if (millis() - lastReadTime > 60000) {
-          lastReadTime = millis();
-          ble_gattc_read(connHandle, currentTimeValHandle, ctsPeriodicReadCb, NULL);
-        }
-      } else if (!isDiscovering && !isSubscribed) {
-        if (millis() - lastCheckTime > 3000) {
-          lastCheckTime = millis();
-          startDiscovery(connHandle);
-        }
+    if (connHandle != 0 && currentTimeValHandle != 0 && isSubscribed && !isDiscovering) {
+      if (millis() - lastReadTime > 60000) {
+        lastReadTime = millis();
+        ble_gattc_read(connHandle, currentTimeValHandle, ctsPeriodicReadCb, NULL);
       }
     }
   }
@@ -128,10 +120,10 @@ private:
   static int ctsReadCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
     if (error->status == 0 && attr != nullptr && attr->om != nullptr) {
       parseTimeBuffer(attr->om);
+      isSubscribed = true;
     } else {
       Serial.printf("[CTS] Read error status: %d\n", error->status);
     }
-    isSubscribed = true;
     isDiscovering = false;
     return 0;
   }

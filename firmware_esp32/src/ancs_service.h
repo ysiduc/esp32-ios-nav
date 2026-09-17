@@ -45,8 +45,10 @@ extern DisplayManager display;
 class AppleNotificationService {
 public:
   static uint16_t notifSourceValHandle;
+  static uint16_t notifSourceCccdHandle;
   static uint16_t controlPointValHandle;
   static uint16_t dataSourceValHandle;
+  static uint16_t dataSourceCccdHandle;
   static uint16_t connHandle;
   static bool isSubscribed;
   static bool isDiscovering;
@@ -63,8 +65,10 @@ public:
 
   static void init() {
     notifSourceValHandle = 0;
+    notifSourceCccdHandle = 0;
     controlPointValHandle = 0;
     dataSourceValHandle = 0;
+    dataSourceCccdHandle = 0;
     connHandle = 0;
     isSubscribed = false;
     isDiscovering = false;
@@ -78,15 +82,18 @@ public:
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
-    if (isSubscribed || isDiscovering) return;
+    if (isSubscribed) return;
+    if (isDiscovering) return;
     connHandle = conn_hdl;
     isDiscovering = true;
     notifSourceValHandle = 0;
+    notifSourceCccdHandle = 0;
     controlPointValHandle = 0;
     dataSourceValHandle = 0;
+    dataSourceCccdHandle = 0;
     svcStartHandle = 0;
     svcEndHandle = 0;
-    Serial.printf("[ANCS] Secure link established (conn=%d). Discovering ANCS service...\n", conn_hdl);
+    Serial.printf("[ANCS] Discovering ANCS service on conn=%d...\n", conn_hdl);
     int rc = ble_gattc_disc_svc_by_uuid(conn_hdl, &ancsServiceUUID.u, ancsSvcDiscCb, NULL);
     if (rc != 0) {
       Serial.printf("[ANCS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
@@ -105,12 +112,7 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0 && !isSubscribed && !isDiscovering) {
-      if (millis() - lastCheckTime > 8000) {
-        lastCheckTime = millis();
-        startDiscovery(connHandle);
-      }
-    }
+    // Discovery is driven strictly by main.cpp state machine
   }
 
   static int handleGapEvent(ble_gap_event *event, void *arg) {
@@ -125,17 +127,54 @@ public:
   }
 
 private:
+  static int ancsDataCccdWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    isDiscovering = false;
+    if (error->status == 0) {
+      isSubscribed = true;
+      Serial.println("[ANCS] Data Source CCCD enabled. ANCS fully subscribed!");
+    } else {
+      Serial.printf("[ANCS] Data Source CCCD write failed status=%d\n", error->status);
+    }
+    return 0;
+  }
+
   static int ancsDataDscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        uint8_t cccdVal[2] = {0x01, 0x00}; // Enable Notifications
-        int rc = ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, NULL, NULL);
-        Serial.printf("[ANCS] Enabled notifications on Data Source CCCD handle %d (rc=%d)\n", dsc->handle, rc);
-        isSubscribed = true;
+        dataSourceCccdHandle = dsc->handle;
+        Serial.printf("[ANCS] Found Data Source CCCD handle: %d\n", dataSourceCccdHandle);
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
+      if (dataSourceCccdHandle != 0) {
+        Serial.printf("[ANCS] Enabling Data Source notifications on CCCD handle %d...\n", dataSourceCccdHandle);
+        static uint8_t cccdVal[2] = {0x01, 0x00};
+        int rc = ble_gattc_write_flat(conn_hdl, dataSourceCccdHandle, cccdVal, 2, ancsDataCccdWriteCb, NULL);
+        if (rc != 0) {
+          Serial.printf("[ANCS] Failed to write Data Source CCCD, rc=%d\n", rc);
+          isDiscovering = false;
+        }
+      } else {
+        Serial.println("[ANCS] Data Source CCCD not found.");
+        isDiscovering = false;
+      }
+    }
+    return 0;
+  }
+
+  static int ancsNotifCccdWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    Serial.printf("[ANCS] Notification Source CCCD write completed, status=%d\n", error->status);
+    // Writing Notification Source CCCD triggers iOS "Allow iPhone Notifications" dialog!
+    if (dataSourceValHandle != 0) {
+      Serial.printf("[ANCS] Discovering Data Source CCCD (handles %d-%d)...\n", dataSourceValHandle, dataSourceValHandle + 2);
+      int rc = ble_gattc_disc_all_dscs(conn_hdl, dataSourceValHandle, dataSourceValHandle + 2, ancsDataDscCb, NULL);
+      if (rc != 0) {
+        Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Data) failed rc=%d\n", rc);
+        isDiscovering = false;
+        isSubscribed = true;
+      }
+    } else {
       isDiscovering = false;
-      Serial.println("[ANCS] ANCS fully subscribed! All Apple BLE services active.");
+      isSubscribed = true;
     }
     return 0;
   }
@@ -143,19 +182,20 @@ private:
   static int ancsNotifDscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        uint8_t cccdVal[2] = {0x01, 0x00}; // Enable Notifications
-        int rc = ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, NULL, NULL);
-        Serial.printf("[ANCS] Enabled notifications on Notification Source CCCD handle %d (rc=%d)\n", dsc->handle, rc);
+        notifSourceCccdHandle = dsc->handle;
+        Serial.printf("[ANCS] Found Notification Source CCCD handle: %d\n", notifSourceCccdHandle);
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
-      // Notification Source CCCD done. Now discover Data Source CCCD!
-      if (dataSourceValHandle != 0) {
-        int rc = ble_gattc_disc_all_dscs(conn_hdl, dataSourceValHandle, dataSourceValHandle + 2, ancsDataDscCb, NULL);
+      if (notifSourceCccdHandle != 0) {
+        Serial.printf("[ANCS] Enabling Notification Source on CCCD handle %d (triggers iOS prompt)...\n", notifSourceCccdHandle);
+        static uint8_t cccdVal[2] = {0x01, 0x00};
+        int rc = ble_gattc_write_flat(conn_hdl, notifSourceCccdHandle, cccdVal, 2, ancsNotifCccdWriteCb, NULL);
         if (rc != 0) {
-          Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Data) failed rc=%d\n", rc);
+          Serial.printf("[ANCS] ble_gattc_write_flat Notif CCCD failed rc=%d\n", rc);
           isDiscovering = false;
         }
       } else {
+        Serial.println("[ANCS] Notification Source CCCD not found.");
         isDiscovering = false;
       }
     }
@@ -178,13 +218,13 @@ private:
       Serial.printf("[ANCS] Chrs discovered: Notif=%d, Ctrl=%d, Data=%d\n",
                     notifSourceValHandle, controlPointValHandle, dataSourceValHandle);
       if (notifSourceValHandle != 0) {
-        // Start CCCD discovery for Notification Source
         int rc = ble_gattc_disc_all_dscs(conn_hdl, notifSourceValHandle, notifSourceValHandle + 2, ancsNotifDscCb, NULL);
         if (rc != 0) {
           Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Notif) failed rc=%d\n", rc);
           isDiscovering = false;
         }
       } else {
+        Serial.println("[ANCS] Notification Source characteristic not found.");
         isDiscovering = false;
       }
     }
@@ -204,7 +244,7 @@ private:
           isDiscovering = false;
         }
       } else {
-        Serial.println("[ANCS] Service not found on this connection.");
+        Serial.println("[ANCS] ANCS Service not found on this connection.");
         isDiscovering = false;
       }
     }
@@ -232,7 +272,7 @@ private:
       currentMessage[0] = '\0';
 
       // Request attributes: Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
-      if (controlPointValHandle != 0) {
+      if (controlPointValHandle != 0 && connHandle != 0) {
         uint8_t cmd[14];
         cmd[0] = 0x00; // CommandIDGetNotificationAttributes
         memcpy(&cmd[1], &buf[4], 4); // 4-byte UID
@@ -314,8 +354,10 @@ private:
 };
 
 uint16_t AppleNotificationService::notifSourceValHandle = 0;
+uint16_t AppleNotificationService::notifSourceCccdHandle = 0;
 uint16_t AppleNotificationService::controlPointValHandle = 0;
 uint16_t AppleNotificationService::dataSourceValHandle = 0;
+uint16_t AppleNotificationService::dataSourceCccdHandle = 0;
 uint16_t AppleNotificationService::connHandle = 0;
 bool AppleNotificationService::isSubscribed = false;
 bool AppleNotificationService::isDiscovering = false;

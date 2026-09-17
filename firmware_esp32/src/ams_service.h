@@ -8,7 +8,6 @@
 #include "nimble/nimble/host/include/host/ble_uuid.h"
 #include "nimble/porting/nimble/include/os/os_mbuf.h"
 #include "display_ui.h"
-#include "cts_service.h"
 
 // Apple Media Service UUID: 89D3502B-0F36-433A-8EF4-C502AD55F8DC
 static const ble_uuid128_t amsServiceUUID = {
@@ -34,6 +33,7 @@ extern DisplayManager display;
 class AppleMediaService {
 public:
   static uint16_t entityUpdateValHandle;
+  static uint16_t entityUpdateCccdHandle;
   static uint16_t connHandle;
   static bool isSubscribed;
   static bool isDiscovering;
@@ -46,6 +46,7 @@ public:
 
   static void init() {
     entityUpdateValHandle = 0;
+    entityUpdateCccdHandle = 0;
     connHandle = 0;
     isSubscribed = false;
     isDiscovering = false;
@@ -57,14 +58,12 @@ public:
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
-    if (isSubscribed) {
-      AppleCurrentTimeService::startDiscovery(conn_hdl);
-      return;
-    }
+    if (isSubscribed) return;
     if (isDiscovering) return;
     connHandle = conn_hdl;
     isDiscovering = true;
     entityUpdateValHandle = 0;
+    entityUpdateCccdHandle = 0;
     svcStartHdl = 0;
     svcEndHdl = 0;
     Serial.printf("[AMS] Discovering Apple Media Service on conn=%d...\n", conn_hdl);
@@ -72,7 +71,6 @@ public:
     if (rc != 0) {
       Serial.printf("[AMS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
       isDiscovering = false;
-      AppleNotificationService::startDiscovery(conn_hdl);
     }
   }
 
@@ -87,12 +85,7 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0 && !isSubscribed && !isDiscovering) {
-      if (millis() - lastCheckTime > 4000) {
-        lastCheckTime = millis();
-        startDiscovery(connHandle);
-      }
-    }
+    // Discovery is driven strictly by main.cpp state machine to avoid ATT collisions
   }
 
   static int handleGapEvent(ble_gap_event *event, void *arg) {
@@ -113,24 +106,21 @@ private:
     } else {
       Serial.printf("[AMS] Track subscription failed status=%d\n", error->status);
     }
-    AppleNotificationService::startDiscovery(conn_handle);
     return 0;
   }
 
   static int amsCccdWriteCb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
     if (error->status == 0) {
-      Serial.println("[AMS] CCCD enabled. Subscribing to Track Title & Artist...");
-      static uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 };
+      Serial.println("[AMS] Entity Update CCCD enabled. Subscribing to Track Title & Artist...");
+      static uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 }; // Entity 2 (Track), Attr 2 (Title), Attr 0 (Artist)
       int rc = ble_gattc_write_flat(conn_handle, entityUpdateValHandle, trackSubCmd, sizeof(trackSubCmd), amsTrackSubWriteCb, NULL);
       if (rc != 0) {
         Serial.printf("[AMS] Failed to write trackSubCmd, rc=%d\n", rc);
         isDiscovering = false;
-        AppleNotificationService::startDiscovery(conn_handle);
       }
     } else {
       Serial.printf("[AMS] CCCD write failed status=%d\n", error->status);
       isDiscovering = false;
-      AppleNotificationService::startDiscovery(conn_handle);
     }
     return 0;
   }
@@ -138,19 +128,21 @@ private:
   static int amsDscDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        Serial.printf("[AMS] Found Entity Update CCCD handle: %d. Enabling notifications...\n", dsc->handle);
+        entityUpdateCccdHandle = dsc->handle;
+        Serial.printf("[AMS] Found Entity Update CCCD handle: %d\n", entityUpdateCccdHandle);
+      }
+    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
+      if (entityUpdateCccdHandle != 0) {
+        Serial.printf("[AMS] Enabling Entity Update notifications on CCCD handle %d...\n", entityUpdateCccdHandle);
         static uint8_t cccdVal[2] = {0x01, 0x00};
-        int rc = ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, amsCccdWriteCb, NULL);
+        int rc = ble_gattc_write_flat(conn_hdl, entityUpdateCccdHandle, cccdVal, 2, amsCccdWriteCb, NULL);
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_write_flat CCCD failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleNotificationService::startDiscovery(conn_hdl);
         }
-      }
-    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
-      if (!isSubscribed && isDiscovering) {
+      } else {
+        Serial.println("[AMS] CCCD descriptor 0x2902 not found.");
         isDiscovering = false;
-        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -168,11 +160,10 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleNotificationService::startDiscovery(conn_hdl);
         }
       } else {
+        Serial.println("[AMS] Entity Update Characteristic not found.");
         isDiscovering = false;
-        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -189,12 +180,10 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleNotificationService::startDiscovery(conn_hdl);
         }
       } else {
-        Serial.println("[AMS] Service not found on this connection.");
+        Serial.println("[AMS] Apple Media Service not found on this connection.");
         isDiscovering = false;
-        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -231,6 +220,7 @@ private:
 };
 
 uint16_t AppleMediaService::entityUpdateValHandle = 0;
+uint16_t AppleMediaService::entityUpdateCccdHandle = 0;
 uint16_t AppleMediaService::connHandle = 0;
 bool AppleMediaService::isSubscribed = false;
 bool AppleMediaService::isDiscovering = false;
