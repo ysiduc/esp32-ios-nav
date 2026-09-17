@@ -96,6 +96,7 @@ public:
     u8f.begin(tft);
     u8f.setFontMode(0);
     u8f.setFontDirection(0);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
     _drawPairingScreenTft();
 #endif
   }
@@ -363,7 +364,7 @@ private:
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
     // Hard clamp: if in the right HUD card, never draw to the left of x = 168 (protects minimap)
-    if (x >= 140 && x < 168) x = 168;
+    if (y >= 24 && x >= 140 && x < 168) x = 168;
     u8f.setCursor(x, y + 13);
     u8f.print(str);
   }
@@ -375,7 +376,7 @@ private:
     int w = u8f.getUTF8Width(str);
     int startX = cx - (w / 2);
     // Hard clamp: if in the right HUD card, never draw to the left of x = 168 (protects minimap)
-    if (cx >= 164 && startX < 168) startX = 168;
+    if (y >= 24 && cx >= 164 && startX < 168) startX = 168;
     u8f.setCursor(startX, y + 13);
     u8f.print(str);
   }
@@ -408,6 +409,10 @@ private:
     if (_navData.songTitle[0] == '\0') {
       return;
     }
+
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setForegroundColor(tft.color565(250, 204, 21));
+    u8f.setBackgroundColor(cDockBg);
 
     String fullSong = String(_navData.songTitle);
     if (_navData.songArtist[0] != '\0' && strcmp(_navData.songArtist, "MO NHAC TREN IPHONE") != 0) {
