@@ -288,57 +288,41 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       Uint8List? jpegBytes;
 
-      if (_isForeground) {
-        // 0. Check live vector snapshot from MapLibre Goong map if provider hooked (foreground only)
-        if (mapSnapshotProvider != null) {
-          try {
-            final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
-            if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
-              final decoded = img.decodeImage(snapshotBytes);
-              if (decoded != null) {
-                jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
-              }
-            }
-          } catch (_) {}
+      // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
+      // Runs in memory in both foreground and background
+      try {
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
+
+        _drawRealMapCanvas(
+          canvas: canvas,
+          w: w.toDouble(),
+          h: h.toDouble(),
+          userPos: userPos,
+          headingDeg: heading,
+          activeRoute: activeRoute,
+          distToTurn: distToTurn,
+          speedKmh: speedKmh,
+        );
+
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(w, h);
+        final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        image.dispose();
+        picture.dispose();
+
+        if (byteData != null) {
+          final rawBytes = byteData.buffer.asUint8List();
+          final imgImage = img.Image.fromBytes(
+            width: w,
+            height: h,
+            bytes: rawBytes.buffer,
+            order: img.ChannelOrder.rgba,
+          );
+          jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 78));
         }
-
-        // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
-        if (jpegBytes == null) {
-          try {
-            final recorder = ui.PictureRecorder();
-            final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
-
-            _drawRealMapCanvas(
-              canvas: canvas,
-              w: w.toDouble(),
-              h: h.toDouble(),
-              userPos: userPos,
-              headingDeg: heading,
-              activeRoute: activeRoute,
-              distToTurn: distToTurn,
-              speedKmh: speedKmh,
-            );
-
-            final picture = recorder.endRecording();
-            final image = await picture.toImage(w, h);
-            final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-            image.dispose();
-            picture.dispose();
-
-            if (byteData != null) {
-              final rawBytes = byteData.buffer.asUint8List();
-              final imgImage = img.Image.fromBytes(
-                width: w,
-                height: h,
-                bytes: rawBytes.buffer,
-                order: img.ChannelOrder.rgba,
-              );
-              jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
-            }
-          } catch (_) {
-            // Skia/Metal context failed, fallback to CPU
-          }
-        }
+      } catch (_) {
+        // Skia/Metal context failed in background, fallback to CPU renderer
       }
 
       // 2. Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
@@ -393,26 +377,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double subTileX = worldX - (centerTileX * 256.0);
       final double subTileY = worldY - (centerTileY * 256.0);
 
-      // Create a 300x300 CPU patch centered on user
-      const int patchSize = 300;
+      // Create a 320x320 CPU patch centered on user (covers 144x208 frame at all rotation angles)
+      const int patchSize = 320;
       final patch = img.Image(width: patchSize, height: patchSize);
       final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(235, 240, 240, 255);
       img.fill(patch, color: bgColor);
 
       const double patchCenter = patchSize / 2.0;
 
-      // Composite 3x3 surrounding tiles
+      // Composite 3x3 surrounding tiles with direct blending
       bool tilesDrawn = false;
       for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
+          final int dstX = (patchCenter + (dx * 256.0) - subTileX).round();
+          final int dstY = (patchCenter + (dy * 256.0) - subTileY).round();
+          if (dstX + 256 <= 0 || dstX >= patchSize || dstY + 256 <= 0 || dstY >= patchSize) {
+            continue;
+          }
+
           final tx = centerTileX + dx;
           final ty = centerTileY + dy;
           final key = '$zoom/$tx/$ty';
           final tileImg = _cpuTileCache[key];
           if (tileImg != null) {
-            final int dstX = (patchCenter + (dx * 256.0) - subTileX).round();
-            final int dstY = (patchCenter + (dy * 256.0) - subTileY).round();
-            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY);
+            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY, blend: img.BlendMode.direct);
             tilesDrawn = true;
           }
         }
@@ -428,9 +416,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Draw active route polyline on patch before rotation (aligned with tiles!)
+      // Draw active route polyline (matching Image 2: Apple blue casing + core with round joint caps)
       if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
         final pts = activeRoute.polylinePoints;
+        final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 81, 179, 255);
+        final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
+
+        // 1. Outer Casing (thickness 8.5) with rounded caps
         img.Point? prevPt;
         for (final pt in pts) {
           final double ptLatRad = pt.latitude * (math.pi / 180.0);
@@ -443,9 +435,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           if (prevPt != null) {
             if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
                 (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 81, 179, 255), thickness: 6);
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 122, 255, 255), thickness: 4);
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(255, 255, 255, 255), thickness: 1);
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: casingColor, thickness: 8);
+              img.fillCircle(patch, x: px, y: py, radius: 4, color: casingColor);
+              img.fillCircle(patch, x: prevPt.x.toInt(), y: prevPt.y.toInt(), radius: 4, color: casingColor);
+            }
+          }
+          prevPt = currPt;
+        }
+
+        // 2. Vibrant Core (thickness 5.5) with rounded caps
+        prevPt = null;
+        for (final pt in pts) {
+          final double ptLatRad = pt.latitude * (math.pi / 180.0);
+          final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
+          final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
+          final int px = (patchCenter + (ptWorldX - worldX)).round();
+          final int py = (patchCenter + (ptWorldY - worldY)).round();
+          final currPt = img.Point(px, py);
+
+          if (prevPt != null) {
+            if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
+                (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: coreColor, thickness: 5);
+              img.fillCircle(patch, x: px, y: py, radius: 2, color: coreColor);
+              img.fillCircle(patch, x: prevPt.x.toInt(), y: prevPt.y.toInt(), radius: 2, color: coreColor);
             }
           }
           prevPt = currPt;
@@ -459,8 +472,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final int dx = (patchCenter + (destWorldX - worldX)).round();
         final int dy = (patchCenter + (destWorldY - worldY)).round();
         if (dx >= 10 && dx <= patchSize - 10 && dy >= 10 && dy <= patchSize - 10) {
-          img.fillCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
-          img.drawCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
+          img.fillCircle(patch, x: dx, y: dy, radius: 8, color: img.ColorRgba8(255, 59, 48, 255));
+          img.drawCircle(patch, x: dx, y: dy, radius: 8, color: img.ColorRgba8(255, 255, 255, 255));
           img.fillCircle(patch, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
         }
       }
@@ -468,7 +481,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Rotate patch by -headingDeg so ahead is UP
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.nearest);
       }
 
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
@@ -485,20 +498,28 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         height: h,
       );
 
-      // Draw Vehicle Location Puck at (72, 140) pointing straight UP (matching Image 2)
+      // Draw Vehicle Location Puck at (72, 140) pointing straight UP (exact match to Image 2!)
       final int vx = (w / 2.0).round();
       final int vy = (h * 0.67).round();
-      img.fillCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(0, 122, 255, 255));
-      img.drawCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(255, 255, 255, 255));
-      // White arrow pointing straight UP
+      final puckColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
+      final auraColor = isDark ? img.ColorRgba8(0, 240, 255, 45) : img.ColorRgba8(0, 122, 255, 45);
+
+      // 1. Translucent radar aura ring (radius 16)
+      img.fillCircle(frame, x: vx, y: vy, radius: 16, color: auraColor);
+      // 2. Crisp outer white border (radius 11)
+      img.fillCircle(frame, x: vx, y: vy, radius: 11, color: img.ColorRgba8(255, 255, 255, 255));
+      // 3. Inner vibrant blue core (radius 9)
+      img.fillCircle(frame, x: vx, y: vy, radius: 9, color: puckColor);
+
+      // 4. Sharp white arrow pointing straight UP (matching Image 2)
       img.fillPolygon(frame, vertices: [
         img.Point(vx, vy - 7),
-        img.Point(vx + 5, vy + 4),
+        img.Point(vx + 4, vy + 4),
         img.Point(vx, vy + 2),
-        img.Point(vx - 5, vy + 4),
+        img.Point(vx - 4, vy + 4),
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 68));
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 78));
     } catch (_) {
       return null;
     }
@@ -685,8 +706,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
         // 1. Decode for CPU background map rendering (0% GPU)
         try {
-          final cpuImg = img.decodeImage(response.bodyBytes);
+          var cpuImg = img.decodeImage(response.bodyBytes);
           if (cpuImg != null) {
+            // Downsample @2x (512x512) to 256x256 for crisp Retina labels ("WinMart", "Nha A5 Đại Kim" matching Image 2!)
+            if (cpuImg.width > 256) {
+              cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
+            }
             _cpuTileCache[key] = cpuImg;
             if (_cpuTileCache.length > 100) {
               _cpuTileCache.remove(_cpuTileCache.keys.first);
@@ -694,19 +719,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           }
         } catch (_) {}
 
-        // 2. Decode for Flutter GPU rendering (when app is in foreground)
-        if (_isForeground) {
-          try {
-            final codec = await ui.instantiateImageCodec(response.bodyBytes);
-            final frame = await codec.getNextFrame();
-            _tileCache[key] = frame.image;
+        // 2. Decode for Flutter Canvas rendering (available for both foreground and background)
+        try {
+          final codec = await ui.instantiateImageCodec(response.bodyBytes);
+          final frame = await codec.getNextFrame();
+          _tileCache[key] = frame.image;
 
-            if (_tileCache.length > 100) {
-              final firstKey = _tileCache.keys.first;
-              _tileCache.remove(firstKey)?.dispose();
-            }
-          } catch (_) {}
-        }
+          if (_tileCache.length > 100) {
+            final firstKey = _tileCache.keys.first;
+            _tileCache.remove(firstKey)?.dispose();
+          }
+        } catch (_) {}
 
         // Trigger immediate redraw so map is updated as soon as tile loads
         _latestJpegBytes = null;
