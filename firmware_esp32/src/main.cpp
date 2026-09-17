@@ -130,6 +130,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     bleConnected = false;
     connParamsUpdated = false;
     display.setBleConnected(false);
+    display.setAppConnected(false);
     AppleMediaService::onDisconnected();
     AppleNotificationService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
@@ -149,12 +150,35 @@ void processJsonPacket(const char* jsonStr) {
   if (error) return;
 
   String typeStr = String(doc["type"] | "");
-  if (typeStr == "PING") {
+  if (typeStr == "APP_CONNECT") {
+    display.setAppConnected(true);
     if (doc["clock"].is<const char*>()) {
       curClock = String(doc["clock"].as<const char*>());
+      display.updateClock(curClock.c_str());
     }
     if (doc["bat"].is<uint8_t>()) {
       curBattery = doc["bat"].as<uint8_t>();
+      display.updateBattery(curBattery);
+    }
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"APP_CONNECT_ACK\",\"status\":\"connected\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+    Serial.println("[BLE] Received APP_CONNECT handshake. Switched to Navigation screen.");
+    return;
+  } else if (typeStr == "APP_DISCONNECT") {
+    display.setAppConnected(false);
+    Serial.println("[BLE] Received APP_DISCONNECT. Returned to Standby screen.");
+    return;
+  } else if (typeStr == "PING") {
+    if (doc["clock"].is<const char*>()) {
+      curClock = String(doc["clock"].as<const char*>());
+      display.updateClock(curClock.c_str());
+    }
+    if (doc["bat"].is<uint8_t>()) {
+      curBattery = doc["bat"].as<uint8_t>();
+      display.updateBattery(curBattery);
     }
     return;
   } else if (typeStr == "DEL_BG") {
@@ -478,6 +502,9 @@ void setup() {
   Serial.printf("[WiFi STA] Connecting to iPhone Hotspot ('%s')...\n", wifiSsid.c_str());
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
 
+  // Configure SNTP for automatic time sync (UTC+7 Vietnam)
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
+
   // Configure WebSocket Client callbacks (begin() is called when WiFi connects)
   webSocketClient.onEvent(webSocketEvent);
   webSocketClient.setReconnectInterval(2000);
@@ -542,6 +569,24 @@ void loop() {
   // 4. Periodic check for Apple Media Service & ANCS discovery
   AppleMediaService::checkPeriodic();
   AppleNotificationService::checkPeriodic();
+
+  // 5. Periodic real-time clock check from SNTP
+  static unsigned long lastClockCheck = 0;
+  if (millis() - lastClockCheck > 1000) {
+    lastClockCheck = millis();
+    time_t now = time(nullptr);
+    if (now > 100000) {
+      struct tm* t = localtime(&now);
+      if (t && t->tm_year > 120) {
+        char clkBuf[16];
+        snprintf(clkBuf, sizeof(clkBuf), "%02d:%02d", t->tm_hour, t->tm_min);
+        if (curClock != clkBuf) {
+          curClock = clkBuf;
+          display.updateClock(clkBuf);
+        }
+      }
+    }
+  }
 
   delay(1);
 }

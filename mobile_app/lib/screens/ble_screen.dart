@@ -23,6 +23,13 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final bleService = Provider.of<BleService>(context, listen: false);
+      bleService.checkSystemDevices();
+      if (!bleService.isConnected && !bleService.isScanning) {
+        bleService.startScan();
+      }
+    });
   }
 
   @override
@@ -201,6 +208,70 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             ],
           ),
         ),
+
+        // System Connected (Bonded) ESP32 Fast-Connect Card
+        if (bleService.systemBondedDevice != null && !bleService.isConnected)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0C243B),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF00F0FF).withAlpha(40), blurRadius: 10),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF00F0FF).withAlpha(30),
+                  ),
+                  child: const Icon(Icons.bluetooth_connected_rounded, color: Color(0xFF00F0FF), size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        bleService.systemBondedDevice!.platformName.isNotEmpty
+                            ? bleService.systemBondedDevice!.platformName
+                            : 'ESP32-S3 Navi',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                      const SizedBox(height: 3),
+                      const Text(
+                        'Đã kết nối Bluetooth iPhone (Hệ thống iOS)',
+                        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11.5),
+                      ),
+                    ],
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00F0FF),
+                    foregroundColor: Colors.black,
+                    elevation: 2,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                  onPressed: () => bleService.connectToDevice(
+                    bleService.systemBondedDevice!,
+                    displayName: bleService.systemBondedDevice!.platformName.isNotEmpty
+                        ? bleService.systemBondedDevice!.platformName
+                        : 'ESP32-S3 Navi',
+                  ),
+                  child: const Text('KẾT NỐI VÀO APP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
 
         // Scanning Indicator or Device Count
         Padding(

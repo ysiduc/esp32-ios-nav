@@ -41,6 +41,7 @@ class BleService extends ChangeNotifier {
   static final Guid nusRxCharUuid = Guid('6E400002-B5A3-F393-E0A9-E50E24DCCA9E');
 
   BluetoothDevice? _connectedDevice;
+  BluetoothDevice? _systemBondedDevice;
   BluetoothCharacteristic? _writeCharacteristic;
   bool _isScanning = false;
   bool _isConnected = false;
@@ -70,6 +71,7 @@ class BleService extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
   String? get connectedDeviceName => _connectedDeviceName;
   BluetoothDevice? get connectedDevice => _connectedDevice;
+  BluetoothDevice? get systemBondedDevice => _systemBondedDevice;
   List<BleDeviceItem> get discoveredDevices => List.unmodifiable(_discoveredDevices);
   List<BleLogItem> get logs => List.unmodifiable(_logs);
   String get wifiStatus => _wifiStatus;
@@ -82,6 +84,7 @@ class BleService extends ChangeNotifier {
   BleService() {
     _initBle();
     _startWifiProbe();
+    checkSystemDevices();
   }
 
   void _startWifiProbe() {
@@ -157,8 +160,7 @@ class BleService extends ChangeNotifier {
       _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
         _addLog('Bluetooth Adapter State: $state', isTx: false);
         if (state == BluetoothAdapterState.on) {
-          // BLE is ON: check if ESP32 is already connected via iOS Settings > Bluetooth
-          Future.delayed(const Duration(milliseconds: 800), _autoConnectIfSystemConnected);
+          Future.delayed(const Duration(milliseconds: 500), checkSystemDevices);
         } else {
           _handleDisconnect();
         }
@@ -170,25 +172,57 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Automatically detect and connect to any BLE device iOS has connected at system level.
-  /// Uses Guid('1800') = Generic Access Profile, which ALL BLE devices advertise.
-  /// IMPORTANT: flutter_blue_plus v2 requires device.connect() even for system-connected devices.
-  Future<void> _autoConnectIfSystemConnected() async {
-    if (_isConnected || _isConnecting) return;
+  /// Retrieve devices already connected to iOS system (bonded / paired).
+  /// Queries custom service FFE0, AMS, ANCS, 1800, and centralManager.connectedDevices.
+  Future<List<BluetoothDevice>> checkSystemDevices() async {
+    final List<BluetoothDevice> matched = [];
     try {
-      // Guid('1800') = Generic Access Profile - required on iOS, present on all BLE devices
-      final sysDevices = await FlutterBluePlus.systemDevices([Guid('1800')]);
-      _addLog('systemDevices found: ${sysDevices.length} devices', isTx: false);
-      for (final d in sysDevices) {
-        final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi';
-        _addLog('Auto-connecting to system device: $name', isTx: false);
-        // connectToDevice handles the connect() call correctly
-        await connectToDevice(d, displayName: name);
-        if (_isConnected) return; // success, stop
+      final isSupported = await FlutterBluePlus.isSupported;
+      if (!isSupported) return matched;
+
+      final filterUuids = [
+        navServiceUuid,
+        Guid('FFE0'),
+        Guid('7905F431-B5CE-4010-8F0B-0724C576E125'), // ANCS
+        Guid('89D3502B-0F36-433A-8EF4-C502AD55F8DC'), // AMS
+        Guid('1800'),
+      ];
+      final sysDevices = await FlutterBluePlus.systemDevices(filterUuids);
+      final connectedDevs = FlutterBluePlus.connectedDevices;
+
+      final allKnown = <String, BluetoothDevice>{};
+      for (final d in [...sysDevices, ...connectedDevs]) {
+        allKnown[d.remoteId.str] = d;
       }
+
+      for (final d in allKnown.values) {
+        final pName = d.platformName;
+        final isEsp = pName.toLowerCase().contains('esp32') ||
+            pName.toLowerCase().contains('nav') ||
+            pName.toLowerCase().contains('ysiduc') ||
+            pName.isEmpty; // iOS sometimes hides name until connected
+
+        if (isEsp) {
+          final name = pName.isNotEmpty ? pName : 'ESP32-S3 Navi (Đã kết nối iOS)';
+          _systemBondedDevice = d;
+          matched.add(d);
+
+          final index = _discoveredDevices.indexWhere((item) => item.device.remoteId == d.remoteId);
+          if (index >= 0) {
+            _discoveredDevices[index] = BleDeviceItem(device: d, name: name, rssi: -30);
+          } else {
+            _discoveredDevices.insert(0, BleDeviceItem(device: d, name: name, rssi: -30));
+          }
+        }
+      }
+      if (matched.isNotEmpty) {
+        _addLog('Phát hiện ${matched.length} thiết bị ESP32 đã ghép nối iOS Bluetooth', isTx: false);
+      }
+      notifyListeners();
     } catch (e) {
-      _addLog('Auto-connect error: $e', isTx: false);
+      debugPrint('[BLE] checkSystemDevices error: $e');
     }
+    return matched;
   }
 
   void _addLog(String msg, {bool isError = false, bool isTx = true}) {
@@ -238,34 +272,8 @@ class BleService extends ChangeNotifier {
       _isScanning = true;
       notifyListeners();
 
-      // 1. Retrieve devices connected at iOS system level (Settings > Bluetooth)
-      // Guid('1800') = Generic Access Profile UUID - required by iOS, present on ALL BLE devices.
-      // After finding them, must still call device.connect() to attach to the app.
-      try {
-        final sysDevices = await FlutterBluePlus.systemDevices([Guid('1800')]);
-        _addLog('Scan: systemDevices found ${sysDevices.length}', isTx: false);
-        for (final d in sysDevices) {
-          final name = d.platformName.isNotEmpty ? d.platformName : 'ESP32-S3 Navi (Đã kết nối iOS)';
-          if (!_discoveredDevices.any((item) => item.device.remoteId == d.remoteId)) {
-            _discoveredDevices.add(BleDeviceItem(device: d, name: name, rssi: -35));
-          }
-          // Auto-connect if not already connected in app
-          if (!_isConnected && !_isConnecting) {
-            _addLog('Tự động kết nối: $name', isTx: false);
-            _isScanning = false;
-            await connectToDevice(d, displayName: name);
-            if (_isConnected) {
-              _isScanning = true;
-              notifyListeners();
-              break;
-            }
-            _isScanning = true;
-          }
-        }
-        notifyListeners();
-      } catch (e) {
-        _addLog('systemDevices error: $e', isTx: false);
-      }
+      // 1. Immediately retrieve devices connected at iOS system level
+      await checkSystemDevices();
 
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
@@ -349,6 +357,20 @@ class BleService extends ChangeNotifier {
         _isConnected = true;
         _enableBackgroundKeepAlive();
         _addLog('Đã kết nối thành công với: $_connectedDeviceName!', isTx: false);
+
+        // Send handshake to tell ESP32 to switch from Standby screen to Navigation screen
+        try {
+          final now = DateTime.now();
+          final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+          final handshake = jsonEncode({
+            'type': 'APP_CONNECT',
+            'clock': timeStr,
+          });
+          await sendRawJson(handshake);
+          _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32', isTx: true);
+        } catch (e) {
+          _addLog('Lỗi gửi APP_CONNECT: $e', isError: true);
+        }
       } else {
         _isConnected = false;
         _addLog('Không tìm thấy Characteristic ghi dữ liệu!', isError: true);
@@ -516,6 +538,9 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  /// Send raw JSON string helper
+  Future<bool> sendRawJson(String json) => sendRawString(json);
+
   /// Send custom raw JSON or string (calls, songs, SMS, pings ALWAYS via BLE)
   Future<bool> sendRawString(String text) async {
     if (!_isConnected || _writeCharacteristic == null) {
@@ -562,6 +587,10 @@ class BleService extends ChangeNotifier {
 
   /// Disconnect current device
   Future<void> disconnect() async {
+    try {
+      final handshake = jsonEncode({'type': 'APP_DISCONNECT'});
+      await sendRawJson(handshake);
+    } catch (_) {}
     if (_connectedDevice != null) {
       try {
         await _connectedDevice!.disconnect();

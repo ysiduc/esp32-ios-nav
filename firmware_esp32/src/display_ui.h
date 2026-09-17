@@ -67,6 +67,8 @@ private:
   bool _lastStreamingState = false;
   unsigned long _lastRenderTime = 0;
   uint32_t _songScrollTick = 0;
+  bool _isAppConnected = false;
+  bool _pairingBgDrawn = false;
 
 public:
   void init() {
@@ -136,6 +138,8 @@ public:
         _needFullRedraw = true;
       }
       _currentState = STATE_NAVIGATION;
+      _isAppConnected = true;
+      _pairingBgDrawn = false;
     }
   }
 
@@ -159,15 +163,49 @@ public:
       _needFullRedraw = true;
     }
     _navData.isConnected = connected;
-    // Only revert to STATE_PAIRING_WAIT if we are NOT actively navigating!
-    // Never interrupt the user's active navigation with a pairing screen if BLE has a momentary glitch.
-    if (!connected && _currentState == STATE_NAVIGATION) {
-      if (!_navData.isNavigating) {
+    if (!connected) {
+      _isAppConnected = false;
+      if (_currentState == STATE_NAVIGATION && !_navData.isNavigating) {
         _currentState = STATE_PAIRING_WAIT;
+        _pairingBgDrawn = false;
         _needFullRedraw = true;
       }
-    } else if (connected && _currentState == STATE_PAIRING_WAIT) {
+    }
+    // When connected == true: remain in STATE_PAIRING_WAIT until App explicitly connects!
+  }
+
+  void setAppConnected(bool connected) {
+    _isAppConnected = connected;
+    if (connected) {
       _currentState = STATE_NAVIGATION;
+      _pairingBgDrawn = false;
+      _needFullRedraw = true;
+    } else {
+      if (!_navData.isNavigating) {
+        _currentState = STATE_PAIRING_WAIT;
+        _pairingBgDrawn = false;
+        _needFullRedraw = true;
+      }
+    }
+  }
+
+  bool isAppConnected() const {
+    return _isAppConnected;
+  }
+
+  void updateClock(const char* clockStr) {
+    if (clockStr && strlen(clockStr) > 0) {
+      if (strcmp(_navData.currentTime, clockStr) != 0) {
+        strncpy(_navData.currentTime, clockStr, sizeof(_navData.currentTime) - 1);
+        _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+        _needFullRedraw = true;
+      }
+    }
+  }
+
+  void updateBattery(uint8_t bat) {
+    if (bat > 0 && bat <= 100 && _navData.batteryLevel != bat) {
+      _navData.batteryLevel = bat;
       _needFullRedraw = true;
     }
   }
@@ -194,7 +232,8 @@ public:
 
   void dismissAlert() {
     if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
-      _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      if (!_isAppConnected) _pairingBgDrawn = false;
       _needFullRedraw = true;
     }
   }
@@ -208,12 +247,14 @@ public:
   }
 
   void forceRedraw() {
+    _pairingBgDrawn = false;
     _needFullRedraw = true;
   }
 
   void update(bool isStreamingActive = false) {
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
-      _currentState = _navData.isConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
+      if (!_isAppConnected) _pairingBgDrawn = false;
       _needFullRedraw = true;
     }
 
@@ -278,67 +319,73 @@ private:
   }
 
   void _drawPairingScreenTft() {
-    if (SPIFFS.exists("/bg_wait.jpg")) {
-      File f = SPIFFS.open("/bg_wait.jpg", "r");
-      if (f) {
-        size_t fSize = f.size();
-        f.close();
-        if (fSize > 500) {
-          JRESULT res = TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
-          if (res == JDR_OK) {
-            // Top status bar overlay
-            tft.setTextColor(TFT_WHITE, TFT_BLACK);
-            tft.drawString("* ysiduc", 10, 4, 2);
-            char batStr[16];
-            snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-            tft.drawString(batStr, 270, 4, 2);
-
-            // Bottom Glass Banner
-            uint16_t cBarBg = tft.color565(11, 17, 26);
-            tft.fillRoundRect(20, 202, 280, 32, 8, cBarBg);
-            tft.drawRoundRect(20, 202, 280, 32, 8, TFT_CYAN);
-            _drawCentreUtf8String("CHỜ KẾT NỐI BLUETOOTH...", 160, 208, TFT_CYAN, cBarBg);
-            return;
+    // 1. Draw Background Image (Decoded once to prevent flickering)
+    if (!_pairingBgDrawn) {
+      bool bgLoaded = false;
+      if (SPIFFS.exists("/bg_wait.jpg")) {
+        File f = SPIFFS.open("/bg_wait.jpg", "r");
+        if (f) {
+          size_t fSize = f.size();
+          f.close();
+          if (fSize > 500) {
+            JRESULT res = TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+            if (res == JDR_OK) {
+              bgLoaded = true;
+            } else {
+              Serial.printf("[SPIFFS] /bg_wait.jpg decode failed (rc=%d), removing.\n", res);
+              SPIFFS.remove("/bg_wait.jpg");
+            }
           } else {
-            Serial.printf("[SPIFFS] /bg_wait.jpg decode failed (rc=%d), removing corrupt file.\n", res);
             SPIFFS.remove("/bg_wait.jpg");
           }
-        } else {
-          Serial.println("[SPIFFS] /bg_wait.jpg incomplete (<500B), removing.");
-          SPIFFS.remove("/bg_wait.jpg");
         }
       }
+
+      if (!bgLoaded) {
+        tft.fillScreen(TFT_BLACK);
+      }
+      _pairingBgDrawn = true;
     }
 
-    tft.fillScreen(TFT_BLACK);
+    // 2. Top Dockbar (Height 24px, Dark Glass semi-transparent overlay)
+    uint16_t cDockBg = tft.color565(8, 12, 18);
+    tft.fillRect(0, 0, 320, 24, cDockBg);
+    tft.drawFastHLine(0, 24, 320, tft.color565(25, 38, 55));
 
-    // Top Status bar (Header: * ysiduc | Current Clock | Battery)
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.drawString("* ysiduc", 10, 4, 2);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawCentreString(_navData.currentTime, 160, 4, 2);
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    // Left: #ysiduc (Cyan)
+    tft.setTextColor(TFT_CYAN, cDockBg);
+    tft.drawString("#ysiduc", 8, 4, 2);
+
+    // Middle: Current Song Title from AMS (if playing)
+    if (_navData.songTitle[0] != '\0') {
+      char songDisplay[48];
+      snprintf(songDisplay, sizeof(songDisplay), "%s", _navData.songTitle);
+      if (strlen(songDisplay) > 22) {
+        songDisplay[19] = '.';
+        songDisplay[20] = '.';
+        songDisplay[21] = '.';
+        songDisplay[22] = '\0';
+      }
+      _drawCentreUtf8String(songDisplay, 150, 4, TFT_WHITE, cDockBg, u8g2_font_unifont_t_vietnamese1);
+    }
+
+    // Right: Current Time & Battery %
+    tft.setTextColor(TFT_WHITE, cDockBg);
+    tft.drawString(_navData.currentTime, 226, 4, 2);
+
     char batStr[16];
     snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    tft.drawString(batStr, 260, 4, 2);
-    tft.drawRect(298, 6, 14, 8, TFT_GREEN);
-    tft.fillRect(300, 8, 10, 4, TFT_GREEN);
+    uint16_t cBat = (_navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
+    tft.setTextColor(cBat, cDockBg);
+    tft.drawRightString(batStr, 298, 4, 2);
 
-    // Center Main Card (Dark Navy Charcoal)
-    uint16_t cCardBg = tft.color565(17, 24, 36);
-    tft.fillRoundRect(14, 26, 292, 202, 12, cCardBg);
-    tft.drawRoundRect(14, 26, 292, 202, 12, TFT_CYAN);
-
-    tft.setTextColor(TFT_CYAN, cCardBg);
-    tft.drawCentreString("YSIDUC SMART NAVIGATOR", 160, 42, 4);
-
-    tft.setTextColor(TFT_GREEN, cCardBg);
-    tft.drawCentreString("STREAM MAP 20 FPS (HD RETINA)", 160, 76, 2);
-
-    tft.setTextColor(TFT_WHITE, cCardBg);
-    tft.drawString("1. Mo App tren dien thoai", 34, 110, 2);
-    tft.drawString("2. Ket noi Bluetooth: ysiduc_NAV", 34, 138, 2);
-    tft.drawString("3. Bat 'Mo phong Man hinh ESP32'", 34, 166, 2);
+    // Battery Icon
+    tft.drawRect(302, 7, 14, 10, cBat);
+    tft.fillRect(316, 10, 2, 4, cBat);
+    int fillW = constrain((_navData.batteryLevel * 10) / 100, 0, 10);
+    if (fillW > 0) {
+      tft.fillRect(304, 9, fillW, 6, cBat);
+    }
   }
 
   /// Draw Anti-Aliased Clean Vector Maneuver Arrow
@@ -715,8 +762,9 @@ private:
 
   void _renderTft(bool isStreamingActive) {
     if (_currentState == STATE_PAIRING_WAIT) {
-      if (isStreamingActive || _navData.isNavigating) {
+      if ((isStreamingActive && _isAppConnected) || _navData.isNavigating || _isAppConnected) {
         _currentState = STATE_NAVIGATION;
+        _pairingBgDrawn = false;
         _needFullRedraw = true;
       } else {
         _drawPairingScreenTft();
