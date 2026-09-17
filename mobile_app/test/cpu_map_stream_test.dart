@@ -14,13 +14,13 @@ void main() {
     // Draw mock river
     img.drawLine(tile, x1: 0, y1: 60, x2: 255, y2: 80, color: img.ColorRgba8(140, 210, 255, 255), thickness: 20);
 
-    // 2. Composite onto 280x280 patch
-    final patch = img.Image(width: 280, height: 280);
+    // 2. Composite onto 360x360 patch
+    final patch = img.Image(width: 360, height: 360);
     img.fill(patch, color: img.ColorRgba8(235, 240, 240, 255));
-    img.compositeImage(patch, tile, dstX: 12, dstY: 12);
+    img.compositeImage(patch, tile, dstX: 52, dstY: 52);
 
-    // 3. Rotate by heading (e.g. 45 degrees)
-    final rotated = img.copyRotate(patch, angle: -45);
+    // 3. Rotate by heading with linear interpolation (e.g. 45 degrees)
+    final rotated = img.copyRotate(patch, angle: -45, interpolation: img.Interpolation.linear);
 
     // 4. Crop 144x208 for ESP32 screen
     final cx = rotated.width ~/ 2;
@@ -43,8 +43,8 @@ void main() {
     img.fillCircle(frame, x: 72, y: 140, radius: 7, color: img.ColorRgba8(0, 150, 255, 255));
     img.drawCircle(frame, x: 72, y: 140, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
 
-    // 7. Encode to JPEG
-    final jpegBytes = Uint8List.fromList(img.encodeJpg(frame, quality: 70));
+    // 7. Encode to high-definition JPEG (quality 82)
+    final jpegBytes = Uint8List.fromList(img.encodeJpg(frame, quality: 82));
 
     stopwatch.stop();
     print('Pure CPU Map Frame Render Time: ${stopwatch.elapsedMilliseconds} ms, JPEG size: ${jpegBytes.length} bytes');

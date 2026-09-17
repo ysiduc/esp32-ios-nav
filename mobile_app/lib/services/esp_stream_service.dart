@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -42,8 +41,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Uint8List? _latestJpegBytes;
   bool _isSendingBle = false;
 
-  // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
-  final Map<String, ui.Image> _tileCache = {};
+  // Real Map Tile Cache (Pure CPU In-Memory Image Cache for 100% Consistent HD Rendering)
   final Map<String, img.Image> _cpuTileCache = {};
   final Set<String> _pendingTileFetches = {};
 
@@ -68,8 +66,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   set streamMapStyle(String val) {
     if (_streamMapStyle != val) {
       _streamMapStyle = val;
-      _tileCache.forEach((_, img) => img.dispose());
-      _tileCache.clear();
       _cpuTileCache.clear();
       _lastPrefetchPos = null;
       notifyListeners();
@@ -82,8 +78,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final clamped = val.clamp(14, 18);
     if (_minimapZoom != clamped) {
       _minimapZoom = clamped;
-      _tileCache.forEach((_, img) => img.dispose());
-      _tileCache.clear();
       _cpuTileCache.clear();
       _lastPrefetchPos = null;
       notifyListeners();
@@ -210,8 +204,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _wsServer?.close(force: true);
     _wsServer = null;
     _pauseTimer?.cancel();
-    _tileCache.forEach((_, img) => img.dispose());
-    _tileCache.clear();
     _cpuTileCache.clear();
     super.dispose();
   }
@@ -266,7 +258,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS (with Pure CPU Background Support)
+  /// Render 144x208 High-Definition Real Street Map in Memory & Stream at 20 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
@@ -278,73 +270,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       const int h = 208;
 
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
-      final double heading = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
-      final activeRoute = navManager?.activeRoute;
-      final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
-      final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
       // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
       _prefetchSurroundingTiles(userPos, _minimapZoom);
 
-      Uint8List? jpegBytes;
-
-      if (_isForeground) {
-        // 0. Check live vector snapshot from MapLibre Goong map if provider hooked (foreground only)
-        if (mapSnapshotProvider != null) {
-          try {
-            final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
-            if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
-              final decoded = img.decodeImage(snapshotBytes);
-              if (decoded != null) {
-                jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
-              }
-            }
-          } catch (_) {}
-        }
-
-        // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
-        if (jpegBytes == null) {
-          try {
-            final recorder = ui.PictureRecorder();
-            final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
-
-            _drawRealMapCanvas(
-              canvas: canvas,
-              w: w.toDouble(),
-              h: h.toDouble(),
-              userPos: userPos,
-              headingDeg: heading,
-              activeRoute: activeRoute,
-              distToTurn: distToTurn,
-              speedKmh: speedKmh,
-            );
-
-            final picture = recorder.endRecording();
-            final image = await picture.toImage(w, h);
-            final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-            image.dispose();
-            picture.dispose();
-
-            if (byteData != null) {
-              final rawBytes = byteData.buffer.asUint8List();
-              final imgImage = img.Image.fromBytes(
-                width: w,
-                height: h,
-                bytes: rawBytes.buffer,
-                order: img.ChannelOrder.rgba,
-              );
-              jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
-            }
-          } catch (_) {
-            // Skia/Metal context failed, fallback to CPU
-          }
-        }
-      }
-
-      // 2. Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
-      // Runs seamlessly in background/screen-off when iOS suspends Metal GPU context!
-      jpegBytes ??= _renderCpuMapFrame(w, h);
-
+      // Unified Pure CPU High-Definition Map Renderer (0% GPU overhead, 100% consistent RAM execution)
+      // Completely eliminates grid squares in foreground, and provides razor-sharp map rendering in all states!
+      final jpegBytes = _renderCpuMapFrame(w, h);
 
       if (jpegBytes == null) {
         _isCapturing = false;
@@ -374,7 +306,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Pure CPU Software Map Renderer (Runs 100% in CPU RAM without Metal GPU, perfect for background)
+  /// Pure CPU Software High-Definition Map Renderer (Runs 100% in CPU RAM without Metal GPU)
+  /// Features: Razor-sharp native 256x256 tile composition, bilinear smooth rotation, Apple Maps 3-layer polyline, HD vehicle puck
   Uint8List? _renderCpuMapFrame(int w, int h) {
     try {
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
@@ -393,15 +326,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double subTileX = worldX - (centerTileX * 256.0);
       final double subTileY = worldY - (centerTileY * 256.0);
 
-      // Create a 300x300 CPU patch centered on user
-      const int patchSize = 300;
+      // Create a 360x360 CPU patch centered on user (radius 180px covers 144x208 frame at ANY rotation angle!)
+      const int patchSize = 360;
       final patch = img.Image(width: patchSize, height: patchSize);
       final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(235, 240, 240, 255);
       img.fill(patch, color: bgColor);
 
       const double patchCenter = patchSize / 2.0;
 
-      // Composite 3x3 surrounding tiles
+      // Composite 3x3 surrounding native 256x256 tiles seamlessly without scaling distortion
       bool tilesDrawn = false;
       for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
@@ -418,6 +351,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
+      // Draw subtle guideline grid ONLY while initial tiles are still downloading
       if (!tilesDrawn) {
         final gridColor = isDark ? img.ColorRgba8(30, 45, 66, 255) : img.ColorRgba8(221, 227, 227, 255);
         for (int gx = 0; gx <= patchSize; gx += 32) {
@@ -428,7 +362,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Draw active route polyline on patch before rotation (aligned with tiles!)
+      // Draw active route polyline on patch before rotation (aligned with 256px tile coordinates!)
       if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
         final pts = activeRoute.polylinePoints;
         img.Point? prevPt;
@@ -441,10 +375,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           final currPt = img.Point(px, py);
 
           if (prevPt != null) {
-            if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
-                (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 81, 179, 255), thickness: 6);
-              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 122, 255, 255), thickness: 4);
+            if ((prevPt.x >= -40 && prevPt.x <= patchSize + 40 && prevPt.y >= -40 && prevPt.y <= patchSize + 40) ||
+                (px >= -40 && px <= patchSize + 40 && py >= -40 && py <= patchSize + 40)) {
+              // 3-layer Apple Maps polyline: Outer casing, vibrant core, white center line
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 81, 179, 255), thickness: 7);
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255), thickness: 4);
               img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(255, 255, 255, 255), thickness: 1);
             }
           }
@@ -459,16 +394,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final int dx = (patchCenter + (destWorldX - worldX)).round();
         final int dy = (patchCenter + (destWorldY - worldY)).round();
         if (dx >= 10 && dx <= patchSize - 10 && dy >= 10 && dy <= patchSize - 10) {
-          img.fillCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
-          img.drawCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
+          img.fillCircle(patch, x: dx, y: dy, radius: 8, color: img.ColorRgba8(255, 59, 48, 255));
+          img.drawCircle(patch, x: dx, y: dy, radius: 8, color: img.ColorRgba8(255, 255, 255, 255));
           img.fillCircle(patch, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
         }
       }
 
-      // Rotate patch by -headingDeg so ahead is UP
+      // Rotate patch by -headingDeg so ahead is UP (bilinear interpolation for anti-aliased, razor-sharp streets!)
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
       }
 
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
@@ -485,20 +420,25 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         height: h,
       );
 
-      // Draw Vehicle Location Puck at (72, 140) pointing straight UP (matching Image 2)
+      // Draw High-Contrast Navigation Vehicle Puck at (72, 140) pointing straight UP (matching Apple Maps / Image 2)
       final int vx = (w / 2.0).round();
       final int vy = (h * 0.67).round();
-      img.fillCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(0, 122, 255, 255));
-      img.drawCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(255, 255, 255, 255));
-      // White arrow pointing straight UP
+      // Translucent radar aura ring
+      img.fillCircle(frame, x: vx, y: vy, radius: 13, color: isDark ? img.ColorRgba8(0, 240, 255, 50) : img.ColorRgba8(0, 122, 255, 50));
+      // Outer crisp white border
+      img.fillCircle(frame, x: vx, y: vy, radius: 9, color: img.ColorRgba8(255, 255, 255, 255));
+      // Inner vibrant blue core
+      img.fillCircle(frame, x: vx, y: vy, radius: 7, color: isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255));
+      // Sharp white directional arrow pointing straight UP
       img.fillPolygon(frame, vertices: [
-        img.Point(vx, vy - 7),
-        img.Point(vx + 5, vy + 4),
-        img.Point(vx, vy + 2),
-        img.Point(vx - 5, vy + 4),
+        img.Point(vx, vy - 6),
+        img.Point(vx + 4, vy + 3),
+        img.Point(vx, vy + 1),
+        img.Point(vx - 4, vy + 3),
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 68));
+      // High-definition JPEG encoding (quality 82 preserves fine street labels and eliminates DCT compression blur)
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 82));
     } catch (_) {
       return null;
     }
@@ -618,7 +558,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         for (int dx = -2; dx <= 2; dx++) {
           for (int dy = -2; dy <= 2; dy++) {
             final k = '$zoom/${cx + dx}/${cy + dy}';
-            if (!_tileCache.containsKey(k) && !_cpuTileCache.containsKey(k)) {
+            if (!_cpuTileCache.containsKey(k)) {
               allCached = false;
               break;
             }
@@ -636,7 +576,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final ty = cy + dy;
         final key = '$zoom/$tx/$ty';
 
-        if (!_tileCache.containsKey(key) && !_cpuTileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
+        if (!_cpuTileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
           _fetchTileImage(key, tx, ty, zoom);
         }
       }
@@ -648,22 +588,21 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final style = _streamMapStyle;
       final isDark = style.contains('dark');
-      final isGoong = style.contains('goong');
       final ext = style == 'hybrid' ? 'jpg' : 'png';
 
       final apiKey = MapboxConfig.maptilerApiKey;
       String url;
-      if (isGoong) {
-        // High-definition clean vector-based raster tiles with bright sky-blue water & white roads (Goong style)
+      // Use native 256x256 tiles with Vietnamese labels (crisp 1:1 pixel rendering, eliminates tile distortion & overlap)
+      if (style.contains('goong') || style == 'bright-v2' || style == 'streets-v2') {
         url = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=$apiKey&language=vi'
-            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=$apiKey&language=vi'
+            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y.png?key=$apiKey&language=vi';
       } else {
         url = apiKey.isNotEmpty
-            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
+            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y.$ext?key=$apiKey&language=vi'
             : (isDark
-                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-                : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+                : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
       }
 
       var response = await http.get(
@@ -674,8 +613,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
-            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY';
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+            : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi';
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'ESP32NavApp/2.0'},
@@ -683,30 +622,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-        // 1. Decode for CPU background map rendering (0% GPU)
+        // Decode for CPU map rendering (0% GPU overhead, pure RAM)
         try {
           final cpuImg = img.decodeImage(response.bodyBytes);
           if (cpuImg != null) {
             _cpuTileCache[key] = cpuImg;
-            if (_cpuTileCache.length > 100) {
+            if (_cpuTileCache.length > 150) {
               _cpuTileCache.remove(_cpuTileCache.keys.first);
             }
           }
         } catch (_) {}
-
-        // 2. Decode for Flutter GPU rendering (when app is in foreground)
-        if (_isForeground) {
-          try {
-            final codec = await ui.instantiateImageCodec(response.bodyBytes);
-            final frame = await codec.getNextFrame();
-            _tileCache[key] = frame.image;
-
-            if (_tileCache.length > 100) {
-              final firstKey = _tileCache.keys.first;
-              _tileCache.remove(firstKey)?.dispose();
-            }
-          } catch (_) {}
-        }
 
         // Trigger immediate redraw so map is updated as soon as tile loads
         _latestJpegBytes = null;
@@ -716,171 +641,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       _pendingTileFetches.remove(key);
     }
-  }
-
-  /// Draw Real Street Map Canvas with Rotating Map & Overlaid Route Polyline
-  void _drawRealMapCanvas({
-    required Canvas canvas,
-    required double w,
-    required double h,
-    required LatLng userPos,
-    required double headingDeg,
-    required NavRoute? activeRoute,
-    required double distToTurn,
-    required double speedKmh,
-  }) {
-    final isDark = _streamMapStyle.contains('dark');
-
-    // 1. Background Fill: Clean Light Cream for Apple Maps / Goong (#F4F6F8) or Dark Navy (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFEBF0F0);
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
-
-    // Vehicle screen anchor (lower center: x=72, y=140)
-    final double cx = w / 2.0;
-    final double cy = h * 0.67;
-
-    // Dynamic Zoom level (14 to 18): controlled via simulator screen slider
-    final int zoom = _minimapZoom;
-    final double n = math.pow(2.0, zoom).toDouble();
-    final double latRad = userPos.latitude * (math.pi / 180.0);
-    final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
-    final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
-
-    final int centerTileX = (worldX / 256.0).floor();
-    final int centerTileY = (worldY / 256.0).floor();
-    final double subTileX = worldX - (centerTileX * 256.0);
-    final double subTileY = worldY - (centerTileY * 256.0);
-
-    final double headingRad = headingDeg * (math.pi / 180.0);
-
-    // --- DRAW ROTATING MAP TILES & ROUTE ---
-    canvas.save();
-    canvas.translate(cx, cy);
-    canvas.rotate(-headingRad);
-
-    bool tilesDrawn = false;
-    for (int dx = -2; dx <= 2; dx++) {
-      for (int dy = -2; dy <= 2; dy++) {
-        final tx = centerTileX + dx;
-        final ty = centerTileY + dy;
-        final key = '$zoom/$tx/$ty';
-
-        final tileImg = _tileCache[key];
-        if (tileImg != null) {
-          final double drawX = (dx * 256.0) - subTileX;
-          final double drawY = (dy * 256.0) - subTileY;
-          canvas.drawImageRect(
-            tileImg,
-            Rect.fromLTWH(0, 0, tileImg.width.toDouble(), tileImg.height.toDouble()),
-            Rect.fromLTWH(drawX, drawY, 256.0, 256.0),
-            Paint()..filterQuality = FilterQuality.medium,
-          );
-          tilesDrawn = true;
-        }
-      }
-    }
-
-    // High-visibility clean placeholder if tiles still downloading
-    if (!tilesDrawn) {
-      final gridPaint = Paint()
-        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFDDE3E3)
-        ..strokeWidth = 1.0;
-      for (double gx = -220; gx <= 220; gx += 32) {
-        canvas.drawLine(Offset(gx, -220), Offset(gx, 220), gridPaint);
-      }
-      for (double gy = -220; gy <= 220; gy += 32) {
-        canvas.drawLine(Offset(-220, gy), Offset(220, gy), gridPaint);
-      }
-    }
-
-    // Draw Route Polyline whenever an active route or preview route exists
-    final effectiveRoute = activeRoute ?? navManager?.previewRoute;
-    final points = (effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
-        ? effectiveRoute.polylinePoints
-        : <LatLng>[];
-
-    if (points.length >= 2) {
-      final routePath = ui.Path();
-      bool first = true;
-
-      for (final pt in points) {
-        final double ptLatRad = pt.latitude * (math.pi / 180.0);
-        final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
-        final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
-
-        final double px = ptWorldX - worldX;
-        final double py = ptWorldY - worldY;
-
-        if (first) {
-          routePath.moveTo(px, py);
-          first = false;
-        } else {
-          routePath.lineTo(px, py);
-        }
-      }
-
-      // Route Outer Glow / Casing (Vibrant Apple Blue Casing #0051B3)
-      final casingPaint = Paint()
-        ..color = isDark ? const Color(0xFF003D66) : const Color(0xFF0051B3)
-        ..strokeWidth = 8.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(routePath, casingPaint);
-
-      // Route Core: Apple Maps Vibrant Blue (#007AFF)
-      final corePaint = Paint()
-        ..color = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF)
-        ..strokeWidth = 5.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      canvas.drawPath(routePath, corePaint);
-
-      // Destination Pin on Route
-      final destPt = points.last;
-      final double destLatRad = destPt.latitude * (math.pi / 180.0);
-      final double destWorldX = (destPt.longitude + 180.0) / 360.0 * n * 256.0;
-      final double destWorldY = (1.0 - (math.log(math.tan(destLatRad) + 1.0 / math.cos(destLatRad)) / math.pi)) / 2.0 * n * 256.0;
-      final double dpx = destWorldX - worldX;
-      final double dpy = destWorldY - worldY;
-      if (dpx.abs() < 240 && dpy.abs() < 240) {
-        canvas.drawCircle(Offset(dpx, dpy), 8, Paint()..color = const Color(0xFFFF3B30));
-        canvas.drawCircle(Offset(dpx, dpy), 4, Paint()..color = Colors.white);
-      }
-    }
-
-    canvas.restore();
-
-    // 2. Navigation Vehicle Indicator (Stationary at center cx, cy pointing straight UP)
-    final vehicleColor = isDark ? const Color(0xFF00F0FF) : const Color(0xFF007AFF);
-    final radarRing = Paint()
-      ..color = vehicleColor.withAlpha(45)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 16, radarRing);
-
-    final vehicleBg = Paint()
-      ..color = vehicleColor
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx, cy), 10, vehicleBg);
-
-    final vehicleBorder = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 2.2
-      ..style = PaintingStyle.stroke;
-    canvas.drawCircle(Offset(cx, cy), 10, vehicleBorder);
-
-    // Direction Arrow pointing straight UP
-    final arrowPath = ui.Path()
-      ..moveTo(cx, cy - 7)
-      ..lineTo(cx + 4.5, cy + 4)
-      ..lineTo(cx, cy + 1.5)
-      ..lineTo(cx - 4.5, cy + 4)
-      ..close();
-    final arrowPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawPath(arrowPath, arrowPaint);
   }
 
   /// Send JPEG frame over BLE in MTU-safe sequential chunks with micro-pacing
