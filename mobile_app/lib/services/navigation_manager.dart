@@ -95,6 +95,7 @@ class NavigationManager extends ChangeNotifier {
   NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
     _initGps();
     _startIdleHeartbeat();
+    bleService.getBatteryLevel().then((b) => _currentBattery = b);
     if (mediaService != null) {
       attachMediaService(mediaService);
     }

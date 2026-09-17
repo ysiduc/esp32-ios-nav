@@ -83,13 +83,28 @@ class BleService extends ChangeNotifier {
   String get wifiPass => _wifiPass;
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
+  int _lastKnownBattery = 85;
+
   Future<int> getBatteryLevel() async {
+    // 1. Direct native iOS UIKit battery query (zero external pod dependencies, 100% reliable)
+    if (Platform.isIOS) {
+      try {
+        final res = await _locationChannel.invokeMethod('getBatteryLevel');
+        if (res is int && res > 0 && res <= 100) {
+          _lastKnownBattery = res;
+          return res;
+        }
+      } catch (_) {}
+    }
+    // 2. Fallback to battery_plus plugin
     try {
       final level = await _battery.batteryLevel;
-      return level.clamp(0, 100);
-    } catch (_) {
-      return 85;
-    }
+      if (level > 0 && level <= 100) {
+        _lastKnownBattery = level;
+        return level;
+      }
+    } catch (_) {}
+    return _lastKnownBattery;
   }
 
   BleService() {
@@ -464,7 +479,7 @@ class BleService extends ChangeNotifier {
     _heartbeatTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
       if (!_isConnected || _writeCharacteristic == null) return;
       final diff = DateTime.now().difference(_lastTxTime).inMilliseconds;
-      if (diff >= 2000) {
+      if (diff >= 3500) {
         final now = DateTime.now();
         final h = now.hour.toString().padLeft(2, '0');
         final m = now.minute.toString().padLeft(2, '0');

@@ -169,7 +169,7 @@ void processJsonPacket(const char* jsonStr) {
       curClock = String(doc["clock"].as<const char*>());
       display.updateClock(curClock.c_str());
     }
-    if (doc["bat"].is<int>()) {
+    if (!doc["bat"].isNull()) {
       int b = doc["bat"].as<int>();
       if (b >= 0 && b <= 100) {
         curBattery = (uint8_t)b;
@@ -196,7 +196,7 @@ void processJsonPacket(const char* jsonStr) {
       curClock = String(doc["clock"].as<const char*>());
       display.updateClock(curClock.c_str());
     }
-    if (doc["bat"].is<int>()) {
+    if (!doc["bat"].isNull()) {
       int b = doc["bat"].as<int>();
       if (b >= 0 && b <= 100) {
         curBattery = (uint8_t)b;
@@ -287,7 +287,16 @@ void processJsonPacket(const char* jsonStr) {
     curArrival = String((const char*)doc["arr"]);
   }
   if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
-  if (doc["bat"].is<int>()) curBattery = doc["bat"];
+  if (!doc["bat"].isNull()) {
+    int b = doc["bat"].as<int>();
+    if (b >= 0 && b <= 100) {
+      curBattery = (uint8_t)b;
+      display.updateBattery(curBattery);
+      prefs.begin("nav_state", false);
+      prefs.putUChar("bat", curBattery);
+      prefs.end();
+    }
+  }
   if (doc["head"].is<int>()) curHeading = doc["head"];
 
   // Dynamically calculate curArrival if not explicitly provided or if still default
@@ -599,24 +608,14 @@ void loop() {
   // 3. Apple-compliant BLE Connection Parameter Update (Send >= 5s after connect so iOS accepts it)
   if (bleConnected && !connParamsUpdated && (millis() - bleConnectedTime >= 5000)) {
     connParamsUpdated = true;
-    // min_interval=36 (45ms), max_interval=48 (60ms), latency=4 (skip 4 events during WiFi bursts), timeout=600 (6.0s)
-    NimBLEDevice::getServer()->updateConnParams(bleConnectedHandle, 36, 48, 4, 600);
-    Serial.println("[BLE] Applied Apple-compliant Coex Connection Parameters (45-60ms, latency 4, timeout 6.0s)");
+    // Apple Accessory Design Guidelines (QA1931):
+    // min_interval: 24 (30ms), max_interval: 36 (45ms), latency: 0 (no missed events), timeout: 600 (6.0s)
+    NimBLEDevice::getServer()->updateConnParams(bleConnectedHandle, 24, 36, 0, 600);
+    Serial.println("[BLE] Applied Apple QA1931 Connection Parameters (30-45ms, latency 0, timeout 6.0s)");
   }
 
-  // 4. Periodic retry of Apple Media & Time services if connection dropped or missed
-  static unsigned long lastBleServiceCheck = 0;
+  // 4. Periodic Apple Time sync check
   if (bleConnected && bleConnectedHandle != 0) {
-    if (millis() - lastBleServiceCheck > 10000) {
-      lastBleServiceCheck = millis();
-      if (!AppleMediaService::isSubscribed && !AppleMediaService::isDiscovering) {
-        AppleMediaService::startDiscovery(bleConnectedHandle);
-      } else if (!AppleCurrentTimeService::isSubscribed && !AppleCurrentTimeService::isDiscovering) {
-        AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
-      } else if (!AppleNotificationService::isSubscribed && !AppleNotificationService::isDiscovering) {
-        AppleNotificationService::startDiscovery(bleConnectedHandle);
-      }
-    }
     AppleCurrentTimeService::checkPeriodic();
   }
 

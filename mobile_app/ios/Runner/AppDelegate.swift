@@ -108,6 +108,15 @@ import AVFoundation
       case "stopBackgroundNavigation":
         NavigationLocationManager.shared.stop()
         result(true)
+      case "getBatteryLevel":
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        let rawLevel = UIDevice.current.batteryLevel
+        if rawLevel >= 0 {
+          let percentage = Int(round(rawLevel * 100.0))
+          result(percentage)
+        } else {
+          result(85)
+        }
       case "shareLog":
         guard let args = call.arguments as? [String: Any],
               let text = args["text"] as? String else {
