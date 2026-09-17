@@ -1325,22 +1325,29 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: streamService.latestJpegBytes != null
-                  ? Image.memory(
-                      streamService.latestJpegBytes!,
+              child: ValueListenableBuilder<Uint8List?>(
+                valueListenable: streamService.latestFrameNotifier,
+                builder: (context, frameBytes, _) {
+                  if (frameBytes != null) {
+                    return Image.memory(
+                      frameBytes,
                       fit: BoxFit.fill,
                       gaplessPlayback: true,
-                    )
-                  : (_mapImagePreview != null
-                      ? Image.memory(
-                          _mapImagePreview!,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                        )
-                      : CustomPaint(
-                          painter: StandbyVectorMapPainter(navManager: navManager),
-                          size: const Size(144, 208),
-                        )),
+                    );
+                  }
+                  if (_mapImagePreview != null) {
+                    return Image.memory(
+                      _mapImagePreview!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    );
+                  }
+                  return CustomPaint(
+                    painter: StandbyVectorMapPainter(navManager: navManager),
+                    size: const Size(144, 208),
+                  );
+                },
+              ),
             ),
           ),
         ),
