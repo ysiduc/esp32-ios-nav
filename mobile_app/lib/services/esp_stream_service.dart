@@ -288,45 +288,44 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       Uint8List? jpegBytes;
 
-      // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
-      // Runs in memory in both foreground and background
-      try {
-        final recorder = ui.PictureRecorder();
-        final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
+      if (_isForeground) {
+        // 1. In foreground: High-Speed Flutter Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck)
+        try {
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
 
-        _drawRealMapCanvas(
-          canvas: canvas,
-          w: w.toDouble(),
-          h: h.toDouble(),
-          userPos: userPos,
-          headingDeg: heading,
-          activeRoute: activeRoute,
-          distToTurn: distToTurn,
-          speedKmh: speedKmh,
-        );
-
-        final picture = recorder.endRecording();
-        final image = await picture.toImage(w, h);
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-        image.dispose();
-        picture.dispose();
-
-        if (byteData != null) {
-          final rawBytes = byteData.buffer.asUint8List();
-          final imgImage = img.Image.fromBytes(
-            width: w,
-            height: h,
-            bytes: rawBytes.buffer,
-            order: img.ChannelOrder.rgba,
+          _drawRealMapCanvas(
+            canvas: canvas,
+            w: w.toDouble(),
+            h: h.toDouble(),
+            userPos: userPos,
+            headingDeg: heading,
+            activeRoute: activeRoute,
+            distToTurn: distToTurn,
+            speedKmh: speedKmh,
           );
-          jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 78));
-        }
-      } catch (_) {
-        // Skia/Metal context failed in background, fallback to CPU renderer
+
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(w, h);
+          final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+          image.dispose();
+          picture.dispose();
+
+          if (byteData != null) {
+            final rawBytes = byteData.buffer.asUint8List();
+            final imgImage = img.Image.fromBytes(
+              width: w,
+              height: h,
+              bytes: rawBytes.buffer,
+              order: img.ChannelOrder.rgba,
+            );
+            jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 78));
+          }
+        } catch (_) {}
       }
 
-      // 2. Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
-      // Runs seamlessly in background/screen-off when iOS suspends Metal GPU context!
+      // 2. In background / screen-off: Pure CPU Software Map Renderer (100% CPU RAM, 0% GPU)
+      // Runs seamlessly without touching Metal rasterizer, upgraded to match Image 2 visual styling!
       jpegBytes ??= _renderCpuMapFrame(w, h);
 
 
@@ -719,17 +718,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           }
         } catch (_) {}
 
-        // 2. Decode for Flutter Canvas rendering (available for both foreground and background)
-        try {
-          final codec = await ui.instantiateImageCodec(response.bodyBytes);
-          final frame = await codec.getNextFrame();
-          _tileCache[key] = frame.image;
+        // 2. Decode for Flutter Canvas rendering (only when app is in foreground)
+        if (_isForeground) {
+          try {
+            final codec = await ui.instantiateImageCodec(response.bodyBytes);
+            final frame = await codec.getNextFrame();
+            _tileCache[key] = frame.image;
 
-          if (_tileCache.length > 100) {
-            final firstKey = _tileCache.keys.first;
-            _tileCache.remove(firstKey)?.dispose();
-          }
-        } catch (_) {}
+            if (_tileCache.length > 100) {
+              final firstKey = _tileCache.keys.first;
+              _tileCache.remove(firstKey)?.dispose();
+            }
+          } catch (_) {}
+        }
 
         // Trigger immediate redraw so map is updated as soon as tile loads
         _latestJpegBytes = null;
