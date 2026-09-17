@@ -282,62 +282,62 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       Uint8List? jpegBytes;
 
-      // 0. Check live vector snapshot from MapLibre Goong map if provider hooked (foreground only)
-      if (_isForeground && mapSnapshotProvider != null) {
-        try {
-          final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
-          if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
-            final decoded = img.decodeImage(snapshotBytes);
-            if (decoded != null) {
-              jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
+      if (_isForeground) {
+        // 0. Check live vector snapshot from MapLibre Goong map if provider hooked (foreground only)
+        if (mapSnapshotProvider != null) {
+          try {
+            final snapshotBytes = await mapSnapshotProvider!(width: w, height: h);
+            if (snapshotBytes != null && snapshotBytes.isNotEmpty) {
+              final decoded = img.decodeImage(snapshotBytes);
+              if (decoded != null) {
+                jpegBytes = Uint8List.fromList(img.encodeJpg(decoded, quality: 72));
+              }
             }
-          }
-        } catch (_) {}
-      }
+          } catch (_) {}
+        }
 
-      // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
-      // Runs in memory in both foreground and background
-      if (jpegBytes == null) {
-        try {
-          final recorder = ui.PictureRecorder();
-          final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
+        // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
+        if (jpegBytes == null) {
+          try {
+            final recorder = ui.PictureRecorder();
+            final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
 
-          _drawRealMapCanvas(
-            canvas: canvas,
-            w: w.toDouble(),
-            h: h.toDouble(),
-            userPos: userPos,
-            headingDeg: heading,
-            activeRoute: activeRoute,
-            distToTurn: distToTurn,
-            speedKmh: speedKmh,
-          );
-
-          final picture = recorder.endRecording();
-          final image = await picture.toImage(w, h);
-          final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-          image.dispose();
-          picture.dispose();
-
-          if (byteData != null) {
-            final rawBytes = byteData.buffer.asUint8List();
-            final imgImage = img.Image.fromBytes(
-              width: w,
-              height: h,
-              bytes: rawBytes.buffer,
-              order: img.ChannelOrder.rgba,
+            _drawRealMapCanvas(
+              canvas: canvas,
+              w: w.toDouble(),
+              h: h.toDouble(),
+              userPos: userPos,
+              headingDeg: heading,
+              activeRoute: activeRoute,
+              distToTurn: distToTurn,
+              speedKmh: speedKmh,
             );
-            jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
+
+            final picture = recorder.endRecording();
+            final image = await picture.toImage(w, h);
+            final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+            image.dispose();
+            picture.dispose();
+
+            if (byteData != null) {
+              final rawBytes = byteData.buffer.asUint8List();
+              final imgImage = img.Image.fromBytes(
+                width: w,
+                height: h,
+                bytes: rawBytes.buffer,
+                order: img.ChannelOrder.rgba,
+              );
+              jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
+            }
+          } catch (_) {
+            // Skia/Metal context failed, fallback to CPU
           }
-        } catch (_) {
-          // If Skia/Metal context is temporarily unavailable in background, fall back to pure CPU renderer below
         }
       }
 
-      // 2. Secondary: Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
-      if (jpegBytes == null) {
-        jpegBytes = _renderCpuMapFrame(w, h);
-      }
+      // 2. Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
+      // Runs seamlessly in background/screen-off when iOS suspends Metal GPU context!
+      jpegBytes ??= _renderCpuMapFrame(w, h);
 
 
       if (jpegBytes == null) {
@@ -373,7 +373,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
-      final activeRoute = navManager?.activeRoute;
+      final activeRoute = navManager?.activeRoute ?? navManager?.previewRoute;
       final int zoom = _minimapZoom;
       final isDark = _streamMapStyle.contains('dark');
 
@@ -387,8 +387,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double subTileX = worldX - (centerTileX * 256.0);
       final double subTileY = worldY - (centerTileY * 256.0);
 
-      // Create a 280x280 CPU patch centered on user
-      const int patchSize = 280;
+      // Create a 300x300 CPU patch centered on user
+      const int patchSize = 300;
       final patch = img.Image(width: patchSize, height: patchSize);
       final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(235, 240, 240, 255);
       img.fill(patch, color: bgColor);
@@ -396,6 +396,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       const double patchCenter = patchSize / 2.0;
 
       // Composite 3x3 surrounding tiles
+      bool tilesDrawn = false;
       for (int dx = -1; dx <= 1; dx++) {
         for (int dy = -1; dy <= 1; dy++) {
           final tx = centerTileX + dx;
@@ -406,7 +407,55 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             final int dstX = (patchCenter + (dx * 256.0) - subTileX).round();
             final int dstY = (patchCenter + (dy * 256.0) - subTileY).round();
             img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY);
+            tilesDrawn = true;
           }
+        }
+      }
+
+      if (!tilesDrawn) {
+        final gridColor = isDark ? img.ColorRgba8(30, 45, 66, 255) : img.ColorRgba8(221, 227, 227, 255);
+        for (int gx = 0; gx <= patchSize; gx += 32) {
+          img.drawLine(patch, x1: gx, y1: 0, x2: gx, y2: patchSize, color: gridColor);
+        }
+        for (int gy = 0; gy <= patchSize; gy += 32) {
+          img.drawLine(patch, x1: 0, y1: gy, x2: patchSize, y2: gy, color: gridColor);
+        }
+      }
+
+      // Draw active route polyline on patch before rotation (aligned with tiles!)
+      if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
+        final pts = activeRoute.polylinePoints;
+        img.Point? prevPt;
+        for (final pt in pts) {
+          final double ptLatRad = pt.latitude * (math.pi / 180.0);
+          final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
+          final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
+          final int px = (patchCenter + (ptWorldX - worldX)).round();
+          final int py = (patchCenter + (ptWorldY - worldY)).round();
+          final currPt = img.Point(px, py);
+
+          if (prevPt != null) {
+            if ((prevPt.x >= -30 && prevPt.x <= patchSize + 30 && prevPt.y >= -30 && prevPt.y <= patchSize + 30) ||
+                (px >= -30 && px <= patchSize + 30 && py >= -30 && py <= patchSize + 30)) {
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 81, 179, 255), thickness: 6);
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(0, 122, 255, 255), thickness: 4);
+              img.drawLine(patch, x1: prevPt.x.toInt(), y1: prevPt.y.toInt(), x2: px, y2: py, color: img.ColorRgba8(255, 255, 255, 255), thickness: 1);
+            }
+          }
+          prevPt = currPt;
+        }
+
+        // Draw destination pin if on patch
+        final destPt = pts.last;
+        final double destLatRad = destPt.latitude * (math.pi / 180.0);
+        final double destWorldX = (destPt.longitude + 180.0) / 360.0 * n * 256.0;
+        final double destWorldY = (1.0 - (math.log(math.tan(destLatRad) + 1.0 / math.cos(destLatRad)) / math.pi)) / 2.0 * n * 256.0;
+        final int dx = (patchCenter + (destWorldX - worldX)).round();
+        final int dy = (patchCenter + (destWorldY - worldY)).round();
+        if (dx >= 10 && dx <= patchSize - 10 && dy >= 10 && dy <= patchSize - 10) {
+          img.fillCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
+          img.drawCircle(patch, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
+          img.fillCircle(patch, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
         }
       }
 
@@ -430,55 +479,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         height: h,
       );
 
-      // Draw active route polyline on frame
-      if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
-        final pts = activeRoute.polylinePoints;
-        final hRad = headingDeg * (math.pi / 180.0);
-        final cosH = math.cos(hRad);
-        final sinH = math.sin(hRad);
-        final cosLat = math.cos(userPos.latitude * (math.pi / 180.0));
-
-        final screenPts = <img.Point>[];
-        final double metersPerPixel = 156543.03392 * math.cos(latRad) / math.pow(2.0, zoom);
-        final double scale = 1.0 / metersPerPixel;
-
-        for (int i = 0; i < pts.length; i++) {
-          final dNorth = (pts[i].latitude - userPos.latitude) * 111139.0;
-          final dEast = (pts[i].longitude - userPos.longitude) * 111139.0 * cosLat;
-          final xRel = dEast * cosH - dNorth * sinH;
-          final yRel = dNorth * cosH + dEast * sinH;
-          final sx = (72 + xRel * scale).round();
-          final sy = ((h * 0.67) - yRel * scale).round();
-          if (sx >= -50 && sx <= w + 50 && sy >= -50 && sy <= h + 50) {
-            screenPts.add(img.Point(sx, sy));
-          }
-        }
-
-        // Draw polyline segments
-        for (int i = 1; i < screenPts.length; i++) {
-          final x1 = screenPts[i - 1].x.toInt();
-          final y1 = screenPts[i - 1].y.toInt();
-          final x2 = screenPts[i].x.toInt();
-          final y2 = screenPts[i].y.toInt();
-          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(0, 110, 220, 255), thickness: 6);
-          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(0, 230, 255, 255), thickness: 4);
-          img.drawLine(frame, x1: x1, y1: y1, x2: x2, y2: y2, color: img.ColorRgba8(255, 255, 255, 255), thickness: 1);
-        }
-      }
-
-      // Draw Vehicle Location Puck at (72, 140) pointing straight UP
-      final int vx = 72;
+      // Draw Vehicle Location Puck at (72, 140) pointing straight UP (matching Image 2)
+      final int vx = (w / 2.0).round();
       final int vy = (h * 0.67).round();
-      img.fillCircle(frame, x: vx, y: vy, radius: 8, color: img.ColorRgba8(0, 130, 250, 255));
-      img.drawCircle(frame, x: vx, y: vy, radius: 8, color: img.ColorRgba8(255, 255, 255, 255));
-      img.fillCircle(frame, x: vx, y: vy, radius: 4, color: img.ColorRgba8(0, 230, 255, 255));
+      img.fillCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(0, 122, 255, 255));
+      img.drawCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(255, 255, 255, 255));
+      // White arrow pointing straight UP
       img.fillPolygon(frame, vertices: [
-        img.Point(vx, vy - 10),
-        img.Point(vx - 4, vy - 3),
-        img.Point(vx + 4, vy - 3),
+        img.Point(vx, vy - 7),
+        img.Point(vx + 5, vy + 4),
+        img.Point(vx, vy + 2),
+        img.Point(vx - 5, vy + 4),
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 65));
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 68));
     } catch (_) {
       return null;
     }
@@ -493,6 +507,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {
           _wsClients.remove(client);
         }
+      }
+      if (_frameCount % 25 == 0) {
+        bleService.logInfo('TX [Hotspot WS] Stream Frame #$_frameCount (${_frameSizeKb} KB, ${_actualFps.toStringAsFixed(1)} FPS)');
       }
       return; // Primary Hotspot WebSocket stream successful - return immediately
     }
@@ -584,7 +601,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         bool allCached = true;
         for (int dx = -2; dx <= 2; dx++) {
           for (int dy = -2; dy <= 2; dy++) {
-            if (!_tileCache.containsKey('$zoom/${cx + dx}/${cy + dy}')) {
+            final k = '$zoom/${cx + dx}/${cy + dy}';
+            if (!_tileCache.containsKey(k) && !_cpuTileCache.containsKey(k)) {
               allCached = false;
               break;
             }
@@ -602,7 +620,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final ty = cy + dy;
         final key = '$zoom/$tx/$ty';
 
-        if (!_tileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
+        if (!_tileCache.containsKey(key) && !_cpuTileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
           _fetchTileImage(key, tx, ty, zoom);
         }
       }

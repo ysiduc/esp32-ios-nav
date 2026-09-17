@@ -4,6 +4,7 @@ import MediaPlayer
 import CallKit
 import CoreLocation
 import MapKit
+import AVFoundation
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -11,7 +12,7 @@ import MapKit
   private var callChannel: FlutterMethodChannel?
   private var locationChannel: FlutterMethodChannel?
   private var isChannelSetup = false
-
+  private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
   // CallKit observer - theo dõi cuộc gọi
   private var callObserver: CXCallObserver?
@@ -25,6 +26,24 @@ import MapKit
       setupChannels(binaryMessenger: controller.binaryMessenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func applicationDidEnterBackground(_ application: UIApplication) {
+    super.applicationDidEnterBackground(application)
+    backgroundTask = application.beginBackgroundTask(withName: "ESP32NavBackgroundKeepAlive") { [weak self] in
+      if let task = self?.backgroundTask, task != .invalid {
+        application.endBackgroundTask(task)
+        self?.backgroundTask = .invalid
+      }
+    }
+  }
+
+  override func applicationWillEnterForeground(_ application: UIApplication) {
+    super.applicationWillEnterForeground(application)
+    if backgroundTask != .invalid {
+      application.endBackgroundTask(backgroundTask)
+      backgroundTask = .invalid
+    }
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -347,6 +366,79 @@ class MediaRemoteObserver {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Background Keep-Alive Manager (Silent Audio Loop for 24/7 Network Survival)
+// ─────────────────────────────────────────────────────────────────────────────
+class BackgroundKeepAliveManager {
+  static let shared = BackgroundKeepAliveManager()
+  private var audioPlayer: AVAudioPlayer?
+  private var isRunning = false
+
+  func start() {
+    guard !isRunning else { return }
+    isRunning = true
+
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try AVAudioSession.sharedInstance().setActive(true)
+
+      if audioPlayer == nil {
+        let silentWav = createSilentWav()
+        audioPlayer = try AVAudioPlayer(data: silentWav)
+        audioPlayer?.numberOfLoops = -1 // Loop infinitely
+        audioPlayer?.volume = 0.001 // Inaudible, mixWithOthers prevents interfering with calls/music
+        audioPlayer?.prepareToPlay()
+      }
+      audioPlayer?.play()
+      print("[BackgroundKeepAlive] Silent audio keep-alive activated")
+    } catch {
+      print("[BackgroundKeepAlive] Audio keep-alive error: \(error)")
+    }
+  }
+
+  func stop() {
+    guard isRunning else { return }
+    isRunning = false
+    audioPlayer?.stop()
+    do {
+      try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    } catch {}
+    print("[BackgroundKeepAlive] Silent audio keep-alive deactivated")
+  }
+
+  /// Generates a standard RIFF/WAVE 1-second 8kHz mono 16-bit PCM silence in memory (~16KB)
+  private func createSilentWav() -> Data {
+    let sampleRate: Int32 = 8000
+    let numChannels: Int16 = 1
+    let bitsPerSample: Int16 = 16
+    let byteRate = sampleRate * Int32(numChannels * bitsPerSample / 8)
+    let blockAlign = numChannels * bitsPerSample / 8
+    let durationSeconds = 1
+    let numSamples = Int(sampleRate) * durationSeconds
+    let dataSize = Int32(numSamples * Int(blockAlign))
+    let chunkSize = 36 + dataSize
+
+    var data = Data()
+    data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+    data.append(contentsOf: withUnsafeBytes(of: chunkSize.littleEndian) { Array($0) })
+    data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
+    data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+    var subchunk1Size: Int32 = 16
+    data.append(contentsOf: withUnsafeBytes(of: subchunk1Size.littleEndian) { Array($0) })
+    var audioFormat: Int16 = 1 // PCM
+    data.append(contentsOf: withUnsafeBytes(of: audioFormat.littleEndian) { Array($0) })
+    data.append(contentsOf: withUnsafeBytes(of: numChannels.littleEndian) { Array($0) })
+    data.append(contentsOf: withUnsafeBytes(of: sampleRate.littleEndian) { Array($0) })
+    data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
+    data.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
+    data.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Array($0) })
+    data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+    data.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
+    data.append(Data(count: Int(dataSize))) // Silence (all zero bytes)
+    return data
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Navigation Location Manager (Background Survival & Blue Bar Indicator)
 // ─────────────────────────────────────────────────────────────────────────────
 class NavigationLocationManager: NSObject, CLLocationManagerDelegate {
@@ -358,6 +450,8 @@ class NavigationLocationManager: NSObject, CLLocationManagerDelegate {
     super.init()
     locationManager.delegate = self
     locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    locationManager.activityType = .automotiveNavigation
+    locationManager.distanceFilter = kCLDistanceFilterNone
   }
 
   func start() {
@@ -375,6 +469,10 @@ class NavigationLocationManager: NSObject, CLLocationManagerDelegate {
     locationManager.pausesLocationUpdatesAutomatically = false
 
     locationManager.startUpdatingLocation()
+    locationManager.startUpdatingHeading()
+
+    // Start silent audio loop to keep WebSocket Hotspot and BLE alive 24/7
+    BackgroundKeepAliveManager.shared.start()
   }
 
   func stop() {
@@ -382,6 +480,9 @@ class NavigationLocationManager: NSObject, CLLocationManagerDelegate {
     isRunning = false
     locationManager.showsBackgroundLocationIndicator = false
     locationManager.stopUpdatingLocation()
+    locationManager.stopUpdatingHeading()
+
+    BackgroundKeepAliveManager.shared.stop()
   }
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {

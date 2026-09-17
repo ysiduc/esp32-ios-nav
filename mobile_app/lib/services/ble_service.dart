@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../models/esp_payload.dart';
 
@@ -334,35 +335,7 @@ class BleService extends ChangeNotifier {
       }
 
       _connectedDevice = device;
-      _isConnected = true;
       _isConnecting = false;
-      _addLog('Đã kết nối thành công với: $_connectedDeviceName!', isTx: false);
-
-      // Listen for disconnections & auto-reconnect if app was suspended/idle
-      _connectionSubscription?.cancel();
-      _connectionSubscription = device.connectionState.listen((state) async {
-        if (state == BluetoothConnectionState.disconnected) {
-          _addLog('Tạm ngắt kết nối Bluetooth, đang tự động kết nối lại...', isTx: false);
-          _isConnected = false;
-          notifyListeners();
-          try {
-            await Future.delayed(const Duration(milliseconds: 1500));
-            if (!_isConnected && _connectedDevice != null) {
-              await _connectedDevice!.connect(
-                license: License.nonprofit,
-                timeout: const Duration(seconds: 20),
-                autoConnect: true,
-              );
-              await _discoverServices(_connectedDevice!);
-              _isConnected = true;
-              notifyListeners();
-              _addLog('Đã tự động kết nối lại thành công!', isTx: false);
-            }
-          } catch (_) {
-            _handleDisconnect();
-          }
-        }
-      });
 
       // Request maximum MTU (512) for high-speed BLE JPEG stream
       try {
@@ -371,15 +344,81 @@ class BleService extends ChangeNotifier {
 
       // Discover GATT Services
       await _discoverServices(device);
+
+      if (_writeCharacteristic != null) {
+        _isConnected = true;
+        _enableBackgroundKeepAlive();
+        _addLog('Đã kết nối thành công với: $_connectedDeviceName!', isTx: false);
+      } else {
+        _isConnected = false;
+        _addLog('Không tìm thấy Characteristic ghi dữ liệu!', isError: true);
+      }
+
+      // Listen for disconnections & auto-reconnect if app was suspended/idle
+      _connectionSubscription?.cancel();
+      _connectionSubscription = device.connectionState.listen((state) async {
+        if (state == BluetoothConnectionState.disconnected) {
+          _addLog('Tạm ngắt kết nối Bluetooth, đang tự động kết nối lại...', isTx: false);
+          _isConnected = false;
+          _writeCharacteristic = null;
+          notifyListeners();
+          try {
+            await Future.delayed(const Duration(milliseconds: 1500));
+            if (!_isConnected && _connectedDevice != null) {
+              await _connectedDevice!.connect(
+                license: License.nonprofit,
+                timeout: const Duration(seconds: 15),
+                autoConnect: false,
+              );
+              try {
+                await _connectedDevice!.connectionState
+                    .firstWhere((s) => s == BluetoothConnectionState.connected)
+                    .timeout(const Duration(seconds: 5));
+              } catch (_) {}
+
+              await _discoverServices(_connectedDevice!);
+              if (_writeCharacteristic != null) {
+                _isConnected = true;
+                _enableBackgroundKeepAlive();
+                notifyListeners();
+                _addLog('Đã tự động kết nối lại thành công!', isTx: false);
+              } else {
+                _handleDisconnect();
+              }
+            }
+          } catch (_) {
+            _handleDisconnect();
+          }
+        }
+      });
+
       _startHeartbeat();
       notifyListeners();
-      return true;
+      return _isConnected;
     } catch (e) {
       _isConnecting = false;
       _handleDisconnect();
       _addLog('Kết nối thất bại: $e', isError: true);
       notifyListeners();
       return false;
+    }
+  }
+
+  static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
+
+  void _enableBackgroundKeepAlive() {
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('startBackgroundNavigation');
+      } catch (_) {}
+    }
+  }
+
+  void _disableBackgroundKeepAlive() {
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('stopBackgroundNavigation');
+      } catch (_) {}
     }
   }
 
@@ -420,7 +459,9 @@ class BleService extends ChangeNotifier {
       }
 
       if (_writeCharacteristic != null) {
-        _addLog('Đã tìm thấy cổng GATT RX (${_writeCharacteristic!.uuid.str.substring(0, 8)}...)', isTx: false);
+        final uStr = _writeCharacteristic!.uuid.str;
+        final displayUuid = uStr.length > 8 ? uStr.substring(0, 8) : uStr;
+        _addLog('Đã tìm thấy cổng GATT RX ($displayUuid...)', isTx: false);
         
         // Listen for incoming notifications from ESP32 (e.g. WiFi connection status)
         try {
@@ -530,6 +571,7 @@ class BleService extends ChangeNotifier {
     _writeCharacteristic = null;
     _wifiStatus = 'disconnected';
     _wifiIp = null;
+    _disableBackgroundKeepAlive();
     _addLog('Đã ngắt kết nối BLE', isTx: false);
     notifyListeners();
   }

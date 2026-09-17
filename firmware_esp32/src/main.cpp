@@ -517,7 +517,7 @@ void loop() {
   }
 
   // 2. Update HUD and status UI
-  bool isStreaming = (millis() - lastFrameTime < 2500);
+  bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
 
