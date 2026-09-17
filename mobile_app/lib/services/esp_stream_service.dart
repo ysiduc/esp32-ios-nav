@@ -150,6 +150,24 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     navManager = newNav;
   }
 
+  static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
+
+  void _enableBackgroundKeepAlive() {
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('startBackgroundNavigation');
+      } catch (_) {}
+    }
+  }
+
+  void _disableBackgroundKeepAlive() {
+    if (Platform.isIOS && !(navManager?.isNavigating ?? false)) {
+      try {
+        _locationChannel.invokeMethod('stopBackgroundNavigation');
+      } catch (_) {}
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -160,10 +178,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // Keep streaming if navigating or connected to WiFi/WebSocket
-      if (_isStreaming && (bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false))) {
+      // Keep streaming if navigating or connected via BLE / WiFi / WebSocket
+      if (_isStreaming && (bleService.isConnected || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false))) {
+        _enableBackgroundKeepAlive();
         _startTimer();
-      } else if (!bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) {
+      } else if (!_isStreaming) {
         _streamTimer?.cancel();
         _streamTimer = null;
       }
@@ -199,7 +218,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _streamTimer = null;
     _pauseTimer?.cancel();
     _pauseTimer = Timer(duration, () {
-      if (_isStreaming && (_isForeground || bleService.isWifiConnected) && _streamTimer == null) {
+      if (_isStreaming && (_isForeground || bleService.isConnected || bleService.isWifiConnected) && _streamTimer == null) {
         _startTimer();
       }
     });
@@ -223,7 +242,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _actualFps = _targetFps.toDouble();
     _lastFpsUpdate = DateTime.now();
 
-    if (_isForeground || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false)) {
+    _enableBackgroundKeepAlive();
+    if (_isForeground || bleService.isConnected || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false)) {
       _startTimer();
     }
 
@@ -244,7 +264,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
-    if (!_isForeground && !bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) return;
+    if (!_isForeground && !bleService.isConnected && !bleService.isWifiConnected && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) return;
     _isCapturing = true;
 
     try {
@@ -494,18 +514,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           _wsClients.remove(client);
         }
       }
+      return; // Primary Hotspot WebSocket stream successful - return immediately
     }
 
-    // 2. Persistent TCP Socket to ESP32 (SoftAP mode 192.168.4.1)
-    if (bleService.isWifiConnected && bleService.wifiIp != null) {
+    // 2. Persistent TCP Socket to ESP32 (SoftAP mode 192.168.4.1 only)
+    if (bleService.isWifiConnected && bleService.wifiIp != null && bleService.wifiIp != '172.20.10.1') {
       if (!_isSendingWifi) {
         _sendJpegOverWifi(jpegBytes);
       }
-    } else if (_wsClients.isEmpty) {
-      // 3. Fallback: BLE Chunks
-      if (!_isSendingBle) {
-        _sendJpegOverBle(jpegBytes);
-      }
+      return; // Secondary SoftAP stream successful - return immediately
+    }
+
+    // 3. Fallback: BLE Chunks (Stream map directly over Bluetooth when Wi-Fi is off or in background)
+    if (bleService.isConnected && !_isSendingBle) {
+      _sendJpegOverBle(jpegBytes);
     }
   }
 
@@ -859,7 +881,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final frameId = (_frameCount % 255);
 
       for (int i = 0; i < totalChunks; i++) {
-        if (!bleService.isConnected || !_isStreaming || !_isForeground) break;
+        // BLE stream remains active in background! Do NOT check !_isForeground here.
+        if (!bleService.isConnected || !_isStreaming) break;
 
         final start = i * chunkSize;
         final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
@@ -893,6 +916,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void stopStreaming() {
     _isStreaming = false;
     _isCapturing = false;
+    _disableBackgroundKeepAlive();
     _streamTimer?.cancel();
     _streamTimer = null;
     _pauseTimer?.cancel();

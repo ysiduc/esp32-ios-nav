@@ -121,6 +121,9 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  /// Send Wi-Fi credentials to ESP32 over BLE so it connects to iPhone Personal Hotspot
+  Future<bool> sendWifiCredentials(String ssid, String pass) => sendWifiConfig(ssid, pass);
+
   /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080 (fallback only)
   Future<void> probeEsp32Wifi() async {
     // If currently connected via Hotspot WebSocket (172.20.10.1), keep connected

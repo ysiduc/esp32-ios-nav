@@ -5,6 +5,7 @@
 #include <WiFiServer.h>
 #include <WiFiClient.h>
 #include <WebSocketsClient.h>
+#include <Preferences.h>
 #include "display_ui.h"
 #include "ams_service.h"
 #include "ancs_service.h"
@@ -13,6 +14,9 @@
 static WebSocketsClient webSocketClient;
 static bool wsConnected = false;
 static bool staConnected = false;
+static Preferences prefs;
+static String wifiSsid = "#ysiduc";
+static String wifiPass = "00000000";
 
 
 
@@ -160,13 +164,20 @@ void processJsonPacket(const char* jsonStr) {
     return;
   } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
     if (doc["ssid"].is<const char*>() && doc["pass"].is<const char*>()) {
-      Serial.printf("[WiFi STA] Reconnecting with SSID: %s\n", doc["ssid"].as<const char*>());
-      WiFi.begin(doc["ssid"].as<const char*>(), doc["pass"].as<const char*>());
+      wifiSsid = String(doc["ssid"].as<const char*>());
+      wifiPass = String(doc["pass"].as<const char*>());
+      prefs.begin("nav_wifi", false);
+      prefs.putString("ssid", wifiSsid);
+      prefs.putString("pass", wifiPass);
+      prefs.end();
+      Serial.printf("[WiFi STA] Saved & Reconnecting with SSID: '%s'\n", wifiSsid.c_str());
+      WiFi.disconnect();
+      WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
     }
     if (pNavChar != nullptr && bleConnected) {
       String staIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "none";
       String statusStr = (WiFi.status() == WL_CONNECTED) ? "connected" : "connecting";
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"" + statusStr + "\",\"mode\":\"STA\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"hotspot\":\"#ysiduc\"}";
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"" + statusStr + "\",\"mode\":\"STA\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"hotspot\":\"" + wifiSsid + "\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
@@ -390,6 +401,13 @@ void setup() {
     Serial.println("[SPIFFS] Filesystem mounted successfully.");
   }
 
+  // Load saved Hotspot credentials from Preferences NVS
+  prefs.begin("nav_wifi", false);
+  wifiSsid = prefs.getString("ssid", "#ysiduc");
+  wifiPass = prefs.getString("pass", "00000000");
+  prefs.end();
+  Serial.printf("[NVS] Loaded Hotspot SSID: '%s'\n", wifiSsid.c_str());
+
   // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
   TJpgDec.setJpgScale(1);
@@ -449,18 +467,18 @@ void setup() {
   // 3. Start WiFi in Pure Station Mode (STA only - ESP32 connects to iPhone Hotspot, no SoftAP)
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence in ESP-IDF!
+  WiFi.setAutoReconnect(true);
 
-  // Connect to iPhone Personal Hotspot
-  Serial.println("[WiFi STA] Connecting to iPhone Hotspot ('#ysiduc')...");
-  WiFi.begin("#ysiduc", "00000000");
+  // Connect to iPhone Personal Hotspot using loaded/configured credentials
+  Serial.printf("[WiFi STA] Connecting to iPhone Hotspot ('%s')...\n", wifiSsid.c_str());
+  WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
 
-  // Configure WebSocket Client to connect to iPhone Hotspot Server (default 172.20.10.1:8080)
-  webSocketClient.begin("172.20.10.1", 8080, "/");
+  // Configure WebSocket Client callbacks (begin() is called when WiFi connects)
   webSocketClient.onEvent(webSocketEvent);
   webSocketClient.setReconnectInterval(2000);
   webSocketClient.enableHeartbeat(15000, 3000, 2);
 
-  Serial.println("[BLE & WiFi STA] ESP32-S3 Navi ready for Hotspot (172.20.10.1) + AMS & ANCS!");
+  Serial.printf("[BLE & WiFi STA] ESP32-S3 Navi ready for Hotspot ('%s') + AMS & ANCS!\n", wifiSsid.c_str());
 }
 
 void loop() {
@@ -472,6 +490,7 @@ void loop() {
       String host = (gw != IPAddress(0, 0, 0, 0)) ? gw.toString() : "172.20.10.1";
       Serial.printf("[WiFi STA] Connected to iPhone Hotspot! ESP32 IP: %s, Gateway: %s, Target: %s:8080\n",
                     WiFi.localIP().toString().c_str(), gw.toString().c_str(), host.c_str());
+      webSocketClient.disconnect();
       webSocketClient.begin(host.c_str(), 8080, "/");
     }
     webSocketClient.loop();
@@ -479,6 +498,7 @@ void loop() {
     if (staConnected) {
       staConnected = false;
       Serial.println("[WiFi STA] Disconnected from iPhone Hotspot. Reconnecting...");
+      webSocketClient.disconnect();
     }
   }
 
