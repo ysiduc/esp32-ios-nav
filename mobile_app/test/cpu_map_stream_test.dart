@@ -55,4 +55,25 @@ void main() {
     expect(jpegBytes[0], 0xFF);
     expect(jpegBytes[1], 0xD8); // Valid JPEG
   });
+
+  test('Surrounding 3x3 tiles composite with negative coordinates test', () {
+    final patch = img.Image(width: 320, height: 320);
+    final tile = img.Image(width: 256, height: 256);
+    img.fill(tile, color: img.ColorRgba8(200, 200, 200, 255));
+
+    // Test tiles at dx=-1, dy=-1 (which produce negative dstX, dstY)
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
+        final int dstX = (160 + (dx * 256.0) - 128.0).round();
+        final int dstY = (160 + (dy * 256.0) - 128.0).round();
+        img.compositeImage(patch, tile, dstX: dstX, dstY: dstY);
+      }
+    }
+
+    final frame = img.copyCrop(patch, x: 88, y: 56, width: 144, height: 208);
+    final jpg = img.encodeJpg(frame, quality: 78);
+    expect(jpg, isNotEmpty);
+    expect(jpg[0], 0xFF);
+    expect(jpg[1], 0xD8);
+  });
 }

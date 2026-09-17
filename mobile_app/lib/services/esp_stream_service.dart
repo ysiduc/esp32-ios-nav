@@ -398,7 +398,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           final key = '$zoom/$tx/$ty';
           final tileImg = _cpuTileCache[key];
           if (tileImg != null) {
-            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY, blend: img.BlendMode.direct);
+            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY);
             tilesDrawn = true;
           }
         }
@@ -477,8 +477,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
       final int rotCx = rotatedPatch.width ~/ 2;
       final int rotCy = rotatedPatch.height ~/ 2;
-      final int cropX = rotCx - (w ~/ 2);
-      final int cropY = rotCy - (h * 0.67).round();
+      final int cropX = (rotCx - (w ~/ 2)).clamp(0, math.max(0, rotatedPatch.width - w));
+      final int cropY = (rotCy - (h * 0.67).round()).clamp(0, math.max(0, rotatedPatch.height - h));
 
       final frame = img.copyCrop(
         rotatedPatch,
@@ -510,7 +510,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
       return Uint8List.fromList(img.encodeJpg(frame, quality: 78));
-    } catch (_) {
+    } catch (e, stack) {
+      debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
     }
   }
