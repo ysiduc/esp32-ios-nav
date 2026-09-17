@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:battery_plus/battery_plus.dart';
 import '../models/esp_payload.dart';
 
 class BleDeviceItem {
@@ -50,6 +51,7 @@ class BleService extends ChangeNotifier {
 
   final List<BleDeviceItem> _discoveredDevices = [];
   final List<BleLogItem> _logs = [];
+  final Battery _battery = Battery();
 
   StreamSubscription? _scanSubscription;
   StreamSubscription? _adapterStateSubscription;
@@ -80,6 +82,15 @@ class BleService extends ChangeNotifier {
   String get wifiSsid => _wifiSsid;
   String get wifiPass => _wifiPass;
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
+
+  Future<int> getBatteryLevel() async {
+    try {
+      final level = await _battery.batteryLevel;
+      return level.clamp(0, 100);
+    } catch (_) {
+      return 85;
+    }
+  }
 
   BleService() {
     _initBle();
@@ -362,12 +373,14 @@ class BleService extends ChangeNotifier {
         try {
           final now = DateTime.now();
           final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+          final bat = await getBatteryLevel();
           final handshake = jsonEncode({
             'type': 'APP_CONNECT',
             'clock': timeStr,
+            'bat': bat,
           });
           await sendRawJson(handshake);
-          _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32', isTx: true);
+          _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32 (Pin: $bat%)', isTx: true);
         } catch (e) {
           _addLog('Lỗi gửi APP_CONNECT: $e', isError: true);
         }
@@ -455,7 +468,11 @@ class BleService extends ChangeNotifier {
         final now = DateTime.now();
         final h = now.hour.toString().padLeft(2, '0');
         final m = now.minute.toString().padLeft(2, '0');
-        sendRawString('{"type":"PING","clock":"$h:$m"}');
+        getBatteryLevel().then((bat) {
+          if (_isConnected && _writeCharacteristic != null) {
+            sendRawString('{"type":"PING","clock":"$h:$m","bat":$bat}');
+          }
+        });
       }
     });
   }

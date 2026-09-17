@@ -8,6 +8,7 @@
 #include "nimble/nimble/host/include/host/ble_uuid.h"
 #include "nimble/porting/nimble/include/os/os_mbuf.h"
 #include "display_ui.h"
+#include "cts_service.h"
 
 // Apple Media Service UUID: 89D3502B-0F36-433A-8EF4-C502AD55F8DC
 static const ble_uuid128_t amsServiceUUID = {
@@ -113,9 +114,11 @@ private:
         isSubscribed = true;
         isDiscovering = false;
         Serial.println("[AMS] Subscribed to Track Title & Artist successfully!");
+        AppleCurrentTimeService::startDiscovery(conn_hdl);
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
       isDiscovering = false;
+      AppleCurrentTimeService::startDiscovery(conn_hdl);
     }
     return 0;
   }
@@ -151,10 +154,12 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
           isDiscovering = false;
+          AppleCurrentTimeService::startDiscovery(conn_hdl);
         }
       } else {
         Serial.println("[AMS] Service not found on this connection.");
         isDiscovering = false;
+        AppleCurrentTimeService::startDiscovery(conn_hdl);
       }
     }
     return 0;

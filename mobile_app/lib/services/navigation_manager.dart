@@ -28,6 +28,7 @@ class NavigationManager extends ChangeNotifier {
   double _currentHeading = 0.0;
   double _distanceToNextManeuver = 0.0;
   double _remainingTotalDistance = 0.0;
+  int _currentBattery = 85;
   int _remainingEtaMinutes = 0;
   int _consecutiveOffRouteCount = 0;
 
@@ -510,11 +511,12 @@ class NavigationManager extends ChangeNotifier {
       heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
-      batteryLevel: 89,
+      batteryLevel: _currentBattery,
       songTitle: _currentSongTitle,
       songArtist: _currentSongArtist,
     );
 
+    bleService.getBatteryLevel().then((b) => _currentBattery = b);
     bleService.sendNavPayload(payload);
   }
 
@@ -542,11 +544,12 @@ class NavigationManager extends ChangeNotifier {
       heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
-      batteryLevel: 89,
+      batteryLevel: _currentBattery,
       songTitle: _currentSongTitle,
       songArtist: _currentSongArtist,
     );
 
+    bleService.getBatteryLevel().then((b) => _currentBattery = b);
     bleService.sendNavPayload(payload);
   }
 

@@ -40,8 +40,8 @@ struct NavStateData {
   uint8_t etaMinutes = 1;
   char streetName[48] = "CAU SONG LU";
   char arrivalTime[16] = "18:26";
-  char currentTime[16] = "18:25";
-  uint8_t batteryLevel = 89;
+  char currentTime[16] = "--:--";
+  uint8_t batteryLevel = 0;
   bool isConnected = false;
   bool isNavigating = false;
   char songTitle[48] = "";
@@ -69,6 +69,11 @@ private:
   uint32_t _songScrollTick = 0;
   bool _isAppConnected = false;
   bool _pairingBgDrawn = false;
+  uint8_t _clockHour = 0;
+  uint8_t _clockMin = 0;
+  uint8_t _clockSec = 0;
+  unsigned long _lastClockTick = 0;
+  bool _clockValid = false;
 
 public:
   void init() {
@@ -193,18 +198,32 @@ public:
     return _isAppConnected;
   }
 
+  void setTime(uint8_t hour, uint8_t minute, uint8_t second = 0) {
+    _clockHour = hour % 24;
+    _clockMin = minute % 60;
+    _clockSec = second % 60;
+    _lastClockTick = millis();
+    _clockValid = true;
+    char timeStr[16];
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d", _clockHour, _clockMin);
+    if (strcmp(_navData.currentTime, timeStr) != 0) {
+      strncpy(_navData.currentTime, timeStr, sizeof(_navData.currentTime) - 1);
+      _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+      _needFullRedraw = true;
+    }
+  }
+
   void updateClock(const char* clockStr) {
-    if (clockStr && strlen(clockStr) > 0) {
-      if (strcmp(_navData.currentTime, clockStr) != 0) {
-        strncpy(_navData.currentTime, clockStr, sizeof(_navData.currentTime) - 1);
-        _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-        _needFullRedraw = true;
+    if (clockStr && strlen(clockStr) >= 4) {
+      int h = 0, m = 0;
+      if (sscanf(clockStr, "%d:%d", &h, &m) == 2) {
+        setTime(h, m, 0);
       }
     }
   }
 
   void updateBattery(uint8_t bat) {
-    if (bat > 0 && bat <= 100 && _navData.batteryLevel != bat) {
+    if (bat <= 100 && _navData.batteryLevel != bat) {
       _navData.batteryLevel = bat;
       _needFullRedraw = true;
     }
@@ -252,6 +271,31 @@ public:
   }
 
   void update(bool isStreamingActive = false) {
+    // Real-time automatic clock ticker (counts second-by-second if disconnected or between BLE syncs)
+    if (_clockValid) {
+      if (millis() - _lastClockTick >= 1000) {
+        uint32_t elapsedSec = (millis() - _lastClockTick) / 1000;
+        _lastClockTick += elapsedSec * 1000;
+        _clockSec += elapsedSec;
+        if (_clockSec >= 60) {
+          uint8_t addMin = _clockSec / 60;
+          _clockSec %= 60;
+          _clockMin += addMin;
+          if (_clockMin >= 60) {
+            _clockHour = (_clockHour + (_clockMin / 60)) % 24;
+            _clockMin %= 60;
+          }
+          char newTime[16];
+          snprintf(newTime, sizeof(newTime), "%02d:%02d", _clockHour, _clockMin);
+          if (strcmp(_navData.currentTime, newTime) != 0) {
+            strncpy(_navData.currentTime, newTime, sizeof(_navData.currentTime) - 1);
+            _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
+            _needFullRedraw = true;
+          }
+        }
+      }
+    }
+
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       if (!_isAppConnected) _pairingBgDrawn = false;
@@ -374,8 +418,12 @@ private:
     tft.drawString(_navData.currentTime, 226, 4, 2);
 
     char batStr[16];
-    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    uint16_t cBat = (_navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
+    if (_navData.batteryLevel > 0 && _navData.batteryLevel <= 100) {
+      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+    } else {
+      snprintf(batStr, sizeof(batStr), "--%%");
+    }
+    uint16_t cBat = (_navData.batteryLevel > 0 && _navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
     tft.setTextColor(cBat, cDockBg);
     tft.drawRightString(batStr, 298, 4, 2);
 
