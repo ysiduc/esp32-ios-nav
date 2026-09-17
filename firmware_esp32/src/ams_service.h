@@ -57,7 +57,11 @@ public:
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
-    if (isSubscribed || isDiscovering) return;
+    if (isSubscribed) {
+      AppleCurrentTimeService::startDiscovery(conn_hdl);
+      return;
+    }
+    if (isDiscovering) return;
     connHandle = conn_hdl;
     isDiscovering = true;
     entityUpdateValHandle = 0;
@@ -68,6 +72,7 @@ public:
     if (rc != 0) {
       Serial.printf("[AMS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
       isDiscovering = false;
+      AppleCurrentTimeService::startDiscovery(conn_hdl);
     }
   }
 
@@ -82,12 +87,7 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0 && !isSubscribed && !isDiscovering) {
-      if (millis() - lastCheckTime > 8000) {
-        lastCheckTime = millis();
-        startDiscovery(connHandle);
-      }
-    }
+    // Handled in main loop sequentially
   }
 
   static int handleGapEvent(ble_gap_event *event, void *arg) {
@@ -100,25 +100,53 @@ public:
   }
 
 private:
+  static int amsTrackSubWriteCb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    isDiscovering = false;
+    if (error->status == 0) {
+      isSubscribed = true;
+      Serial.println("[AMS] Subscribed to Track Title & Artist successfully!");
+    } else {
+      Serial.printf("[AMS] Track subscription failed status=%d\n", error->status);
+    }
+    AppleCurrentTimeService::startDiscovery(conn_handle);
+    return 0;
+  }
+
+  static int amsCccdWriteCb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    if (error->status == 0) {
+      Serial.println("[AMS] CCCD enabled. Subscribing to Track Title & Artist...");
+      static uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 };
+      int rc = ble_gattc_write_flat(conn_handle, entityUpdateValHandle, trackSubCmd, sizeof(trackSubCmd), amsTrackSubWriteCb, NULL);
+      if (rc != 0) {
+        Serial.printf("[AMS] Failed to write trackSubCmd, rc=%d\n", rc);
+        isDiscovering = false;
+        AppleCurrentTimeService::startDiscovery(conn_handle);
+      }
+    } else {
+      Serial.printf("[AMS] CCCD write failed status=%d\n", error->status);
+      isDiscovering = false;
+      AppleCurrentTimeService::startDiscovery(conn_handle);
+    }
+    return 0;
+  }
+
   static int amsDscDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
         Serial.printf("[AMS] Found Entity Update CCCD handle: %d. Enabling notifications...\n", dsc->handle);
-        uint8_t cccdVal[2] = {0x01, 0x00};
-        ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, NULL, NULL);
-
-        // Subscribe to Track Title (2) and Artist (0)
-        uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 };
-        ble_gattc_write_flat(conn_hdl, entityUpdateValHandle, trackSubCmd, sizeof(trackSubCmd), NULL, NULL);
-
-        isSubscribed = true;
-        isDiscovering = false;
-        Serial.println("[AMS] Subscribed to Track Title & Artist successfully!");
-        AppleCurrentTimeService::startDiscovery(conn_hdl);
+        static uint8_t cccdVal[2] = {0x01, 0x00};
+        int rc = ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, amsCccdWriteCb, NULL);
+        if (rc != 0) {
+          Serial.printf("[AMS] ble_gattc_write_flat CCCD failed rc=%d\n", rc);
+          isDiscovering = false;
+          AppleCurrentTimeService::startDiscovery(conn_hdl);
+        }
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
-      isDiscovering = false;
-      AppleCurrentTimeService::startDiscovery(conn_hdl);
+      if (!isSubscribed && isDiscovering) {
+        isDiscovering = false;
+        AppleCurrentTimeService::startDiscovery(conn_hdl);
+      }
     }
     return 0;
   }
@@ -135,9 +163,11 @@ private:
         if (rc != 0) {
           Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
           isDiscovering = false;
+          AppleCurrentTimeService::startDiscovery(conn_hdl);
         }
       } else {
         isDiscovering = false;
+        AppleCurrentTimeService::startDiscovery(conn_hdl);
       }
     }
     return 0;

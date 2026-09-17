@@ -8,7 +8,6 @@
 #include "nimble/nimble/host/include/host/ble_uuid.h"
 #include "nimble/porting/nimble/include/os/os_mbuf.h"
 #include "display_ui.h"
-#include "ams_service.h"
 
 // Apple Notification Center Service (ANCS) UUID: 7905F431-B5CE-4E99-A40F-4B1E122D00D0
 // Little-endian byte order:
@@ -92,7 +91,6 @@ public:
     if (rc != 0) {
       Serial.printf("[ANCS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
       isDiscovering = false;
-      AppleMediaService::startDiscovery(conn_hdl);
     }
   }
 
@@ -137,8 +135,7 @@ private:
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
       isDiscovering = false;
-      Serial.println("[ANCS] ANCS fully subscribed! Handing off to AMS discovery...");
-      AppleMediaService::startDiscovery(conn_hdl);
+      Serial.println("[ANCS] ANCS fully subscribed! All Apple BLE services active.");
     }
     return 0;
   }
@@ -157,11 +154,9 @@ private:
         if (rc != 0) {
           Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Data) failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleMediaService::startDiscovery(conn_hdl);
         }
       } else {
         isDiscovering = false;
-        AppleMediaService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -188,11 +183,9 @@ private:
         if (rc != 0) {
           Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Notif) failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleMediaService::startDiscovery(conn_hdl);
         }
       } else {
         isDiscovering = false;
-        AppleMediaService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -209,12 +202,10 @@ private:
         if (rc != 0) {
           Serial.printf("[ANCS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
           isDiscovering = false;
-          AppleMediaService::startDiscovery(conn_hdl);
         }
       } else {
         Serial.println("[ANCS] Service not found on this connection.");
         isDiscovering = false;
-        AppleMediaService::startDiscovery(conn_hdl);
       }
     }
     return 0;

@@ -8,6 +8,7 @@
 #include "nimble/nimble/host/include/host/ble_uuid.h"
 #include "nimble/porting/nimble/include/os/os_mbuf.h"
 #include "display_ui.h"
+#include "ancs_service.h"
 
 // Standard Current Time Service UUID: 0x1805
 static const ble_uuid16_t ctsServiceUUID = {
@@ -47,7 +48,11 @@ public:
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
-    if (isSubscribed || isDiscovering) return;
+    if (isSubscribed) {
+      AppleNotificationService::startDiscovery(conn_hdl);
+      return;
+    }
+    if (isDiscovering) return;
     connHandle = conn_hdl;
     isDiscovering = true;
     currentTimeValHandle = 0;
@@ -58,6 +63,7 @@ public:
     if (rc != 0) {
       Serial.printf("[CTS] ble_gattc_disc_svc_by_uuid failed rc=%d\n", rc);
       isDiscovering = false;
+      AppleNotificationService::startDiscovery(conn_hdl);
     }
   }
 
@@ -72,16 +78,9 @@ public:
   }
 
   static void checkPeriodic() {
-    if (connHandle != 0) {
-      if (!isSubscribed && !isDiscovering && currentTimeValHandle == 0) {
-        if (millis() - lastCheckTime > 5000) {
-          lastCheckTime = millis();
-          startDiscovery(connHandle);
-        }
-      } else if (currentTimeValHandle != 0 && millis() - lastReadTime > 30000) {
-        lastReadTime = millis();
-        ble_gattc_read(connHandle, currentTimeValHandle, ctsReadCb, NULL);
-      }
+    if (connHandle != 0 && currentTimeValHandle != 0 && millis() - lastReadTime > 60000) {
+      lastReadTime = millis();
+      ble_gattc_read(connHandle, currentTimeValHandle, ctsReadCb, NULL);
     }
   }
 
@@ -121,6 +120,19 @@ private:
     } else {
       Serial.printf("[CTS] Read error status: %d\n", error->status);
     }
+    // Now that read is finished, discover CCCD for notifications
+    if (currentTimeValHandle != 0) {
+      int rc = ble_gattc_disc_all_dscs(conn_hdl, currentTimeValHandle, currentTimeValHandle + 2, ctsDscDiscCb, NULL);
+      if (rc != 0) {
+        Serial.printf("[CTS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
+        isDiscovering = false;
+        isSubscribed = true;
+        AppleNotificationService::startDiscovery(conn_hdl);
+      }
+    } else {
+      isDiscovering = false;
+      AppleNotificationService::startDiscovery(conn_hdl);
+    }
     return 0;
   }
 
@@ -128,13 +140,16 @@ private:
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
         Serial.printf("[CTS] Found Current Time CCCD handle: %d. Enabling notifications...\n", dsc->handle);
-        uint8_t cccdVal[2] = {0x01, 0x00};
+        static uint8_t cccdVal[2] = {0x01, 0x00};
         ble_gattc_write_flat(conn_hdl, dsc->handle, cccdVal, 2, NULL, NULL);
         isSubscribed = true;
         isDiscovering = false;
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
       isDiscovering = false;
+      isSubscribed = true;
+      AppleNotificationService::startDiscovery(conn_hdl);
     }
     return 0;
   }
@@ -150,9 +165,13 @@ private:
         lastReadTime = millis();
         int rc = ble_gattc_read(conn_hdl, currentTimeValHandle, ctsReadCb, NULL);
         Serial.printf("[CTS] Initial read triggered (rc=%d)\n", rc);
-        ble_gattc_disc_all_dscs(conn_hdl, currentTimeValHandle, currentTimeValHandle + 2, ctsDscDiscCb, NULL);
+        if (rc != 0) {
+          isDiscovering = false;
+          AppleNotificationService::startDiscovery(conn_hdl);
+        }
       } else {
         isDiscovering = false;
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;
@@ -169,10 +188,12 @@ private:
         if (rc != 0) {
           Serial.printf("[CTS] ble_gattc_disc_all_chrs failed rc=%d\n", rc);
           isDiscovering = false;
+          AppleNotificationService::startDiscovery(conn_hdl);
         }
       } else {
         Serial.println("[CTS] Current Time Service not found on this iPhone connection.");
         isDiscovering = false;
+        AppleNotificationService::startDiscovery(conn_hdl);
       }
     }
     return 0;

@@ -7,9 +7,9 @@
 #include <WebSocketsClient.h>
 #include <Preferences.h>
 #include "display_ui.h"
-#include "ams_service.h"
 #include "ancs_service.h"
 #include "cts_service.h"
+#include "ams_service.h"
 
 // Pure WiFi STA Client for iPhone Hotspot (IP 172.20.10.1:8080)
 static WebSocketsClient webSocketClient;
@@ -81,10 +81,8 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
     Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
                   event->enc_change.status, event->enc_change.conn_handle);
     if (event->enc_change.status == 0) {
-      // Re-encryption restored on bonded connection! Immediately trigger sequential discovery!
-      AppleNotificationService::onEncrypted(event->enc_change.conn_handle);
+      // Re-encryption restored on bonded connection! Immediately trigger sequential discovery starting with AMS!
       AppleMediaService::onEncrypted(event->enc_change.conn_handle);
-      AppleCurrentTimeService::onEncrypted(event->enc_change.conn_handle);
     }
   }
   AppleMediaService::handleGapEvent(event, arg);
@@ -120,10 +118,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
     // If already encrypted/bonded, immediately trigger sequential discovery
     if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted. Starting ANCS/AMS/CTS discovery...");
-      AppleNotificationService::onEncrypted(desc->conn_handle);
+      Serial.println("[BLE] Link already encrypted. Starting AMS/CTS/ANCS sequential discovery...");
       AppleMediaService::onEncrypted(desc->conn_handle);
-      AppleCurrentTimeService::onEncrypted(desc->conn_handle);
     } else {
       // Trigger pairing/bonding request to iOS (prompts native iOS pairing dialog)
       int secRc = NimBLEDevice::startSecurity(desc->conn_handle);
@@ -138,9 +134,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
-      AppleNotificationService::onEncrypted(desc->conn_handle);
       AppleMediaService::onEncrypted(desc->conn_handle);
-      AppleCurrentTimeService::onEncrypted(desc->conn_handle);
     }
   }
 
@@ -175,12 +169,16 @@ void processJsonPacket(const char* jsonStr) {
       curClock = String(doc["clock"].as<const char*>());
       display.updateClock(curClock.c_str());
     }
-    if (doc["bat"].is<uint8_t>()) {
-      curBattery = doc["bat"].as<uint8_t>();
-      display.updateBattery(curBattery);
-      prefs.begin("nav_state", false);
-      prefs.putUChar("bat", curBattery);
-      prefs.end();
+    if (doc["bat"].is<int>()) {
+      int b = doc["bat"].as<int>();
+      if (b >= 0 && b <= 100) {
+        curBattery = (uint8_t)b;
+        display.updateBattery(curBattery);
+        prefs.begin("nav_state", false);
+        prefs.putUChar("bat", curBattery);
+        prefs.end();
+        Serial.printf("[JSON] APP_CONNECT: Battery updated to %d%%\n", curBattery);
+      }
     }
     if (pNavChar != nullptr && bleConnected) {
       String resp = "{\"type\":\"APP_CONNECT_ACK\",\"status\":\"connected\"}";
@@ -198,12 +196,15 @@ void processJsonPacket(const char* jsonStr) {
       curClock = String(doc["clock"].as<const char*>());
       display.updateClock(curClock.c_str());
     }
-    if (doc["bat"].is<uint8_t>()) {
-      curBattery = doc["bat"].as<uint8_t>();
-      display.updateBattery(curBattery);
-      prefs.begin("nav_state", false);
-      prefs.putUChar("bat", curBattery);
-      prefs.end();
+    if (doc["bat"].is<int>()) {
+      int b = doc["bat"].as<int>();
+      if (b >= 0 && b <= 100) {
+        curBattery = (uint8_t)b;
+        display.updateBattery(curBattery);
+        prefs.begin("nav_state", false);
+        prefs.putUChar("bat", curBattery);
+        prefs.end();
+      }
     }
     return;
   } else if (typeStr == "DEL_BG") {
@@ -492,8 +493,10 @@ void setup() {
   prefs.end();
   if (savedBat > 0 && savedBat <= 100) {
     curBattery = savedBat;
-    display.updateBattery(curBattery);
+  } else {
+    curBattery = 85;
   }
+  display.updateBattery(curBattery);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -601,10 +604,21 @@ void loop() {
     Serial.println("[BLE] Applied Apple-compliant Coex Connection Parameters (45-60ms, latency 4, timeout 6.0s)");
   }
 
-  // 4. Periodic check for Apple Media Service, ANCS & Current Time Service
-  AppleMediaService::checkPeriodic();
-  AppleNotificationService::checkPeriodic();
-  AppleCurrentTimeService::checkPeriodic();
+  // 4. Periodic retry of Apple Media & Time services if connection dropped or missed
+  static unsigned long lastBleServiceCheck = 0;
+  if (bleConnected && bleConnectedHandle != 0) {
+    if (millis() - lastBleServiceCheck > 10000) {
+      lastBleServiceCheck = millis();
+      if (!AppleMediaService::isSubscribed && !AppleMediaService::isDiscovering) {
+        AppleMediaService::startDiscovery(bleConnectedHandle);
+      } else if (!AppleCurrentTimeService::isSubscribed && !AppleCurrentTimeService::isDiscovering) {
+        AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
+      } else if (!AppleNotificationService::isSubscribed && !AppleNotificationService::isDiscovering) {
+        AppleNotificationService::startDiscovery(bleConnectedHandle);
+      }
+    }
+    AppleCurrentTimeService::checkPeriodic();
+  }
 
   // 5. Periodic real-time clock check from SNTP
   static unsigned long lastClockCheck = 0;

@@ -41,7 +41,7 @@ struct NavStateData {
   char streetName[48] = "CAU SONG LU";
   char arrivalTime[16] = "18:26";
   char currentTime[16] = "--:--";
-  uint8_t batteryLevel = 0;
+  uint8_t batteryLevel = 85;
   bool isConnected = false;
   bool isNavigating = false;
   char songTitle[48] = "";
@@ -149,17 +149,33 @@ public:
   }
 
   void setSongInfo(const char* song, const char* artist) {
+    bool changed = false;
     if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0) {
-      strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
-      _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+      if (strcmp(_navData.songTitle, song) != 0) {
+        strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
+        _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+        changed = true;
+      }
     } else if (song == nullptr || strlen(song) == 0 || strcmp(song, "CHUA PHAT NHAC") == 0) {
-      _navData.songTitle[0] = '\0';
+      if (_navData.songTitle[0] != '\0') {
+        _navData.songTitle[0] = '\0';
+        changed = true;
+      }
     }
     if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0) {
-      strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
-      _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
+      if (strcmp(_navData.songArtist, artist) != 0) {
+        strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
+        _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
+        changed = true;
+      }
     } else if (artist == nullptr || strlen(artist) == 0) {
-      _navData.songArtist[0] = '\0';
+      if (_navData.songArtist[0] != '\0') {
+        _navData.songArtist[0] = '\0';
+        changed = true;
+      }
+    }
+    if (changed) {
+      _needFullRedraw = true;
     }
   }
 
@@ -402,15 +418,17 @@ private:
 
     // Middle: Current Song Title from AMS (if playing)
     if (_navData.songTitle[0] != '\0') {
-      char songDisplay[48];
-      snprintf(songDisplay, sizeof(songDisplay), "%s", _navData.songTitle);
-      if (strlen(songDisplay) > 22) {
-        songDisplay[19] = '.';
-        songDisplay[20] = '.';
-        songDisplay[21] = '.';
-        songDisplay[22] = '\0';
+      String songDisplay = String(_navData.songTitle);
+      if (u8f.getUTF8Width(songDisplay.c_str()) > 150) {
+        while (songDisplay.length() > 0 && u8f.getUTF8Width((songDisplay + "...").c_str()) > 150) {
+          // Safely remove bytes until not ending on a UTF-8 continuation byte
+          do {
+            songDisplay.remove(songDisplay.length() - 1);
+          } while (songDisplay.length() > 0 && (songDisplay.charAt(songDisplay.length() - 1) & 0xC0) == 0x80);
+        }
+        songDisplay += "...";
       }
-      _drawCentreUtf8String(songDisplay, 150, 4, TFT_WHITE, cDockBg, u8g2_font_unifont_t_vietnamese1);
+      _drawCentreUtf8String(songDisplay.c_str(), 144, 4, TFT_WHITE, cDockBg, u8g2_font_unifont_t_vietnamese1);
     }
 
     // Right: Current Time & Battery %
@@ -421,7 +439,7 @@ private:
     if (_navData.batteryLevel > 0 && _navData.batteryLevel <= 100) {
       snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
     } else {
-      snprintf(batStr, sizeof(batStr), "--%%");
+      snprintf(batStr, sizeof(batStr), "85%%");
     }
     uint16_t cBat = (_navData.batteryLevel > 0 && _navData.batteryLevel <= 20) ? TFT_RED : TFT_GREEN;
     tft.setTextColor(cBat, cDockBg);
