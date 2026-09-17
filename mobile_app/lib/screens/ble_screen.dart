@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../models/esp_payload.dart';
 import '../services/ble_service.dart';
@@ -416,16 +417,82 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
           ),
         ),
 
-        // Logs Header & Clear Button
+        // Logs Header & Action Bar
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('NHẬT KÝ TRUYỀN DỮ LIỆU THỜI GIAN THỰC', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
-              TextButton(
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('NHẬT KÝ GÓI TIN (TX / RX)',
+                        style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                    Text('${bleService.logs.length} bản ghi • MTU: ${bleService.currentMtu}',
+                        style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                  ],
+                ),
+              ),
+              // Nút Xuất file nhật ký (iOS Share Sheet / Lưu tệp)
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00F0FF).withAlpha(40),
+                  foregroundColor: const Color(0xFF00F0FF),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.share_rounded, size: 15),
+                label: const Text('Xuất file', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                onPressed: bleService.logs.isEmpty
+                    ? null
+                    : () async {
+                        final logText = bleService.exportLogsAsText();
+                        await Clipboard.setData(ClipboardData(text: logText));
+                        try {
+                          await const MethodChannel('com.ysiduc.esp32_nav/location').invokeMethod(
+                            'shareLog',
+                            {
+                              'text': logText,
+                              'fileName': 'esp32_tx_rx_log_${DateTime.now().millisecondsSinceEpoch}.txt',
+                            },
+                          );
+                        } catch (_) {}
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã mở bảng xuất file và sao chép toàn bộ nhật ký!'),
+                              backgroundColor: Color(0xFF05FFA1),
+                            ),
+                          );
+                        }
+                      },
+              ),
+              const SizedBox(width: 6),
+              // Nút Sao chép nhanh
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, color: Colors.white60, size: 18),
+                tooltip: 'Sao chép nhật ký',
+                onPressed: bleService.logs.isEmpty
+                    ? null
+                    : () async {
+                        final logText = bleService.exportLogsAsText();
+                        await Clipboard.setData(ClipboardData(text: logText));
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã sao chép toàn bộ nhật ký vào bộ nhớ tạm!'),
+                              backgroundColor: Color(0xFF00F0FF),
+                            ),
+                          );
+                        }
+                      },
+              ),
+              // Nút Xóa
+              IconButton(
+                icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
+                tooltip: 'Xóa nhật ký',
                 onPressed: () => bleService.clearLogs(),
-                child: const Text('Xóa nhật ký', style: TextStyle(color: Colors.white54, fontSize: 12)),
               ),
             ],
           ),

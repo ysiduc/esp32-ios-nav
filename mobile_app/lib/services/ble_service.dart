@@ -193,10 +193,33 @@ class BleService extends ChangeNotifier {
   void _addLog(String msg, {bool isError = false, bool isTx = true}) {
     final item = BleLogItem(message: msg, isError: isError, isTx: isTx);
     _logs.insert(0, item);
-    if (_logs.length > 100) _logs.removeLast();
-    if (isError) {
-      notifyListeners();
+    if (_logs.length > 2000) _logs.removeLast();
+    notifyListeners();
+  }
+
+  /// Public logger helpers for other services (e.g. EspStreamService)
+  void logError(String msg) => _addLog(msg, isError: true, isTx: true);
+  void logInfo(String msg) => _addLog(msg, isError: false, isTx: true);
+
+  /// Export all TX/RX logs as formatted text for debugging
+  String exportLogsAsText() {
+    final sb = StringBuffer();
+    sb.writeln('================================================================');
+    sb.writeln('NHAT KY TRUYEN NHAN GOI TIN (TX/RX) - ESP32 NAVIGATOR');
+    sb.writeln('Thoi gian xuat file: ${DateTime.now().toLocal().toString()}');
+    sb.writeln('Trang thai BLE: ${_isConnected ? "Da ket noi (${_connectedDeviceName ?? "ESP32"})" : "Chua ket noi"}');
+    sb.writeln('Device ID / MAC: ${_connectedDevice?.remoteId.str ?? "N/A"}');
+    sb.writeln('ATT MTU: $currentMtu (Payload chunk an toan: $safeChunkSize bytes)');
+    sb.writeln('Trang thai Wi-Fi: $_wifiStatus (IP: ${_wifiIp ?? "N/A"}:$_wifiPort)');
+    sb.writeln('Tong so ban ghi log: ${_logs.length}');
+    sb.writeln('================================================================\n');
+
+    for (final log in _logs.reversed) {
+      final timeStr = '${log.timestamp.hour.toString().padLeft(2, '0')}:${log.timestamp.minute.toString().padLeft(2, '0')}:${log.timestamp.second.toString().padLeft(2, '0')}.${log.timestamp.millisecond.toString().padLeft(3, '0')}';
+      final tag = log.isError ? '[ERROR]' : (log.isTx ? '[TX]' : '[RX]');
+      sb.writeln('$timeStr $tag ${log.message}');
     }
+    return sb.toString();
   }
 
   /// Start scanning for BLE devices

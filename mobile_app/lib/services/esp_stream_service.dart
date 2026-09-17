@@ -295,8 +295,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      // 1. In Foreground: Try high-speed GPU Canvas rendering
-      if (jpegBytes == null && _isForeground) {
+      // 1. Primary: High-Speed Canvas rendering (Real Map Tiles, Route Polyline, Blue Arrow Puck - exactly matching Image 2!)
+      // Runs in memory in both foreground and background
+      if (jpegBytes == null) {
         try {
           final recorder = ui.PictureRecorder();
           final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 144, 208));
@@ -329,32 +330,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 70));
           }
         } catch (_) {
-          // Fall through to CPU renderer below if Metal GPU context is suspended
+          // If Skia/Metal context is temporarily unavailable in background, fall back to pure CPU renderer below
         }
       }
 
-      // 2. In Background (Screen locked / App minimized) or if GPU failed:
-      // Option A: Try native iOS MKMapSnapshotter off-screen renderer
-      if (jpegBytes == null && Platform.isIOS) {
-        try {
-          final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
-          final res = await const MethodChannel('com.ysiduc.esp32_nav/location').invokeMethod<Uint8List>(
-            'renderMapSnapshot',
-            {
-              'lat': userPos.latitude,
-              'lng': userPos.longitude,
-              'width': w.toDouble(),
-              'height': h.toDouble(),
-              'spanMeters': 300.0,
-            },
-          );
-          if (res != null && res.isNotEmpty) {
-            jpegBytes = res;
-          }
-        } catch (_) {}
-      }
-
-      // Option B: Pure CPU Software Map Renderer (0% GPU, 100% Reliable in Background!)
+      // 2. Secondary: Pure CPU Software Map Renderer (0% GPU, 100% in CPU RAM - identical layout & tiles)
       if (jpegBytes == null) {
         jpegBytes = _renderCpuMapFrame(w, h);
       }
@@ -898,12 +878,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         packet.setRange(5, 5 + slice.length, slice);
 
         final success = await bleService.sendRawBytes(packet);
-        if (!success) break;
+        if (!success) {
+          bleService.logError('TX [BLE JPEG] Frame #$frameId: Chunk $i/$totalChunks thất bại');
+          break;
+        }
         if (i < totalChunks - 1) {
-          await Future.delayed(const Duration(milliseconds: 3));
+          await Future.delayed(const Duration(milliseconds: 6));
         }
       }
-    } catch (_) {
+      if (_frameCount % 15 == 0) {
+        bleService.logInfo('TX [BLE JPEG] Gửi thành công Frame #$frameId ($totalChunks chunks, $totalLen B)');
+      }
+    } catch (e) {
+      bleService.logError('TX [BLE JPEG] Lỗi truyền frame: $e');
     } finally {
       _isSendingBle = false;
     }

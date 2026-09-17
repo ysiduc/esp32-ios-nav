@@ -81,7 +81,7 @@ import MapKit
       name: "com.ysiduc.esp32_nav/location",
       binaryMessenger: binaryMessenger
     )
-    locationChannel?.setMethodCallHandler { (call, result) in
+    locationChannel?.setMethodCallHandler { [weak self] (call, result) in
       switch call.method {
       case "startBackgroundNavigation":
         NavigationLocationManager.shared.start()
@@ -89,6 +89,30 @@ import MapKit
       case "stopBackgroundNavigation":
         NavigationLocationManager.shared.stop()
         result(true)
+      case "shareLog":
+        guard let args = call.arguments as? [String: Any],
+              let text = args["text"] as? String else {
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing log text", details: nil))
+          return
+        }
+        let fileName = (args["fileName"] as? String) ?? "esp32_tx_rx_log.txt"
+        let tempUrl = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+          try text.write(to: tempUrl, atomically: true, encoding: .utf8)
+          DispatchQueue.main.async {
+            let activityVC = UIActivityViewController(activityItems: [tempUrl], applicationActivities: nil)
+            let rootVC = self?.window?.rootViewController ?? UIApplication.shared.windows.first?.rootViewController
+            if let popover = activityVC.popoverPresentationController, let rvc = rootVC {
+              popover.sourceView = rvc.view
+              popover.sourceRect = CGRect(x: rvc.view.bounds.midX, y: rvc.view.bounds.midY, width: 0, height: 0)
+              popover.permittedArrowDirections = []
+            }
+            rootVC?.present(activityVC, animated: true, completion: nil)
+            result(true)
+          }
+        } catch {
+          result(FlutterError(code: "WRITE_ERROR", message: error.localizedDescription, details: nil))
+        }
       case "renderMapSnapshot":
         guard let args = call.arguments as? [String: Any],
               let lat = args["lat"] as? Double,
