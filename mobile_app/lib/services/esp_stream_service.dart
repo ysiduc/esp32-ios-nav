@@ -27,12 +27,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 20; // High-speed 20 FPS stream over Wi-Fi (throttled to 4 FPS in background)
+  int _targetFps = 14; // Real-time 14 FPS match for ESP32 hardware (zero queue lag, 3 FPS in background)
   double _actualFps = 10.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
   int _framesInCurrentSec = 0;
+
+  bool _wsReadyForNextFrame = true;
+  DateTime _lastWsSendTime = DateTime.now();
 
   Timer? _streamTimer;
   Timer? _pauseTimer;
@@ -114,7 +117,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
             socket.listen(
               (data) {
-                // Incoming messages from ESP32 client
+                // Incoming messages from ESP32 client (ACK 'K' when frame is rendered)
+                if (data == 'K' || data == 'ACK') {
+                  _wsReadyForNextFrame = true;
+                }
               },
               onDone: () {
                 _wsClients.remove(socket);
@@ -501,6 +507,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void _dispatchTransmission(Uint8List jpegBytes) {
     // 1. WebSocket Broadcast to iPhone Hotspot client (ESP32)
     if (_wsClients.isNotEmpty) {
+      final now = DateTime.now();
+      final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
+      // Flow control: only send if ESP32 finished decoding/rendering previous frame, or if >90ms timeout
+      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 90) {
+        return; // Drop intermediate frame to prevent TCP buffer accumulation and latency!
+      }
+
+      _wsReadyForNextFrame = false;
+      _lastWsSendTime = now;
+
       for (final client in _wsClients.toList()) {
         try {
           client.add(jpegBytes);

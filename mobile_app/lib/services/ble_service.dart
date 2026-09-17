@@ -483,6 +483,8 @@ class BleService extends ChangeNotifier {
     }
   }
 
+  DateTime _lastNavPayloadTime = DateTime.now().subtract(const Duration(seconds: 1));
+
   /// Send Navigation Payload to ESP32 (ALWAYS via BLE per architecture)
   Future<bool> sendNavPayload(EspNavPayload payload) async {
     final jsonStr = payload.toJsonString();
@@ -490,6 +492,12 @@ class BleService extends ChangeNotifier {
     if (!_isConnected || _writeCharacteristic == null) {
       return false;
     }
+
+    final now = DateTime.now();
+    if (now.difference(_lastNavPayloadTime).inMilliseconds < 80) {
+      return false; // Skip burst write collision
+    }
+    _lastNavPayloadTime = now;
 
     try {
       final bytes = utf8.encode(jsonStr);

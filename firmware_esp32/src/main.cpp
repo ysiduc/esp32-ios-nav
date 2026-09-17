@@ -110,8 +110,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       Serial.printf("[BLE] startSecurity returned: %d\n", secRc);
     }
 
-    // Keep advertising active so the App or other scans can still find this device
-    NimBLEDevice::startAdvertising();
+    // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
+    NimBLEDevice::stopAdvertising();
   }
 
   void onAuthenticationComplete(ble_gap_conn_desc* desc) {
@@ -466,7 +466,7 @@ void setup() {
 
   // 3. Start WiFi in Pure Station Mode (STA only - ESP32 connects to iPhone Hotspot, no SoftAP)
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence in ESP-IDF!
+  WiFi.setSleep(false); // Disables modem sleep for instant <2ms Wi-Fi packet latency
   WiFi.setAutoReconnect(true);
 
   // Connect to iPhone Personal Hotspot using loaded/configured credentials
@@ -514,6 +514,11 @@ void loop() {
       g_clipMapOnly = false;
     }
     #endif
+
+    // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
+    if (wsConnected) {
+      webSocketClient.sendTXT("K");
+    }
   }
 
   // 2. Update HUD and status UI
