@@ -64,6 +64,13 @@ public:
   static char currentMessage[128];
   static char currentAppId[64];
 
+  // ANCS Data Source multi-packet stream accumulator
+  static uint8_t dsStreamBuf[512];
+  static uint16_t dsStreamLen;
+  static uint32_t dsStreamUid;
+  static unsigned long dsLastRxTime;
+  static bool dsStreamActive;
+
   static void init() {
     notifSourceValHandle = 0;
     notifSourceCccdHandle = 0;
@@ -81,6 +88,10 @@ public:
     currentTitle[0] = '\0';
     currentMessage[0] = '\0';
     currentAppId[0] = '\0';
+    dsStreamLen = 0;
+    dsStreamUid = 0;
+    dsLastRxTime = 0;
+    dsStreamActive = false;
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
@@ -114,7 +125,11 @@ public:
   }
 
   static void checkPeriodic() {
-    // Discovery is driven strictly by main.cpp state machine
+    // If stream is active and no new chunk arrived for 100ms, dispatch what we have collected!
+    if (dsStreamActive && (millis() - dsLastRxTime > 100)) {
+      dsStreamActive = false;
+      dispatchNotification();
+    }
   }
 
   static int handleGapEvent(ble_gap_event *event, void *arg) {
@@ -272,8 +287,21 @@ private:
       pendingCategoryID = categoryId;
       currentTitle[0] = '\0';
       currentMessage[0] = '\0';
+      currentAppId[0] = '\0';
 
-      // Request attributes: Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
+      // Reset stream accumulator for this notification
+      dsStreamLen = 0;
+      dsStreamUid = uid;
+      dsStreamActive = true;
+      dsLastRxTime = millis();
+
+      // For incoming calls, pop up immediately with generic status so display responds in <5ms!
+      // When Data Source stream finishes parsing caller name, it updates seamlessly.
+      if (categoryId == 1) {
+        display.showCallAlert("Cuộc gọi đến", "đang gọi đến...", APP_SOURCE_SIM);
+      }
+
+      // Request attributes: AppID (Attr 0), Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
       if (controlPointValHandle != 0 && connHandle != 0) {
         uint8_t cmd[15];
         cmd[0] = 0x00; // CommandIDGetNotificationAttributes
@@ -302,47 +330,94 @@ private:
 
   static void handleDataSource(struct os_mbuf *om) {
     uint16_t pktLen = OS_MBUF_PKTLEN(om);
-    if (pktLen < 5) return;
+    if (pktLen == 0) return;
 
-    uint8_t buf[256];
-    size_t copyLen = pktLen < sizeof(buf) - 1 ? pktLen : sizeof(buf) - 1;
-    os_mbuf_copydata(om, 0, copyLen, buf);
-    buf[copyLen] = '\0';
+    uint8_t chunk[256];
+    size_t copyLen = pktLen < sizeof(chunk) ? pktLen : sizeof(chunk);
+    os_mbuf_copydata(om, 0, copyLen, chunk);
 
-    if (buf[0] != 0x00) return; // CommandID check
-
-    size_t offset = 5; // Skip CommandID (1) + UID (4)
-    while (offset + 3 <= copyLen) {
-      uint8_t attrId = buf[offset];
-      uint16_t attrLen = (uint16_t)buf[offset + 1] | ((uint16_t)buf[offset + 2] << 8);
-      offset += 3;
-
-      if (offset + attrLen > copyLen) {
-        attrLen = copyLen - offset;
-      }
-
-      char attrStr[128];
-      size_t safeLen = attrLen < sizeof(attrStr) - 1 ? attrLen : sizeof(attrStr) - 1;
-      memcpy(attrStr, &buf[offset], safeLen);
-      attrStr[safeLen] = '\0';
-      offset += attrLen;
-
-      if (attrId == 0) { // AppIdentifier (Bundle ID)
-        strncpy(currentAppId, attrStr, sizeof(currentAppId) - 1);
-        currentAppId[sizeof(currentAppId) - 1] = '\0';
-      } else if (attrId == 1) { // Title (Caller name or Message sender)
-        strncpy(currentTitle, attrStr, sizeof(currentTitle) - 1);
-        currentTitle[sizeof(currentTitle) - 1] = '\0';
-      } else if (attrId == 2) { // Subtitle
-        if (currentTitle[0] == '\0') {
-          strncpy(currentTitle, attrStr, sizeof(currentTitle) - 1);
-        }
-      } else if (attrId == 3) { // Message (Phone number or Message content)
-        strncpy(currentMessage, attrStr, sizeof(currentMessage) - 1);
-        currentMessage[sizeof(currentMessage) - 1] = '\0';
-      }
+    // If chunk starts with CommandID 0x00 and length >= 5, this is the first packet of a response
+    if (copyLen >= 5 && chunk[0] == 0x00) {
+      uint32_t uid = (uint32_t)chunk[1] | ((uint32_t)chunk[2] << 8) | ((uint32_t)chunk[3] << 16) | ((uint32_t)chunk[4] << 24);
+      dsStreamUid = uid;
+      dsStreamLen = 0;
+      dsStreamActive = true;
+      currentTitle[0] = '\0';
+      currentMessage[0] = '\0';
+      currentAppId[0] = '\0';
     }
 
+    if (!dsStreamActive) return;
+
+    // Append chunk to stream buffer
+    if (dsStreamLen + copyLen <= sizeof(dsStreamBuf)) {
+      memcpy(dsStreamBuf + dsStreamLen, chunk, copyLen);
+      dsStreamLen += copyLen;
+    } else {
+      size_t rem = sizeof(dsStreamBuf) - dsStreamLen;
+      if (rem > 0) {
+        memcpy(dsStreamBuf + dsStreamLen, chunk, rem);
+        dsStreamLen += rem;
+      }
+    }
+    dsLastRxTime = millis();
+
+    // Parse attributes received so far
+    parseDataSourceStream();
+  }
+
+  static void parseDataSourceStream() {
+    if (!dsStreamActive || dsStreamLen < 5) return;
+    if (dsStreamBuf[0] != 0x00) return;
+
+    size_t offset = 5; // Skip CommandID (1) + UID (4)
+    bool hasTitle = false;
+    bool hasMessage = false;
+
+    while (offset + 3 <= dsStreamLen) {
+      uint8_t attrId = dsStreamBuf[offset];
+      uint16_t attrLen = (uint16_t)dsStreamBuf[offset + 1] | ((uint16_t)dsStreamBuf[offset + 2] << 8);
+
+      if (offset + 3 + attrLen > dsStreamLen) {
+        // Attribute is split across BLE packets; wait for continuation packets
+        return;
+      }
+
+      const uint8_t* valPtr = &dsStreamBuf[offset + 3];
+      if (attrId == 0) { // AppIdentifier
+        size_t safeLen = attrLen < sizeof(currentAppId) - 1 ? attrLen : sizeof(currentAppId) - 1;
+        memcpy(currentAppId, valPtr, safeLen);
+        currentAppId[safeLen] = '\0';
+      } else if (attrId == 1) { // Title (Caller name or Message sender)
+        size_t safeLen = attrLen < sizeof(currentTitle) - 1 ? attrLen : sizeof(currentTitle) - 1;
+        memcpy(currentTitle, valPtr, safeLen);
+        currentTitle[safeLen] = '\0';
+        hasTitle = true;
+      } else if (attrId == 2) { // Subtitle
+        if (currentTitle[0] == '\0') {
+          size_t safeLen = attrLen < sizeof(currentTitle) - 1 ? attrLen : sizeof(currentTitle) - 1;
+          memcpy(currentTitle, valPtr, safeLen);
+          currentTitle[safeLen] = '\0';
+          hasTitle = true;
+        }
+      } else if (attrId == 3) { // Message (Phone number or Message text)
+        size_t safeLen = attrLen < sizeof(currentMessage) - 1 ? attrLen : sizeof(currentMessage) - 1;
+        memcpy(currentMessage, valPtr, safeLen);
+        currentMessage[safeLen] = '\0';
+        hasMessage = true;
+      }
+
+      offset += 3 + attrLen;
+    }
+
+    // Complete if we have both Title and Message, or for Call if we have Title, or if offset reaches end
+    if ((pendingCategoryID == 1 && hasTitle) || (hasTitle && hasMessage) || (offset >= dsStreamLen && (hasTitle || hasMessage))) {
+      dsStreamActive = false;
+      dispatchNotification();
+    }
+  }
+
+  static void dispatchNotification() {
     AppSourceType appType = APP_SOURCE_OTHER;
     String appIdLower = String(currentAppId);
     appIdLower.toLowerCase();
@@ -361,7 +436,7 @@ private:
       appType = APP_SOURCE_SMS;
     }
 
-    Serial.printf("[ANCS] Details -> Cat=%d, App: '%s' (type=%d), Title: '%s', Msg: '%s'\n",
+    Serial.printf("[ANCS] Dispatched -> Cat=%d, App: '%s' (type=%d), Title: '%s', Msg: '%s'\n",
                   pendingCategoryID, currentAppId, (int)appType, currentTitle, currentMessage);
 
     if (pendingCategoryID == 1) { // Incoming Call
@@ -371,7 +446,7 @@ private:
     } else if (pendingCategoryID == 2) { // Missed Call
       const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuộc gọi nhỡ";
       display.showCallAlert("Cuộc gọi nhỡ", name, appType);
-    } else { // Messages & Social Notifications
+    } else { // Messages & Social Notifications (Category 0, 4, 6, etc.)
       const char* sender = currentTitle[0] != '\0' ? currentTitle : "Tin nhắn";
       const char* content = currentMessage[0] != '\0' ? currentMessage : "Thông báo mới";
       display.showSmsAlert(sender, content, appType);
@@ -395,5 +470,10 @@ uint8_t AppleNotificationService::pendingCategoryID = 0;
 char AppleNotificationService::currentTitle[64] = "";
 char AppleNotificationService::currentMessage[128] = "";
 char AppleNotificationService::currentAppId[64] = "";
+uint8_t AppleNotificationService::dsStreamBuf[512];
+uint16_t AppleNotificationService::dsStreamLen = 0;
+uint32_t AppleNotificationService::dsStreamUid = 0;
+unsigned long AppleNotificationService::dsLastRxTime = 0;
+bool AppleNotificationService::dsStreamActive = false;
 
 #endif // ANCS_SERVICE_H

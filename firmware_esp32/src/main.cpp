@@ -44,6 +44,8 @@ TFT_eSPI tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
 TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
 U8g2_for_TFT_eSPI u8f_marquee;
+TFT_eSprite notifMarqueeSpr = TFT_eSprite(&tft);
+U8g2_for_TFT_eSPI u8f_notif;
 #include <TJpg_Decoder.h>
 bool g_clipMapOnly = false;
 extern DisplayManager display;
@@ -99,6 +101,12 @@ static unsigned long secPendingTime = 0;
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 
+// MTU exchange callback to confirm large BLE packets with iOS
+static int mtuExchangeCb(uint16_t conn_handle, const struct ble_gatt_error *error, uint16_t mtu, void *arg) {
+  Serial.printf("[BLE] MTU exchange completed: conn=%d, status=%d, mtu=%d\n", conn_handle, error->status, mtu);
+  return 0;
+}
+
 // GAP event handler to monitor connection lifecycle, clean up bonds, and forward to Apple services
 static int combinedGapHandler(ble_gap_event *event, void *arg) {
   // Forward notification events to Apple services for notifications & media
@@ -114,6 +122,8 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
       // Link encrypted and bonded! Start ANCS notification discovery
       appleDiscState = APPLE_DISC_START_ANCS;
       appleDiscTimer = millis() + 200;
+      // Negotiate large MTU with iOS on the secure link
+      ble_gattc_exchange_mtu(event->enc_change.conn_handle, mtuExchangeCb, NULL);
     } else {
       appleDiscState = APPLE_DISC_IDLE;
       NimBLEDevice::deleteBond(event->enc_change.conn_handle);
@@ -162,16 +172,15 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       secPending = false;
       appleDiscState = APPLE_DISC_START_ANCS;
       appleDiscTimer = millis() + 300;
-    } else if (desc->sec_state.bonded) {
-      Serial.println("[BLE] Link bonded, awaiting encryption change or starting ANCS...");
-      secPending = false;
-      appleDiscState = APPLE_DISC_START_ANCS;
-      appleDiscTimer = millis() + 600;
+      ble_gattc_exchange_mtu(desc->conn_handle, mtuExchangeCb, NULL);
     } else {
-      // Unbonded link: Schedule slave security request in 500ms so iOS prompts native "Bluetooth Pairing Request" dialog
-      Serial.println("[BLE] Link connected (unbonded). Scheduling security request in 500ms to trigger Pairing dialog...");
+      // Both bonded and unbonded links: schedule startSecurity in 300ms!
+      // If bonded: iOS immediately re-encrypts using stored LTK (silent, no user prompt on iPhone).
+      // If unbonded: iOS shows native Pairing dialog.
+      Serial.printf("[BLE] Link connected (bonded=%d, encrypted=0). Scheduling startSecurity in 300ms...\n",
+                    desc->sec_state.bonded);
       secPending = true;
-      secPendingTime = millis() + 500;
+      secPendingTime = millis() + 300;
       appleDiscState = APPLE_DISC_IDLE;
     }
   }
@@ -695,15 +704,17 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
-  // 3. Delayed Security Request execution to prompt iOS native "Bluetooth Pairing Request"
+  // 3. Delayed Security Request execution to prompt iOS native "Bluetooth Pairing Request" or re-encrypt bonded link
   if (secPending && millis() >= secPendingTime) {
     secPending = false;
     if (bleConnected && bleConnectedHandle != 0) {
-      Serial.println("[BLE] Requesting security from iPhone (startSecurity) to trigger native Pairing dialog...");
+      Serial.println("[BLE] Requesting security from iPhone (startSecurity)...");
       int rc = NimBLEDevice::startSecurity(bleConnectedHandle);
       Serial.printf("[BLE] NimBLEDevice::startSecurity returned rc=%d\n", rc);
-      appleDiscState = APPLE_DISC_START_ANCS;
-      appleDiscTimer = millis() + 1000;
+      if (appleDiscState == APPLE_DISC_IDLE) {
+        appleDiscState = APPLE_DISC_START_ANCS;
+        appleDiscTimer = millis() + 1500;
+      }
     }
   }
 
@@ -794,8 +805,9 @@ void loop() {
         break;
     }
 
-    // 5. Periodic Apple Time sync check (once every 60s when connected & subscribed)
+    // 5. Periodic Apple Time sync & ANCS stream timeout checks
     AppleCurrentTimeService::checkPeriodic();
+    AppleNotificationService::checkPeriodic();
   }
 
   // 5. Periodic real-time clock check from SNTP

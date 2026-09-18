@@ -17,6 +17,8 @@ extern U8g2_for_TFT_eSPI u8f;
 extern TFT_eSPI tft;
 extern TFT_eSprite marqueeSpr;
 extern U8g2_for_TFT_eSPI u8f_marquee;
+extern TFT_eSprite notifMarqueeSpr;
+extern U8g2_for_TFT_eSPI u8f_notif;
 #endif
 
 #include "icons.h"
@@ -80,6 +82,9 @@ private:
   int _songScrollOffset = 0;
   unsigned long _lastSongScrollTime = 0;
   unsigned long _songScrollPauseUntil = 0;
+  int _notifScrollOffset = 0;
+  unsigned long _lastNotifScrollTime = 0;
+  unsigned long _notifScrollPauseUntil = 0;
   bool _isAppConnected = false;
   bool _pairingBgDrawn = false;
   uint8_t _clockHour = 12;
@@ -136,6 +141,12 @@ public:
     u8f_marquee.setFontMode(0);
     u8f_marquee.setFontDirection(0);
     u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
+
+    notifMarqueeSpr.createSprite(248, 20);
+    u8f_notif.begin(notifMarqueeSpr);
+    u8f_notif.setFontMode(0);
+    u8f_notif.setFontDirection(0);
+    u8f_notif.setFont(u8g2_font_unifont_t_vietnamese1);
 
     _drawPairingScreenTft();
 #endif
@@ -349,7 +360,27 @@ public:
     _popupData.appSource = app;
     // Exactly 10 seconds for message notification as requested
     _popupData.expireMillis = millis() + 10000;
+    _notifScrollOffset = 0;
+    _notifScrollPauseUntil = millis() + 1200;
+    _lastNotifScrollTime = millis();
     _currentState = STATE_POPUP_SMS;
+  }
+
+  void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
+    if (title != nullptr && title[0] != '\0') {
+      strncpy(_popupData.title, title, sizeof(_popupData.title) - 1);
+      _popupData.title[sizeof(_popupData.title) - 1] = '\0';
+    }
+    if (msg != nullptr && msg[0] != '\0') {
+      if (strcmp(_popupData.message, msg) != 0) {
+        strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
+        _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+        _notifScrollOffset = 0;
+        _notifScrollPauseUntil = millis() + 1200;
+        _lastNotifScrollTime = millis();
+      }
+    }
+    _popupData.appSource = app;
   }
 
   void dismissAlert() {
@@ -439,6 +470,21 @@ public:
       if (millis() - _lastSongScrollTime >= 35) {
         uint16_t cDockBg = tft.color565(8, 12, 18);
         _renderDockbarSongMarquee(cDockBg);
+      }
+    }
+
+    // High-fps smooth scrolling for long notification message (marquee)
+    if (isPopupActive() && _currentState == STATE_POPUP_SMS) {
+      if (millis() - _lastNotifScrollTime >= 30) {
+        uint16_t cCardBg;
+        if (_popupData.appSource == APP_SOURCE_ZALO) {
+          cCardBg = tft.color565(8, 22, 42);
+        } else if (_popupData.appSource == APP_SOURCE_MESSENGER) {
+          cCardBg = tft.color565(26, 12, 38);
+        } else {
+          cCardBg = tft.color565(8, 28, 16);
+        }
+        _renderNotifMarquee(cCardBg);
       }
     }
 #endif
@@ -637,10 +683,59 @@ private:
       const char* sender = _popupData.title[0] != '\0' ? _popupData.title : "Tin nhắn mới";
       _drawBannerUtf8String(sender, 54, 28, tft.color565(250, 204, 21), cCardBg, maxTextW);
 
-      // Row 2: Message Content
-      const char* msg = _popupData.message[0] != '\0' ? _popupData.message : "Thông báo mới";
-      _drawBannerUtf8String(msg, 54, 48, TFT_WHITE, cCardBg, bw - 60);
+      // Row 2: Message Content (rendered via smooth sprite marquee)
+      _renderNotifMarquee(cCardBg);
     }
+  }
+
+  void _renderNotifMarquee(uint16_t cCardBg) {
+    if (_currentState != STATE_POPUP_SMS) return;
+
+    const int clipW = 248;
+    const int clipH = 20;
+
+    const char* textToScroll = _popupData.message[0] != '\0' ? _popupData.message : "Thông báo mới";
+    uint16_t textColor = TFT_WHITE;
+
+    notifMarqueeSpr.fillSprite(cCardBg);
+
+    u8f_notif.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f_notif.setForegroundColor(textColor);
+    u8f_notif.setBackgroundColor(cCardBg);
+
+    int textW = u8f_notif.getUTF8Width(textToScroll);
+    if (textW <= clipW) {
+      u8f_notif.setCursor(0, 14);
+      u8f_notif.print(textToScroll);
+      _notifScrollOffset = 0;
+      _notifScrollPauseUntil = millis() + 1500;
+    } else {
+      String sep = "    •    ";
+      int sepW = u8f_notif.getUTF8Width(sep.c_str());
+      int totalLoopW = textW + sepW;
+
+      if (millis() < _notifScrollPauseUntil) {
+        // Paused at start of message so user can read beginning
+      } else if (millis() - _lastNotifScrollTime >= 30) {
+        _lastNotifScrollTime = millis();
+        _notifScrollOffset++;
+        if (_notifScrollOffset >= totalLoopW) {
+          _notifScrollOffset = 0;
+          _notifScrollPauseUntil = millis() + 1200;
+        }
+      }
+
+      int drawX = -_notifScrollOffset;
+      u8f_notif.setCursor(drawX, 14);
+      u8f_notif.print(textToScroll);
+
+      if (drawX + textW < clipW) {
+        u8f_notif.setCursor(drawX + textW, 14);
+        u8f_notif.print((sep + String(textToScroll)).c_str());
+      }
+    }
+
+    notifMarqueeSpr.pushSprite(54, 48);
   }
 
   void _drawWrappedUtf8String(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, uint16_t bgColor, int lineHeight = 22) {
@@ -1251,6 +1346,20 @@ private:
   }
 
   void _renderTft(bool isStreamingActive) {
+    // If not connected to mobile app and not navigating/streaming, stay strictly on Pairing Wait screen
+    if (!_isAppConnected && !_navData.isNavigating && !isStreamingActive) {
+      if (!_pairingBgDrawn || _needFullRedraw) {
+        _drawPairingScreenTft();
+        _needFullRedraw = false;
+      } else {
+        _drawUnifiedDockbar(false);
+      }
+      if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+        _drawTopNotificationBanner();
+      }
+      return;
+    }
+
     if (_currentState == STATE_PAIRING_WAIT) {
       if ((isStreamingActive && _isAppConnected) || _navData.isNavigating || _isAppConnected) {
         _currentState = STATE_NAVIGATION;
