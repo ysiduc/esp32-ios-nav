@@ -91,15 +91,28 @@ enum AppleDiscState {
 
 static AppleDiscState appleDiscState = APPLE_DISC_IDLE;
 static unsigned long appleDiscTimer = 0;
+static bool secPending = false;
+static unsigned long secPendingTime = 0;
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 
-// GAP event handler to monitor connection lifecycle and clean up bonds
+// GAP event handler to monitor connection lifecycle, clean up bonds, and forward to Apple services
 static int combinedGapHandler(ble_gap_event *event, void *arg) {
+  // Forward notification events to Apple services for notifications & media
+  AppleNotificationService::handleGapEvent(event, arg);
+  AppleMediaService::handleGapEvent(event, arg);
+  AppleCurrentTimeService::handleGapEvent(event, arg);
+
   if (event->type == BLE_GAP_EVENT_ENC_CHANGE) {
     Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
                   event->enc_change.status, event->enc_change.conn_handle);
-    if (event->enc_change.status != 0) {
+    if (event->enc_change.status == 0) {
+      secPending = false;
+      // Link encrypted and bonded! Start ANCS notification discovery
+      appleDiscState = APPLE_DISC_START_ANCS;
+      appleDiscTimer = millis() + 200;
+    } else {
+      appleDiscState = APPLE_DISC_IDLE;
       NimBLEDevice::deleteBond(event->enc_change.conn_handle);
       Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
                     event->enc_change.status);
@@ -125,10 +138,15 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d, bonded=%d, encrypted=%d\n",
+                  desc->conn_handle, desc->sec_state.bonded, desc->sec_state.encrypted);
 
     bleConnectedHandle = desc->conn_handle;
     bleConnectedTime = millis();
+
+    AppleNotificationService::connHandle = desc->conn_handle;
+    AppleMediaService::connHandle = desc->conn_handle;
+    AppleCurrentTimeService::connHandle = desc->conn_handle;
 
     // Request Apple-compliant connection parameters (20ms - 40ms interval, 6000ms supervision timeout)
     pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 600);
@@ -136,18 +154,42 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
     NimBLEDevice::stopAdvertising();
 
-    appleDiscState = APPLE_DISC_IDLE;
+    if (desc->sec_state.encrypted) {
+      Serial.println("[BLE] Link already encrypted/bonded. Starting Apple ANCS discovery...");
+      secPending = false;
+      appleDiscState = APPLE_DISC_START_ANCS;
+      appleDiscTimer = millis() + 300;
+    } else if (desc->sec_state.bonded) {
+      Serial.println("[BLE] Link bonded, awaiting encryption change or starting ANCS...");
+      secPending = false;
+      appleDiscState = APPLE_DISC_START_ANCS;
+      appleDiscTimer = millis() + 600;
+    } else {
+      // Unbonded link: Schedule slave security request in 500ms so iOS prompts native "Bluetooth Pairing Request" dialog
+      Serial.println("[BLE] Link connected (unbonded). Scheduling security request in 500ms to trigger Pairing dialog...");
+      secPending = true;
+      secPendingTime = millis() + 500;
+      appleDiscState = APPLE_DISC_IDLE;
+    }
   }
 
   void onAuthenticationComplete(ble_gap_conn_desc* desc) {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
+    secPending = false;
+    if (desc->sec_state.encrypted) {
+      appleDiscState = APPLE_DISC_START_ANCS;
+      appleDiscTimer = millis() + 200;
+    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     bleConnectedHandle = 0;
+    secPending = false;
     appleDiscState = APPLE_DISC_IDLE;
+    AppleNotificationService::onDisconnected();
+    AppleMediaService::onDisconnected();
     display.setBleConnected(false);
     display.setAppConnected(false);
     Serial.println("[BLE] Disconnected. Restarting advertising...");
@@ -552,17 +594,25 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
 
-  // Primary Advertisement Data: "ESP32-S3 Navi" + Service 0xFFE0
+  // Primary Advertisement Data (must strictly be <= 31 bytes):
+  // 1. Flags: 0x02, 0x01, 0x06 (3 bytes)
+  // 2. 128-bit Service Solicitation for ANCS (AD Type 0x15): 0x11, 0x15, [16 bytes UUID] (18 bytes)
+  //    -> This triggers iOS Settings -> Bluetooth to immediately recognize and list "ESP32-S3 Navi" in Other Devices!
+  // 3. Complete 16-bit Service UUID: 0x03, 0x03, 0xE0, 0xFF (4 bytes)
+  // 4. Shortened Local Name (AD Type 0x08): 0x05, 0x08, 'N', 'a', 'v', 'i' (6 bytes)
+  // Total in advData = 3 + 18 + 4 + 6 = 31 bytes (EXACTLY 31 bytes maximum!)
   NimBLEAdvertisementData advData;
-  advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
-  advData.setName("ESP32-S3 Navi");
+  advData.setFlags(0x06);
+  advData.addData(std::string((char*)ancsSolicitData, sizeof(ancsSolicitData)));
   advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
+  advData.setShortName("Navi");
   pAdvertising->setAdvertisementData(advData);
 
+  // Scan Response Data (Active Scan response <= 31 bytes):
+  // Complete Local Name (AD Type 0x09): 0x0E, 0x09, "ESP32-S3 Navi" (15 bytes)
+  // Total in scanResponseData = 15 bytes <= 31 bytes
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.setName("ESP32-S3 Navi");
-  // Include 128-bit ANCS Service Solicitation so iOS recognizes notification capabilities
-  scanResponseData.addData(std::string((char*)ancsSolicitData, sizeof(ancsSolicitData)));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -638,69 +688,28 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
-  // 3. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
+  // 3. Delayed Security Request execution to prompt iOS native "Bluetooth Pairing Request"
+  if (secPending && millis() >= secPendingTime) {
+    secPending = false;
+    if (bleConnected && bleConnectedHandle != 0) {
+      Serial.println("[BLE] Requesting security from iPhone (startSecurity) to trigger native Pairing dialog...");
+      int rc = NimBLEDevice::startSecurity(bleConnectedHandle);
+      Serial.printf("[BLE] NimBLEDevice::startSecurity returned rc=%d\n", rc);
+      appleDiscState = APPLE_DISC_START_ANCS;
+      appleDiscTimer = millis() + 1000;
+    }
+  }
+
+  // 4. Strictly Sequential Apple GATT Discovery State Machine (ANCS -> CTS -> AMS)
   if (bleConnected && bleConnectedHandle != 0) {
     switch (appleDiscState) {
-      case APPLE_DISC_START_CTS:
-        if (millis() >= appleDiscTimer) {
-          if (AppleCurrentTimeService::isSubscribed) {
-            appleDiscState = APPLE_DISC_START_AMS;
-            appleDiscTimer = millis() + 100;
-          } else {
-            Serial.println("[BLE State] Step 1/3: Starting CTS (Time) discovery...");
-            appleDiscState = APPLE_DISC_WAIT_CTS;
-            appleDiscTimer = millis() + 4000;
-            AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
-          }
-        }
-        break;
-
-      case APPLE_DISC_WAIT_CTS:
-        if (!AppleCurrentTimeService::isDiscovering) {
-          Serial.println("[BLE State] CTS completed. Step 2/3: Advancing to AMS...");
-          appleDiscState = APPLE_DISC_START_AMS;
-          appleDiscTimer = millis() + 100;
-        } else if (millis() >= appleDiscTimer) {
-          Serial.println("[BLE State] CTS timed out. Step 2/3: Advancing to AMS...");
-          AppleCurrentTimeService::isDiscovering = false;
-          appleDiscState = APPLE_DISC_START_AMS;
-          appleDiscTimer = millis() + 100;
-        }
-        break;
-
-      case APPLE_DISC_START_AMS:
-        if (millis() >= appleDiscTimer) {
-          if (AppleMediaService::isSubscribed) {
-            appleDiscState = APPLE_DISC_START_ANCS;
-            appleDiscTimer = millis() + 100;
-          } else {
-            Serial.println("[BLE State] Step 2/3: Starting AMS (Music Title) discovery...");
-            appleDiscState = APPLE_DISC_WAIT_AMS;
-            appleDiscTimer = millis() + 4000;
-            AppleMediaService::startDiscovery(bleConnectedHandle);
-          }
-        }
-        break;
-
-      case APPLE_DISC_WAIT_AMS:
-        if (!AppleMediaService::isDiscovering) {
-          Serial.println("[BLE State] AMS completed. Step 3/3: Advancing to ANCS...");
-          appleDiscState = APPLE_DISC_START_ANCS;
-          appleDiscTimer = millis() + 100;
-        } else if (millis() >= appleDiscTimer) {
-          Serial.println("[BLE State] AMS timed out. Step 3/3: Advancing to ANCS...");
-          AppleMediaService::isDiscovering = false;
-          appleDiscState = APPLE_DISC_START_ANCS;
-          appleDiscTimer = millis() + 100;
-        }
-        break;
-
       case APPLE_DISC_START_ANCS:
         if (millis() >= appleDiscTimer) {
           if (AppleNotificationService::isSubscribed) {
-            appleDiscState = APPLE_DISC_COMPLETE;
+            appleDiscState = APPLE_DISC_START_CTS;
+            appleDiscTimer = millis() + 100;
           } else {
-            Serial.println("[BLE State] Step 3/3: Starting ANCS (Notifications) discovery...");
+            Serial.println("[BLE State] Step 1/3: Starting ANCS (Notifications) discovery...");
             appleDiscState = APPLE_DISC_WAIT_ANCS;
             appleDiscTimer = millis() + 6000; // 6s allows user time to tap Allow Notifications on iPhone
             AppleNotificationService::startDiscovery(bleConnectedHandle);
@@ -710,11 +719,64 @@ void loop() {
 
       case APPLE_DISC_WAIT_ANCS:
         if (!AppleNotificationService::isDiscovering) {
-          Serial.println("[BLE State] ANCS completed! All Apple services active & configured.");
+          Serial.println("[BLE State] ANCS completed! Advancing to CTS (Time)...");
+          appleDiscState = APPLE_DISC_START_CTS;
+          appleDiscTimer = millis() + 100;
+        } else if (millis() >= appleDiscTimer) {
+          Serial.println("[BLE State] ANCS timed out. Advancing to CTS (Time)...");
+          AppleNotificationService::isDiscovering = false;
+          appleDiscState = APPLE_DISC_START_CTS;
+          appleDiscTimer = millis() + 100;
+        }
+        break;
+
+      case APPLE_DISC_START_CTS:
+        if (millis() >= appleDiscTimer) {
+          if (AppleCurrentTimeService::isSubscribed) {
+            appleDiscState = APPLE_DISC_START_AMS;
+            appleDiscTimer = millis() + 100;
+          } else {
+            Serial.println("[BLE State] Step 2/3: Starting CTS (Time) discovery...");
+            appleDiscState = APPLE_DISC_WAIT_CTS;
+            appleDiscTimer = millis() + 4000;
+            AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
+          }
+        }
+        break;
+
+      case APPLE_DISC_WAIT_CTS:
+        if (!AppleCurrentTimeService::isDiscovering) {
+          Serial.println("[BLE State] CTS completed. Step 3/3: Advancing to AMS...");
+          appleDiscState = APPLE_DISC_START_AMS;
+          appleDiscTimer = millis() + 100;
+        } else if (millis() >= appleDiscTimer) {
+          Serial.println("[BLE State] CTS timed out. Step 3/3: Advancing to AMS...");
+          AppleCurrentTimeService::isDiscovering = false;
+          appleDiscState = APPLE_DISC_START_AMS;
+          appleDiscTimer = millis() + 100;
+        }
+        break;
+
+      case APPLE_DISC_START_AMS:
+        if (millis() >= appleDiscTimer) {
+          if (AppleMediaService::isSubscribed) {
+            appleDiscState = APPLE_DISC_COMPLETE;
+          } else {
+            Serial.println("[BLE State] Step 3/3: Starting AMS (Music Title) discovery...");
+            appleDiscState = APPLE_DISC_WAIT_AMS;
+            appleDiscTimer = millis() + 4000;
+            AppleMediaService::startDiscovery(bleConnectedHandle);
+          }
+        }
+        break;
+
+      case APPLE_DISC_WAIT_AMS:
+        if (!AppleMediaService::isDiscovering) {
+          Serial.println("[BLE State] AMS completed! All Apple services active & configured.");
           appleDiscState = APPLE_DISC_COMPLETE;
         } else if (millis() >= appleDiscTimer) {
-          Serial.println("[BLE State] ANCS timed out. Finalizing discovery.");
-          AppleNotificationService::isDiscovering = false;
+          Serial.println("[BLE State] AMS timed out. Finalizing discovery.");
+          AppleMediaService::isDiscovering = false;
           appleDiscState = APPLE_DISC_COMPLETE;
         }
         break;
