@@ -677,10 +677,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
       } else {
         url = apiKey.isNotEmpty
-            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey'
+            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
             : (isDark
                 ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-                : 'https://api.maptiler.com/maps/bright-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
       }
 
       var response = await http.get(
@@ -691,7 +691,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y.png?key=dtGJ2HGvyxQPKNlHznvY'
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
             : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi';
         response = await http.get(
           Uri.parse(fallbackUrl),
