@@ -46,6 +46,8 @@ dependencies:
   image: ^4.5.4
   image_picker: ^1.1.2
   battery_plus: ^7.1.1
+  shared_preferences: ^2.5.5
+  flutter_tts: ^4.2.5
 
 
 dev_dependencies:

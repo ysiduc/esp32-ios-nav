@@ -246,6 +246,8 @@ class MapPlace {
   final String? category;
   final double? distanceMeters;
   final String? placeId;
+  final DateTime? savedAt;
+  final bool isCustomSaved;
 
   MapPlace({
     required this.displayName,
@@ -255,12 +257,14 @@ class MapPlace {
     this.category,
     this.distanceMeters,
     this.placeId,
+    this.savedAt,
+    this.isCustomSaved = false,
   });
 
   factory MapPlace.fromJson(Map<String, dynamic> json, {LatLng? userLocation}) {
-    final lat = double.tryParse(json['lat']?.toString() ?? '0') ?? 0.0;
-    final lon = double.tryParse(json['lon']?.toString() ?? '0') ?? 0.0;
-    final displayName = json['display_name'] as String? ?? 'Địa điểm';
+    final lat = double.tryParse(json['lat']?.toString() ?? json['latitude']?.toString() ?? '0') ?? 0.0;
+    final lon = double.tryParse(json['lon']?.toString() ?? json['longitude']?.toString() ?? '0') ?? 0.0;
+    final displayName = json['display_name'] as String? ?? json['displayName'] as String? ?? 'Địa điểm';
     final name = json['name'] as String? ?? displayName.split(',').first;
     final coord = LatLng(lat, lon);
 
@@ -268,6 +272,13 @@ class MapPlace {
     if (userLocation != null) {
       const distanceCalculator = Distance();
       dist = distanceCalculator.as(LengthUnit.Meter, userLocation, coord);
+    } else if (json['distance_meters'] != null) {
+      dist = double.tryParse(json['distance_meters'].toString());
+    }
+
+    DateTime? savedAt;
+    if (json['saved_at'] != null) {
+      savedAt = DateTime.tryParse(json['saved_at'].toString());
     }
 
     return MapPlace(
@@ -277,6 +288,47 @@ class MapPlace {
       type: json['type'] as String?,
       category: json['class'] as String? ?? json['category'] as String?,
       distanceMeters: dist,
+      placeId: json['place_id'] as String? ?? json['placeId'] as String?,
+      savedAt: savedAt,
+      isCustomSaved: json['is_custom_saved'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'display_name': displayName,
+      'name': name,
+      'lat': coordinate.latitude,
+      'lon': coordinate.longitude,
+      'type': type,
+      'category': category,
+      'place_id': placeId,
+      'saved_at': savedAt?.toIso8601String(),
+      'is_custom_saved': isCustomSaved,
+    };
+  }
+
+  MapPlace copyWith({
+    String? displayName,
+    String? name,
+    LatLng? coordinate,
+    String? type,
+    String? category,
+    double? distanceMeters,
+    String? placeId,
+    DateTime? savedAt,
+    bool? isCustomSaved,
+  }) {
+    return MapPlace(
+      displayName: displayName ?? this.displayName,
+      name: name ?? this.name,
+      coordinate: coordinate ?? this.coordinate,
+      type: type ?? this.type,
+      category: category ?? this.category,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
+      placeId: placeId ?? this.placeId,
+      savedAt: savedAt ?? this.savedAt,
+      isCustomSaved: isCustomSaved ?? this.isCustomSaved,
     );
   }
 

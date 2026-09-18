@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -577,7 +578,9 @@ class SearchService {
     ),
   ];
 
-  // Recent searches cache
+  // =========================================================================
+  // PERSISTENT SEARCH HISTORY & SAVED PLACES (FAVORITES)
+  // =========================================================================
   static final List<MapPlace> _recentSearches = [
     MapPlace(
       name: 'Hồ Hoàn Kiếm',
@@ -591,36 +594,144 @@ class SearchService {
       coordinate: const LatLng(10.7725, 106.6980),
       type: 'marketplace',
     ),
-    MapPlace(
-      name: 'Keangnam Landmark 72',
-      displayName: 'Đường Phạm Hùng, Mễ Trì, Nam Từ Liêm, Hà Nội',
-      coordinate: const LatLng(21.016922, 105.783688),
-      type: 'commercial',
-    ),
-    MapPlace(
-      name: 'Landmark 81',
-      displayName: 'Số 720A Điện Biên Phủ, Phường 22, Bình Thạnh, TP.HCM',
-      coordinate: const LatLng(10.7952, 106.7218),
-      type: 'building',
-    ),
   ];
+  static final List<MapPlace> _savedPlaces = [];
+  static bool _isLoaded = false;
 
-  List<MapPlace> get recentSearches => List.unmodifiable(_recentSearches);
+  SearchService() {
+    _ensureLoaded();
+  }
 
-  void addRecentSearch(MapPlace place) {
+  static Future<void> _ensureLoaded() async {
+    if (_isLoaded) return;
+    _isLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // 1. Load Recent Searches from SharedPreferences
+      final recentJson = prefs.getStringList('recent_searches_v2');
+      if (recentJson != null && recentJson.isNotEmpty) {
+        _recentSearches.clear();
+        for (final str in recentJson) {
+          try {
+            final Map<String, dynamic> item = jsonDecode(str);
+            _recentSearches.add(MapPlace.fromJson(item));
+          } catch (_) {}
+        }
+      }
+
+      // 2. Load Saved Places (Favorites) from SharedPreferences
+      final savedJson = prefs.getStringList('saved_places_v2');
+      if (savedJson != null && savedJson.isNotEmpty) {
+        _savedPlaces.clear();
+        for (final str in savedJson) {
+          try {
+            final Map<String, dynamic> item = jsonDecode(str);
+            _savedPlaces.add(MapPlace.fromJson(item));
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  // --- Search History API ---
+  List<MapPlace> get recentSearches {
+    _ensureLoaded();
+    return List.unmodifiable(_recentSearches);
+  }
+
+  Future<void> addRecentSearch(MapPlace place) async {
     _recentSearches.removeWhere((p) =>
         p.name.toLowerCase() == place.name.toLowerCase() ||
-        (p.coordinate.latitude == place.coordinate.latitude &&
-            p.coordinate.longitude == place.coordinate.longitude));
+        ((p.coordinate.latitude - place.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - place.coordinate.longitude).abs() < 0.0001));
     _recentSearches.insert(0, place);
-    if (_recentSearches.length > 10) {
-      _recentSearches.removeLast();
+    if (_recentSearches.length > 20) {
+      _recentSearches.removeRange(20, _recentSearches.length);
+    }
+    await _ensureLoaded();
+    _persistRecentSearches();
+  }
+
+  Future<void> deleteRecentSearch(MapPlace place) async {
+    _recentSearches.removeWhere((p) =>
+        p.name.toLowerCase() == place.name.toLowerCase() ||
+        ((p.coordinate.latitude - place.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - place.coordinate.longitude).abs() < 0.0001));
+    await _ensureLoaded();
+    _persistRecentSearches();
+  }
+
+  Future<void> clearRecentSearches() async {
+    _recentSearches.clear();
+    await _ensureLoaded();
+    _persistRecentSearches();
+  }
+
+  static Future<void> _persistRecentSearches() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _recentSearches.map((p) => jsonEncode(p.toJson())).toList();
+      await prefs.setStringList('recent_searches_v2', list);
+    } catch (_) {}
+  }
+
+  // --- Saved Places (Favorites) API ---
+  List<MapPlace> get savedPlaces {
+    _ensureLoaded();
+    return List.unmodifiable(_savedPlaces);
+  }
+
+  bool isPlaceSaved(MapPlace place) {
+    _ensureLoaded();
+    return _savedPlaces.any((p) =>
+        p.name.toLowerCase() == place.name.toLowerCase() ||
+        ((p.coordinate.latitude - place.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - place.coordinate.longitude).abs() < 0.0001));
+  }
+
+  Future<bool> toggleSavePlace(MapPlace place) async {
+    final alreadySaved = isPlaceSaved(place);
+    if (alreadySaved) {
+      await removeSavedPlace(place);
+      return false;
+    } else {
+      await savePlace(place);
+      return true;
     }
   }
 
-  void clearRecentSearches() {
-    _recentSearches.clear();
+  Future<void> savePlace(MapPlace place) async {
+    _savedPlaces.removeWhere((p) =>
+        p.name.toLowerCase() == place.name.toLowerCase() ||
+        ((p.coordinate.latitude - place.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - place.coordinate.longitude).abs() < 0.0001));
+    final savedItem = place.copyWith(
+      savedAt: DateTime.now(),
+      isCustomSaved: true,
+    );
+    _savedPlaces.insert(0, savedItem);
+    await _ensureLoaded();
+    _persistSavedPlaces();
   }
+
+  Future<void> removeSavedPlace(MapPlace place) async {
+    _savedPlaces.removeWhere((p) =>
+        p.name.toLowerCase() == place.name.toLowerCase() ||
+        ((p.coordinate.latitude - place.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - place.coordinate.longitude).abs() < 0.0001));
+    await _ensureLoaded();
+    _persistSavedPlaces();
+  }
+
+  static Future<void> _persistSavedPlaces() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _savedPlaces.map((p) => jsonEncode(p.toJson())).toList();
+      await prefs.setStringList('saved_places_v2', list);
+    } catch (_) {}
+  }
+
 
   /// Remove Vietnamese diacritics for ultra-flexible search
   static String removeDiacritics(String str) {

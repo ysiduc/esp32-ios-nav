@@ -3,8 +3,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/models/esp_payload.dart';
 import 'package:mobile_app/models/route_model.dart';
 import 'package:mobile_app/services/search_service.dart';
+import 'package:mobile_app/services/voice_guidance_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('Route & Search Model Tests', () {
     test('MapPlace distance calculation and formatting', () {
       final place = MapPlace(
@@ -100,6 +102,66 @@ void main() {
       expect(jsonStr.contains('"dist":150'), isTrue);
       expect(jsonStr.contains('"street":"Duong Nguyen Trai"'), isTrue);
       expect(jsonStr.contains('"arr":"${payload.arrivalTimeClock}"'), isTrue);
+    });
+    test('SearchService saved places operations', () async {
+      final searchService = SearchService();
+      final fav = MapPlace(
+        name: 'Văn phòng Công ty',
+        displayName: 'Tòa nhà Landmark 72, Nam Từ Liêm, Hà Nội',
+        coordinate: const LatLng(21.0169, 105.7836),
+      );
+
+      // Initially not saved
+      expect(searchService.isPlaceSaved(fav), isFalse);
+
+      // Save place
+      await searchService.savePlace(fav);
+      expect(searchService.isPlaceSaved(fav), isTrue);
+      expect(searchService.savedPlaces.first.name, 'Văn phòng Công ty');
+
+      // Toggle save (should remove)
+      final stateAfterToggle = await searchService.toggleSavePlace(fav);
+      expect(stateAfterToggle, isFalse);
+      expect(searchService.isPlaceSaved(fav), isFalse);
+
+      // Re-save and remove
+      await searchService.savePlace(fav);
+      expect(searchService.isPlaceSaved(fav), isTrue);
+      await searchService.removeSavedPlace(fav);
+      expect(searchService.isPlaceSaved(fav), isFalse);
+    });
+
+    test('SearchService deleteRecentSearch and clearRecentSearches', () async {
+      final searchService = SearchService();
+      final p1 = MapPlace(
+        name: 'Hồ Gươm Plaza',
+        displayName: 'Trần Phú, Hà Đông, Hà Nội',
+        coordinate: const LatLng(20.9785, 105.7852),
+      );
+      await searchService.addRecentSearch(p1);
+      expect(searchService.recentSearches.any((p) => p.name == 'Hồ Gươm Plaza'), isTrue);
+
+      await searchService.deleteRecentSearch(p1);
+      expect(searchService.recentSearches.any((p) => p.name == 'Hồ Gươm Plaza'), isFalse);
+
+      await searchService.clearRecentSearches();
+      expect(searchService.recentSearches.isEmpty, isTrue);
+    });
+
+    test('VoiceGuidanceService mute and state management', () {
+      final voice = VoiceGuidanceService();
+      expect(voice.isMuted, isFalse);
+
+      voice.toggleMute();
+      expect(voice.isMuted, isTrue);
+
+      voice.toggleMute();
+      expect(voice.isMuted, isFalse);
+
+      voice.setMuted(true);
+      expect(voice.isMuted, isTrue);
+      voice.setMuted(false);
+      expect(voice.isMuted, isFalse);
     });
   });
 }

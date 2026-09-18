@@ -1,3 +1,4 @@
+import 'voice_guidance_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -227,6 +228,13 @@ class NavigationManager extends ChangeNotifier {
 
     notifyListeners();
     _sendCurrentPayloadToEsp32();
+
+    // Voice announcement
+    VoiceGuidanceService().announceTripStart(
+      route.title.isNotEmpty ? route.title : (currentStep?.streetName ?? 'Điểm đến'),
+      route.totalDistanceMeters / 1000.0,
+      (route.totalDurationSeconds / 60).round(),
+    );
   }
 
   /// Start Simulation Mode (walks through polyline path automatically)
@@ -272,6 +280,7 @@ class NavigationManager extends ChangeNotifier {
         _remainingTotalDistance = 0.0;
         _remainingEtaMinutes = 0;
         _currentSpeedKmh = 0.0;
+        VoiceGuidanceService().announceArrival(_activeRoute?.title);
         notifyListeners();
         _sendCurrentPayloadToEsp32();
       }
@@ -282,6 +291,13 @@ class NavigationManager extends ChangeNotifier {
     });
 
     notifyListeners();
+
+    // Voice announcement for simulation
+    VoiceGuidanceService().announceTripStart(
+      route.title.isNotEmpty ? route.title : (currentStep?.streetName ?? 'Điểm đến'),
+      route.totalDistanceMeters / 1000.0,
+      (route.totalDurationSeconds / 60).round(),
+    );
   }
 
   void _updateUserPosition(LatLng newLocation, double speedKmh, double heading) {
@@ -319,6 +335,15 @@ class NavigationManager extends ChangeNotifier {
     }
 
     _updateRemainingMetrics();
+
+    // Voice announcement check for turns & maneuvers
+    final activeStep = _activeRoute!.steps[_currentStepIndex];
+    VoiceGuidanceService().checkAndAnnounceManeuver(
+      step: activeStep,
+      distanceMeters: _distanceToNextManeuver,
+      stepIndex: _currentStepIndex,
+    );
+
     notifyListeners();
   }
 
@@ -340,6 +365,7 @@ class NavigationManager extends ChangeNotifier {
       _consecutiveOffRouteCount++;
       if (_consecutiveOffRouteCount >= 2) {
         _isRerouting = true;
+        VoiceGuidanceService().announceReroute();
         notifyListeners();
 
         final destination = _activeRoute!.polylinePoints.last;
@@ -556,6 +582,7 @@ class NavigationManager extends ChangeNotifier {
 
   /// Stop active navigation or simulation
   void stopNavigation() {
+    VoiceGuidanceService().resetNavigation();
     _disableBackgroundNavigation();
     _isNavigating = false;
     _isSimulating = false;

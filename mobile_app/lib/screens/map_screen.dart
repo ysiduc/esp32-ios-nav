@@ -16,6 +16,7 @@ import '../services/goong_service.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/search_service.dart';
+import '../services/voice_guidance_service.dart';
 
 enum MapThemeMode {
   streets,         // Apple / Goong Streets (clean light aesthetic)
@@ -72,6 +73,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    _isMuted = VoiceGuidanceService().isMuted;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       if (navManager.currentLocation != null) {
@@ -835,8 +837,12 @@ class _MapScreenState extends State<MapScreen> {
                   const SizedBox(height: 12),
                   _buildCircularGlassButton(
                     icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                    tooltip: 'Âm thanh',
-                    onTap: () => setState(() => _isMuted = !_isMuted),
+                    tooltip: _isMuted ? 'Bật âm thanh' : 'Tắt âm thanh',
+                    onTap: () {
+                      final voice = VoiceGuidanceService();
+                      voice.toggleMute();
+                      setState(() => _isMuted = voice.isMuted);
+                    },
                   ),
                   const SizedBox(height: 12),
                   _buildCircularGlassButton(
@@ -1388,14 +1394,138 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
 
-                                  // Section 1: "Gần đây >"
+                                  // Section 1: "Địa điểm đã lưu" (Saved Places)
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          const Text(
+                                            'Địa điểm đã lưu',
+                                            style: TextStyle(
+                                              fontSize: 19,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black87,
+                                              letterSpacing: -0.3,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          if (_searchService.savedPlaces.isNotEmpty)
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF007AFF).withOpacity(0.12),
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: Text(
+                                                '${_searchService.savedPlaces.length}',
+                                                style: const TextStyle(
+                                                  color: Color(0xFF007AFF),
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(16),
+                                      boxShadow: [
+                                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      children: _searchService.savedPlaces.isEmpty
+                                          ? [
+                                              Padding(
+                                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(Icons.bookmark_outline_rounded, color: Colors.black26, size: 22),
+                                                    const SizedBox(width: 10),
+                                                    const Expanded(
+                                                      child: Text(
+                                                        'Chưa có địa điểm lưu. Chạm "Lưu" trên địa điểm để lưu vào đây.',
+                                                        style: TextStyle(color: Colors.black45, fontSize: 13),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ]
+                                          : _searchService.savedPlaces.map((p) {
+                                              return Column(
+                                                children: [
+                                                  ListTile(
+                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                                                    leading: Container(
+                                                      width: 36,
+                                                      height: 36,
+                                                      decoration: BoxDecoration(
+                                                        color: const Color(0xFFFF9500).withOpacity(0.15),
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                      child: const Icon(Icons.star_rounded, color: Color(0xFFFF9500), size: 20),
+                                                    ),
+                                                    title: Text(
+                                                      p.name,
+                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                                                    ),
+                                                    subtitle: Text(
+                                                      p.displayName,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(color: Colors.black45, fontSize: 13),
+                                                    ),
+                                                    trailing: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        IconButton(
+                                                          icon: const Icon(Icons.directions_rounded, color: Color(0xFF007AFF), size: 22),
+                                                          tooltip: 'Chỉ đường',
+                                                          onPressed: () {
+                                                            Navigator.pop(modalCtx);
+                                                            _calculateRoutesForPlace(p);
+                                                          },
+                                                        ),
+                                                        IconButton(
+                                                          icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 18),
+                                                          tooltip: 'Bỏ lưu',
+                                                          onPressed: () async {
+                                                            await _searchService.removeSavedPlace(p);
+                                                            setModalState(() {});
+                                                            setState(() {});
+                                                          },
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    onTap: () {
+                                                      Navigator.pop(modalCtx);
+                                                      _onPlaceClicked(p);
+                                                    },
+                                                  ),
+                                                  const Divider(height: 1, indent: 48, color: Colors.black12),
+                                                ],
+                                              );
+                                            }).toList(),
+                                    ),
+                                  ),
+
+                                  const SizedBox(height: 20),
+
+                                  // Section 2: "Lịch sử tìm kiếm" (Recent Searches)
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
                                       const Row(
                                         children: [
                                           Text(
-                                            'Gần đây',
+                                            'Lịch sử tìm kiếm',
                                             style: TextStyle(
                                               fontSize: 19,
                                               fontWeight: FontWeight.bold,
@@ -1408,11 +1538,19 @@ class _MapScreenState extends State<MapScreen> {
                                       ),
                                       if (_searchService.recentSearches.isNotEmpty)
                                         GestureDetector(
-                                          onTap: () {
-                                            setState(() => _searchService.clearRecentSearches());
+                                          onTap: () async {
+                                            await _searchService.clearRecentSearches();
                                             setModalState(() {});
+                                            setState(() {});
                                           },
-                                          child: const Text('Xóa', style: TextStyle(color: Color(0xFF007AFF), fontSize: 14)),
+                                          child: const Text(
+                                            'Xóa tất cả',
+                                            style: TextStyle(
+                                              color: Color(0xFF007AFF),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                         ),
                                     ],
                                   ),
@@ -1433,15 +1571,23 @@ class _MapScreenState extends State<MapScreen> {
                                                 child: Text('Chưa có lịch sử tìm kiếm', style: TextStyle(color: Colors.black38, fontSize: 14)),
                                               ),
                                             ]
-                                          : _searchService.recentSearches.take(4).map((p) {
+                                          : _searchService.recentSearches.take(8).map((p) {
                                               return Column(
                                                 children: [
                                                   ListTile(
                                                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                                                    leading: const Icon(Icons.search_rounded, color: Colors.black45, size: 20),
+                                                    leading: const Icon(Icons.history_rounded, color: Colors.black45, size: 20),
                                                     title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
                                                     subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black45, fontSize: 13)),
-                                                    trailing: const Icon(Icons.more_horiz_rounded, color: Colors.black38),
+                                                    trailing: IconButton(
+                                                      icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 18),
+                                                      tooltip: 'Xóa',
+                                                      onPressed: () async {
+                                                        await _searchService.deleteRecentSearch(p);
+                                                        setModalState(() {});
+                                                        setState(() {});
+                                                      },
+                                                    ),
                                                     onTap: () {
                                                       Navigator.pop(modalCtx);
                                                       _onPlaceClicked(p);
@@ -1656,53 +1802,87 @@ class _MapScreenState extends State<MapScreen> {
               const SizedBox(height: 14),
 
               // Primary Action Buttons Row (Screenshot 3)
-              Row(
-                children: [
-                  // Blue Directions Button (Car Icon + Travel Time e.g. "Chỉ đường")
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF007AFF),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              Builder(
+                builder: (context) {
+                  final isSaved = _searchService.isPlaceSaved(place);
+                  return Row(
+                    children: [
+                      // Blue Directions Button (Car Icon + Travel Time e.g. "Chỉ đường")
+                      Expanded(
+                        flex: 5,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF007AFF),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          ),
+                          icon: const Icon(Icons.directions_car_rounded, size: 20),
+                          label: const Text(
+                            'Chỉ đường',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: () => _calculateRoutesForPlace(place),
+                        ),
                       ),
-                      icon: const Icon(Icons.directions_car_rounded, size: 20),
-                      label: const Text(
-                        'Chỉ đường',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      const SizedBox(width: 8),
+                      // Bookmark / Save Place Button
+                      Expanded(
+                        flex: 4,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isSaved ? const Color(0xFFFF9500).withOpacity(0.16) : const Color(0xFFE5F0FF),
+                            foregroundColor: isSaved ? const Color(0xFFFF9500) : const Color(0xFF007AFF),
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          ),
+                          icon: Icon(isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded, size: 20),
+                          label: Text(
+                            isSaved ? 'Đã lưu' : 'Lưu',
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: () async {
+                            await _searchService.toggleSavePlace(place);
+                            setState(() {});
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  duration: const Duration(seconds: 1),
+                                  content: Text(
+                                    isSaved ? 'Đã xóa khỏi địa điểm đã lưu' : 'Đã lưu địa điểm thành công',
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                        ),
                       ),
-                      onPressed: () => _calculateRoutesForPlace(place),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // Secondary Button: Info / Coordinates
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFE5F0FF),
-                        foregroundColor: const Color(0xFF007AFF),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      const SizedBox(width: 8),
+                      // Copy GPS Coordinates Button
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE5F0FF),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.copy_rounded, color: Color(0xFF007AFF), size: 20),
+                          tooltip: 'Sao chép tọa độ GPS',
+                          padding: const EdgeInsets.all(14),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(
+                              text: '${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}',
+                            ));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Đã sao chép tọa độ GPS vào bộ nhớ tạm')),
+                            );
+                          },
+                        ),
                       ),
-                      icon: const Icon(Icons.explore_outlined, size: 20),
-                      label: const Text(
-                        'Trang web',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(
-                          text: '${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}',
-                        ));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Đã sao chép tọa độ GPS vào bộ nhớ tạm')),
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
 
               const SizedBox(height: 14),
