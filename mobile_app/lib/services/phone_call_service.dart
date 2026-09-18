@@ -12,10 +12,12 @@ class PhoneCallService extends ChangeNotifier {
   bool _isInCall = false;
   String _callerName = '';
   String _phoneNumber = '';
+  String _callApp = 'sim'; // 'sim' or 'zalo'
 
-  // Last received SMS notification
+  // Last received message notification
   String _lastSmsSender = '';
   String _lastSmsMessage = '';
+  String _smsApp = 'zalo'; // 'zalo', 'sim', 'messenger'
   bool _showSmsNotification = false;
   Timer? _smsDismissTimer;
 
@@ -27,9 +29,11 @@ class PhoneCallService extends ChangeNotifier {
   bool get isInCall => _isInCall;
   String get callerName => _callerName.isNotEmpty ? _callerName : 'Cuộc gọi đến';
   String get phoneNumber => _phoneNumber;
+  String get callApp => _callApp;
   bool get showSmsNotification => _showSmsNotification;
   String get lastSmsSender => _lastSmsSender;
   String get lastSmsMessage => _lastSmsMessage;
+  String get smsApp => _smsApp;
 
   void _initChannel() {
     _callChannel.setMethodCallHandler((call) async {
@@ -38,7 +42,8 @@ class PhoneCallService extends ChangeNotifier {
           final args = call.arguments != null ? Map<String, dynamic>.from(call.arguments as Map) : {};
           final name = args['name'] as String? ?? 'Cuộc gọi đến';
           final number = args['number'] as String? ?? '';
-          _onIncomingCall(name, number);
+          final app = args['app'] as String? ?? 'sim';
+          _onIncomingCall(name, number, app: app);
           break;
         case 'onCallAnswered':
           _isRinging = false;
@@ -52,11 +57,12 @@ class PhoneCallService extends ChangeNotifier {
     });
   }
 
-  void _onIncomingCall(String name, String number) {
+  void _onIncomingCall(String name, String number, {String app = 'sim'}) {
     _isRinging = true;
     _isInCall = false;
     _callerName = name;
     _phoneNumber = number;
+    _callApp = app;
     notifyListeners();
 
     final isGeneric = name.toLowerCase() == 'cuoc goi den' ||
@@ -65,9 +71,9 @@ class PhoneCallService extends ChangeNotifier {
         name.isEmpty;
     final hasRealNumber = number.isNotEmpty && number != 'unknown';
 
-    final title = !isGeneric ? name : 'Cuộc gọi đến';
-    final msg = hasRealNumber && !isGeneric ? number : 'Đang đổ chuông...';
-    _bleService.sendRawString('{"type":"CALL","title":"$title","msg":"$msg"}');
+    final title = !isGeneric ? name : (app == 'zalo' ? 'Zalo Audio Call' : 'Cuộc gọi đến');
+    final msg = hasRealNumber && !isGeneric ? number : 'đang gọi đến...';
+    _bleService.sendRawString('{"type":"CALL","app":"$app","title":"$title","msg":"$msg"}');
   }
 
   void _onCallEnded() {
@@ -80,13 +86,17 @@ class PhoneCallService extends ChangeNotifier {
   }
 
   /// Trigger a simulated or user-tested incoming call
-  void triggerMockCall({String? name, String? number}) {
-    final cName = name?.trim().isNotEmpty == true ? name!.trim() : 'Mẹ (0912.345.678)';
-    final cNum = number?.trim().isNotEmpty == true ? number!.trim() : '0912 345 678';
-    _onIncomingCall(cName, cNum);
+  void triggerMockCall({String? name, String? number, String app = 'sim'}) {
+    final cName = name?.trim().isNotEmpty == true
+        ? name!.trim()
+        : (app == 'zalo' ? 'Nguyễn Văn A' : 'Mẹ (0912.345.678)');
+    final cNum = number?.trim().isNotEmpty == true
+        ? number!.trim()
+        : (app == 'zalo' ? 'Zalo Audio Call' : '0912 345 678');
+    _onIncomingCall(cName, cNum, app: app);
 
-    // Auto dismiss after 10s if not answered
-    Timer(const Duration(seconds: 10), () {
+    // Auto dismiss after 12s if not answered
+    Timer(const Duration(seconds: 12), () {
       if (_isRinging && !_isInCall) {
         _onCallEnded();
       }
@@ -94,17 +104,22 @@ class PhoneCallService extends ChangeNotifier {
   }
 
   /// Trigger a simulated or user-tested incoming SMS / Zalo message
-  void triggerMockSms({String? sender, String? message}) {
-    _lastSmsSender = sender?.trim().isNotEmpty == true ? sender!.trim() : 'Zalo: Anh Nam';
-    _lastSmsMessage = message?.trim().isNotEmpty == true ? message!.trim() : 'Bạn đang ở đâu đấy?';
+  void triggerMockSms({String? sender, String? message, String app = 'zalo'}) {
+    _lastSmsSender = sender?.trim().isNotEmpty == true
+        ? sender!.trim()
+        : (app == 'zalo' ? 'Anh Nam' : (app == 'messenger' ? 'Linh Hoàng' : '0988.123.456'));
+    _lastSmsMessage = message?.trim().isNotEmpty == true
+        ? message!.trim()
+        : (app == 'zalo' ? 'Bạn đang ở đâu đấy? Chiều nay đi cà phê nhé!' : 'Mã xác thực OTP của bạn là 849201');
+    _smsApp = app;
     _showSmsNotification = true;
     notifyListeners();
 
     // Send to ESP32 via BLE
-    _bleService.sendRawString('{"type":"SMS","title":"$_lastSmsSender","msg":"$_lastSmsMessage"}');
+    _bleService.sendRawString('{"type":"SMS","app":"$app","title":"$_lastSmsSender","msg":"$_lastSmsMessage"}');
 
     _smsDismissTimer?.cancel();
-    _smsDismissTimer = Timer(const Duration(seconds: 6), () {
+    _smsDismissTimer = Timer(const Duration(seconds: 8), () {
       _showSmsNotification = false;
       notifyListeners();
     });

@@ -52,9 +52,18 @@ struct NavStateData {
   int16_t heading = 0;
 };
 
+enum AppSourceType : uint8_t {
+  APP_SOURCE_SIM = 0,
+  APP_SOURCE_ZALO = 1,
+  APP_SOURCE_MESSENGER = 2,
+  APP_SOURCE_SMS = 3,
+  APP_SOURCE_OTHER = 4
+};
+
 struct AncsPopupData {
-  char title[32] = "";
-  char message[64] = "";
+  char title[64] = "";
+  char message[160] = "";
+  AppSourceType appSource = APP_SOURCE_SIM;
   uint32_t expireMillis = 0;
 };
 
@@ -313,22 +322,28 @@ public:
     m = _clockMin;
   }
 
-  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
+  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr, AppSourceType app = APP_SOURCE_SIM) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     if (phoneOrMsg != nullptr && phoneOrMsg[0] != '\0') {
       strncpy(_popupData.message, phoneOrMsg, sizeof(_popupData.message) - 1);
+      _popupData.message[sizeof(_popupData.message) - 1] = '\0';
     } else {
       _popupData.message[0] = '\0';
     }
-    _popupData.expireMillis = millis() + 10000;
+    _popupData.appSource = app;
+    _popupData.expireMillis = millis() + 12000;
     _currentState = STATE_POPUP_CALL;
     _needFullRedraw = true;
   }
 
-  void showSmsAlert(const char* sender, const char* msg) {
+  void showSmsAlert(const char* sender, const char* msg, AppSourceType app = APP_SOURCE_SMS) {
     strncpy(_popupData.title, sender, sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
-    _popupData.expireMillis = millis() + 6000;
+    _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+    _popupData.appSource = app;
+    _popupData.expireMillis = millis() + 8000;
     _currentState = STATE_POPUP_SMS;
     _needFullRedraw = true;
   }
@@ -443,6 +458,134 @@ private:
     if (y >= 24 && x >= 140 && x < 168) x = 168;
     u8f.setCursor(x, y + 13);
     u8f.print(str);
+  }
+
+  // ---------------------------------------------------------------------------
+  // APP NOTIFICATION & CALL ICONS
+  // ---------------------------------------------------------------------------
+  void _drawZaloIcon(int x, int y) {
+    uint16_t cZaloBlue = tft.color565(0, 104, 255);
+    tft.fillRoundRect(x, y, 36, 36, 8, cZaloBlue);
+    tft.drawRoundRect(x, y, 36, 36, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cZaloBlue);
+    tft.drawString("Zalo", x + 4, y + 10, 2);
+  }
+
+  void _drawPhoneCallIcon(int x, int y) {
+    uint16_t cCallGreen = tft.color565(34, 197, 94);
+    tft.fillCircle(x + 18, y + 18, 18, cCallGreen);
+    tft.drawCircle(x + 18, y + 18, 18, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cCallGreen);
+    tft.drawString("SIM", x + 5, y + 10, 2);
+  }
+
+  void _drawSmsIcon(int x, int y) {
+    uint16_t cSmsGreen = tft.color565(52, 199, 89);
+    tft.fillRoundRect(x, y, 36, 30, 8, cSmsGreen);
+    tft.fillTriangle(x + 8, y + 29, x + 16, y + 29, x + 6, y + 35, cSmsGreen);
+    tft.drawRoundRect(x, y, 36, 30, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cSmsGreen);
+    tft.drawString("SMS", x + 5, y + 8, 2);
+  }
+
+  void _drawMessengerIcon(int x, int y) {
+    uint16_t cMsgPurple = tft.color565(168, 85, 247);
+    tft.fillRoundRect(x, y, 36, 30, 8, cMsgPurple);
+    tft.fillTriangle(x + 20, y + 29, x + 28, y + 29, x + 24, y + 35, cMsgPurple);
+    tft.drawRoundRect(x, y, 36, 30, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cMsgPurple);
+    tft.drawString("MSG", x + 4, y + 8, 2);
+  }
+
+  void _drawOtherNotifIcon(int x, int y) {
+    uint16_t cOtherCyan = tft.color565(0, 180, 216);
+    tft.fillRoundRect(x, y, 36, 36, 8, cOtherCyan);
+    tft.drawRoundRect(x, y, 36, 36, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cOtherCyan);
+    tft.drawString("APP", x + 4, y + 10, 2);
+  }
+
+  void _drawAppIcon(AppSourceType app, int x, int y) {
+    switch (app) {
+      case APP_SOURCE_ZALO:
+        _drawZaloIcon(x, y);
+        break;
+      case APP_SOURCE_SIM:
+        _drawPhoneCallIcon(x, y);
+        break;
+      case APP_SOURCE_MESSENGER:
+        _drawMessengerIcon(x, y);
+        break;
+      case APP_SOURCE_SMS:
+        _drawSmsIcon(x, y);
+        break;
+      case APP_SOURCE_OTHER:
+      default:
+        _drawOtherNotifIcon(x, y);
+        break;
+    }
+  }
+
+  void _drawWrappedUtf8String(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, uint16_t bgColor, int lineHeight = 22) {
+    if (text == nullptr || text[0] == '\0') return;
+
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+
+    char currentLine[128];
+    currentLine[0] = '\0';
+    int lineCount = 0;
+    int curY = startY;
+
+    const char* ptr = text;
+    while (*ptr != '\0' && lineCount < maxLines) {
+      while (*ptr == ' ') ptr++;
+      if (*ptr == '\0') break;
+
+      char word[64];
+      int wordLen = 0;
+      while (*ptr != '\0' && *ptr != ' ' && wordLen < (int)sizeof(word) - 1) {
+        word[wordLen++] = *ptr++;
+      }
+      word[wordLen] = '\0';
+
+      char candidate[128];
+      if (currentLine[0] == '\0') {
+        strncpy(candidate, word, sizeof(candidate) - 1);
+      } else {
+        snprintf(candidate, sizeof(candidate), "%s %s", currentLine, word);
+      }
+      candidate[sizeof(candidate) - 1] = '\0';
+
+      int w = u8f.getUTF8Width(candidate);
+      if (w <= maxWidth) {
+        strncpy(currentLine, candidate, sizeof(currentLine) - 1);
+        currentLine[sizeof(currentLine) - 1] = '\0';
+      } else {
+        if (currentLine[0] != '\0') {
+          u8f.setCursor(startX, curY + 13);
+          u8f.print(currentLine);
+          lineCount++;
+          curY += lineHeight;
+        }
+        if (lineCount < maxLines) {
+          strncpy(currentLine, word, sizeof(currentLine) - 1);
+          currentLine[sizeof(currentLine) - 1] = '\0';
+        } else {
+          currentLine[0] = '\0';
+          break;
+        }
+      }
+    }
+
+    if (currentLine[0] != '\0' && lineCount < maxLines) {
+      if (*ptr != '\0') {
+        strncat(currentLine, "...", sizeof(currentLine) - strlen(currentLine) - 1);
+      }
+      u8f.setCursor(startX, curY + 13);
+      u8f.print(currentLine);
+    }
   }
 
   void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
@@ -1005,25 +1148,97 @@ private:
     }
 
     if (_currentState == STATE_POPUP_CALL) {
-      uint16_t cCallBg = tft.color565(2, 44, 34);
-      tft.fillRoundRect(15, 20, 290, 200, 16, cCallBg);
-      tft.drawRoundRect(15, 20, 290, 200, 16, TFT_GREEN);
-      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 32, TFT_GREEN, cCallBg);
-      _drawCentreUtf8String(_popupData.title, 160, 80, TFT_WHITE, cCallBg);
-      if (_popupData.message[0] != '\0') {
-        _drawCentreUtf8String(_popupData.message, 160, 125, TFT_YELLOW, cCallBg);
+      bool isZalo = (_popupData.appSource == APP_SOURCE_ZALO);
+      uint16_t cCardBg = isZalo ? tft.color565(8, 24, 46) : tft.color565(4, 38, 22);
+      uint16_t cBorder = isZalo ? tft.color565(0, 104, 255) : tft.color565(34, 197, 94);
+      uint16_t cTagColor = isZalo ? tft.color565(0, 180, 255) : tft.color565(34, 197, 94);
+
+      // Main Popup Card (290x208)
+      tft.fillRoundRect(15, 16, 290, 208, 16, cCardBg);
+      tft.drawRoundRect(15, 16, 290, 208, 16, cBorder);
+      tft.drawRoundRect(16, 17, 288, 206, 15, cBorder);
+
+      // App Icon (Left)
+      _drawAppIcon(_popupData.appSource, 30, 26);
+
+      // App Header Badge / Title
+      if (isZalo) {
+        tft.fillRoundRect(74, 28, 155, 28, 6, tft.color565(0, 48, 110));
+        tft.drawRoundRect(74, 28, 155, 28, 6, cBorder);
+        _drawUtf8String("CUỘC GỌI ZALO", 84, 33, cTagColor, tft.color565(0, 48, 110));
+      } else {
+        tft.fillRoundRect(74, 28, 175, 28, 6, tft.color565(12, 54, 32));
+        tft.drawRoundRect(74, 28, 175, 28, 6, cBorder);
+        _drawUtf8String("CUỘC GỌI ĐẾN (SIM)", 82, 33, cTagColor, tft.color565(12, 54, 32));
       }
-      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 175, TFT_CYAN, cCallBg);
+
+      // Caller Name ("tên người gọi" / "tên đã lưu hoặc sdt")
+      _drawCentreUtf8String(_popupData.title, 160, 78, TFT_WHITE, cCardBg);
+
+      // Status text: "đang gọi đến..."
+      _drawCentreUtf8String("đang gọi đến...", 160, 116, TFT_GREEN, cCardBg);
+
+      // Phone number / subtitle if available and distinct
+      if (_popupData.message[0] != '\0' &&
+          strcmp(_popupData.message, "Dang do chuong...") != 0 &&
+          strcmp(_popupData.message, "đang gọi đến...") != 0 &&
+          strcmp(_popupData.message, _popupData.title) != 0) {
+        _drawCentreUtf8String(_popupData.message, 160, 146, TFT_YELLOW, cCardBg);
+      }
+
+      // Footer divider & prompt
+      tft.drawFastHLine(35, 176, 250, tft.color565(40, 60, 80));
+      _drawCentreUtf8String("Chạm iPhone để nhận cuộc gọi", 160, 186, tft.color565(148, 163, 184), cCardBg);
       return;
     }
 
     if (_currentState == STATE_POPUP_SMS) {
-      uint16_t cSmsBg = tft.color565(11, 25, 44);
-      tft.fillRoundRect(15, 20, 290, 200, 16, cSmsBg);
-      tft.drawRoundRect(15, 20, 290, 200, 16, TFT_CYAN);
-      _drawCentreUtf8String("TIN NHẮN MỚI", 160, 35, TFT_CYAN, cSmsBg);
-      _drawCentreUtf8String(_popupData.title, 160, 85, TFT_YELLOW, cSmsBg);
-      _drawCentreUtf8String(_popupData.message, 160, 135, TFT_WHITE, cSmsBg);
+      uint16_t cCardBg = tft.color565(11, 20, 32);
+      uint16_t cBorder;
+      const char* appBadge;
+      uint16_t cBadgeBg;
+
+      if (_popupData.appSource == APP_SOURCE_ZALO) {
+        cBorder = tft.color565(0, 104, 255); // Zalo blue
+        appBadge = "TIN NHẮN ZALO";
+        cBadgeBg = tft.color565(0, 48, 110);
+      } else if (_popupData.appSource == APP_SOURCE_MESSENGER) {
+        cBorder = tft.color565(168, 85, 247); // Messenger purple
+        appBadge = "TIN NHẮN MESSENGER";
+        cBadgeBg = tft.color565(60, 20, 95);
+      } else {
+        cBorder = tft.color565(52, 199, 89); // SMS green
+        appBadge = "TIN NHẮN SMS";
+        cBadgeBg = tft.color565(14, 52, 28);
+      }
+
+      // Main Popup Card
+      tft.fillRoundRect(15, 16, 290, 208, 16, cCardBg);
+      tft.drawRoundRect(15, 16, 290, 208, 16, cBorder);
+      tft.drawRoundRect(16, 17, 288, 206, 15, cBorder);
+
+      // App Icon (Left)
+      _drawAppIcon(_popupData.appSource, 30, 26);
+
+      // App Header Badge
+      tft.fillRoundRect(74, 28, 185, 26, 6, cBadgeBg);
+      tft.drawRoundRect(74, 28, 185, 26, 6, cBorder);
+      _drawUtf8String(appBadge, 84, 32, TFT_WHITE, cBadgeBg);
+
+      // Sender Row: "Người gửi: [Tên người gửi]"
+      _drawUtf8String("Người gửi:", 30, 64, tft.color565(148, 163, 184), cCardBg);
+      _drawUtf8String(_popupData.title, 105, 64, TFT_YELLOW, cCardBg);
+
+      // Message Content Box (Bubble)
+      uint16_t cBubbleBg = tft.color565(20, 30, 46);
+      tft.fillRoundRect(26, 88, 268, 100, 10, cBubbleBg);
+      tft.drawRoundRect(26, 88, 268, 100, 10, tft.color565(40, 56, 82));
+
+      // Draw Message text with multi-line wrapping
+      _drawWrappedUtf8String(_popupData.message, 36, 94, 248, 4, TFT_WHITE, cBubbleBg, 22);
+
+      // Footer
+      _drawCentreUtf8String("Nhấn bất kỳ để đóng", 160, 196, tft.color565(100, 116, 139), cCardBg);
       return;
     }
 

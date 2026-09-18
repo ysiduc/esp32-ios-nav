@@ -242,28 +242,50 @@ void processJsonPacket(const char* jsonStr) {
     }
     return;
 
-  } else if (typeStr == "CALL") {
+} else if (typeStr == "CALL") {
+    const char* name = doc["title"] | "Cuộc gọi đến";
+    const char* msg = doc["msg"] | "đang gọi đến...";
+    const char* appStr = doc["app"] | "sim";
 
-    const char* name = doc["title"] | "Cuoc goi den";
-    const char* msg = doc["msg"] | "Cuoc goi den tu iPhone";
-    // If ANCS already set a caller name from iOS native system, do NOT overwrite with generic "Cuoc goi den"
-    if (display.isCallActive() && strcmp(display.getCallerName(), "Cuoc goi den") != 0 && strcmp(name, "Cuoc goi den") == 0) {
+    AppSourceType appType = APP_SOURCE_SIM;
+    if (strcasecmp(appStr, "zalo") == 0) {
+      appType = APP_SOURCE_ZALO;
+    } else if (strcasecmp(appStr, "messenger") == 0) {
+      appType = APP_SOURCE_MESSENGER;
+    } else {
+      appType = APP_SOURCE_SIM;
+    }
+
+    if (display.isCallActive() && strcmp(display.getCallerName(), "Cuộc gọi đến") != 0 && strcmp(name, "Cuộc gọi đến") == 0) {
       return;
     }
     popupTitle = name;
     popupMsg = msg;
     popupType = "CALL";
-    popupExpire = millis() + 10000;
-    display.showCallAlert(name, popupMsg.c_str());
+    popupExpire = millis() + 12000;
+    display.showCallAlert(name, popupMsg.c_str(), appType);
     return;
   } else if (typeStr == "SMS") {
-    const char* sender = doc["title"] | "Tin nhan";
-    const char* content = doc["msg"] | "Thong bao moi";
+    const char* sender = doc["title"] | "Tin nhắn";
+    const char* content = doc["msg"] | "Thông báo mới";
+    const char* appStr = doc["app"] | "sms";
+
+    AppSourceType appType = APP_SOURCE_SMS;
+    if (strcasecmp(appStr, "zalo") == 0) {
+      appType = APP_SOURCE_ZALO;
+    } else if (strcasecmp(appStr, "messenger") == 0) {
+      appType = APP_SOURCE_MESSENGER;
+    } else if (strcasecmp(appStr, "sim") == 0 || strcasecmp(appStr, "sms") == 0) {
+      appType = APP_SOURCE_SMS;
+    } else {
+      appType = APP_SOURCE_OTHER;
+    }
+
     popupTitle = sender;
     popupMsg = content;
     popupType = "SMS";
     popupExpire = millis() + 8000;
-    display.showSmsAlert(sender, content);
+    display.showSmsAlert(sender, content, appType);
     return;
   } else if (typeStr == "CALL_END") {
     popupType = "NONE";
@@ -490,8 +512,11 @@ void setup() {
   NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
-  // Disable BLE Security Auth to prevent iOS CoreOS bluetoothd from initiating 30s SMP timeout
-  NimBLEDevice::setSecurityAuth(false, false, false);
+  // Enable BLE Security Auth with Bonding for Apple Notification Center Service (ANCS)
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
 
   // Restore last known battery level and clock from flash storage
@@ -536,6 +561,8 @@ void setup() {
 
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.setName("ESP32-S3 Navi");
+  // Include 128-bit ANCS Service Solicitation so iOS recognizes notification capabilities
+  scanResponseData.addData(std::string((char*)ancsSolicitData, sizeof(ancsSolicitData)));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
