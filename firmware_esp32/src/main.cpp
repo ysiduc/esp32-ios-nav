@@ -91,8 +91,6 @@ enum AppleDiscState {
 
 static AppleDiscState appleDiscState = APPLE_DISC_IDLE;
 static unsigned long appleDiscTimer = 0;
-static bool secPending = false;
-static unsigned long secPendingTime = 0;
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 
@@ -102,12 +100,14 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
     Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
                   event->enc_change.status, event->enc_change.conn_handle);
     if (event->enc_change.status == 0) {
-      secPending = false;
       // Link encrypted and bonded! Start sequential discovery starting with CTS
       appleDiscState = APPLE_DISC_START_CTS;
       appleDiscTimer = millis() + 200;
     } else {
-      Serial.printf("[BLE] Link encryption failed (status=%d). If previously bonded, please 'Forget This Device' in iPhone Bluetooth Settings.\n",
+      appleDiscState = APPLE_DISC_IDLE;
+      // Clear stale bonding keys on encryption failure to prevent getting locked into 30s SMP timeout
+      NimBLEDevice::deleteBond(event->enc_change.conn_handle);
+      Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
                     event->enc_change.status);
     }
   }
@@ -138,19 +138,21 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     AppleNotificationService::connHandle = desc->conn_handle;
     AppleCurrentTimeService::connHandle = desc->conn_handle;
 
+    // Request Apple-compliant connection parameters (20ms - 40ms interval, 6000ms supervision timeout)
+    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 600);
+
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
     NimBLEDevice::stopAdvertising();
 
     if (desc->sec_state.encrypted) {
       Serial.println("[BLE] Link already encrypted/bonded. Starting Apple sequential discovery...");
-      secPending = false;
       appleDiscState = APPLE_DISC_START_CTS;
       appleDiscTimer = millis() + 300;
+    } else if (desc->sec_state.bonded) {
+      Serial.println("[BLE] Link bonded, awaiting encryption change event...");
+      appleDiscState = APPLE_DISC_IDLE;
     } else {
-      // Slave security request must be sent 500ms after connection so iOS prompts "Bluetooth Pairing Request"
-      Serial.println("[BLE] Link connected (unencrypted). Scheduling slave security request in 500ms...");
-      secPending = true;
-      secPendingTime = millis() + 500;
+      Serial.println("[BLE] Link connected (standard mode). Ready for App navigation stream!");
       appleDiscState = APPLE_DISC_IDLE;
     }
   }
@@ -159,7 +161,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
     if (desc->sec_state.encrypted) {
-      secPending = false;
       if (appleDiscState == APPLE_DISC_IDLE) {
         appleDiscState = APPLE_DISC_START_CTS;
         appleDiscTimer = millis() + 200;
@@ -170,7 +171,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     bleConnectedHandle = 0;
-    secPending = false;
     appleDiscState = APPLE_DISC_IDLE;
     display.setBleConnected(false);
     display.setAppConnected(false);
@@ -552,8 +552,8 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC |
-    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC |
+    NIMBLE_PROPERTY::READ |
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
     NIMBLE_PROPERTY::NOTIFY
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
@@ -653,18 +653,7 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
-
-  // 3. Delayed Security Request execution to prompt iOS native Pairing dialog
-  if (secPending && millis() >= secPendingTime) {
-    secPending = false;
-    if (bleConnected && bleConnectedHandle != 0) {
-      Serial.println("[BLE] Requesting security from iPhone (startSecurity) to trigger native Pairing dialog...");
-      int rc = NimBLEDevice::startSecurity(bleConnectedHandle);
-      Serial.printf("[BLE] NimBLEDevice::startSecurity returned rc=%d\n", rc);
-    }
-  }
-
-  // 4. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
+  // 3. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
   if (bleConnected && bleConnectedHandle != 0) {
     switch (appleDiscState) {
       case APPLE_DISC_START_CTS:
