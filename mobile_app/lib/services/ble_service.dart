@@ -231,8 +231,6 @@ class BleService extends ChangeNotifier {
       final filterUuids = [
         navServiceUuid,
         Guid('FFE0'),
-        Guid('7905F431-B5CE-4010-8F0B-0724C576E125'), // ANCS
-        Guid('89D3502B-0F36-433A-8EF4-C502AD55F8DC'), // AMS
         Guid('1800'),
       ];
       final sysDevices = await FlutterBluePlus.systemDevices(filterUuids);

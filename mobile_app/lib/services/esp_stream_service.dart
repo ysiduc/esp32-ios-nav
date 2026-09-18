@@ -671,10 +671,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final apiKey = MapboxConfig.maptilerApiKey;
       String url;
       if (isGoong) {
-        // High-definition clean vector-based raster tiles with bright sky-blue water & white roads (Goong style)
-        url = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=$apiKey&language=vi'
-            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi';
+        // High-definition Google Vietnam localized raster tiles (100% authentic Vietnamese labels: Sông Lừ, Đ. Trường Chinh, etc.)
+        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&scale=2';
       } else {
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
@@ -685,32 +683,48 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       var response = await http.get(
         Uri.parse(url),
-        headers: {'User-Agent': 'ESP32NavApp/2.0'},
+        headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
       ).timeout(const Duration(seconds: 4));
 
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        final fallbackUrl = isDark
-            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi';
+        final fallbackUrl = isGoong
+            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&scale=2'
+            : (isDark
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
         response = await http.get(
           Uri.parse(fallbackUrl),
-          headers: {'User-Agent': 'ESP32NavApp/2.0'},
+          headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
         ).timeout(const Duration(seconds: 4));
       }
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        Uint8List finalBytes = response.bodyBytes;
         // 1. Decode for CPU background map rendering (0% GPU)
         try {
           var cpuImg = img.decodeImage(response.bodyBytes);
           if (cpuImg != null) {
-            // Downsample @2x (512x512) to 256x256 for crisp Retina labels ("WinMart", "Nha A5 Đại Kim" matching Image 2!)
+            // Downsample @2x (512x512) to 256x256 for crisp Retina labels ("Sông Lừ", etc.)
             if (cpuImg.width > 256) {
               cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
+            }
+            if (isDark && isGoong) {
+              // Convert light tile to sleek dark mode
+              img.invert(cpuImg);
+              for (final pixel in cpuImg) {
+                pixel.r = (pixel.r * 0.7).round();
+                pixel.g = (pixel.g * 0.8).round();
+                pixel.b = (pixel.b * 1.0).round();
+              }
             }
             _cpuTileCache[key] = cpuImg;
             if (_cpuTileCache.length > 100) {
               _cpuTileCache.remove(_cpuTileCache.keys.first);
+            }
+
+            if (isDark && isGoong) {
+              finalBytes = Uint8List.fromList(img.encodePng(cpuImg));
             }
           }
         } catch (_) {}
@@ -718,7 +732,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         // 2. Decode for Flutter Canvas rendering (only when app is in foreground)
         if (_isForeground) {
           try {
-            final codec = await ui.instantiateImageCodec(response.bodyBytes);
+            final codec = await ui.instantiateImageCodec(finalBytes);
             final frame = await codec.getNextFrame();
             _tileCache[key] = frame.image;
 

@@ -94,30 +94,27 @@ static unsigned long appleDiscTimer = 0;
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 
-// Combined GAP event handler for AMS, ANCS & CTS
+// GAP event handler to monitor connection lifecycle and clean up bonds
 static int combinedGapHandler(ble_gap_event *event, void *arg) {
   if (event->type == BLE_GAP_EVENT_ENC_CHANGE) {
     Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
                   event->enc_change.status, event->enc_change.conn_handle);
-    if (event->enc_change.status == 0) {
-      // Link encrypted and bonded! Start sequential discovery starting with CTS
-      appleDiscState = APPLE_DISC_START_CTS;
-      appleDiscTimer = millis() + 200;
-    } else {
-      appleDiscState = APPLE_DISC_IDLE;
-      // Clear stale bonding keys on encryption failure to prevent getting locked into 30s SMP timeout
+    if (event->enc_change.status != 0) {
       NimBLEDevice::deleteBond(event->enc_change.conn_handle);
       Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
                     event->enc_change.status);
     }
   }
+  if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
+    Serial.printf("[BLE] Repeat pairing request from conn_handle=%d. Resetting bond and retrying...\n",
+                  event->repeat_pairing.conn_handle);
+    NimBLEDevice::deleteBond(event->repeat_pairing.conn_handle);
+    return BLE_GAP_REPEAT_PAIRING_RETRY;
+  }
   if (event->type == BLE_GAP_EVENT_DISCONNECT) {
     Serial.printf("[BLE] Disconnected event! reason=0x%04x (HCI 0x%02x)\n",
                   event->disconnect.reason, event->disconnect.reason - 0x200);
   }
-  AppleMediaService::handleGapEvent(event, arg);
-  AppleNotificationService::handleGapEvent(event, arg);
-  AppleCurrentTimeService::handleGapEvent(event, arg);
   return 0;
 }
 
@@ -128,15 +125,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
-                  desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
 
     bleConnectedHandle = desc->conn_handle;
     bleConnectedTime = millis();
-
-    AppleMediaService::connHandle = desc->conn_handle;
-    AppleNotificationService::connHandle = desc->conn_handle;
-    AppleCurrentTimeService::connHandle = desc->conn_handle;
 
     // Request Apple-compliant connection parameters (20ms - 40ms interval, 6000ms supervision timeout)
     pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 600);
@@ -144,28 +136,12 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
     NimBLEDevice::stopAdvertising();
 
-    if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted/bonded. Starting Apple sequential discovery...");
-      appleDiscState = APPLE_DISC_START_CTS;
-      appleDiscTimer = millis() + 300;
-    } else if (desc->sec_state.bonded) {
-      Serial.println("[BLE] Link bonded, awaiting encryption change event...");
-      appleDiscState = APPLE_DISC_IDLE;
-    } else {
-      Serial.println("[BLE] Link connected (standard mode). Ready for App navigation stream!");
-      appleDiscState = APPLE_DISC_IDLE;
-    }
+    appleDiscState = APPLE_DISC_IDLE;
   }
 
   void onAuthenticationComplete(ble_gap_conn_desc* desc) {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
-    if (desc->sec_state.encrypted) {
-      if (appleDiscState == APPLE_DISC_IDLE) {
-        appleDiscState = APPLE_DISC_START_CTS;
-        appleDiscTimer = millis() + 200;
-      }
-    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {
@@ -174,9 +150,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     appleDiscState = APPLE_DISC_IDLE;
     display.setBleConnected(false);
     display.setAppConnected(false);
-    AppleMediaService::onDisconnected();
-    AppleNotificationService::onDisconnected();
-    AppleCurrentTimeService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -517,16 +490,9 @@ void setup() {
   NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
-  // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
-  // bonding = true, mitm = false ("Just Works" - no PIN input needed), sc = true (LE Secure Connections)
-  NimBLEDevice::setSecurityAuth(true, false, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
-  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  // Disable BLE Security Auth to prevent iOS CoreOS bluetoothd from initiating 30s SMP timeout
+  NimBLEDevice::setSecurityAuth(false, false, false);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
-  AppleMediaService::init();
-  AppleNotificationService::init();
-  AppleCurrentTimeService::init();
 
   // Restore last known battery level and clock from flash storage
   prefs.begin("nav_state", true);
@@ -561,24 +527,15 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
 
-  // 1. Primary Advertisement Data (Max 31 bytes):
-  // Flags: 3 bytes (0x02, 0x01, 0x06)
-  // ANCS 128-bit Service Solicitation: 18 bytes (0x11, 0x15, ...UUID...)
-  // Total = 21 bytes <= 31 bytes!
-  // Placing ANCS Solicitation in advData is REQUIRED by Apple for iOS Settings to recognize the accessory,
-  // trigger pairing, and display the "Allow iPhone Notifications" prompt!
+  // Primary Advertisement Data: "ESP32-S3 Navi" + Service 0xFFE0
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
-  advData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
+  advData.setName("ESP32-S3 Navi");
+  advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setAdvertisementData(advData);
 
-  // 2. Scan Response Data (Max 31 bytes):
-  // Complete Local Name: "ESP32-S3 Navi" (15 bytes)
-  // Custom Nav Service: 0xFFE0 (4 bytes)
-  // Total = 19 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.setName("ESP32-S3 Navi");
-  scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
