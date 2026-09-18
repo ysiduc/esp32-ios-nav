@@ -71,6 +71,11 @@ public:
   static unsigned long dsLastRxTime;
   static bool dsStreamActive;
 
+  // Pending attribute request queue
+  static uint32_t pendingAttrUid;
+  static bool pendingAttrActive;
+  static unsigned long pendingAttrLastTry;
+
   static void init() {
     notifSourceValHandle = 0;
     notifSourceCccdHandle = 0;
@@ -92,6 +97,9 @@ public:
     dsStreamUid = 0;
     dsLastRxTime = 0;
     dsStreamActive = false;
+    pendingAttrUid = 0;
+    pendingAttrActive = false;
+    pendingAttrLastTry = 0;
   }
 
   static void startDiscovery(uint16_t conn_hdl) {
@@ -125,10 +133,19 @@ public:
   }
 
   static void checkPeriodic() {
-    // If stream is active and no new chunk arrived for 100ms, dispatch what we have collected!
+    // 1. If stream is active and no new chunk arrived for 100ms, dispatch what we have collected!
     if (dsStreamActive && (millis() - dsLastRxTime > 100)) {
       dsStreamActive = false;
       dispatchNotification();
+    }
+
+    // 2. If attribute request was queued (GATT busy or link establishing), retry it every 250ms
+    if (pendingAttrActive && controlPointValHandle != 0 && connHandle != 0 && (millis() - pendingAttrLastTry > 250)) {
+      pendingAttrLastTry = millis();
+      if (sendNotificationAttributeRequest(pendingAttrUid)) {
+        pendingAttrActive = false;
+        Serial.printf("[ANCS] Pending attribute request dispatched for UID=%lu\n", (unsigned long)pendingAttrUid);
+      }
     }
   }
 
@@ -143,78 +160,115 @@ public:
     return 0;
   }
 
-private:
-  static int ancsDataCccdWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
-    isDiscovering = false;
-    if (error->status == 0) {
-      isSubscribed = true;
-      Serial.println("[ANCS] Data Source CCCD enabled. ANCS fully subscribed!");
-    } else {
-      Serial.printf("[ANCS] Data Source CCCD write failed status=%d\n", error->status);
-    }
-    return 0;
+  static bool sendNotificationAttributeRequest(uint32_t uid) {
+    if (controlPointValHandle == 0 || connHandle == 0) return false;
+
+    uint8_t cmd[15];
+    cmd[0] = 0x00; // CommandIDGetNotificationAttributes
+    cmd[1] = (uint8_t)(uid & 0xFF);
+    cmd[2] = (uint8_t)((uid >> 8) & 0xFF);
+    cmd[3] = (uint8_t)((uid >> 16) & 0xFF);
+    cmd[4] = (uint8_t)((uid >> 24) & 0xFF);
+    cmd[5] = 0x00; // Attr 0: AppIdentifier (no length param)
+    cmd[6] = 0x01; // Attr 1: Title
+    cmd[7] = 64; cmd[8] = 0; // max 64 bytes
+    cmd[9] = 0x02; // Attr 2: Subtitle
+    cmd[10] = 32; cmd[11] = 0; // max 32 bytes
+    cmd[12] = 0x03; // Attr 3: Message
+    cmd[13] = 128; cmd[14] = 0; // max 128 bytes
+
+    int rc = ble_gattc_write_flat(connHandle, controlPointValHandle, cmd, sizeof(cmd), ancsCpWriteCb, NULL);
+    Serial.printf("[ANCS] Sent GetNotificationAttributes for UID=%lu (rc=%d)\n", (unsigned long)uid, rc);
+    return (rc == 0);
   }
 
-  static int ancsDataDscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
-    if (error->status == 0 && dsc != nullptr) {
-      if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        dataSourceCccdHandle = dsc->handle;
-        Serial.printf("[ANCS] Found Data Source CCCD handle: %d\n", dataSourceCccdHandle);
-      }
-    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
-      if (dataSourceCccdHandle != 0) {
-        Serial.printf("[ANCS] Enabling Data Source notifications on CCCD handle %d...\n", dataSourceCccdHandle);
-        static uint8_t cccdVal[2] = {0x01, 0x00};
-        int rc = ble_gattc_write_flat(conn_hdl, dataSourceCccdHandle, cccdVal, 2, ancsDataCccdWriteCb, NULL);
-        if (rc != 0) {
-          Serial.printf("[ANCS] Failed to write Data Source CCCD, rc=%d\n", rc);
-          isDiscovering = false;
-        }
-      } else {
-        Serial.println("[ANCS] Data Source CCCD not found.");
-        isDiscovering = false;
-      }
+private:
+  static int ancsCpWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    if (error->status != 0) {
+      Serial.printf("[ANCS] Control Point write error status=%d\n", error->status);
+    } else {
+      Serial.println("[ANCS] Control Point write ACK received from iPhone.");
     }
     return 0;
   }
 
   static int ancsNotifCccdWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
-    Serial.printf("[ANCS] Notification Source CCCD write completed, status=%d\n", error->status);
-    // Writing Notification Source CCCD triggers iOS "Allow iPhone Notifications" dialog!
-    if (dataSourceValHandle != 0) {
-      Serial.printf("[ANCS] Discovering Data Source CCCD (handles %d-%d)...\n", dataSourceValHandle, dataSourceValHandle + 2);
-      int rc = ble_gattc_disc_all_dscs(conn_hdl, dataSourceValHandle, dataSourceValHandle + 2, ancsDataDscCb, NULL);
-      if (rc != 0) {
-        Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Data) failed rc=%d\n", rc);
-        isDiscovering = false;
-        isSubscribed = true;
-      }
-    } else {
-      isDiscovering = false;
+    isDiscovering = false;
+    if (error->status == 0) {
       isSubscribed = true;
+      Serial.println("[ANCS] BOTH Notification Source & Data Source CCCDs enabled! ANCS fully active.");
+    } else {
+      Serial.printf("[ANCS] Notification Source CCCD write error status=%d\n", error->status);
     }
     return 0;
   }
 
-  static int ancsNotifDscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
-    if (error->status == 0 && dsc != nullptr) {
-      if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        notifSourceCccdHandle = dsc->handle;
-        Serial.printf("[ANCS] Found Notification Source CCCD handle: %d\n", notifSourceCccdHandle);
-      }
-    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
-      if (notifSourceCccdHandle != 0) {
-        Serial.printf("[ANCS] Enabling Notification Source on CCCD handle %d (triggers iOS prompt)...\n", notifSourceCccdHandle);
-        static uint8_t cccdVal[2] = {0x01, 0x00};
-        int rc = ble_gattc_write_flat(conn_hdl, notifSourceCccdHandle, cccdVal, 2, ancsNotifCccdWriteCb, NULL);
-        if (rc != 0) {
-          Serial.printf("[ANCS] ble_gattc_write_flat Notif CCCD failed rc=%d\n", rc);
-          isDiscovering = false;
-        }
-      } else {
-        Serial.println("[ANCS] Notification Source CCCD not found.");
+  static void subscribeNotificationSource(uint16_t conn_hdl) {
+    if (notifSourceCccdHandle != 0) {
+      Serial.printf("[ANCS] Step 2/2: Subscribing to Notification Source CCCD handle %d...\n", notifSourceCccdHandle);
+      static uint8_t cccdVal[2] = {0x01, 0x00};
+      int rc = ble_gattc_write_flat(conn_hdl, notifSourceCccdHandle, cccdVal, 2, ancsNotifCccdWriteCb, NULL);
+      if (rc != 0) {
+        Serial.printf("[ANCS] Failed to write Notif CCCD, rc=%d\n", rc);
         isDiscovering = false;
       }
+    } else {
+      Serial.println("[ANCS] Notification Source CCCD not found.");
+      isDiscovering = false;
+    }
+  }
+
+  static int ancsDataCccdWriteCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
+    if (error->status == 0) {
+      Serial.println("[ANCS] Data Source CCCD enabled successfully.");
+    } else {
+      Serial.printf("[ANCS] Data Source CCCD write error status=%d\n", error->status);
+    }
+    // Now subscribe to Notification Source CCCD
+    subscribeNotificationSource(conn_hdl);
+    return 0;
+  }
+
+  static void subscribeDataAndNotifSource(uint16_t conn_hdl) {
+    if (dataSourceCccdHandle != 0) {
+      Serial.printf("[ANCS] Step 1/2: Subscribing to Data Source CCCD handle %d...\n", dataSourceCccdHandle);
+      static uint8_t cccdVal[2] = {0x01, 0x00};
+      int rc = ble_gattc_write_flat(conn_hdl, dataSourceCccdHandle, cccdVal, 2, ancsDataCccdWriteCb, NULL);
+      if (rc != 0) {
+        Serial.printf("[ANCS] Failed to write Data Source CCCD, rc=%d. Proceeding to Notif CCCD...\n", rc);
+        subscribeNotificationSource(conn_hdl);
+      }
+    } else {
+      subscribeNotificationSource(conn_hdl);
+    }
+  }
+
+  static int ancsDscDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
+    if (error->status == 0 && dsc != nullptr) {
+      if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
+        Serial.printf("[ANCS] Found CCCD (0x2902) handle: %d\n", dsc->handle);
+        if (dsc->handle > notifSourceValHandle && (controlPointValHandle == 0 || dsc->handle < controlPointValHandle)) {
+          notifSourceCccdHandle = dsc->handle;
+          Serial.printf("[ANCS] Identified Notification Source CCCD: %d\n", notifSourceCccdHandle);
+        } else if (dsc->handle > dataSourceValHandle && dsc->handle <= svcEndHandle) {
+          dataSourceCccdHandle = dsc->handle;
+          Serial.printf("[ANCS] Identified Data Source CCCD: %d\n", dataSourceCccdHandle);
+        }
+      }
+    } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
+      // Guaranteed fallbacks: CCCD descriptor is always at val_handle + 1 in standard GATT
+      if (notifSourceCccdHandle == 0 && notifSourceValHandle != 0) {
+        notifSourceCccdHandle = notifSourceValHandle + 1;
+        Serial.printf("[ANCS] Fallback Notif Source CCCD handle: %d\n", notifSourceCccdHandle);
+      }
+      if (dataSourceCccdHandle == 0 && dataSourceValHandle != 0) {
+        dataSourceCccdHandle = dataSourceValHandle + 1;
+        Serial.printf("[ANCS] Fallback Data Source CCCD handle: %d\n", dataSourceCccdHandle);
+      }
+
+      Serial.printf("[ANCS] Descriptor discovery complete. NotifCCCD=%d, DataCCCD=%d\n",
+                    notifSourceCccdHandle, dataSourceCccdHandle);
+      subscribeDataAndNotifSource(conn_hdl);
     }
     return 0;
   }
@@ -234,14 +288,19 @@ private:
     } else if (error->status == BLE_HS_EDONE || chr == nullptr) {
       Serial.printf("[ANCS] Chrs discovered: Notif=%d, Ctrl=%d, Data=%d\n",
                     notifSourceValHandle, controlPointValHandle, dataSourceValHandle);
-      if (notifSourceValHandle != 0) {
-        int rc = ble_gattc_disc_all_dscs(conn_hdl, notifSourceValHandle, notifSourceValHandle + 2, ancsNotifDscCb, NULL);
+      if (notifSourceValHandle != 0 && svcStartHandle != 0 && svcEndHandle != 0) {
+        // Discover all descriptors across the whole ANCS service in a single range [svcStartHandle, svcEndHandle]
+        Serial.printf("[ANCS] Discovering all descriptors in ANCS range %d-%d...\n", svcStartHandle, svcEndHandle);
+        int rc = ble_gattc_disc_all_dscs(conn_hdl, svcStartHandle, svcEndHandle, ancsDscDiscCb, NULL);
         if (rc != 0) {
-          Serial.printf("[ANCS] ble_gattc_disc_all_dscs (Notif) failed rc=%d\n", rc);
-          isDiscovering = false;
+          Serial.printf("[ANCS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
+          // Apply fallback immediately if discovery cannot be queued
+          notifSourceCccdHandle = notifSourceValHandle + 1;
+          dataSourceCccdHandle = (dataSourceValHandle != 0) ? (dataSourceValHandle + 1) : 0;
+          subscribeDataAndNotifSource(conn_hdl);
         }
       } else {
-        Serial.println("[ANCS] Notification Source characteristic not found.");
+        Serial.println("[ANCS] Required characteristics or service range missing.");
         isDiscovering = false;
       }
     }
@@ -302,20 +361,12 @@ private:
       }
 
       // Request attributes: AppID (Attr 0), Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
-      if (controlPointValHandle != 0 && connHandle != 0) {
-        uint8_t cmd[15];
-        cmd[0] = 0x00; // CommandIDGetNotificationAttributes
-        memcpy(&cmd[1], &buf[4], 4); // 4-byte UID
-        cmd[5] = 0x00; // Attr 0: AppIdentifier (no length param)
-        cmd[6] = 0x01; // Attr 1: Title
-        cmd[7] = 64; cmd[8] = 0; // max 64 bytes
-        cmd[9] = 0x02; // Attr 2: Subtitle
-        cmd[10] = 32; cmd[11] = 0; // max 32 bytes
-        cmd[12] = 0x03; // Attr 3: Message
-        cmd[13] = 128; cmd[14] = 0; // max 128 bytes
-
-        int rc = ble_gattc_write_flat(connHandle, controlPointValHandle, cmd, sizeof(cmd), NULL, NULL);
-        Serial.printf("[ANCS] Sent GetNotificationAttributes for UID=%lu (rc=%d)\n", (unsigned long)uid, rc);
+      bool sent = sendNotificationAttributeRequest(uid);
+      if (!sent) {
+        pendingAttrUid = uid;
+        pendingAttrActive = true;
+        pendingAttrLastTry = millis();
+        Serial.printf("[ANCS] Attribute request queued for UID=%lu (waiting for link ready)\n", (unsigned long)uid);
       }
     }
     // Event 2: Notification Removed (Call ended / dismissed on phone)
@@ -442,7 +493,11 @@ private:
     if (pendingCategoryID == 1) { // Incoming Call
       const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuộc gọi đến";
       const char* phone = currentMessage[0] != '\0' ? currentMessage : "đang gọi đến...";
-      display.showCallAlert(name, phone, appType);
+      if (display.isCallActive()) {
+        display.updatePopupDetails(name, phone, appType);
+      } else {
+        display.showCallAlert(name, phone, appType);
+      }
     } else if (pendingCategoryID == 2) { // Missed Call
       const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuộc gọi nhỡ";
       display.showCallAlert("Cuộc gọi nhỡ", name, appType);
@@ -475,5 +530,8 @@ uint16_t AppleNotificationService::dsStreamLen = 0;
 uint32_t AppleNotificationService::dsStreamUid = 0;
 unsigned long AppleNotificationService::dsLastRxTime = 0;
 bool AppleNotificationService::dsStreamActive = false;
+uint32_t AppleNotificationService::pendingAttrUid = 0;
+bool AppleNotificationService::pendingAttrActive = false;
+unsigned long AppleNotificationService::pendingAttrLastTry = 0;
 
 #endif // ANCS_SERVICE_H

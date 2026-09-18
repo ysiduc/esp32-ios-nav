@@ -126,15 +126,23 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
       ble_gattc_exchange_mtu(event->enc_change.conn_handle, mtuExchangeCb, NULL);
     } else {
       appleDiscState = APPLE_DISC_IDLE;
-      NimBLEDevice::deleteBond(event->enc_change.conn_handle);
-      Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
-                    event->enc_change.status);
+      Serial.printf("[BLE] Link encryption failed (status=%d).\n", event->enc_change.status);
+      ble_gap_conn_desc desc;
+      if (ble_gap_conn_find(event->enc_change.conn_handle, &desc) == 0) {
+        if (event->enc_change.status == BLE_HS_HCI_ERR(BLE_ERR_PINKEY_MISSING)) {
+          NimBLEDevice::deleteBond(NimBLEAddress(desc.peer_id_addr));
+          Serial.println("[BLE] Stale LTK cleared on peer PIN missing.");
+        }
+      }
     }
   }
   if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
     Serial.printf("[BLE] Repeat pairing request from conn_handle=%d. Resetting bond and retrying...\n",
                   event->repeat_pairing.conn_handle);
-    NimBLEDevice::deleteBond(event->repeat_pairing.conn_handle);
+    ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+      NimBLEDevice::deleteBond(NimBLEAddress(desc.peer_id_addr));
+    }
     return BLE_GAP_REPEAT_PAIRING_RETRY;
   }
   if (event->type == BLE_GAP_EVENT_DISCONNECT) {
@@ -737,14 +745,20 @@ void loop() {
 
       case APPLE_DISC_WAIT_ANCS:
         if (!AppleNotificationService::isDiscovering) {
-          Serial.println("[BLE State] ANCS completed! Advancing to CTS (Time)...");
-          appleDiscState = APPLE_DISC_START_CTS;
-          appleDiscTimer = millis() + 100;
+          if (AppleNotificationService::isSubscribed) {
+            Serial.println("[BLE State] ANCS completed successfully! Advancing to CTS (Time)...");
+            appleDiscState = APPLE_DISC_START_CTS;
+            appleDiscTimer = millis() + 100;
+          } else {
+            Serial.println("[BLE State] ANCS not fully subscribed yet. Retrying discovery in 1.5s...");
+            appleDiscState = APPLE_DISC_START_ANCS;
+            appleDiscTimer = millis() + 1500;
+          }
         } else if (millis() >= appleDiscTimer) {
-          Serial.println("[BLE State] ANCS timed out. Advancing to CTS (Time)...");
+          Serial.println("[BLE State] ANCS discovery timed out. Retrying in 1.0s...");
           AppleNotificationService::isDiscovering = false;
-          appleDiscState = APPLE_DISC_START_CTS;
-          appleDiscTimer = millis() + 100;
+          appleDiscState = APPLE_DISC_START_ANCS;
+          appleDiscTimer = millis() + 1000;
         }
         break;
 
