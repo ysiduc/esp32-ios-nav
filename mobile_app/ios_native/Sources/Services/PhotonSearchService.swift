@@ -2,10 +2,9 @@ import Foundation
 import Combine
 import CoreLocation
 
-/// Reactive Search Service using Goong Places Autocomplete API V2 with Combine debounce (400ms).
-/// Replaces Komoot Photon with Goong for Vietnam-specific POI data and addresses.
-///
-/// API: https://rsapi.goong.io/v2/place/autocomplete
+/// Reactive Search Service using self-hosted Photon geocoder.
+/// API is identical to Komoot Photon — only base URL changes.
+/// Photon repo: https://github.com/komoot/photon
 @MainActor
 public final class PhotonSearchService: ObservableObject {
     @Published public private(set) var results: [SearchResultItem] = []
@@ -15,16 +14,11 @@ public final class PhotonSearchService: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let session: URLSession
 
-    // Goong Places Autocomplete V2 endpoint
-    private let baseUrl = "https://rsapi.goong.io/v2/place/autocomplete"
-    private let apiKey  = ValhallaRoutingService.goongApiKey
-
     public init(session: URLSession = .shared) {
         self.session = session
         setupDebouncedSearch()
     }
 
-    /// Setup Combine pipeline with 400ms debounce
     private func setupDebouncedSearch() {
         $searchText
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -33,40 +27,32 @@ public final class PhotonSearchService: ObservableObject {
             .sink { [weak self] query in
                 guard let self = self else { return }
                 if query.isEmpty {
-                    self.results = []
-                    self.isSearching = false
+                    self.results = []; self.isSearching = false
                 } else {
-                    Task {
-                        await self.search(query: query)
-                    }
+                    Task { await self.search(query: query) }
                 }
             }
             .store(in: &cancellables)
     }
 
-    /// Search places using Goong Autocomplete API
     public func search(query: String, near coordinate: CLLocationCoordinate2D? = nil, limit: Int = 10) async {
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else {
-            self.results = []
-            return
-        }
+        guard !clean.isEmpty else { self.results = []; return }
 
         self.isSearching = true
         defer { self.isSearching = false }
 
-        guard var components = URLComponents(string: baseUrl) else { return }
+        // Use self-hosted Photon from NavServerConfig
+        guard var components = URLComponents(string: NavServerConfig.geocodingURL) else { return }
         var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "input",   value: clean),
-            URLQueryItem(name: "limit",   value: "\(limit)"),
-            URLQueryItem(name: "api_key", value: apiKey)
+            URLQueryItem(name: "q",     value: clean),
+            URLQueryItem(name: "limit", value: "\(limit)"),
+            URLQueryItem(name: "lang",  value: "vi")
         ]
-
-        // Bias results toward user's current location if available
         if let coord = coordinate {
-            queryItems.append(URLQueryItem(name: "location", value: "\(coord.latitude),\(coord.longitude)"))
+            queryItems.append(URLQueryItem(name: "lat", value: String(format: "%.6f", coord.latitude)))
+            queryItems.append(URLQueryItem(name: "lon", value: String(format: "%.6f", coord.longitude)))
         }
-
         components.queryItems = queryItems
         guard let url = components.url else { return }
 
@@ -76,99 +62,46 @@ public final class PhotonSearchService: ObservableObject {
             request.timeoutInterval = 8.0
 
             let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                return
-            }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return }
 
-            // Goong Autocomplete response:
-            // { "predictions": [ { "place_id": "...", "description": "...", "compound": { "district": "...", "province": "..." }, "geometry": { "location": { "lat": ..., "lng": ... } } } ] }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let predictions = json["predictions"] as? [[String: Any]] else {
-                return
-            }
+            // Photon GeoJSON response
+            let decoded = try JSONDecoder().decode(PhotonResponse.self, from: data)
+            let items = decoded.features.compactMap { feature -> SearchResultItem? in
+                guard feature.geometry.coordinates.count >= 2 else { return nil }
+                let lon = feature.geometry.coordinates[0]
+                let lat = feature.geometry.coordinates[1]
+                let itemCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
 
-            var items: [SearchResultItem] = []
-            for pred in predictions {
-                let placeId     = pred["place_id"] as? String ?? ""
-                let description = (pred["description"] as? String ?? "Địa điểm").trimmingCharacters(in: .whitespacesAndNewlines)
-                let compound    = pred["compound"] as? [String: Any]
-                let district    = compound?["district"] as? String
-                let province    = compound?["province"] as? String
-
-                // Try to get coordinate directly from prediction (Goong v2 may include it)
-                var itemCoord: CLLocationCoordinate2D? = nil
-                if let geo = pred["geometry"] as? [String: Any],
-                   let loc = geo["location"] as? [String: Any],
-                   let lat = loc["lat"] as? Double,
-                   let lng = loc["lng"] as? Double {
-                    itemCoord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
-                }
-
-                // If no geometry in prediction, geocode using place_id
-                if itemCoord == nil && !placeId.isEmpty {
-                    itemCoord = await geocodePlaceId(placeId)
-                }
-
-                guard let coord = itemCoord else { continue }
+                let props = feature.properties
+                let name  = props.name ?? props.street ?? "Địa điểm"
 
                 var dist: Double? = nil
                 if let userLoc = coordinate {
                     let locA = CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude)
-                    let locB = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                    let locB = CLLocation(latitude: lat, longitude: lon)
                     dist = locA.distance(from: locB)
                 }
 
-                // Parse name vs address from description ("Name, Street, District, Province")
-                let parts = description.components(separatedBy: ", ")
-                let name  = parts.first ?? description
-                let street = parts.count > 1 ? parts[1] : nil
-
-                items.append(SearchResultItem(
+                return SearchResultItem(
                     name: name,
-                    street: street,
-                    houseNumber: nil,
-                    district: district,
-                    city: province,
-                    country: "Việt Nam",
-                    coordinate: coord,
+                    street: props.street,
+                    houseNumber: props.housenumber,
+                    district: props.district ?? props.locality,
+                    city: props.city ?? props.state,
+                    country: props.country,
+                    coordinate: itemCoord,
                     distanceMeters: dist
-                ))
+                )
             }
-
             self.results = items
         } catch {
-            print("[GoongSearch] Error: \(error.localizedDescription)")
+            print("[Photon] Search error: \(error.localizedDescription)")
             self.results = []
         }
     }
 
-    /// Geocode a Goong place_id to get exact coordinates
-    private func geocodePlaceId(_ placeId: String) async -> CLLocationCoordinate2D? {
-        guard var components = URLComponents(string: "https://rsapi.goong.io/v2/place/detail") else { return nil }
-        components.queryItems = [
-            URLQueryItem(name: "place_id", value: placeId),
-            URLQueryItem(name: "api_key",  value: apiKey)
-        ]
-        guard let url = components.url else { return nil }
-
-        do {
-            let (data, _) = try await session.data(from: url)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let result = json["result"] as? [String: Any],
-                  let geo = result["geometry"] as? [String: Any],
-                  let loc = geo["location"] as? [String: Any],
-                  let lat = loc["lat"] as? Double,
-                  let lng = loc["lng"] as? Double else { return nil }
-            return CLLocationCoordinate2D(latitude: lat, longitude: lng)
-        } catch {
-            return nil
-        }
-    }
-
-    /// Clear search results and text
     public func clear() {
-        self.searchText = ""
-        self.results = []
-        self.isSearching = false
+        self.searchText = ""; self.results = []; self.isSearching = false
     }
 }

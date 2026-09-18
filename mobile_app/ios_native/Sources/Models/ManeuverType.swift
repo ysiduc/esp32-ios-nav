@@ -115,3 +115,28 @@ extension ManeuverType {
         return .straight
     }
 }
+
+// MARK: - GraphHopper Sign Mapping
+extension ManeuverType {
+    /// Map from GraphHopper instruction sign code.
+    /// https://docs.graphhopper.com/#tag/Routing-API/operation/getRoute
+    ///   -98 = U_TURN_UNKNOWN, -8 = U_TURN_LEFT, -7 = KEEP_LEFT
+    ///   -3 = SHARP_LEFT, -2 = LEFT, -1 = SLIGHT_LEFT
+    ///    0 = STRAIGHT,  1 = SLIGHT_RIGHT, 2 = RIGHT, 3 = SHARP_RIGHT
+    ///    4 = FINISH/ARRIVE, 5 = VIA, 6 = ROUNDABOUT, 7 = KEEP_RIGHT, 8 = U_TURN_RIGHT
+    public static func fromGraphHopper(sign: Int) -> ManeuverType {
+        switch sign {
+        case 4, 5:      return .arrive
+        case 6:         return .roundabout
+        case -98, -8, 8: return .uTurn
+        case 3:         return .sharpRight
+        case 1, 7:      return .slightRight
+        case 2:         return .right
+        case -3:        return .sharpLeft
+        case -1, -7:    return .slightLeft
+        case -2:        return .left
+        case 0:         return .straight
+        default:        return .straight
+        }
+    }
+}

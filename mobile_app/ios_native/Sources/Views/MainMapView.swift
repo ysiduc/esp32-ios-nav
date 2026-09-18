@@ -200,7 +200,7 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> UIView {
         #if canImport(MapLibre)
-        let styleUrl = URL(string: ValhallaRoutingService.goongMapStyleUrl)!
+        let styleUrl = URL(string: NavServerConfig.mapStyleURL)!
         let mapView = MLNMapView(frame: .zero, styleURL: styleUrl)
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         mapView.showsUserLocation = true
