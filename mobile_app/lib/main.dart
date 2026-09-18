@@ -57,7 +57,7 @@ class Esp32NavApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        title: 'ESP32 iOS Navigator',
+        title: 'ysiduc',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           brightness: Brightness.dark,

@@ -571,7 +571,7 @@ void setup() {
   display.init();
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
-  NimBLEDevice::init("ESP32-S3 Navi");
+  NimBLEDevice::init("ysiducw");
   NimBLEDevice::setMTU(517);
 
   // Enable BLE Security Auth with Bonding for Apple Notification Center Service (ANCS)
@@ -617,22 +617,22 @@ void setup() {
   // Primary Advertisement Data (must strictly be <= 31 bytes):
   // 1. Flags: 0x02, 0x01, 0x06 (3 bytes)
   // 2. 128-bit Service Solicitation for ANCS (AD Type 0x15): 0x11, 0x15, [16 bytes UUID] (18 bytes)
-  //    -> This triggers iOS Settings -> Bluetooth to immediately recognize and list "ESP32-S3 Navi" in Other Devices!
+  //    -> This triggers iOS Settings -> Bluetooth to immediately recognize and list "ysiducw" in Other Devices!
   // 3. Complete 16-bit Service UUID: 0x03, 0x03, 0xE0, 0xFF (4 bytes)
-  // 4. Shortened Local Name (AD Type 0x08): 0x05, 0x08, 'N', 'a', 'v', 'i' (6 bytes)
+  // 4. Shortened Local Name (AD Type 0x08): 0x05, 0x08, 'y', 's', 'i', 'd' (6 bytes)
   // Total in advData = 3 + 18 + 4 + 6 = 31 bytes (EXACTLY 31 bytes maximum!)
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06);
   advData.addData(std::string((char*)ancsSolicitData, sizeof(ancsSolicitData)));
   advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
-  advData.setShortName("Navi");
+  advData.setShortName("ysid");
   pAdvertising->setAdvertisementData(advData);
 
   // Scan Response Data (Active Scan response <= 31 bytes):
-  // Complete Local Name (AD Type 0x09): 0x0E, 0x09, "ESP32-S3 Navi" (15 bytes)
-  // Total in scanResponseData = 15 bytes <= 31 bytes
+  // Complete Local Name (AD Type 0x09): 0x08, 0x09, "ysiducw" (9 bytes)
+  // Total in scanResponseData = 9 bytes <= 31 bytes
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.setName("ESP32-S3 Navi");
+  scanResponseData.setName("ysiducw");
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -657,7 +657,7 @@ void setup() {
   webSocketClient.setReconnectInterval(2000);
   webSocketClient.enableHeartbeat(15000, 3000, 2);
 
-  Serial.printf("[BLE & WiFi STA] ESP32-S3 Navi ready for Hotspot ('%s') + AMS & ANCS!\n", wifiSsid.c_str());
+  Serial.printf("[BLE & WiFi STA] ysiducw ready for Hotspot ('%s') + AMS & ANCS!\n", wifiSsid.c_str());
 }
 
 void loop() {
@@ -804,12 +804,25 @@ void loop() {
 
       case APPLE_DISC_WAIT_AMS:
         if (!AppleMediaService::isDiscovering) {
-          Serial.println("[BLE State] AMS completed! All Apple services active & configured.");
-          appleDiscState = APPLE_DISC_COMPLETE;
+          if (AppleMediaService::isSubscribed) {
+            Serial.println("[BLE State] AMS completed! All Apple services active & configured.");
+            appleDiscState = APPLE_DISC_COMPLETE;
+          } else {
+            static uint8_t amsRetries = 0;
+            if (amsRetries++ < 5) {
+              Serial.printf("[BLE State] AMS discovery ended without subscription, retry #%d in 2s...\n", amsRetries);
+              appleDiscState = APPLE_DISC_START_AMS;
+              appleDiscTimer = millis() + 2000;
+            } else {
+              Serial.println("[BLE State] AMS max retries reached. Finalizing discovery.");
+              appleDiscState = APPLE_DISC_COMPLETE;
+            }
+          }
         } else if (millis() >= appleDiscTimer) {
-          Serial.println("[BLE State] AMS timed out. Finalizing discovery.");
+          Serial.println("[BLE State] AMS timed out. Scheduling retry in 2s...");
           AppleMediaService::isDiscovering = false;
-          appleDiscState = APPLE_DISC_COMPLETE;
+          appleDiscState = APPLE_DISC_START_AMS;
+          appleDiscTimer = millis() + 2000;
         }
         break;
 

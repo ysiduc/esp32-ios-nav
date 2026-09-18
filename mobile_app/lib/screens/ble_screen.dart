@@ -201,7 +201,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ESP32-S3 Navi" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
+                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ysiducw" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
                   style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5, height: 1.35),
                 ),
               ),
@@ -242,7 +242,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       Text(
                         bleService.systemBondedDevice!.platformName.isNotEmpty
                             ? bleService.systemBondedDevice!.platformName
-                            : 'ESP32-S3 Navi',
+                            : 'ysiducw',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                       ),
                       const SizedBox(height: 3),
@@ -265,7 +265,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     bleService.systemBondedDevice!,
                     displayName: bleService.systemBondedDevice!.platformName.isNotEmpty
                         ? bleService.systemBondedDevice!.platformName
-                        : 'ESP32-S3 Navi',
+                        : 'ysiducw',
                   ),
                   child: const Text('KẾT NỐI VÀO APP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                 ),

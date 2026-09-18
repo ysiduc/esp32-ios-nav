@@ -112,7 +112,7 @@ private:
   static int amsCccdWriteCb(uint16_t conn_handle, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {
     if (error->status == 0) {
       Serial.println("[AMS] Entity Update CCCD enabled. Subscribing to Track Title & Artist...");
-      static uint8_t trackSubCmd[] = { 0x02, 0x02, 0x00 }; // Entity 2 (Track), Attr 2 (Title), Attr 0 (Artist)
+      static uint8_t trackSubCmd[] = { 0x02, 0x00, 0x01, 0x02 }; // Entity 2 (Track): Attr 0 (Artist), Attr 1 (Album), Attr 2 (Title)
       int rc = ble_gattc_write_flat(conn_handle, entityUpdateValHandle, trackSubCmd, sizeof(trackSubCmd), amsTrackSubWriteCb, NULL);
       if (rc != 0) {
         Serial.printf("[AMS] Failed to write trackSubCmd, rc=%d\n", rc);
@@ -128,10 +128,18 @@ private:
   static int amsDscDiscCb(uint16_t conn_hdl, const struct ble_gatt_error *error, uint16_t chr_val_hdl, const struct ble_gatt_dsc *dsc, void *arg) {
     if (error->status == 0 && dsc != nullptr) {
       if (ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
-        entityUpdateCccdHandle = dsc->handle;
-        Serial.printf("[AMS] Found Entity Update CCCD handle: %d\n", entityUpdateCccdHandle);
+        if (dsc->handle > entityUpdateValHandle && dsc->handle <= svcEndHdl) {
+          entityUpdateCccdHandle = dsc->handle;
+          Serial.printf("[AMS] Found Entity Update CCCD handle: %d\n", entityUpdateCccdHandle);
+        }
       }
     } else if (error->status == BLE_HS_EDONE || dsc == nullptr) {
+      // Guaranteed fallback: CCCD descriptor is always at val_handle + 1 in standard GATT
+      if (entityUpdateCccdHandle == 0 && entityUpdateValHandle != 0) {
+        entityUpdateCccdHandle = entityUpdateValHandle + 1;
+        Serial.printf("[AMS] Fallback Entity Update CCCD handle: %d\n", entityUpdateCccdHandle);
+      }
+
       if (entityUpdateCccdHandle != 0) {
         Serial.printf("[AMS] Enabling Entity Update notifications on CCCD handle %d...\n", entityUpdateCccdHandle);
         static uint8_t cccdVal[2] = {0x01, 0x00};
@@ -155,11 +163,16 @@ private:
         entityUpdateValHandle = chr->val_handle;
       }
     } else if (error->status == BLE_HS_EDONE || chr == nullptr) {
-      if (entityUpdateValHandle != 0) {
-        int rc = ble_gattc_disc_all_dscs(conn_hdl, entityUpdateValHandle, entityUpdateValHandle + 2, amsDscDiscCb, NULL);
+      if (entityUpdateValHandle != 0 && svcStartHdl != 0 && svcEndHdl != 0) {
+        Serial.printf("[AMS] Entity Update found (%d). Discovering descriptors across range %d-%d...\n",
+                      entityUpdateValHandle, svcStartHdl, svcEndHdl);
+        int rc = ble_gattc_disc_all_dscs(conn_hdl, svcStartHdl, svcEndHdl, amsDscDiscCb, NULL);
         if (rc != 0) {
-          Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d\n", rc);
-          isDiscovering = false;
+          Serial.printf("[AMS] ble_gattc_disc_all_dscs failed rc=%d, trying direct CCCD at %d\n",
+                        rc, entityUpdateValHandle + 1);
+          entityUpdateCccdHandle = entityUpdateValHandle + 1;
+          static uint8_t cccdVal[2] = {0x01, 0x00};
+          ble_gattc_write_flat(conn_hdl, entityUpdateCccdHandle, cccdVal, 2, amsCccdWriteCb, NULL);
         }
       } else {
         Serial.println("[AMS] Entity Update Characteristic not found.");

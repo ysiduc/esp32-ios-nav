@@ -249,7 +249,7 @@ class BleService extends ChangeNotifier {
             pName.isEmpty; // iOS sometimes hides name until connected
 
         if (isEsp) {
-          final name = pName.isNotEmpty ? pName : 'ESP32-S3 Navi (Đã kết nối iOS)';
+          final name = pName.isNotEmpty ? pName : 'ysiducw (Đã kết nối iOS)';
           _systemBondedDevice = d;
           matched.add(d);
 

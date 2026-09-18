@@ -41,3 +41,4 @@ migrate_working_dir/
 default.profraw
 *.ipa
 *.app
+*.bak

@@ -335,13 +335,23 @@ private:
     os_mbuf_copydata(om, 0, 8, buf);
 
     uint8_t eventId = buf[0];
+    uint8_t eventFlags = buf[1];
     uint8_t categoryId = buf[2];
     uint32_t uid = (uint32_t)buf[4] | ((uint32_t)buf[5] << 8) | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
 
-    Serial.printf("[ANCS] Event=%d, Category=%d, UID=%lu\n", eventId, categoryId, (unsigned long)uid);
+    Serial.printf("[ANCS] Event=%d, Flags=0x%02X, Category=%d, UID=%lu\n",
+                  eventId, eventFlags, categoryId, (unsigned long)uid);
 
     // Event 0: Notification Added, Event 1: Notification Modified
     if (eventId == 0 || eventId == 1) {
+      // Filter out pre-existing notifications sent by iOS upon reconnection.
+      // Bit 2 (0x04) = EventFlagPreExisting. These already exist in Notification Center.
+      bool isPreExisting = (eventFlags & 0x04) != 0;
+      if (isPreExisting) {
+        Serial.printf("[ANCS] Dropping pre-existing notification (Cat=%d, UID=%lu)\n",
+                      categoryId, (unsigned long)uid);
+        return;
+      }
       pendingUID = uid;
       pendingCategoryID = categoryId;
       currentTitle[0] = '\0';

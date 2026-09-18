@@ -1128,7 +1128,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           child: Text(
                             'Để iPhone tự động gửi tên người gọi & tin nhắn thật đến ESP32:\n'
                             '1. Mở Cài đặt iPhone ➔ Bluetooth\n'
-                            '2. Bấm chữ (i) bên cạnh "ESP32-S3 Navi"\n'
+                            '2. Bấm chữ (i) bên cạnh "ysiducw"\n'
                             '3. BẬT mục "Chia sẻ thông báo hệ thống" (Share System Notifications).',
                             style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, height: 1.4),
                           ),
