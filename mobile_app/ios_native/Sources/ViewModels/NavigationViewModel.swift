@@ -71,7 +71,7 @@ public final class NavigationViewModel: ObservableObject {
         routeErrorMessage = nil
 
         do {
-            let costing = (transportMode == "motorcycle") ? "motorcycle" : ((transportMode == "auto") ? "auto" : "bicycle")
+            let costing = (transportMode == "motorcycle") ? "bike" : ((transportMode == "auto") ? "car" : "bike")
             let result = try await routingService.calculateRoute(from: userLoc, to: destination, costing: costing)
             self.calculatedRoute = result.route
         } catch {

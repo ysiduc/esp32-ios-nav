@@ -95,3 +95,23 @@ public enum ManeuverType: UInt8, CaseIterable, Codable, Sendable {
         }
     }
 }
+
+// MARK: - Goong Maneuver Mapping
+extension ManeuverType {
+    /// Map from Goong Directions API maneuver type string.
+    /// Goong uses Google-compatible maneuver strings e.g. "turn-left", "roundabout-left", "straight"
+    public static func fromGoong(type: String) -> ManeuverType {
+        let t = type.lowercased()
+        if t.contains("destination") || t.contains("arrive") { return .arrive }
+        if t.contains("roundabout") || t.contains("rotary")  { return .roundabout }
+        if t.contains("uturn") || t == "u-turn"              { return .uTurn }
+        if t.contains("sharp-right") || t.contains("sharp right") { return .sharpRight }
+        if t.contains("slight-right") || t.contains("slight right") { return .slightRight }
+        if t.contains("right")                               { return .right }
+        if t.contains("sharp-left") || t.contains("sharp left") { return .sharpLeft }
+        if t.contains("slight-left") || t.contains("slight left") { return .slightLeft }
+        if t.contains("left")                                { return .left }
+        if t.contains("straight") || t.contains("continue") || t.contains("merge") { return .straight }
+        return .straight
+    }
+}
