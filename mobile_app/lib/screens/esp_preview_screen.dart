@@ -649,11 +649,27 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
                     // Main Split Screen Body (50% Map Zoom x16 | 50% HUD Cards)
                     Expanded(
-                      child: isCallActive
-                          ? _buildCallPopup(activeCallerName, activeCallerNum, app: activeCallApp)
-                          : isSmsActive
-                              ? _buildSmsPopup(activeSmsSender, activeSmsMsg, app: activeSmsApp)
-                              : _buildSplitView(navManager, streamService, userLoc),
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: _buildSplitView(navManager, streamService, userLoc),
+                          ),
+                          if (isCallActive)
+                            Positioned(
+                              top: 2,
+                              left: 2,
+                              right: 2,
+                              child: _buildCallPopup(activeCallerName, activeCallerNum, app: activeCallApp),
+                            ),
+                          if (!isCallActive && isSmsActive)
+                            Positioned(
+                              top: 2,
+                              left: 2,
+                              right: 2,
+                              child: _buildSmsPopup(activeSmsSender, activeSmsMsg, app: activeSmsApp),
+                            ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1698,68 +1714,95 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
   Widget _buildCallPopup(String name, String number, {String app = 'sim'}) {
     final isZalo = app.toLowerCase() == 'zalo';
-    final cardBg = isZalo ? const Color(0xFF0A192E) : const Color(0xFF042616);
+    final cardBg = isZalo ? const Color(0xFF081A32) : const Color(0xFF062212);
     final borderColor = isZalo ? const Color(0xFF0068FF) : const Color(0xFF22C55E);
     final badgeColor = isZalo ? const Color(0xFF0068FF) : const Color(0xFF22C55E);
-    final badgeTitle = isZalo ? 'CUỘC GỌI ZALO' : 'CUỘC GỌI ĐẾN (SIM)';
+    final badgeTitle = isZalo ? 'ZALO' : 'SIM';
 
     return Container(
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor, width: 2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4, offset: const Offset(0, 2)),
+        ],
       ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (isZalo)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0068FF),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.white, width: 1),
-                  ),
-                  child: const Text('Zalo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF22C55E),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1.5),
-                  ),
-                  child: const Icon(Icons.phone_in_talk_rounded, color: Colors.white, size: 16),
-                ),
-              const SizedBox(width: 8),
-              Text(
-                badgeTitle,
-                style: TextStyle(color: badgeColor, fontSize: 12, fontWeight: FontWeight.bold),
+          if (isZalo)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0068FF),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.white, width: 1),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            name,
-            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'đang gọi đến...',
-            style: TextStyle(color: Color(0xFF22C55E), fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          if (number.isNotEmpty && number != 'unknown' && number != 'Zalo Call' && number != name)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(number, style: const TextStyle(color: Colors.yellow, fontSize: 11)),
+              child: const Text('Zalo', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF22C55E),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1),
+              ),
+              child: const Icon(Icons.phone_in_talk_rounded, color: Colors.white, size: 14),
             ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: badgeColor, width: 0.8),
+                      ),
+                      child: Text(badgeTitle, style: TextStyle(color: badgeColor, fontSize: 9, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    const Text(
+                      'đang gọi đến...',
+                      style: TextStyle(color: Color(0xFF22C55E), fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                    if (number.isNotEmpty && number != 'unknown' && number != 'Zalo Call' && number != name) ...[
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '• ',
+                          style: const TextStyle(color: Colors.yellow, fontSize: 10),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          const Icon(Icons.ring_volume_rounded, color: Color(0xFF22C55E), size: 18),
         ],
       ),
     );
@@ -1772,76 +1815,79 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
     if (app.toLowerCase() == 'zalo') {
       borderColor = const Color(0xFF0068FF);
-      badgeTitle = 'TIN NHẮN ZALO';
+      badgeTitle = 'ZALO';
       iconWidget = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(color: const Color(0xFF0068FF), borderRadius: BorderRadius.circular(4)),
-        child: const Text('Zalo', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(color: const Color(0xFF0068FF), borderRadius: BorderRadius.circular(6)),
+        child: const Text('Zalo', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
       );
     } else if (app.toLowerCase() == 'messenger') {
       borderColor = const Color(0xFFA855F7);
-      badgeTitle = 'TIN NHẮN MESSENGER';
+      badgeTitle = 'MSG';
       iconWidget = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(color: const Color(0xFFA855F7), borderRadius: BorderRadius.circular(4)),
-        child: const Text('MSG', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(color: const Color(0xFFA855F7), borderRadius: BorderRadius.circular(6)),
+        child: const Text('MSG', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
       );
     } else {
       borderColor = const Color(0xFF34C759);
-      badgeTitle = 'TIN NHẮN SMS';
+      badgeTitle = 'SMS';
       iconWidget = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(color: const Color(0xFF34C759), borderRadius: BorderRadius.circular(4)),
-        child: const Text('SMS', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: BoxDecoration(color: const Color(0xFF34C759), borderRadius: BorderRadius.circular(6)),
+        child: const Text('SMS', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
       );
     }
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1420),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor, width: 2),
+        color: const Color(0xFF0C1624),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 4, offset: const Offset(0, 2)),
+        ],
       ),
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children:
- [
-          Row(
-            children: [
-              iconWidget,
-              const SizedBox(width: 6),
-              Text(badgeTitle, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              const Text('Người gửi: ', style: TextStyle(color: Colors.white54, fontSize: 11)),
-              Expanded(
-                child: Text(
-                  sender,
-                  style: const TextStyle(color: Color(0xFFFFB800), fontSize: 13, fontWeight: FontWeight.bold),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
+        children: [
+          iconWidget,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Text('Người gửi: ', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                    Expanded(
+                      child: Text(
+                        sender,
+                        style: const TextStyle(color: Color(0xFFFFB800), fontSize: 12, fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: borderColor.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: borderColor, width: 0.8),
+                      ),
+                      child: Text(badgeTitle, style: TextStyle(color: borderColor, fontSize: 9, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  content,
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF141F30),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              content,
-              style: const TextStyle(color: Colors.white, fontSize: 11, height: 1.2),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
+              ],
             ),
           ),
         ],

@@ -290,10 +290,11 @@ private:
         Serial.printf("[ANCS] Sent GetNotificationAttributes for UID=%lu (rc=%d)\n", (unsigned long)uid, rc);
       }
     }
-    // Event 2: Notification Removed (Call ended / dismissed)
+    // Event 2: Notification Removed (Call ended / dismissed on phone)
     else if (eventId == 2) {
-      if (categoryId == 1) { // Incoming Call ended
-        Serial.println("[ANCS] Call ended, clearing alert.");
+      Serial.printf("[ANCS] Notification removed: Category=%d, UID=%lu\n", categoryId, (unsigned long)uid);
+      if (categoryId == 1 || categoryId == 2 || (display.isCallActive() && uid == pendingUID) || display.isCallActive()) {
+        Serial.println("[ANCS] Call notification dismissed or call ended on phone, clearing alert immediately.");
         display.dismissAlert();
       }
     }

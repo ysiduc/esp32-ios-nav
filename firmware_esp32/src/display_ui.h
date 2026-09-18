@@ -322,6 +322,10 @@ public:
     m = _clockMin;
   }
 
+  bool isPopupActive() const {
+    return (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS);
+  }
+
   void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr, AppSourceType app = APP_SOURCE_SIM) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
     _popupData.title[sizeof(_popupData.title) - 1] = '\0';
@@ -332,9 +336,9 @@ public:
       _popupData.message[0] = '\0';
     }
     _popupData.appSource = app;
-    _popupData.expireMillis = millis() + 12000;
+    // Keep call alert active while ringing (60s timeout fallback) - dismissed immediately when phone stops ringing
+    _popupData.expireMillis = millis() + 60000;
     _currentState = STATE_POPUP_CALL;
-    _needFullRedraw = true;
   }
 
   void showSmsAlert(const char* sender, const char* msg, AppSourceType app = APP_SOURCE_SMS) {
@@ -343,9 +347,9 @@ public:
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
     _popupData.message[sizeof(_popupData.message) - 1] = '\0';
     _popupData.appSource = app;
-    _popupData.expireMillis = millis() + 8000;
+    // Exactly 10 seconds for message notification as requested
+    _popupData.expireMillis = millis() + 10000;
     _currentState = STATE_POPUP_SMS;
-    _needFullRedraw = true;
   }
 
   void dismissAlert() {
@@ -523,6 +527,119 @@ private:
       default:
         _drawOtherNotifIcon(x, y);
         break;
+    }
+  }
+
+  void _drawBannerUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, int maxWidth = 240, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(font);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+
+    char buf[128];
+    strncpy(buf, str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    if (u8f.getUTF8Width(buf) > maxWidth) {
+      size_t len = strlen(buf);
+      while (len > 3 && u8f.getUTF8Width(buf) > maxWidth) {
+        len--;
+        while (len > 0 && (buf[len] & 0xC0) == 0x80) len--;
+        buf[len] = '\0';
+        strncat(buf, "...", sizeof(buf) - strlen(buf) - 1);
+      }
+    }
+
+    u8f.setCursor(x, y + 13);
+    u8f.print(buf);
+  }
+
+  void _drawTopNotificationBanner() {
+    bool isCall = (_currentState == STATE_POPUP_CALL);
+    bool isZalo = (_popupData.appSource == APP_SOURCE_ZALO);
+    bool isMessenger = (_popupData.appSource == APP_SOURCE_MESSENGER);
+
+    uint16_t cCardBg;
+    uint16_t cBorder;
+    const char* badgeText;
+    uint16_t cBadgeBg;
+
+    if (isCall) {
+      if (isZalo) {
+        cCardBg = tft.color565(8, 22, 42);     // Deep Zalo Navy
+        cBorder = tft.color565(0, 104, 255);    // Zalo Blue (#0068FF)
+        badgeText = "ZALO";
+        cBadgeBg = tft.color565(0, 55, 120);
+      } else {
+        cCardBg = tft.color565(6, 28, 16);     // Deep SIM Forest Green
+        cBorder = tft.color565(34, 197, 94);    // Green (#22C55E)
+        badgeText = "SIM";
+        cBadgeBg = tft.color565(12, 54, 28);
+      }
+    } else { // SMS / Message
+      if (isZalo) {
+        cCardBg = tft.color565(8, 22, 42);
+        cBorder = tft.color565(0, 104, 255);
+        badgeText = "ZALO";
+        cBadgeBg = tft.color565(0, 55, 120);
+      } else if (isMessenger) {
+        cCardBg = tft.color565(26, 12, 38);
+        cBorder = tft.color565(168, 85, 247);   // Messenger Purple (#A855F7)
+        badgeText = "MSG";
+        cBadgeBg = tft.color565(60, 20, 95);
+      } else {
+        cCardBg = tft.color565(8, 28, 16);
+        cBorder = tft.color565(52, 199, 89);    // SMS Green
+        badgeText = "SMS";
+        cBadgeBg = tft.color565(14, 52, 28);
+      }
+    }
+
+    // Top Horizontal Banner Bar (308x52 pixels, right below waybar y=24)
+    const int bx = 6, by = 26, bw = 308, bh = 52;
+    tft.fillRoundRect(bx, by, bw, bh, 10, cCardBg);
+    tft.drawRoundRect(bx, by, bw, bh, 10, cBorder);
+    tft.drawRoundRect(bx + 1, by + 1, bw - 2, bh - 2, 9, cBorder);
+
+    // Left: App Icon (36x36 at x = 12, y = 34)
+    _drawAppIcon(_popupData.appSource, 12, 34);
+
+    // Top-Right Badge Pill
+    int badgeW = (badgeText != nullptr) ? (strlen(badgeText) * 8 + 14) : 0;
+    if (badgeW > 0) {
+      tft.fillRoundRect(bx + bw - badgeW - 8, by + 5, badgeW, 18, 5, cBadgeBg);
+      tft.drawRoundRect(bx + bw - badgeW - 8, by + 5, badgeW, 18, 5, cBorder);
+      tft.setTextColor(TFT_WHITE, cBadgeBg);
+      tft.drawString(badgeText, bx + bw - badgeW - 1, by + 7, 2);
+    }
+
+    int maxTextW = bw - 54 - badgeW - 14;
+
+    if (isCall) {
+      // Row 1: Caller Name ("tên người gọi" hoặc "tên đã lưu / SĐT")
+      const char* name = _popupData.title[0] != '\0' ? _popupData.title : "Cuộc gọi đến";
+      _drawBannerUtf8String(name, 54, 28, TFT_WHITE, cCardBg, maxTextW);
+
+      // Row 2: Status "đang gọi đến..."
+      char statusBuf[64];
+      if (_popupData.message[0] != '\0' &&
+          strcmp(_popupData.message, "Dang do chuong...") != 0 &&
+          strcmp(_popupData.message, "đang gọi đến...") != 0 &&
+          strcmp(_popupData.message, name) != 0) {
+        snprintf(statusBuf, sizeof(statusBuf), "%s • đang gọi đến...", _popupData.message);
+      } else {
+        snprintf(statusBuf, sizeof(statusBuf), "đang gọi đến...");
+      }
+      _drawBannerUtf8String(statusBuf, 54, 48, TFT_GREEN, cCardBg, bw - 60);
+
+    } else {
+      // Row 1: Sender Name
+      const char* sender = _popupData.title[0] != '\0' ? _popupData.title : "Tin nhắn mới";
+      _drawBannerUtf8String(sender, 54, 28, tft.color565(250, 204, 21), cCardBg, maxTextW);
+
+      // Row 2: Message Content
+      const char* msg = _popupData.message[0] != '\0' ? _popupData.message : "Thông báo mới";
+      _drawBannerUtf8String(msg, 54, 48, TFT_WHITE, cCardBg, bw - 60);
     }
   }
 
@@ -1147,99 +1264,9 @@ private:
       }
     }
 
-    if (_currentState == STATE_POPUP_CALL) {
-      bool isZalo = (_popupData.appSource == APP_SOURCE_ZALO);
-      uint16_t cCardBg = isZalo ? tft.color565(8, 24, 46) : tft.color565(4, 38, 22);
-      uint16_t cBorder = isZalo ? tft.color565(0, 104, 255) : tft.color565(34, 197, 94);
-      uint16_t cTagColor = isZalo ? tft.color565(0, 180, 255) : tft.color565(34, 197, 94);
-
-      // Main Popup Card (290x208)
-      tft.fillRoundRect(15, 16, 290, 208, 16, cCardBg);
-      tft.drawRoundRect(15, 16, 290, 208, 16, cBorder);
-      tft.drawRoundRect(16, 17, 288, 206, 15, cBorder);
-
-      // App Icon (Left)
-      _drawAppIcon(_popupData.appSource, 30, 26);
-
-      // App Header Badge / Title
-      if (isZalo) {
-        tft.fillRoundRect(74, 28, 155, 28, 6, tft.color565(0, 48, 110));
-        tft.drawRoundRect(74, 28, 155, 28, 6, cBorder);
-        _drawUtf8String("CUỘC GỌI ZALO", 84, 33, cTagColor, tft.color565(0, 48, 110));
-      } else {
-        tft.fillRoundRect(74, 28, 175, 28, 6, tft.color565(12, 54, 32));
-        tft.drawRoundRect(74, 28, 175, 28, 6, cBorder);
-        _drawUtf8String("CUỘC GỌI ĐẾN (SIM)", 82, 33, cTagColor, tft.color565(12, 54, 32));
-      }
-
-      // Caller Name ("tên người gọi" / "tên đã lưu hoặc sdt")
-      _drawCentreUtf8String(_popupData.title, 160, 78, TFT_WHITE, cCardBg);
-
-      // Status text: "đang gọi đến..."
-      _drawCentreUtf8String("đang gọi đến...", 160, 116, TFT_GREEN, cCardBg);
-
-      // Phone number / subtitle if available and distinct
-      if (_popupData.message[0] != '\0' &&
-          strcmp(_popupData.message, "Dang do chuong...") != 0 &&
-          strcmp(_popupData.message, "đang gọi đến...") != 0 &&
-          strcmp(_popupData.message, _popupData.title) != 0) {
-        _drawCentreUtf8String(_popupData.message, 160, 146, TFT_YELLOW, cCardBg);
-      }
-
-      // Footer divider & prompt
-      tft.drawFastHLine(35, 176, 250, tft.color565(40, 60, 80));
-      _drawCentreUtf8String("Chạm iPhone để nhận cuộc gọi", 160, 186, tft.color565(148, 163, 184), cCardBg);
-      return;
-    }
-
-    if (_currentState == STATE_POPUP_SMS) {
-      uint16_t cCardBg = tft.color565(11, 20, 32);
-      uint16_t cBorder;
-      const char* appBadge;
-      uint16_t cBadgeBg;
-
-      if (_popupData.appSource == APP_SOURCE_ZALO) {
-        cBorder = tft.color565(0, 104, 255); // Zalo blue
-        appBadge = "TIN NHẮN ZALO";
-        cBadgeBg = tft.color565(0, 48, 110);
-      } else if (_popupData.appSource == APP_SOURCE_MESSENGER) {
-        cBorder = tft.color565(168, 85, 247); // Messenger purple
-        appBadge = "TIN NHẮN MESSENGER";
-        cBadgeBg = tft.color565(60, 20, 95);
-      } else {
-        cBorder = tft.color565(52, 199, 89); // SMS green
-        appBadge = "TIN NHẮN SMS";
-        cBadgeBg = tft.color565(14, 52, 28);
-      }
-
-      // Main Popup Card
-      tft.fillRoundRect(15, 16, 290, 208, 16, cCardBg);
-      tft.drawRoundRect(15, 16, 290, 208, 16, cBorder);
-      tft.drawRoundRect(16, 17, 288, 206, 15, cBorder);
-
-      // App Icon (Left)
-      _drawAppIcon(_popupData.appSource, 30, 26);
-
-      // App Header Badge
-      tft.fillRoundRect(74, 28, 185, 26, 6, cBadgeBg);
-      tft.drawRoundRect(74, 28, 185, 26, 6, cBorder);
-      _drawUtf8String(appBadge, 84, 32, TFT_WHITE, cBadgeBg);
-
-      // Sender Row: "Người gửi: [Tên người gửi]"
-      _drawUtf8String("Người gửi:", 30, 64, tft.color565(148, 163, 184), cCardBg);
-      _drawUtf8String(_popupData.title, 105, 64, TFT_YELLOW, cCardBg);
-
-      // Message Content Box (Bubble)
-      uint16_t cBubbleBg = tft.color565(20, 30, 46);
-      tft.fillRoundRect(26, 88, 268, 100, 10, cBubbleBg);
-      tft.drawRoundRect(26, 88, 268, 100, 10, tft.color565(40, 56, 82));
-
-      // Draw Message text with multi-line wrapping
-      _drawWrappedUtf8String(_popupData.message, 36, 94, 248, 4, TFT_WHITE, cBubbleBg, 22);
-
-      // Footer
-      _drawCentreUtf8String("Nhấn bất kỳ để đóng", 160, 196, tft.color565(100, 116, 139), cCardBg);
-      return;
+    // Auto-expire popup if timeout reached
+    if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() >= _popupData.expireMillis) {
+      dismissAlert();
     }
 
     // =========================================================================
@@ -1468,6 +1495,13 @@ private:
         tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
         tft.setTextPadding(0);
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // TOP NOTIFICATION BANNER OVERLAY (Rendered right beneath waybar)
+    // -------------------------------------------------------------------------
+    if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+      _drawTopNotificationBanner();
     }
   }
 #endif

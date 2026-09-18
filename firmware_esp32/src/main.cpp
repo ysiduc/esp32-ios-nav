@@ -46,9 +46,12 @@ TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
 U8g2_for_TFT_eSPI u8f_marquee;
 #include <TJpg_Decoder.h>
 bool g_clipMapOnly = false;
+extern DisplayManager display;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= tft.width()) return 1;
   if (g_clipMapOnly && x >= 154) return 1;
+  // If top notification banner is active, clip map stream from overwriting banner at y: 24..80
+  if (display.isPopupActive() && (y + h > 24 && y < 80)) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
@@ -304,7 +307,7 @@ void processJsonPacket(const char* jsonStr) {
     popupTitle = name;
     popupMsg = msg;
     popupType = "CALL";
-    popupExpire = millis() + 12000;
+    popupExpire = millis() + 60000;
     display.showCallAlert(name, popupMsg.c_str(), appType);
     return;
   } else if (typeStr == "SMS") {
@@ -326,7 +329,7 @@ void processJsonPacket(const char* jsonStr) {
     popupTitle = sender;
     popupMsg = content;
     popupType = "SMS";
-    popupExpire = millis() + 8000;
+    popupExpire = millis() + 10000; // Exactly 10s for SMS notification
     display.showSmsAlert(sender, content, appType);
     return;
   } else if (typeStr == "CALL_END") {
@@ -670,7 +673,11 @@ void loop() {
     // Only render live map when in Navigation mode (app connected via BLE)
     if (activeRenderBufLen > 100 && display.isAppConnected()) {
       g_clipMapOnly = true;
-      tft.setViewport(6, 26, 144, 208, false);
+      if (display.isPopupActive()) {
+        tft.setViewport(6, 80, 144, 154, false); // Clip below notification banner
+      } else {
+        tft.setViewport(6, 26, 144, 208, false);
+      }
       TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
       tft.resetViewport();
       g_clipMapOnly = false;
