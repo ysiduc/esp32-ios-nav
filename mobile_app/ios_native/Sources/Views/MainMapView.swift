@@ -1,9 +1,6 @@
 import SwiftUI
 import CoreLocation
-
-#if canImport(MapLibre)
-import MapLibre
-#endif
+import MapKit
 
 /// Main SwiftUI Map Screen integrating MapLibre Native, Search Bar, Route Card, and Navigation HUD
 public struct MainMapView: View {
@@ -14,10 +11,10 @@ public struct MainMapView: View {
     public var body: some View {
         ZStack {
             // 1. Full-screen Vector Map
-            MapLibreNativeRepresentable(
+            MapKitRepresentable(
                 route: viewModel.calculatedRoute,
                 destination: viewModel.selectedDestination?.coordinate,
-                userLocation: viewModel.navManager.userLocation?.coordinate,
+                snappedLocation: viewModel.navManager.snappedLocation,
                 isNavigating: viewModel.navManager.isNavigating
             )
             .ignoresSafeArea()
@@ -191,105 +188,116 @@ public struct MainMapView: View {
     }
 }
 
-// MARK: - MapLibre Native UIViewRepresentable
-public struct MapLibreNativeRepresentable: UIViewRepresentable {
+// MARK: - MapKit UIViewRepresentable
+/// Native Apple Maps view — free, no API key, excellent Vietnam road data.
+public struct MapKitRepresentable: UIViewRepresentable {
     public let route: NavRoute?
     public let destination: CLLocationCoordinate2D?
-    public let userLocation: CLLocationCoordinate2D?
+    public let snappedLocation: CLLocationCoordinate2D?
     public let isNavigating: Bool
 
-    public func makeUIView(context: Context) -> UIView {
-        #if canImport(MapLibre)
-        let styleUrl = URL(string: NavServerConfig.mapStyleURL)!
-        let mapView = MLNMapView(frame: .zero, styleURL: styleUrl)
-        mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    public func makeUIView(context: Context) -> MKMapView {
+        let mapView = MKMapView()
         mapView.showsUserLocation = true
-        mapView.userTrackingMode = isNavigating ? .followWithCourse : .follow
+        mapView.showsCompass = false
+        mapView.showsScale = false
+        mapView.mapType = .standard
         mapView.delegate = context.coordinator
-        context.coordinator.mapView = mapView
+        mapView.userTrackingMode = .follow
         return mapView
-        #else
-        let fallbackView = UIView()
-        fallbackView.backgroundColor = UIColor(red: 0.08, green: 0.11, blue: 0.16, alpha: 1.0)
-        return fallbackView
-        #endif
     }
 
-    public func updateUIView(_ uiView: UIView, context: Context) {
-        #if canImport(MapLibre)
-        guard uiView is MLNMapView else { return }
+    public func updateUIView(_ mapView: MKMapView, context: Context) {
         context.coordinator.update(
+            mapView: mapView,
             route: route,
             destination: destination,
-            userLocation: userLocation,
+            snappedLocation: snappedLocation,
             isNavigating: isNavigating
         )
-        #endif
     }
 
-    public func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
+    public func makeCoordinator() -> Coordinator { Coordinator() }
 
-    #if canImport(MapLibre)
-    public class Coordinator: NSObject, MLNMapViewDelegate {
-        weak var mapView: MLNMapView?
-        private var polylineAnnotation: MLNPolyline?
-        private var destinationAnnotation: MLNPointAnnotation?
+    public class Coordinator: NSObject, MKMapViewDelegate {
+        private var routeOverlay: MKPolyline?
+        private var destinationAnnotation: MKPointAnnotation?
+        private var lastIsNavigating = false
 
-        public func mapView(_ mapView: MLNMapView, strokeColorForShapeAnnotation annotation: MLNShape) -> UIColor {
-            return UIColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 1.0)
-        }
-
-        public func mapView(_ mapView: MLNMapView, lineWidthForPolylineAnnotation annotation: MLNPolyline) -> CGFloat {
-            return 6.0
-        }
-
-        public func mapView(_ mapView: MLNMapView, alphaForShapeAnnotation annotation: MLNShape) -> CGFloat {
-            return 0.95
-        }
-
-        func update(route: NavRoute?, destination: CLLocationCoordinate2D?, userLocation: CLLocationCoordinate2D?, isNavigating: Bool) {
-            guard let mapView = mapView else { return }
-
-            // Update Polyline
-            if let existing = polylineAnnotation {
-                mapView.removeAnnotation(existing)
-                polylineAnnotation = nil
+        func update(
+            mapView: MKMapView,
+            route: NavRoute?,
+            destination: CLLocationCoordinate2D?,
+            snappedLocation: CLLocationCoordinate2D?,
+            isNavigating: Bool
+        ) {
+            // --- Route polyline ---
+            if let existing = routeOverlay {
+                mapView.removeOverlay(existing)
+                routeOverlay = nil
             }
-
             if let route = route, route.coordinates.count >= 2 {
                 var coords = route.coordinates
-                let polyline = MLNPolyline(coordinates: &coords, count: UInt(coords.count))
-                mapView.addAnnotation(polyline)
-                self.polylineAnnotation = polyline
+                let polyline = MKPolyline(coordinates: &coords, count: coords.count)
+                mapView.addOverlay(polyline, level: .aboveRoads)
+                routeOverlay = polyline
 
                 if !isNavigating {
-                    // Fit route bounds
-                    mapView.setVisibleCoordinates(&coords, count: UInt(coords.count), edgePadding: UIEdgeInsets(top: 100, left: 40, bottom: 220, right: 40), animated: true)
+                    // Fit map to route with padding
+                    let rect = polyline.boundingMapRect
+                    mapView.setVisibleMapRect(
+                        rect,
+                        edgePadding: UIEdgeInsets(top: 80, left: 40, bottom: 240, right: 40),
+                        animated: true
+                    )
                 }
             }
 
-            // Update Destination Pin
-            if let existingPin = destinationAnnotation {
-                mapView.removeAnnotation(existingPin)
+            // --- Destination pin ---
+            if let existing = destinationAnnotation {
+                mapView.removeAnnotation(existing)
                 destinationAnnotation = nil
             }
-
             if let destCoord = destination {
-                let pin = MLNPointAnnotation()
+                let pin = MKPointAnnotation()
                 pin.coordinate = destCoord
                 pin.title = "Điểm đến"
                 mapView.addAnnotation(pin)
-                self.destinationAnnotation = pin
+                destinationAnnotation = pin
             }
 
-            if isNavigating {
-                mapView.userTrackingMode = .followWithHeading
+            // --- Navigation tracking mode ---
+            if isNavigating != lastIsNavigating {
+                lastIsNavigating = isNavigating
+                mapView.userTrackingMode = isNavigating ? .followWithHeading : .follow
             }
         }
+
+        // Cyan route line
+        public func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor(red: 0.0, green: 0.75, blue: 1.0, alpha: 1.0)
+                renderer.lineWidth = 6.0
+                renderer.lineCap = .round
+                renderer.lineJoin = .round
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+
+        // Red destination pin
+        public func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard !(annotation is MKUserLocation) else { return nil }
+            let id = "destination"
+            let view = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+            if let marker = view as? MKMarkerAnnotationView {
+                marker.markerTintColor = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
+                marker.glyphImage = UIImage(systemName: "flag.checkered")
+            }
+            view.annotation = annotation
+            return view
+        }
     }
-    #else
-    public class Coordinator: NSObject {}
-    #endif
 }

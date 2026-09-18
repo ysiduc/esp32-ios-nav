@@ -1,10 +1,10 @@
 import Foundation
 import Combine
 import CoreLocation
+import MapKit
 
-/// Reactive Search Service using self-hosted Photon geocoder.
-/// API is identical to Komoot Photon — only base URL changes.
-/// Photon repo: https://github.com/komoot/photon
+/// Reactive Search Service using Apple MKLocalSearch — 100% free, no API key, built into iOS.
+/// Quality is excellent for Vietnam: uses Apple Maps POI database.
 @MainActor
 public final class PhotonSearchService: ObservableObject {
     @Published public private(set) var results: [SearchResultItem] = []
@@ -12,10 +12,9 @@ public final class PhotonSearchService: ObservableObject {
     @Published public var searchText: String = ""
 
     private var cancellables = Set<AnyCancellable>()
-    private let session: URLSession
+    private var currentSearchTask: Task<Void, Never>?
 
-    public init(session: URLSession = .shared) {
-        self.session = session
+    public init() {
         setupDebouncedSearch()
     }
 
@@ -26,15 +25,19 @@ public final class PhotonSearchService: ObservableObject {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] query in
                 guard let self = self else { return }
+                self.currentSearchTask?.cancel()
                 if query.isEmpty {
                     self.results = []; self.isSearching = false
                 } else {
-                    Task { await self.search(query: query) }
+                    self.currentSearchTask = Task {
+                        await self.search(query: query)
+                    }
                 }
             }
             .store(in: &cancellables)
     }
 
+    /// Search places using Apple MKLocalSearch (completer + request)
     public func search(query: String, near coordinate: CLLocationCoordinate2D? = nil, limit: Int = 10) async {
         let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { self.results = []; return }
@@ -42,66 +45,74 @@ public final class PhotonSearchService: ObservableObject {
         self.isSearching = true
         defer { self.isSearching = false }
 
-        // Use self-hosted Photon from NavServerConfig
-        guard var components = URLComponents(string: NavServerConfig.geocodingURL) else { return }
-        var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "q",     value: clean),
-            URLQueryItem(name: "limit", value: "\(limit)"),
-            URLQueryItem(name: "lang",  value: "vi")
-        ]
-        if let coord = coordinate {
-            queryItems.append(URLQueryItem(name: "lat", value: String(format: "%.6f", coord.latitude)))
-            queryItems.append(URLQueryItem(name: "lon", value: String(format: "%.6f", coord.longitude)))
-        }
-        components.queryItems = queryItems
-        guard let url = components.url else { return }
-
         do {
-            var request = URLRequest(url: url)
-            request.setValue("ESP32_Native_Navigator/1.0", forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 8.0
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = clean
+            request.resultTypes = [.pointOfInterest, .address]
 
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else { return }
+            // Bias search toward Vietnam if no specific location given
+            if let coord = coordinate {
+                // 50km radius search region centered on user
+                let region = MKCoordinateRegion(
+                    center: coord,
+                    latitudinalMeters: 50_000,
+                    longitudinalMeters: 50_000
+                )
+                request.region = region
+            } else {
+                // Default to Vietnam bounding box
+                let vietnamCenter = CLLocationCoordinate2D(latitude: 16.0, longitude: 107.5)
+                request.region = MKCoordinateRegion(
+                    center: vietnamCenter,
+                    span: MKCoordinateSpan(latitudeDelta: 15.0, longitudeDelta: 8.0)
+                )
+            }
 
-            // Photon GeoJSON response
-            let decoded = try JSONDecoder().decode(PhotonResponse.self, from: data)
-            let items = decoded.features.compactMap { feature -> SearchResultItem? in
-                guard feature.geometry.coordinates.count >= 2 else { return nil }
-                let lon = feature.geometry.coordinates[0]
-                let lat = feature.geometry.coordinates[1]
-                let itemCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let search = MKLocalSearch(request: request)
+            let response = try await search.start()
 
-                let props = feature.properties
-                let name  = props.name ?? props.street ?? "Địa điểm"
+            let items = response.mapItems.prefix(limit).map { item -> SearchResultItem in
+                let placemark = item.placemark
+                let coord     = placemark.coordinate
 
                 var dist: Double? = nil
                 if let userLoc = coordinate {
                     let locA = CLLocation(latitude: userLoc.latitude, longitude: userLoc.longitude)
-                    let locB = CLLocation(latitude: lat, longitude: lon)
+                    let locB = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                     dist = locA.distance(from: locB)
                 }
 
+                // Build clean name
+                let name     = item.name ?? placemark.name ?? "Địa điểm"
+                let street   = placemark.thoroughfare
+                let district = placemark.subLocality ?? placemark.locality
+                let city     = placemark.administrativeArea
+
                 return SearchResultItem(
                     name: name,
-                    street: props.street,
-                    houseNumber: props.housenumber,
-                    district: props.district ?? props.locality,
-                    city: props.city ?? props.state,
-                    country: props.country,
-                    coordinate: itemCoord,
+                    street: street,
+                    houseNumber: placemark.subThoroughfare,
+                    district: district,
+                    city: city,
+                    country: placemark.country,
+                    coordinate: coord,
                     distanceMeters: dist
                 )
             }
-            self.results = items
+
+            self.results = Array(items)
+            print("[MKLocalSearch] '\(clean)' → \(items.count) results")
+
         } catch {
-            print("[Photon] Search error: \(error.localizedDescription)")
+            if (error as? CancellationError) == nil {
+                print("[MKLocalSearch] Search error: \(error.localizedDescription)")
+            }
             self.results = []
         }
     }
 
     public func clear() {
-        self.searchText = ""; self.results = []; self.isSearching = false
+        currentSearchTask?.cancel()
+        searchText = ""; results = []; isSearching = false
     }
 }

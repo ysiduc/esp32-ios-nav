@@ -140,3 +140,23 @@ extension ManeuverType {
         }
     }
 }
+
+// MARK: - Apple MKDirections Instruction Mapping
+extension ManeuverType {
+    /// Infer maneuver type from Apple MKRoute.Step instruction string.
+    /// MKDirections provides natural language instructions in the device locale.
+    public static func fromMKInstruction(_ instruction: String) -> ManeuverType {
+        let t = instruction.lowercased()
+        if t.contains("đến đích") || t.contains("arrive") || t.contains("destination") { return .arrive }
+        if t.contains("vòng xuyến") || t.contains("roundabout") || t.contains("traffic circle") { return .roundabout }
+        if t.contains("quay đầu") || t.contains("u-turn") || t.contains("uturn") { return .uTurn }
+        if t.contains("gấp phải") || t.contains("sharp right") { return .sharpRight }
+        if t.contains("gấp trái") || t.contains("sharp left")  { return .sharpLeft }
+        if t.contains("nhẹ phải") || t.contains("slight right") || t.contains("keep right") || t.contains("bear right") { return .slightRight }
+        if t.contains("nhẹ trái") || t.contains("slight left")  || t.contains("keep left")  || t.contains("bear left")  { return .slightLeft }
+        if t.contains("rẽ phải") || t.contains("turn right") { return .right }
+        if t.contains("rẽ trái") || t.contains("turn left")  { return .left }
+        if t.contains("đi thẳng") || t.contains("continue") || t.contains("straight") || t.contains("head") { return .straight }
+        return .straight
+    }
+}
