@@ -603,6 +603,7 @@ void loop() {
     // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
     if (wsConnected) {
       webSocketClient.sendTXT("K");
+      webSocketClient.loop();
     }
   }
 

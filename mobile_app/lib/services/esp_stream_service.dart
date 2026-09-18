@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -118,7 +119,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             socket.listen(
               (data) {
                 // Incoming messages from ESP32 client (ACK 'K' when frame is rendered)
-                if (data == 'K' || data == 'ACK') {
+                final msg = data is String
+                    ? data.trim()
+                    : (data is List<int> ? utf8.decode(data, allowMalformed: true).trim() : '');
+                if (msg == 'K' || msg == 'ACK' || msg.contains('K')) {
                   _wsReadyForNextFrame = true;
                 }
               },
@@ -270,6 +274,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
+
+    // Strict 1-in-flight queue control: if ESP32 hasn't rendered previous frame, skip tick to prevent queue buildup
+    if (_wsClients.isNotEmpty && !_wsReadyForNextFrame && DateTime.now().difference(_lastWsSendTime).inMilliseconds < 250) {
+      return;
+    }
     _isCapturing = true;
 
     try {
@@ -318,7 +327,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
               bytes: rawBytes.buffer,
               order: img.ChannelOrder.rgba,
             );
-            jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 78));
+            jpegBytes = Uint8List.fromList(img.encodeJpg(imgImage, quality: 65));
           }
         } catch (_) {}
       }
@@ -509,7 +518,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         img.Point(vx - 4, vy + 4),
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 78));
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 65));
     } catch (e, stack) {
       debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
@@ -521,13 +530,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     if (_wsClients.isNotEmpty) {
       final now = DateTime.now();
       final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
-      // Flow control: only send if ESP32 finished decoding/rendering previous frame, or if >90ms timeout
-      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 90) {
+      // Strict 1-in-flight closed-loop flow control (Zero-Queue latency):
+      // Only send if ESP32 finished rendering previous frame, or after 250ms watchdog timeout
+      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 250) {
         return; // Drop intermediate frame to prevent TCP buffer accumulation and latency!
       }
-      // Micro-gap flow control (at least 55ms between frames = max ~18 FPS):
-      // Leaves a clean ~30ms RF breather between Wi-Fi packets, allowing 2.4GHz radio to service BLE without dropouts!
-      if (elapsedSinceLastWs < 55) {
+      // Micro-gap flow control (at least 45ms between frames = max ~22 FPS):
+      // Leaves a clean RF breather between Wi-Fi packets, allowing 2.4GHz radio to service BLE without dropouts!
+      if (elapsedSinceLastWs < 45) {
         return;
       }
 
@@ -647,8 +657,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _lastPrefetchPos = pos;
 
-    for (int dx = -2; dx <= 2; dx++) {
-      for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
         final tx = cx + dx;
         final ty = cy + dy;
         final key = '$zoom/$tx/$ty';
@@ -672,7 +682,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       String url;
       if (isGoong) {
         // High-definition Google Vietnam localized raster tiles (100% authentic Vietnamese labels: Sông Lừ, Đ. Trường Chinh, etc.)
-        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&scale=2';
+        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi';
       } else {
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
@@ -689,7 +699,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isGoong
-            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&scale=2'
+            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi'
             : (isDark
                 ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
                 : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
@@ -794,8 +804,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.rotate(-headingRad);
 
     bool tilesDrawn = false;
-    for (int dx = -2; dx <= 2; dx++) {
-      for (int dy = -2; dy <= 2; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
         final tx = centerTileX + dx;
         final ty = centerTileY + dy;
         final key = '$zoom/$tx/$ty';
