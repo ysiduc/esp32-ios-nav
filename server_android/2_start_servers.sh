@@ -1,33 +1,36 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # =============================================================================
 # SCRIPT 2: Start all navigation servers
-# Chay script nay moi khi khoi dong Termux
-# Tip: Cai termux-boot de tu dong chay khi Android bat may
+# Chay script nay moi khi khoi dong Android/Termux
+#
+# Yeu cau:
+#   - Da chay 1_setup_termux.sh
+#   - Da cai Tailscale tren Android va dang nhap (tu Play Store)
 # =============================================================================
 
 SERVER_DIR="$HOME/navserver"
 LOG_DIR="$SERVER_DIR/logs"
+mkdir -p "$LOG_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-info() { echo -e "${GREEN}[OK]${NC} $1"; }
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[--]${NC} $1"; }
-head_() { echo -e "${CYAN}$1${NC}"; }
+hd()   { echo -e "${CYAN}$1${NC}"; }
 
 kill_port() {
     local port=$1
-    local pid=$(lsof -ti :$port 2>/dev/null || true)
-    if [ -n "$pid" ]; then
-        kill -9 $pid 2>/dev/null || true
-        sleep 1
-    fi
+    local pid=$(lsof -ti :"$port" 2>/dev/null | head -1 || true)
+    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null && sleep 1 || true
 }
 
-head_ "======================================================"
-head_ "  Navigation Server Stack — Starting..."
-head_ "======================================================"
+hd "=================================================="
+hd "  Navigation Server Stack — Khoi dong..."
+hd "=================================================="
 
-# ---- 1. Martin (Map Tiles) ---- port 3000
-head_ "\n[1/3] Starting Martin tile server..."
+# ================================================================
+# 1. Martin (Map Tiles) — port 3000
+# ================================================================
+hd "\n[1/3] Starting Martin tile server..."
 kill_port 3000
 cd "$SERVER_DIR"
 nohup ./martin \
@@ -36,13 +39,15 @@ nohup ./martin \
 MARTIN_PID=$!
 sleep 2
 if kill -0 $MARTIN_PID 2>/dev/null; then
-    info "Martin running (PID $MARTIN_PID) → http://0.0.0.0:3000"
+    ok "Martin running (PID $MARTIN_PID) :3000"
 else
-    warn "Martin failed! Check: $LOG_DIR/martin.log"
+    warn "Martin failed! Log: tail $LOG_DIR/martin.log"
 fi
 
-# ---- 2. GraphHopper (Routing) ---- port 8989
-head_ "\n[2/3] Starting GraphHopper routing engine..."
+# ================================================================
+# 2. GraphHopper (Routing) — port 8989
+# ================================================================
+hd "\n[2/3] Starting GraphHopper routing engine..."
 kill_port 8989
 cd "$SERVER_DIR/routing"
 nohup java -Xmx1g \
@@ -51,15 +56,17 @@ nohup java -Xmx1g \
     server \
     > "$LOG_DIR/graphhopper.log" 2>&1 &
 GH_PID=$!
-sleep 3
+sleep 4
 if kill -0 $GH_PID 2>/dev/null; then
-    info "GraphHopper running (PID $GH_PID) → http://0.0.0.0:8989"
+    ok "GraphHopper running (PID $GH_PID) :8989"
 else
-    warn "GraphHopper failed! Check: $LOG_DIR/graphhopper.log"
+    warn "GraphHopper failed! Log: tail $LOG_DIR/graphhopper.log"
 fi
 
-# ---- 3. Photon (Geocoding/Search) ---- port 2322
-head_ "\n[3/3] Starting Photon geocoding server..."
+# ================================================================
+# 3. Photon (Geocoding/Search) — port 2322
+# ================================================================
+hd "\n[3/3] Starting Photon geocoding server..."
 kill_port 2322
 cd "$SERVER_DIR/geocoding"
 nohup java -Xmx1g \
@@ -70,23 +77,58 @@ nohup java -Xmx1g \
 PHOTON_PID=$!
 sleep 2
 if kill -0 $PHOTON_PID 2>/dev/null; then
-    info "Photon running (PID $PHOTON_PID) → http://0.0.0.0:2322"
+    ok "Photon running (PID $PHOTON_PID) :2322"
 else
-    warn "Photon failed! Check: $LOG_DIR/photon.log"
+    warn "Photon failed! Log: tail $LOG_DIR/photon.log"
 fi
 
-# ---- Status summary ----
-head_ "\n======================================================"
-head_ "  Server Status"
-head_ "======================================================"
-MY_IP=$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1 || hostname -I | awk '{print $1}')
+# ================================================================
+# 4. Lay Tailscale IP (iPhone ket noi bang IP nay)
+# ================================================================
+hd "\n[INFO] Getting Tailscale IP..."
+TAILSCALE_IP=""
+
+# Thu lay IP Tailscale (100.x.x.x)
+if command -v tailscale &>/dev/null; then
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
+fi
+
+# Fallback: lay tu interface utun/tun
+if [ -z "$TAILSCALE_IP" ]; then
+    TAILSCALE_IP=$(ip addr show 2>/dev/null | grep '100\.' | awk '{print $2}' | cut -d/ -f1 | head -1 || true)
+fi
+
+LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{print $7}' | head -1 \
+           || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
+
+# ================================================================
+# 5. Status summary
+# ================================================================
+hd "\n=================================================="
+hd "  Server Status"
+hd "=================================================="
 echo ""
-echo "  Map Tiles:  http://${MY_IP}:3000"
-echo "  Routing:    http://${MY_IP}:8989"
-echo "  Search:     http://${MY_IP}:2322"
+
+if [ -n "$TAILSCALE_IP" ]; then
+    echo -e "${GREEN}Tailscale IP: $TAILSCALE_IP${NC}"
+    echo ""
+    echo "  Trong iOS app, set:"
+    echo -e "  ${YELLOW}NavServerConfig.serverBase = \"http://$TAILSCALE_IP\"${NC}"
+    echo ""
+    echo "  Map Tiles:  http://$TAILSCALE_IP:3000/catalog"
+    echo "  Routing:    http://$TAILSCALE_IP:8989/health"
+    echo "  Search:     http://$TAILSCALE_IP:2322/api?q=hanoi"
+else
+    echo -e "${YELLOW}Tailscale chua bat! Hay mo app Tailscale tren Android.${NC}"
+    echo "Local IP: $LOCAL_IP (chi dung cung WiFi)"
+    echo ""
+    echo "  Map Tiles:  http://$LOCAL_IP:3000/catalog"
+    echo "  Routing:    http://$LOCAL_IP:8989/health"
+    echo "  Search:     http://$LOCAL_IP:2322/api?q=hanoi"
+fi
+
 echo ""
-echo "  Test Tiles:   curl http://${MY_IP}:3000/catalog"
-echo "  Test Route:   curl 'http://${MY_IP}:8989/route?point=21.028,105.852&point=21.035,105.860&vehicle=car&type=json'"
-echo "  Test Search:  curl 'http://${MY_IP}:2322/api?q=Ho+Hoan+Kiem&limit=5'"
+echo "  Logs: $LOG_DIR/"
+echo "  Stop: pkill -f 'martin\|graphhopper\|photon'"
 echo ""
-info "All servers started! Logs in: $LOG_DIR/"
+ok "Done! Servers started."
