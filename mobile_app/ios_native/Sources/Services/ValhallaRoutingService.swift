@@ -10,11 +10,12 @@ public final class ValhallaRoutingService: Sendable {
 
     // MARK: - Configuration
     // Goong API Key (Maps Tiles key for map style + API key for Directions & Places)
-    static let goongApiKey: String = "aBEuWpbGkXPXKEr7P5e5ghHBxcFzOd52P3NxXEhY"
+    static let goongApiKey: String    = "LyG3pKyU88XZHKpKudhyUoG9jsB5i8twzm8vXfIq"  // API Key: Directions + Places
+    static let goongTilesKey: String = "i8CAxB85uuHXj0YbYO4YM7SjkqLmwdvChoQK36ds" // Maptiles Key: map style
 
     // Goong Map Style URL (use Navigation Day for driving — shows lanes, tunnels clearly)
     static let goongMapStyleUrl: String =
-        "https://tiles.goong.io/assets/navigation_day.json?api_key=\(goongApiKey)"
+        "https://tiles.goong.io/assets/navigation_day.json?api_key=\(goongTilesKey)"
 
     private let baseUrl: String
     private let session: URLSession

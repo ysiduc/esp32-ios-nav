@@ -200,7 +200,7 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> UIView {
         #if canImport(MapLibre)
-        let styleUrl = URL(string: "https://tiles.goong.io/assets/navigation_day.json?api_key=aBEuWpbGkXPXKEr7P5e5ghHBxcFzOd52P3NxXEhY")!
+        let styleUrl = URL(string: ValhallaRoutingService.goongMapStyleUrl)!
         let mapView = MLNMapView(frame: .zero, styleURL: styleUrl)
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         mapView.showsUserLocation = true
