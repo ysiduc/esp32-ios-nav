@@ -1,110 +1,166 @@
-import Foundation
-import CoreLocation
-import Combine
+//
+//  NavigationViewModel.swift
+//  Main view model — wires GoongSearchService → ValhallaRoutingService → NavigationSessionManager → BLE.
+//  Observes state changes and drives the UI.
+//
 
-/// Main ViewModel orchestrating Search, Valhalla Routing, Ferrostar Navigation, and BLE Dispatch
+import Combine
+import CoreLocation
+import Foundation
+
 @MainActor
 public final class NavigationViewModel: ObservableObject {
-    @Published public var searchService: PhotonSearchService
-    @Published public var navManager: FerrostarNavManager
-    @Published public var bleManager: BLEManager
 
-    @Published public var selectedDestination: SearchResultItem?
-    @Published public var calculatedRoute: NavRoute?
-    @Published public var isCalculatingRoute: Bool = false
-    @Published public var routeErrorMessage: String?
-    @Published public var transportMode: String = "motorcycle" // 'motorcycle', 'auto', 'bicycle'
+    // MARK: - Child Services
+    public let navSession    = NavigationSessionManager()
+    public let searchService = GoongSearchService()
+    public let routing       = ValhallaRoutingService.shared
+    public let bleManager    = BLEManager()
 
-    @Published public var isSearchActive: Bool = false
+    // MARK: - Published UI State
     @Published public var showBLEScanner: Bool = false
+    @Published public var isSearchActive: Bool = false
+    @Published public var isCalculatingRoute: Bool = false
+    @Published public var routeErrorMessage: String? = nil
+    @Published public var selectedPrediction: GoongPrediction? = nil
+    @Published public var selectedDestination: GoongPlace? = nil
+    @Published public var transportMode: String = "motorcycle" // "motorcycle" | "auto" | "bicycle" | "pedestrian"
 
-    private let routingService = ValhallaRoutingService()
+    // Convenience mirrors from navSession
+    public var state: NavigationState { navSession.state }
+    public var activeRoute: NavRoute?  { navSession.activeRoute }
+    public var progress: NavigationProgress { navSession.activeProgress }
+    public var userLocation: CLLocation? { navSession.userLocation }
+    public var snappedLocation: CLLocationCoordinate2D? { navSession.snappedLocation }
+    public var heading: Double { navSession.heading }
+    public var isNavigating: Bool { navSession.state == .navigating }
+
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
-        let search = PhotonSearchService()
-        let nav = FerrostarNavManager()
-        let ble = BLEManager()
+        // Forward GPS location to Goong search for proximity-biased results
+        navSession.$userLocation
+            .compactMap { $0?.coordinate }
+            .sink { [weak self] coord in
+                self?.searchService.userLocation = coord
+            }
+            .store(in: &cancellables)
 
-        self.searchService = search
-        self.navManager = nav
-        self.bleManager = ble
-
-        setupBindings()
-    }
-
-    private func setupBindings() {
-        // Forward progress updates from Ferrostar navigation to BLE packet transmitter
-        navManager.onProgressUpdate = { [weak self] progress in
-            guard let self = self else { return }
-            self.bleManager.sendNavigationPacket(progress)
+        // Forward navigation progress → BLE ESP32 display
+        navSession.onProgressUpdate = { [weak self] progress in
+            self?.bleManager.sendNavigationPacket(progress)
         }
 
-        // Handle off-route reroute trigger
-        navManager.onRerouteNeeded = { [weak self] in
-            guard let self = self else { return }
-            Task {
-                await self.recalculateCurrentRoute()
+        // Auto-reroute when off-route detected
+        navSession.onRerouteNeeded = { [weak self] in
+            Task { await self?.recalculateCurrentRoute() }
+        }
+
+        // Handle arrival
+        navSession.onArrived = { [weak self] in
+            print("[ViewModel] 🏁 Arrived at destination!")
+        }
+    }
+
+    // MARK: - Search Flow
+
+    public func activateSearch() {
+        isSearchActive = true
+    }
+
+    public func deactivateSearch() {
+        isSearchActive = false
+        searchService.clear()
+    }
+
+    /// User selected a Goong autocomplete prediction.
+    /// Fetches Place Detail (lat/lng) then calculates route.
+    public func selectPrediction(_ prediction: GoongPrediction) {
+        selectedPrediction = prediction
+        isSearchActive     = false
+        searchService.clear()
+
+        Task {
+            do {
+                let place = try await searchService.getPlaceDetail(placeID: prediction.placeID)
+                self.selectedDestination = place
+                await self.calculateRoute(to: place.location.coordinate)
+            } catch {
+                self.routeErrorMessage = "Không thể lấy thông tin địa điểm: \(error.localizedDescription)"
+                print("[ViewModel] Place detail error: \(error)")
             }
         }
     }
 
-    /// Select destination from search and calculate route immediately
-    public func selectDestination(_ item: SearchResultItem) {
-        self.selectedDestination = item
-        self.isSearchActive = false
-        self.searchService.clear()
+    // MARK: - Route Calculation
 
-        Task {
-            await calculateRoute(to: item.coordinate)
-        }
-    }
-
-    /// Calculate route from user location to target coordinate
+    /// Calculate route from current GPS location to destination.
     public func calculateRoute(to destination: CLLocationCoordinate2D) async {
-        guard let userLoc = navManager.userLocation?.coordinate else {
+        guard let userCoord = navSession.userLocation?.coordinate else {
             routeErrorMessage = "Chưa nhận được tín hiệu định vị GPS"
             return
         }
 
-        isCalculatingRoute = true
-        routeErrorMessage = nil
+        isCalculatingRoute  = true
+        routeErrorMessage   = nil
+
+        let costing = valhallaCosting(for: transportMode)
 
         do {
-            let costing = (transportMode == "motorcycle") ? "bike" : ((transportMode == "auto") ? "car" : "bike") // GraphHopper profiles
-            let result = try await routingService.calculateRoute(from: userLoc, to: destination, costing: costing)
-            self.calculatedRoute = result.route
+            let route = try await routing.calculateRoute(
+                from: userCoord,
+                to: destination,
+                costing: costing
+            )
+            navSession.setRoutePreview(route)
+            print("[ViewModel] Route: \(route.formattedDistance), \(route.formattedDuration), \(route.steps.count) steps")
         } catch {
-            print("[NavigationViewModel] Routing error: \(error.localizedDescription)")
-            self.routeErrorMessage = "Không thể tìm đường đến địa điểm này"
+            routeErrorMessage = "Không thể tìm đường: \(error.localizedDescription)"
+            print("[ViewModel] Routing error: \(error)")
         }
 
         isCalculatingRoute = false
     }
 
-    /// Recalculate route when diverging from current path
+    /// Reroute from current position to original destination (triggered on off-route).
     public func recalculateCurrentRoute() async {
-        guard let destination = selectedDestination?.coordinate else { return }
-        await calculateRoute(to: destination)
-        if let route = calculatedRoute {
-            navManager.startNavigation(route: route)
+        guard let dest = selectedDestination?.location.coordinate else { return }
+        print("[ViewModel] 🔄 Rerouting from current position…")
+        await calculateRoute(to: dest)
+        if let route = navSession.activeRoute {
+            navSession.startNavigation(route: route)
         }
     }
 
-    /// Start active driving turn-by-turn navigation
+    // MARK: - Navigation Control
+
     public func startNavigation() {
-        guard let route = calculatedRoute else { return }
-        navManager.startNavigation(route: route)
+        guard let route = navSession.activeRoute else { return }
+        navSession.startNavigation(route: route)
     }
 
-    /// Stop navigation and reset destination
     public func stopNavigation() {
-        navManager.stopNavigation()
+        navSession.stopNavigation()
+        navSession.clearRoute()
         selectedDestination = nil
-        calculatedRoute = nil
+        selectedPrediction  = nil
+        let end = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
+        bleManager.sendNavigationPacket(end)
+    }
 
-        // Send a clear packet (arrive code with 0 distance) to clear ESP32 screen
-        let endProgress = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
-        bleManager.sendNavigationPacket(endProgress)
+    public func recalculateForTransportMode() {
+        guard let dest = selectedDestination?.location.coordinate else { return }
+        Task { await calculateRoute(to: dest) }
+    }
+
+    // MARK: - Helpers
+
+    private func valhallaCosting(for mode: String) -> String {
+        switch mode {
+        case "auto":       return "auto"
+        case "bicycle":    return "bicycle"
+        case "pedestrian": return "pedestrian"
+        default:           return "motorcycle"
+        }
     }
 }

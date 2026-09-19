@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.ysiduc
   deploymentTarget:
     iOS: "16.0"
+packages:
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    from: 6.7.1
 targets:
   ESP32NavApp:
     type: application
@@ -12,7 +16,9 @@ targets:
       - Sources
     info:
       path: Info.plist
-    dependencies: []
+    dependencies:
+      - package: MapLibre
+        product: MapLibre
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.ios.ysiducw.map
       GENERATE_INFOPLIST_FILE: false
@@ -21,6 +27,12 @@ targets:
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.10"
       ENABLE_BITCODE: NO
+      # ObjC++ bridging for Valhalla C++ wrapper
+      SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridge/ESP32Nav-Bridging-Header.h
+      GCC_ENABLE_CPP_EXCEPTIONS: YES
+      CLANG_CXX_LANGUAGE_STANDARD: gnu++17
+      CLANG_CXX_LIBRARY: libc++
+      OTHER_CPLUSPLUSFLAGS: "-fmodules"
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO

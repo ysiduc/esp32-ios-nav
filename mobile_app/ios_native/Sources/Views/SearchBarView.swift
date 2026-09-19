@@ -1,99 +1,152 @@
+//
+//  SearchBarView.swift
+//  Standalone search bar component — uses GoongSearchService autocomplete.
+//  Integrated directly into MainMapView; this file kept for modularity.
+//
+
 import SwiftUI
 
-/// Floating search bar with real-time Photon autocomplete dropdown
+/// Standalone search bar connected to GoongSearchService.
+/// Embed in a ZStack or VStack to overlay on top of the map.
 public struct SearchBarView: View {
-    @ObservedObject var searchService: PhotonSearchService
-    let onSelect: (SearchResultItem) -> Void
-    let onCancel: () -> Void
 
+    @ObservedObject var searchService: GoongSearchService
+    var onSelectPrediction: (GoongPrediction) -> Void
+    var onCancel: () -> Void
+
+    @State private var query: String = ""
     @FocusState private var isFocused: Bool
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Search Input Field
+        VStack(spacing: 8) {
+            // Input row
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.cyan)
-                    .font(.system(size: 16, weight: .semibold))
+                Image(systemName: isFocused ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundColor(isFocused ? Color(red: 0, green: 0.75, blue: 1.0) : .gray)
+                    .animation(.easeInOut(duration: 0.2), value: isFocused)
 
-                TextField("Tìm kiếm địa chỉ, số nhà, địa điểm...", text: $searchService.searchText)
-                    .foregroundColor(.white)
+                TextField("Tìm kiếm địa điểm tại Việt Nam…", text: $query)
                     .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .tint(Color(red: 0, green: 0.75, blue: 1.0))
                     .focused($isFocused)
-                    .autocorrectionDisabled()
+                    .onChange(of: query) { newVal in
+                        searchService.search(newVal)
+                    }
 
-                if searchService.isSearching {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
-                        .scaleEffect(0.8)
-                } else if !searchService.searchText.isEmpty {
+                if !query.isEmpty {
                     Button(action: {
+                        query = ""
                         searchService.clear()
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.gray)
-                            .font(.system(size: 16))
                     }
                 }
+
+                if searchService.isLoading {
+                    ProgressView().scaleEffect(0.75).tint(.cyan)
+                }
+
+                Button("Huỷ") { onCancel() }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(red: 0, green: 0.75, blue: 1.0))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(Color(red: 0.12, green: 0.16, blue: 0.22).opacity(0.95))
-            .cornerRadius(16)
-            .overlay(
+            .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    .fill(Color(red: 0.12, green: 0.16, blue: 0.22).opacity(0.97))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(
+                                isFocused
+                                    ? Color(red: 0, green: 0.75, blue: 1.0).opacity(0.5)
+                                    : Color.white.opacity(0.08),
+                                lineWidth: 1.5
+                            )
+                    )
             )
             .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
 
-            // Autocomplete Results Dropdown
-            if !searchService.results.isEmpty {
+            // Results list
+            if !searchService.predictions.isEmpty {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(searchService.results) { item in
+                        ForEach(searchService.predictions) { prediction in
                             Button(action: {
+                                query = prediction.mainText
+                                onSelectPrediction(prediction)
                                 isFocused = false
-                                onSelect(item)
                             }) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .foregroundColor(.red)
-                                        .font(.system(size: 20))
-
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.name)
-                                            .foregroundColor(.white)
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .lineLimit(1)
-
-                                        Text(item.formattedSubtitle)
-                                            .foregroundColor(.gray)
-                                            .font(.system(size: 12))
-                                            .lineLimit(1)
-                                    }
-
-                                    Spacer()
-
-                                    if !item.formattedDistance.isEmpty {
-                                        Text(item.formattedDistance)
-                                            .foregroundColor(.cyan)
-                                            .font(.system(size: 12, weight: .bold))
-                                    }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                                .background(Color(red: 0.08, green: 0.11, blue: 0.16))
+                                GoongPredictionRow(prediction: prediction)
                             }
-                            Divider().background(Color.white.opacity(0.08))
+                            .buttonStyle(PlainButtonStyle())
+
+                            if prediction.id != searchService.predictions.last?.id {
+                                Divider().background(Color.white.opacity(0.06))
+                                    .padding(.horizontal, 16)
+                            }
                         }
                     }
                 }
-                .frame(maxHeight: 280)
-                .background(Color(red: 0.08, green: 0.11, blue: 0.16))
-                .cornerRadius(16)
-                .padding(.top, 6)
-                .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 6)
+                .frame(maxHeight: 320)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color(red: 0.10, green: 0.13, blue: 0.19).opacity(0.98))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 5)
+            }
+
+            if let err = searchService.errorMessage {
+                Text(err)
+                    .font(.system(size: 13))
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 14)
             }
         }
+    }
+}
+
+private struct GoongPredictionRow: View {
+    let prediction: GoongPrediction
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "mappin.and.ellipse")
+                .font(.system(size: 14))
+                .foregroundColor(Color(red: 0, green: 0.75, blue: 1.0))
+                .frame(width: 30, height: 30)
+                .background(Color(red: 0, green: 0.75, blue: 1.0).opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(prediction.mainText)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                if !prediction.secondaryText.isEmpty {
+                    Text(prediction.secondaryText)
+                        .font(.system(size: 12))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10))
+                .foregroundColor(.gray.opacity(0.4))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 }

@@ -1,3 +1,8 @@
+//
+//  NavigationApp.swift
+//  App entry point.
+//
+
 import SwiftUI
 
 @main
