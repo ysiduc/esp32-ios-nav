@@ -320,7 +320,7 @@ public final class ValhallaRoutingService: ObservableObject {
             distanceMeters: totalMeters / 2.0,
             durationSeconds: (totalMeters / 2.0) / 10.0,
             streetName: "",
-            maneuverType: .destination,
+            maneuverType: .arrive,
             instruction: "Đến đích"
         )
 
