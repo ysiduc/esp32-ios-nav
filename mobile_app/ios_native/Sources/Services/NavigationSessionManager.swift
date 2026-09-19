@@ -237,12 +237,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         let snappedLoc = CLLocation(latitude: snapped.latitude, longitude: snapped.longitude)
 
         // --- Step advancement ---
-        let safeStep = { () -> NavStep in
-            let i = min(stepIndex, route.steps.count - 1)
+        func getStep(_ idx: Int) -> NavStep {
+            let i = min(idx, route.steps.count - 1)
             return route.steps[i]
         }
 
-        var currentStep = safeStep()
+        var currentStep = getStep(stepIndex)
         let stepEndLoc  = CLLocation(
             latitude:  currentStep.coordinate.latitude,
             longitude: currentStep.coordinate.longitude
@@ -253,7 +253,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         while distToStepEnd < stepAdvanceThresholdMeters
                 && stepIndex + 1 < route.steps.count {
             stepIndex  += 1
-            currentStep = safeStep()
+            currentStep = getStep(stepIndex)
             let nextEnd = CLLocation(
                 latitude:  currentStep.coordinate.latitude,
                 longitude: currentStep.coordinate.longitude
