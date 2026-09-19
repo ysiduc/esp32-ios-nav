@@ -22,17 +22,41 @@ jobs:
         run: |
           brew install xcodegen
 
-      - name: 3. Generate Xcode Project
+      - name: 3. Verify Valhalla Framework & Libs
+        working-directory: mobile_app/ios_native
+        run: |
+          if [ ! -d "Frameworks/valhalla-wrapper.xcframework" ]; then
+            echo "📥 Downloading prebuilt Valhalla XCFramework..."
+            mkdir -p Frameworks
+            curl -sL https://github.com/Rallista/valhalla-mobile/releases/download/0.6.3/valhalla-wrapper.xcframework.zip -o /tmp/valhalla.zip
+            unzip -q /tmp/valhalla.zip -d Frameworks/
+            cd Frameworks && ln -sf valhalla-wrapper.xcframework/ios-arm64/libvalhalla_all.a libvalhalla.a && cd ..
+          fi
+          ls -lh Frameworks/valhalla-wrapper.xcframework/ios-arm64/libvalhalla_all.a
+
+      - name: 4. Generate Xcode Project
         working-directory: mobile_app/ios_native
         run: |
           xcodegen generate
 
-      - name: 4. Build Native iOS App
+      - name: 5. Resolve Swift Packages
         working-directory: mobile_app/ios_native
         run: |
-          xcodebuild -project ESP32NavApp.xcodeproj             -scheme ESP32NavApp             -configuration Release             -destination 'generic/platform=iOS'             -derivedDataPath build/derivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             clean build
+          xcodebuild -project ESP32NavApp.xcodeproj -scheme ESP32NavApp -resolvePackageDependencies
 
-      - name: 5. Package Native IPA
+      - name: 6. Build Native iOS App
+        working-directory: mobile_app/ios_native
+        run: |
+          xcodebuild -project ESP32NavApp.xcodeproj \
+            -scheme ESP32NavApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/derivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: 7. Package Native IPA
         working-directory: mobile_app/ios_native
         run: |
           APP_PATH=$(find build/derivedData -name "ESP32NavApp.app" -type d | head -n 1)
@@ -50,7 +74,7 @@ jobs:
           zip -r -y -q esp32_nav_native_app.ipa Payload/
           ls -lh esp32_nav_native_app.ipa
 
-      - name: 6. Upload Native IPA artifact
+      - name: 8. Upload Native IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32_nav_native_ios_ipa

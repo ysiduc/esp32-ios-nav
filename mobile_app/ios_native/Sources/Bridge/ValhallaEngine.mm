@@ -1,34 +1,29 @@
 //
 //  ValhallaEngine.mm
-//  Objective-C++ implementation wrapping valhalla::actor_t.
-//
-//  --- HOW TO ENABLE REAL VALHALLA ---
-//  1. Build libvalhalla.a + all dependencies for iOS arm64:
-//       https://github.com/valhalla/valhalla/blob/master/docs/building.md
-//     Or use the pre-built package:
-//       https://github.com/gis-ops/valhalla-ios-prebuilt (if available)
-//  2. In Xcode: Build Phases → Link Binary With Libraries → add libvalhalla.a
-//  3. Add valhalla headers to HEADER_SEARCH_PATHS
-//  4. Replace the #if VALHALLA_AVAILABLE block stubs with real implementation
-//
-//  Currently this file ships as a STUB that returns a fake JSON skeleton.
-//  This allows the Swift codebase to compile and be tested end-to-end;
-//  replace the stub bodies when the .a library is ready.
+//  Objective-C++ implementation wrapping valhalla::actor_t via valhalla-wrapper.
 //
 
 #import "ValhallaEngine.h"
 #import <Foundation/Foundation.h>
 
-// Toggle this to 1 once libvalhalla.a is linked:
-#define VALHALLA_AVAILABLE 0
+// Valhalla is now compiled and linked via valhalla-wrapper.xcframework (libvalhalla_all.a)
+#define VALHALLA_AVAILABLE 1
 
 #if VALHALLA_AVAILABLE
-// Real includes when library is linked:
-#include <valhalla/tyr/actor.h>
-#include <valhalla/midgard/encoded.h>
-#include <valhalla/baldr/graphreader.h>
-#include <boost/property_tree/json_parser.hpp>
-#include <boost/property_tree/ptree.hpp>
+#if __has_include(<include/main.h>)
+#include <include/main.h>
+#elif __has_include("main.h")
+#include "main.h"
+#else
+#include <string>
+std::string route(const char *request, void* actor);
+std::string trace_route(const char *request, void* actor);
+std::string trace_attributes(const char *request, void* actor);
+std::string height(const char *request, void* actor);
+std::string matrix(const char *request, void* actor);
+void* create_valhalla_actor(const char *config_path, void* http_client = nullptr);
+void delete_valhalla_actor(void* actor);
+#endif
 #include <string>
 #include <stdexcept>
 #endif
@@ -88,8 +83,6 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 @property (nonatomic, strong) dispatch_queue_t queue;
 
 #if VALHALLA_AVAILABLE
-// Stored as void* to avoid exposing C++ type to ObjC callers.
-// Cast back to valhalla::tyr::actor_t* when needed.
 @property (nonatomic, assign) void *actorPtr;
 #endif
 
@@ -101,7 +94,7 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 
 @implementation ValhallaEngine {
 #if VALHALLA_AVAILABLE
-    valhalla::tyr::actor_t *_actor;
+    void *_actor;
 #endif
 }
 
@@ -126,6 +119,15 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return self;
 }
 
+- (void)dealloc {
+#if VALHALLA_AVAILABLE
+    if (_actor) {
+        delete_valhalla_actor(_actor);
+        _actor = nullptr;
+    }
+#endif
+}
+
 - (BOOL)isAvailable {
 #if VALHALLA_AVAILABLE
     return YES;
@@ -141,24 +143,34 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 
     dispatch_sync(self.queue, ^{
         try {
-            std::string path = [configPath UTF8String];
-            boost::property_tree::ptree pt;
-            boost::property_tree::json_parser::read_json(path, pt);
-
-            // Deallocate previous actor if reloading
             if (_actor) {
-                delete _actor;
+                delete_valhalla_actor(_actor);
                 _actor = nullptr;
             }
 
-            _actor = new valhalla::tyr::actor_t(pt, true);
-            self.configLoaded = YES;
-            success = YES;
+            std::string path = [configPath UTF8String];
+            _actor = create_valhalla_actor(path.c_str(), nullptr);
+            if (_actor != nullptr) {
+                self.configLoaded = YES;
+                success = YES;
+                NSLog(@"[ValhallaEngine] ✅ Native Valhalla engine initialized successfully from: %@", configPath);
+            } else {
+                loadError = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                               code:ValhallaEngineErrorEngineException
+                                           userInfo:@{NSLocalizedDescriptionKey: @"Failed to create Valhalla actor. Check config and tile paths."}];
+                NSLog(@"[ValhallaEngine] ❌ create_valhalla_actor returned null");
+            }
         } catch (const std::exception &e) {
             loadError = [NSError errorWithDomain:ValhallaEngineErrorDomain
                                            code:ValhallaEngineErrorEngineException
                                        userInfo:@{NSLocalizedDescriptionKey:
                                                       [NSString stringWithUTF8String:e.what()]}];
+            NSLog(@"[ValhallaEngine] ❌ Exception in loadConfigAtPath: %s", e.what());
+        } catch (...) {
+            loadError = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                           code:ValhallaEngineErrorEngineException
+                                       userInfo:@{NSLocalizedDescriptionKey: @"Unknown exception during Valhalla initialization"}];
+            NSLog(@"[ValhallaEngine] ❌ Unknown exception in loadConfigAtPath");
         }
     });
 
@@ -166,8 +178,7 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return success;
 
 #else
-    // STUB: mark as loaded so route requests can return fake data for UI testing
-    NSLog(@"[ValhallaEngine] STUB mode — loadConfig pretending success. Link libvalhalla.a for real routing.");
+    NSLog(@"[ValhallaEngine] STUB mode — loadConfig pretending success.");
     self.configLoaded = YES;
     return YES;
 #endif
@@ -194,6 +205,13 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     __block NSError *routeError  = nil;
 
     dispatch_sync(self.queue, ^{
+        if (!_actor) {
+            routeError = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                             code:ValhallaEngineErrorConfigNotLoaded
+                                         userInfo:@{NSLocalizedDescriptionKey: @"Valhalla actor is null."}];
+            return;
+        }
+
         try {
             // Build Valhalla JSON request
             NSString *requestJSON = [NSString stringWithFormat:
@@ -204,7 +222,7 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
                 fromLon, fromLat, toLon, toLat, costing];
 
             std::string req([requestJSON UTF8String]);
-            std::string resp = _actor->route(req);
+            std::string resp = route(req.c_str(), _actor);
 
             NSString *jsonString = [NSString stringWithUTF8String:resp.c_str()];
             result = [self parseValhallaJSON:jsonString error:&routeError];
@@ -214,6 +232,10 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
                                              code:ValhallaEngineErrorEngineException
                                          userInfo:@{NSLocalizedDescriptionKey:
                                                         [NSString stringWithUTF8String:e.what()]}];
+        } catch (...) {
+            routeError = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                             code:ValhallaEngineErrorEngineException
+                                         userInfo:@{NSLocalizedDescriptionKey: @"Unknown exception during route calculation"}];
         }
     });
 
@@ -221,63 +243,43 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return result;
 
 #else
-    // -----------------------------------------------------------------------
     // STUB IMPLEMENTATION
-    // Returns a tiny fake route with 2 straight steps so the navigation HUD
-    // can be visually tested before libvalhalla.a is integrated.
-    // -----------------------------------------------------------------------
     NSLog(@"[ValhallaEngine] STUB — returning fake route from (%.4f,%.4f) to (%.4f,%.4f)",
           fromLat, fromLon, toLat, toLon);
 
-    // Build a fake straight-line 2-step route between origin and destination.
-    // Mid-point is the only turn.
     double midLat = (fromLat + toLat) / 2.0;
     double midLon = (fromLon + toLon) / 2.0;
 
-    // Approximate distance using simple haversine approximation (metres)
     double dlat = (toLat - fromLat) * 111319.9;
     double dlon = (toLon - fromLon) * 111319.9 * cos(fromLat * M_PI / 180.0);
     double totalMeters = sqrt(dlat * dlat + dlon * dlon);
 
-    // Step 1: straight to midpoint
     ValhallaStep *step1 = [[ValhallaStep alloc] init];
     step1.distanceMeters  = totalMeters / 2.0;
-    step1.durationSeconds = (totalMeters / 2.0) / 10.0; // ~36km/h
+    step1.durationSeconds = (totalMeters / 2.0) / 10.0;
     step1.streetName      = @"Đường Thẳng";
-    step1.maneuverType    = 1; // kManeuverTypeStart
+    step1.maneuverType    = 1;
     step1.instruction     = @"Đi thẳng";
     step1.beginShapeIndex = 0;
     step1.endShapeIndex   = 1;
 
-    // Step 2: arrive at destination
     ValhallaStep *step2 = [[ValhallaStep alloc] init];
     step2.distanceMeters  = totalMeters / 2.0;
     step2.durationSeconds = (totalMeters / 2.0) / 10.0;
     step2.streetName      = @"";
-    step2.maneuverType    = 6; // kManeuverTypeDestination
+    step2.maneuverType    = 6;
     step2.instruction     = @"Đến đích";
     step2.beginShapeIndex = 1;
     step2.endShapeIndex   = 2;
 
-    // Simple 3-point encoded polyline6: origin → mid → dest
-    // We skip actual polyline6 encoding in stub; ValhallaWrapper uses raw coords instead.
-    step1.encodedPolyline = @""; // handled in ValhallaWrapper stub path
+    step1.encodedPolyline = @"";
     step2.encodedPolyline = @"";
-
-    NSString *fakeJSON = [NSString stringWithFormat:
-        @"{\"trip\":{\"summary\":{\"length\":%.4f,\"time\":%.1f},\"legs\":[{\"summary\":{\"length\":%.4f,\"time\":%.1f},\"maneuvers\":[]}]}}",
-        totalMeters / 1000.0, totalMeters / 10.0,
-        totalMeters / 1000.0, totalMeters / 10.0];
 
     ValhallaRoute *route          = [[ValhallaRoute alloc] init];
     route.totalDistanceMeters     = totalMeters;
-    route.totalDurationSeconds    = totalMeters / 10.0; // ~36 km/h average
+    route.totalDurationSeconds    = totalMeters / 10.0;
     route.encodedPolyline6        = @"";
     route.steps                   = @[step1, step2];
-    route.rawJSON                 = fakeJSON;
-
-    // Attach raw coordinates as a JSON array for ValhallaWrapper to decode
-    // (since we skip real polyline6 encoding in the stub)
     route.rawJSON = [NSString stringWithFormat:
         @"{\"_stub_coords\":[[%.7f,%.7f],[%.7f,%.7f],[%.7f,%.7f]],"
         @"\"trip\":{\"summary\":{\"length\":%.4f,\"time\":%.1f},\"status\":0}}",
@@ -295,8 +297,6 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 // MARK: - JSON Parser (real Valhalla response)
 // ---------------------------------------------------------------------------
 
-/// Parses the standard Valhalla JSON route response into a ValhallaRoute object.
-/// See: https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/#outputs-of-a-route
 - (nullable ValhallaRoute *)parseValhallaJSON:(NSString *)jsonString
                                         error:(NSError **)error {
     NSData *data = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
@@ -318,11 +318,16 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         return nil;
     }
 
-    // Check for Valhalla error response (status != 0)
     NSDictionary *trip = root[@"trip"];
     if (!trip) {
-        NSDictionary *routeError = root[@"error"];
-        NSString *msg = routeError[@"message"] ?: @"No route found";
+        NSString *msg = @"No route found";
+        if ([root[@"error"] isKindOfClass:[NSDictionary class]]) {
+            msg = root[@"error"][@"message"] ?: @"No route found";
+        } else if ([root[@"error"] isKindOfClass:[NSString class]]) {
+            msg = root[@"error"];
+        } else if ([root[@"message"] isKindOfClass:[NSString class]]) {
+            msg = root[@"message"];
+        }
         if (error) {
             *error = [NSError errorWithDomain:ValhallaEngineErrorDomain
                                          code:ValhallaEngineErrorNoRouteFound
@@ -335,7 +340,6 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     double totalKm  = [summary[@"length"] doubleValue];
     double totalSec = [summary[@"time"]   doubleValue];
 
-    // Legs → maneuvers (Valhalla puts all steps in leg 0 for a single-leg route)
     NSArray *legs = trip[@"legs"];
     if (!legs || legs.count == 0) {
         if (error) {
@@ -353,14 +357,13 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     NSMutableArray<ValhallaStep *> *steps = [NSMutableArray array];
     for (NSDictionary *m in maneuvers) {
         ValhallaStep *step  = [[ValhallaStep alloc] init];
-        step.distanceMeters  = [m[@"length"] doubleValue] * 1000.0; // km → metres
+        step.distanceMeters  = [m[@"length"] doubleValue] * 1000.0;
         step.durationSeconds = [m[@"time"]   doubleValue];
         step.maneuverType    = [m[@"type"]   integerValue];
         step.instruction     = m[@"instruction"] ?: @"";
         step.beginShapeIndex = [m[@"begin_shape_index"] integerValue];
         step.endShapeIndex   = [m[@"end_shape_index"]   integerValue];
 
-        // Street name: first street_names entry, or sign->exit_toward_elements
         NSArray *streetNames = m[@"street_names"];
         step.streetName = (streetNames && streetNames.count > 0) ? streetNames[0] : @"";
         if (step.streetName.length == 0) {

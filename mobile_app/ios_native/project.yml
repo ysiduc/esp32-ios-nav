@@ -19,6 +19,9 @@ targets:
     dependencies:
       - package: MapLibre
         product: MapLibre
+      - framework: Frameworks/valhalla-wrapper.xcframework
+        embed: false
+      - sdk: libz.tbd
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.ios.ysiducw.map
       GENERATE_INFOPLIST_FILE: false
@@ -30,9 +33,19 @@ targets:
       # ObjC++ bridging for Valhalla C++ wrapper
       SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridge/ESP32Nav-Bridging-Header.h
       GCC_ENABLE_CPP_EXCEPTIONS: YES
-      CLANG_CXX_LANGUAGE_STANDARD: gnu++17
+      CLANG_CXX_LANGUAGE_STANDARD: c++20
       CLANG_CXX_LIBRARY: libc++
       OTHER_CPLUSPLUSFLAGS: "-fmodules"
+      HEADER_SEARCH_PATHS:
+        - "$(inherited)"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers/include"
+      FRAMEWORK_SEARCH_PATHS:
+        - "$(inherited)"
+        - "$(SRCROOT)/Frameworks"
+      OTHER_LDFLAGS:
+        - "$(inherited)"
+        - "-lz"
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
