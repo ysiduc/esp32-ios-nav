@@ -126,18 +126,12 @@ public final class ValhallaRoutingService: ObservableObject {
         do {
             // Prepare dynamic valhalla config pointing to actual tile location
             let activeConfigURL = try prepareActiveConfig(from: configBaseURL, tilesURL: tilesURL)
-            var nsError: NSError?
-            let ok = engine.loadConfig(atPath: activeConfigURL.path, error: &nsError)
-            if ok {
-                isLoaded = true
-                print("[ValhallaWrapper] ✅ Native Valhalla initialized with tiles: \(tilesURL?.path ?? "none")")
-            } else {
-                loadError = nsError?.localizedDescription ?? "Valhalla init failed"
-                print("[ValhallaWrapper] ⚠️ Valhalla tiles not loaded (\(loadError!)). Online fallback ready.")
-            }
+            try engine.loadConfig(atPath: activeConfigURL.path)
+            isLoaded = true
+            print("[ValhallaWrapper] ✅ Native Valhalla initialized with tiles: \(tilesURL?.path ?? "none")")
         } catch {
             loadError = error.localizedDescription
-            print("[ValhallaWrapper] ⚠️ Config preparation error: \(error.localizedDescription)")
+            print("[ValhallaWrapper] ⚠️ Valhalla tiles not loaded (\(loadError!)). Online fallback ready.")
         }
     }
 
@@ -228,41 +222,33 @@ public final class ValhallaRoutingService: ObservableObject {
     ) async throws -> NavRoute {
         return try await withCheckedThrowingContinuation { continuation in
             routingQueue.async {
-                var nsError: NSError?
-                let valhallaRoute = ValhallaEngine.shared().computeRoute(
-                    fromLat: origin.latitude,
-                    fromLon: origin.longitude,
-                    toLat: destination.latitude,
-                    toLon: destination.longitude,
-                    costing: costing,
-                    error: &nsError
-                )
+                do {
+                    let vr = try ValhallaEngine.shared().computeRoute(
+                        fromLat: origin.latitude,
+                        fromLon: origin.longitude,
+                        toLat: destination.latitude,
+                        toLon: destination.longitude,
+                        costing: costing
+                    )
 
-                if let err = nsError {
-                    continuation.resume(throwing: ValhallaRoutingError.noRouteFound(err.localizedDescription))
-                    return
+                    let coords = Self.decodeRouteCoordinates(from: vr)
+                    if coords.isEmpty {
+                        continuation.resume(throwing: ValhallaRoutingError.decodingFailed("Empty coordinate list"))
+                        return
+                    }
+
+                    let steps = Self.decodeSteps(vr.steps as! [ValhallaStep], fullPolyline: coords)
+
+                    let navRoute = NavRoute(
+                        coordinates: coords,
+                        steps: steps,
+                        totalDistanceMeters: vr.totalDistanceMeters,
+                        totalDurationSeconds: vr.totalDurationSeconds
+                    )
+                    continuation.resume(returning: navRoute)
+                } catch {
+                    continuation.resume(throwing: ValhallaRoutingError.noRouteFound(error.localizedDescription))
                 }
-
-                guard let vr = valhallaRoute else {
-                    continuation.resume(throwing: ValhallaRoutingError.noRouteFound("No route returned"))
-                    return
-                }
-
-                let coords = Self.decodeRouteCoordinates(from: vr)
-                if coords.isEmpty {
-                    continuation.resume(throwing: ValhallaRoutingError.decodingFailed("Empty coordinate list"))
-                    return
-                }
-
-                let steps = Self.decodeSteps(vr.steps as! [ValhallaStep], fullPolyline: coords)
-
-                let navRoute = NavRoute(
-                    coordinates: coords,
-                    steps: steps,
-                    totalDistanceMeters: vr.totalDistanceMeters,
-                    totalDurationSeconds: vr.totalDurationSeconds
-                )
-                continuation.resume(returning: navRoute)
             }
         }
     }
