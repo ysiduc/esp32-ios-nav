@@ -63,11 +63,12 @@ public struct GoongPlace: Sendable {
 
 // MARK: - Search Errors
 
-public enum GoongSearchError: LocalizedError {
+public enum GoongSearchError: LocalizedError, Equatable {
     case invalidURL
     case networkError(URLError)
     case decodingError(String)
     case noResults
+    case apiStatus(String)
 
     public var errorDescription: String? {
         switch self {
@@ -75,6 +76,7 @@ public enum GoongSearchError: LocalizedError {
         case .networkError(let e):    return "Lỗi mạng: \(e.localizedDescription)"
         case .decodingError(let m):   return "Lỗi đọc dữ liệu: \(m)"
         case .noResults:              return "Không tìm thấy kết quả"
+        case .apiStatus(let status):  return "Lỗi dịch vụ tìm kiếm (\(status))"
         }
     }
 }

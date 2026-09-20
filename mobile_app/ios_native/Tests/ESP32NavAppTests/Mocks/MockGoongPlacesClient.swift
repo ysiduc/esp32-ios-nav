@@ -2,6 +2,7 @@
 //  MockGoongPlacesClient.swift
 //  Controllable test double for GoongPlacesClientProtocol.
 //  Records all invocation parameters for assertion.
+//  Supports controllable continuation-based async responses for race testing.
 //
 
 import CoreLocation
@@ -17,6 +18,8 @@ final class MockGoongPlacesClient: GoongPlacesClientProtocol {
     var autocompleteCallCount = 0
     var autocompleteQueries:       [String]                          = []
     var autocompleteLocations:     [CLLocationCoordinate2D?]        = []
+    /// Whether the last autocomplete call had a location parameter
+    var lastAutocompleteHadLocation: Bool { autocompleteLocations.last.flatMap { $0 } != nil }
     var autocompleteRadii:         [Int]                             = []
     var autocompleteLimits:        [Int]                             = []
     var autocompleteSessionTokens: [String]                          = []
@@ -46,6 +49,48 @@ final class MockGoongPlacesClient: GoongPlacesClientProtocol {
     var autocompleteDelay: UInt64 = 0
     var detailDelay: UInt64 = 0
 
+    // MARK: - Controllable Continuation Support (Race Tests)
+
+    var useContinuationForAutocomplete: Bool = false
+
+    struct PendingAutocomplete {
+        let query: String
+        let sessionToken: String
+        let continuation: CheckedContinuation<[GoongRawPrediction], Error>
+    }
+    private(set) var pendingAutocompletes: [PendingAutocomplete] = []
+
+    func resumeAutocomplete(at index: Int = 0, with result: Result<[GoongRawPrediction], Error>) {
+        guard index < pendingAutocompletes.count else { return }
+        let pending = pendingAutocompletes.remove(at: index)
+        switch result {
+        case .success(let predictions):
+            pending.continuation.resume(returning: predictions)
+        case .failure(let error):
+            pending.continuation.resume(throwing: error)
+        }
+    }
+
+    var useContinuationForDetail: Bool = false
+
+    struct PendingDetail {
+        let placeID: String
+        let sessionToken: String
+        let continuation: CheckedContinuation<GoongPlace, Error>
+    }
+    private(set) var pendingDetails: [PendingDetail] = []
+
+    func resumeDetail(at index: Int = 0, with result: Result<GoongPlace, Error>) {
+        guard index < pendingDetails.count else { return }
+        let pending = pendingDetails.remove(at: index)
+        switch result {
+        case .success(let place):
+            pending.continuation.resume(returning: place)
+        case .failure(let error):
+            pending.continuation.resume(throwing: error)
+        }
+    }
+
     // MARK: - GoongPlacesClientProtocol
 
     func autocomplete(
@@ -62,6 +107,16 @@ final class MockGoongPlacesClient: GoongPlacesClientProtocol {
         autocompleteLimits.append(limit)
         autocompleteSessionTokens.append(sessionToken)
 
+        if useContinuationForAutocomplete {
+            return try await withCheckedThrowingContinuation { cont in
+                pendingAutocompletes.append(PendingAutocomplete(
+                    query: query,
+                    sessionToken: sessionToken,
+                    continuation: cont
+                ))
+            }
+        }
+
         if autocompleteDelay > 0 {
             try await Task.sleep(nanoseconds: autocompleteDelay)
         }
@@ -75,6 +130,16 @@ final class MockGoongPlacesClient: GoongPlacesClientProtocol {
         detailCallCount += 1
         detailPlaceIDs.append(placeID)
         detailSessionTokens.append(sessionToken)
+
+        if useContinuationForDetail {
+            return try await withCheckedThrowingContinuation { cont in
+                pendingDetails.append(PendingDetail(
+                    placeID: placeID,
+                    sessionToken: sessionToken,
+                    continuation: cont
+                ))
+            }
+        }
 
         if detailDelay > 0 {
             try await Task.sleep(nanoseconds: detailDelay)
@@ -97,6 +162,13 @@ final class MockGoongPlacesClient: GoongPlacesClientProtocol {
         detailCallCount     = 0
         detailPlaceIDs      = []
         detailSessionTokens = []
+
+        pendingAutocompletes.forEach { $0.continuation.resume(throwing: CancellationError()) }
+        pendingAutocompletes.removeAll()
+        pendingDetails.forEach { $0.continuation.resume(throwing: CancellationError()) }
+        pendingDetails.removeAll()
+        useContinuationForAutocomplete = false
+        useContinuationForDetail = false
     }
 
     func makePrediction(

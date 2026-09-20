@@ -131,6 +131,15 @@ public struct MainMapView: View {
                     .padding(.top, 6)
             }
 
+            // Place Detail / Route error banner
+            if let routeErr = viewModel.routeErrorMessage {
+                Text(routeErr)
+                    .font(.system(size: 13))
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+            }
+
             // Transport mode chips (visible when a destination is selected)
             if viewModel.navSession.state == .idle || viewModel.navSession.state == .searching {
                 if viewModel.selectedDestination != nil || viewModel.isCalculatingRoute {

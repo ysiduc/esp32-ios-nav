@@ -15,8 +15,11 @@
 //    4. placeID ASC        (deterministic final tie-break)
 //
 //  Vietnamese normalization:
-//    String.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-//    followed by whitespace collapse.
+//    1. Diacritic folding via fixed Locale(identifier: "vi_VN") (deterministic)
+//    2. Lowercase
+//    3. Đ / đ → d
+//    4. Punctuation / symbols → spaces
+//    5. Collapse whitespace and trim
 //
 
 import Foundation
@@ -52,13 +55,39 @@ public enum SearchRanking {
 
     // MARK: - Normalization
 
-    /// Normalize a Vietnamese string: remove diacritics, lowercase, collapse whitespace.
+    /// Normalize a Vietnamese string: remove diacritics, lowercase, transliterate Đ/đ to d,
+    /// convert basic punctuation to spaces, collapse whitespace, and trim.
     ///
-    /// Example: "Đường Trần Hưng Đạo" → "duong tran hung dao"
+    /// Independent of host device locale (uses fixed vi_VN locale for diacritic folding).
+    ///
+    /// Examples:
+    ///   - "Đường Trần Hưng Đạo" → "duong tran hung dao"
+    ///   - "Ba Đình"            → "ba dinh"
+    ///   - "91-Trung Kính"       → "91 trung kinh"
+    ///   - "Hồ Hoàn Kiếm, Hà Nội" → "ho hoan kiem ha noi"
     public static func normalize(_ text: String) -> String {
-        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        // Collapse runs of whitespace to a single space
-        let collapsed = folded.components(separatedBy: .whitespaces)
+        let viLocale = Locale(identifier: "vi_VN")
+        // 1. Fold diacritics and case with fixed vi_VN locale
+        let folded = text
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: viLocale)
+            .lowercased()
+            // 2. Explicit transliteration for Vietnamese Đ/đ (not folded by diacriticInsensitive in Foundation)
+            .replacingOccurrences(of: "đ", with: "d")
+            .replacingOccurrences(of: "Đ", with: "d")
+
+        // 3. Convert basic punctuation and symbols to spaces
+        var cleaned = ""
+        cleaned.reserveCapacity(folded.count)
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                cleaned.unicodeScalars.append(scalar)
+            } else {
+                cleaned.append(" ")
+            }
+        }
+
+        // 4. Collapse runs of whitespace and trim
+        let collapsed = cleaned.components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
         return collapsed

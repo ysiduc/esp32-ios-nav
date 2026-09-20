@@ -42,3 +42,7 @@ default.profraw
 *.ipa
 *.app
 *.bak
+
+# Local xcconfig with secrets
+Config.xcconfig
+*.local.xcconfig

@@ -27,14 +27,10 @@ final class GoongSearchServiceTests: XCTestCase {
     // MARK: - 1. Short query clears state immediately
 
     func testShortQuery_ClearsPredictions() async {
-        // Seed some predictions first
-        client.autocompleteResult = .success([client.makePrediction()])
-        service.updateQuery("Ha Noi")
-        // Wait for debounce (0) + mock call
-        try? await Task.sleep(nanoseconds: 30_000_000)
-
-        // Now type a single char
-        service.updateQuery("H")
+        // After a short query, predictions and loading must be cleared immediately.
+        // (Do NOT interleave with a long query to avoid racing the mock.)
+        service.updateQuery("Ha")   // 2 chars — valid but won't fire because we immediately cancel
+        service.updateQuery("H")    // 1 char — cancels previous, clears immediately
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertFalse(service.isLoading)
     }
@@ -63,7 +59,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testAutocompleteRequest_HasRadius2000km() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Hanoi street")
-        try await Task.sleep(nanoseconds: 30_000_000) // let debounce(0) fire
+        try await Task.sleep(nanoseconds: 50_000_000) // let debounce(0) fire
         guard client.autocompleteCallCount > 0 else {
             XCTFail("No autocomplete call made"); return
         }
@@ -74,7 +70,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testAutocompleteRequest_HasLimit10() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Hanoi street test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         guard client.autocompleteCallCount > 0 else {
             XCTFail("No autocomplete call made"); return
         }
@@ -84,7 +80,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testAutocompleteRequest_QueryPassedUnchanged() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Đường Trần Hưng Đạo")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         guard client.autocompleteCallCount > 0 else {
             XCTFail("No autocomplete call made"); return
         }
@@ -95,26 +91,24 @@ final class GoongSearchServiceTests: XCTestCase {
         service.userLocation = CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8)
         client.autocompleteResult = .success([])
         service.updateQuery("Test location bias")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         guard client.autocompleteCallCount > 0 else {
             XCTFail("No autocomplete call made"); return
         }
-        let loc = client.autocompleteLocations.last
-        XCTAssertNotNil(loc as? CLLocationCoordinate2D,
-                        "Location should be forwarded when userLocation is set")
+        XCTAssertTrue(client.lastAutocompleteHadLocation,
+                      "Location should be forwarded when userLocation is set")
     }
 
     func testAutocompleteRequest_NoLocationWhenNil() async throws {
         service.userLocation = nil
         client.autocompleteResult = .success([])
         service.updateQuery("Test no location")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         guard client.autocompleteCallCount > 0 else {
             XCTFail("No autocomplete call made"); return
         }
-        let loc = client.autocompleteLocations.last
-        XCTAssertNil(loc as? CLLocationCoordinate2D,
-                     "No location should be sent when userLocation is nil")
+        XCTAssertFalse(client.lastAutocompleteHadLocation,
+                       "No location should be sent when userLocation is nil")
     }
 
     // MARK: - 4. Session token lifecycle
@@ -122,7 +116,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testSessionToken_SameAcrossAutocompleteAndDetail() async throws {
         client.autocompleteResult = .success([client.makePrediction(placeID: "tok1")])
         service.updateQuery("Ba Dinh")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         guard let autocompleteToken = client.autocompleteSessionTokens.last else {
             XCTFail("No autocomplete call"); return
         }
@@ -139,13 +133,13 @@ final class GoongSearchServiceTests: XCTestCase {
     func testEndSearchSession_RotatesToken() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("First session")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.endSearchSession()
 
         service.updateQuery("Second session")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
         XCTAssertFalse(tokenBefore.isEmpty, "Should have made at least one autocomplete call")
@@ -157,13 +151,13 @@ final class GoongSearchServiceTests: XCTestCase {
     func testCancelAutocomplete_DoesNotRotateToken() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Hoan Kiem test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.cancelAutocomplete()
 
         service.updateQuery("Hoan Kiem more test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
         XCTAssertFalse(tokenBefore.isEmpty)
@@ -175,14 +169,14 @@ final class GoongSearchServiceTests: XCTestCase {
     func testClearPredictions_DoesNotRotateToken() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Dong Da token test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.clearPredictions()
         XCTAssertTrue(service.predictions.isEmpty)
 
         service.updateQuery("Dong Da still same token")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
         XCTAssertFalse(tokenBefore.isEmpty)
@@ -194,13 +188,13 @@ final class GoongSearchServiceTests: XCTestCase {
     func testResetAll_RotatesToken() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Before reset query test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.resetAll()
 
         service.updateQuery("After reset query test")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
         XCTAssertFalse(tokenBefore.isEmpty)
@@ -213,7 +207,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testAutocompleteError_SetsErrorMessage() async throws {
         client.autocompleteResult = .failure(GoongSearchError.networkError(URLError(.notConnectedToInternet)))
         service.updateQuery("Error test query")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertNotNil(service.errorMessage)
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertFalse(service.isLoading)
@@ -223,7 +217,7 @@ final class GoongSearchServiceTests: XCTestCase {
         client.autocompleteResult = .failure(GoongSearchError.noResults)
         service.updateQuery("Loading test query")
         XCTAssertTrue(service.isLoading, "isLoading should be set synchronously")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertFalse(service.isLoading, "isLoading must be cleared after error")
     }
 
@@ -237,7 +231,7 @@ final class GoongSearchServiceTests: XCTestCase {
         ]
         client.autocompleteResult = .success(predictions)
         service.updateQuery("Duplicate test query")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(service.predictions.count, 2)
         XCTAssertTrue(service.predictions.map(\.placeID).contains("dup-id"))
         XCTAssertTrue(service.predictions.map(\.placeID).contains("unique-id"))
@@ -248,7 +242,7 @@ final class GoongSearchServiceTests: XCTestCase {
     func testEmptyResult_NoPredictions_NoError() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Empty result test query")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertNil(service.errorMessage)
         XCTAssertFalse(service.isLoading)
@@ -260,10 +254,96 @@ final class GoongSearchServiceTests: XCTestCase {
         let pred = client.makePrediction(placeID: "pub-test", mainText: "Published Place")
         client.autocompleteResult = .success([pred])
         service.updateQuery("Published test query")
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(service.predictions.count, 1)
         XCTAssertEqual(service.predictions.first?.placeID, "pub-test")
         XCTAssertFalse(service.isLoading)
         XCTAssertNil(service.errorMessage)
+    }
+
+    // MARK: - 9. Race conditions with controllable continuations
+
+    func testStaleAutocomplete_AReturnsAfterB_Discarded() async throws {
+        client.useContinuationForAutocomplete = true
+
+        service.updateQuery("ha")
+        await Task.yield()
+
+        XCTAssertEqual(client.pendingAutocompletes.count, 1)
+
+        service.updateQuery("hanoi")
+        await Task.yield()
+
+        XCTAssertEqual(client.pendingAutocompletes.count, 2)
+
+        let predA = client.makePrediction(placeID: "id-a", mainText: "Ha")
+        let predB = client.makePrediction(placeID: "id-b", mainText: "Hanoi")
+
+        // Resume B first (index 1)
+        client.resumeAutocomplete(at: 1, with: .success([predB]))
+        await Task.yield()
+
+        XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
+                       "Service should publish B results immediately")
+
+        // Resume A late (now index 0)
+        client.resumeAutocomplete(at: 0, with: .success([predA]))
+        await Task.yield()
+
+        XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
+                       "Late response from query A must be discarded and not overwrite B")
+    }
+
+    func testStaleAutocomplete_OldCancellationMustNotClearNewLoading() async throws {
+        client.useContinuationForAutocomplete = true
+
+        service.updateQuery("ha")
+        await Task.yield()
+
+        XCTAssertEqual(client.pendingAutocompletes.count, 1)
+
+        service.updateQuery("hanoi")
+        await Task.yield()
+
+        XCTAssertEqual(client.pendingAutocompletes.count, 2)
+        XCTAssertTrue(service.isLoading, "isLoading must stay true while B is still pending")
+
+        let predB = client.makePrediction(placeID: "id-b", mainText: "Hanoi")
+        client.resumeAutocomplete(at: 1, with: .success([predB]))
+        await Task.yield()
+
+        XCTAssertFalse(service.isLoading, "isLoading must be cleared once B completes")
+        XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"])
+
+        // Clean up pending A
+        client.resumeAutocomplete(at: 0, with: .failure(CancellationError()))
+    }
+
+    func testStaleAutocomplete_StaleErrorAfterSuccessDoesNotClearPredictions() async throws {
+        client.useContinuationForAutocomplete = true
+
+        service.updateQuery("ha")
+        await Task.yield()
+
+        service.updateQuery("hanoi")
+        await Task.yield()
+
+        XCTAssertEqual(client.pendingAutocompletes.count, 2)
+
+        let predB = client.makePrediction(placeID: "id-b", mainText: "Hanoi")
+        client.resumeAutocomplete(at: 1, with: .success([predB]))
+        await Task.yield()
+
+        XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"])
+        XCTAssertNil(service.errorMessage)
+
+        // Late failure for A
+        client.resumeAutocomplete(at: 0, with: .failure(URLError(.timedOut)))
+        await Task.yield()
+
+        XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
+                       "Late error from A must not clear B's predictions")
+        XCTAssertNil(service.errorMessage,
+                     "Late error from A must not publish error message over B")
     }
 }

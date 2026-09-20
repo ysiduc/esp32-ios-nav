@@ -223,28 +223,62 @@ When `errorMessage != nil`:
 
 ## 20. Test Count Summary
 
-| Suite | Tests | New in P3 |
-|-------|-------|-----------|
-| RouteGeometryTests | 12 | 0 |
-| OffRouteDetectorTests | 0 | 0 |
-| RerouteManagerTests | 37 | 0 |
-| GoongSearchServiceTests | 20 | +20 |
-| SearchRankingTests | 10 | +10 |
-| DestinationSelectionTests | 9 | +9 |
-| **Total** | **88** | **+39** |
+### Failed Run 35527411890 Breakdown:
+| Suite | Executed | Passed | Failed |
+|-------|----------|--------|--------|
+| RouteGeometryTests | 12 | 12 | 0 |
+| OffRouteDetectorTests | 10 | 10 | 0 |
+| RerouteManagerTests | 15 | 15 | 0 |
+| GoongSearchServiceTests | 19 | 19 | 0 |
+| SearchRankingTests | 13 | 11 | 2 (`testNormalize_RemovesDiacritics`, `testNormalize_CollapsesWhitespace`) |
+| DestinationSelectionTests | 9 | 9 | 0 |
+| **Total** | **78** | **76** | **2** |
+
+### P3.1 Target Suite Breakdown:
+| Suite | Baseline | P3.1 Total | New in P3/P3.1 | Description |
+|-------|----------|------------|----------------|-------------|
+| RouteGeometryTests | 12 | 12 | 0 | P1 geometry math & projection |
+| OffRouteDetectorTests | 10 | 10 | 0 | P2 off-route detection |
+| RerouteManagerTests | 15 | 15 | 0 | P2 reroute state machine & backoff |
+| GoongSearchServiceTests | 0 | 22 | +22 | Autocomplete, tokens, debouncing, 3 controllable continuation race tests |
+| SearchRankingTests | 0 | 31 | +31 | Đ/đ, punctuation, locale determinism, JSON "score" & compound parsing, status errors, request builder, dedup |
+| DestinationSelectionTests | 0 | 13 | +13 | Selection lifecycle, token propagation, 4 controllable continuation race tests (new query cancels detail, Route A/B race, clear while pending) |
+| **Total** | **37** | **103** | **+66** | Complete test coverage |
 
 ## 21. GitHub Actions Evidence
 
-- **Baseline Commit**: `dced5f1c2076a9600fa2be505b9c14509dc02222`
-- **P2.1 Verified Implementation Commit**: `ec7ed1b008c3c125d52e64dd54231034305b1496`
-- **P3 Implementation Commit**: _TBD after CI run_
-- **P3 Verified GitHub Actions Run ID**: _TBD_
+### Historical Failed Run (P3 initial attempt):
+- **Commit**: `44ed7e0c84a9764e149b5ca2c6b2d5b1d64c4a89`
+- **GitHub Actions Run ID**: `35527411890`
+- **Result**:
+  - Native Unit Tests: 78 executed, 76 passed, 2 failed in `SearchRankingTests` (`testNormalize_RemovesDiacritics`, `testNormalize_CollapsesWhitespace`)
+  - Native Release Build: SKIPPED
+  - Native IPA: SKIPPED
+  - Flutter iOS: SUCCESS
 
-### Expected Build Matrix:
-| Job / Suite | Expected |
+### P3.1 Verified Implementation:
+- **Baseline Commit**: `44ed7e0c84a9764e149b5ca2c6b2d5b1d64c4a89`
+- **P3.1 Implementation Commit**: _TBD (updated after CI completion)_
+- **P3.1 Verified GitHub Actions Run ID**: _TBD (updated after CI completion)_
+
+### Build Matrix:
+| Job / Suite | Result |
 | :--- | :--- |
-| Compile Native iOS Swift/SwiftUI | SUCCESS |
-| Native Unit Tests | ≥74 PASS, 0 failures |
-| Native Release Build | SUCCESS |
-| Native IPA | SUCCESS |
-| Flutter iOS IPA | SUCCESS |
+| Compile Native iOS Swift/SwiftUI | Pending CI |
+| Native Unit Tests | Pending CI (Target: 103 PASS, 0 failures) |
+| Native Release Build | Pending CI |
+| Native IPA | Pending CI |
+| Flutter iOS IPA | Pending CI |
+
+## 22. Local Developer Configuration
+
+A template file `mobile_app/ios_native/Config.example.xcconfig` is provided:
+```
+// Example local configuration for Goong API key.
+// Copy this file to Config.xcconfig (which is gitignored) and insert your Goong API key.
+// Never commit real API keys to version control.
+GOONG_API_KEY =
+```
+
+- To configure locally: copy `Config.example.xcconfig` to `Config.xcconfig` (ignored by git) and set your key.
+- Note: `CI compile/test success != live Goong search tested`. Unit tests mock the network client; live search requires a valid Goong API key.

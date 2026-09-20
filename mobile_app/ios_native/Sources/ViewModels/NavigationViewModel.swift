@@ -123,12 +123,21 @@ public final class NavigationViewModel: ObservableObject {
     /// If a destination was already selected, editing the field begins a fresh session:
     /// clears the old destination, route preview, and invalidates pending tasks.
     public func updateSearchQuery(_ text: String) {
-        if selectedDestination != nil && text != searchQuery {
-            // User is editing after a selection — start fresh
+        let isNewSearchIntent = (
+            selectedPrediction != nil ||
+            selectedDestination != nil ||
+            placeDetailTask != nil ||
+            navSession.state == .routePreview ||
+            navSession.activeRoute != nil
+        ) && text != searchQuery
+
+        if isNewSearchIntent {
+            // User is editing after a selection or while detail/preview was active — start fresh
             _cancelPendingSelectionTask()
             _cancelPendingRouteCalculation()
             selectedDestination = nil
             selectedPrediction  = nil
+            routeErrorMessage   = nil
             navSession.clearRoute()
             searchService.endSearchSession()
         }
@@ -154,7 +163,13 @@ public final class NavigationViewModel: ObservableObject {
     ///   5. On success: set selectedDestination, rotate session token, calculate route.
     ///   6. On failure: show error; preserve selectedPrediction for retry context.
     public func selectPrediction(_ prediction: GoongPrediction) {
+        // Cancel prior selection & routing, clear stale preview and errors
         _cancelPendingSelectionTask()
+        _cancelPendingRouteCalculation()
+        navSession.clearRoute()
+        selectedDestination = nil
+        routeErrorMessage   = nil
+
         destinationSelectionGeneration &+= 1
         let mySelGen = destinationSelectionGeneration
 
