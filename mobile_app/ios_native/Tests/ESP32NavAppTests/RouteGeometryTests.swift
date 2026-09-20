@@ -284,7 +284,7 @@ final class RouteGeometryTests: XCTestCase {
             distanceMeters: 222.6,
             durationSeconds: 20.0,
             streetName: "First St",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Turn right onto Second St",
             beginShapeIndex: 0,
             endShapeIndex: 2
@@ -383,7 +383,7 @@ final class RouteGeometryTests: XCTestCase {
             distanceMeters: 441.8,
             durationSeconds: 40.0,
             streetName: "Corner St",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Turn right",
             beginShapeIndex: 0,
             endShapeIndex: 2
@@ -422,7 +422,7 @@ final class RouteGeometryTests: XCTestCase {
             instruction: "Arrive"
         )
         let routeA = NavRoute(coordinates: coordsA, steps: [stepA], totalDistanceMeters: 556.0, totalDurationSeconds: 60.0)
-        let destination = NavigationDestination(name: "Test Destination", coordinate: coordsA[1])
+        let destination = NavigationDestination(coordinate: coordsA[1], name: "Test Destination")
 
         // Start Navigation with Route A
         manager.startNavigation(route: routeA, destination: destination)
