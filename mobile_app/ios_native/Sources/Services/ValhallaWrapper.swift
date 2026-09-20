@@ -111,8 +111,18 @@ public enum ValhallaRoutingError: LocalizedError {
     }
 }
 
+/// Protocol abstracting route calculation for testability and provider substitution.
 @MainActor
-public final class ValhallaRoutingService: ObservableObject {
+public protocol RoutingServiceProtocol: AnyObject {
+    func calculateRoute(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        costing: String
+    ) async throws -> NavRoute
+}
+
+@MainActor
+public final class ValhallaRoutingService: ObservableObject, RoutingServiceProtocol {
 
     public static let shared = ValhallaRoutingService()
     private init() { Task { await loadValhalla() } }

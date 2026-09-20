@@ -16,6 +16,7 @@ public final class NavigationViewModel: ObservableObject {
     public let searchService = GoongSearchService()
     public let routing       = ValhallaRoutingService.shared
     public let bleManager    = BLEManager()
+    public let rerouteManager: RerouteManager
 
     // MARK: - Published UI State
     @Published public var showBLEScanner: Bool = false
@@ -50,7 +51,10 @@ public final class NavigationViewModel: ObservableObject {
     private var routeCalculationTask: Task<NavRoute, Error>?
     private var rerouteTask: Task<NavRoute, Error>?
 
-    public init() {
+    public init(routingService: RoutingServiceProtocol = ValhallaRoutingService.shared) {
+        let reroute = RerouteManager(routingService: routingService, navSession: navSession)
+        self.rerouteManager = reroute
+
         // Forward filtered physical GPS location to Goong search for proximity-biased results
         navSession.$filteredLocation
             .compactMap { $0?.coordinate }
@@ -64,7 +68,18 @@ public final class NavigationViewModel: ObservableObject {
             self?.bleManager.sendNavigationPacket(progress)
         }
 
-        // Auto-reroute when off-route detected
+        // Wire P2 quality-aware off-route decisions directly to RerouteManager
+        navSession.onOffRouteDecision = { [weak self] decision, location in
+            guard let self = self else { return }
+            let costing = self.valhallaCosting(for: self.transportMode)
+            self.rerouteManager.handleObservation(
+                location: location,
+                decision: decision,
+                costing: costing
+            )
+        }
+
+        // Auto-reroute callback fallback
         navSession.onRerouteNeeded = { [weak self] in
             Task { @MainActor in
                 await self?.recalculateCurrentRoute()
@@ -177,71 +192,12 @@ public final class NavigationViewModel: ObservableObject {
             print("[ViewModel] Skipping reroute: navigation session not active")
             return
         }
-        guard let dest = navSession.navigationDestination else {
-            print("[ViewModel] Skipping reroute: no active navigation destination")
-            return
-        }
-        guard let userCoord = navSession.userLocation?.coordinate else {
+        guard let origin = navSession.filteredLocation?.coordinate ?? navSession.userLocation?.coordinate else {
             print("[ViewModel] Skipping reroute: no GPS coordinate available")
             return
         }
-
-        // Cancel previous reroute task (Strategy B: cancel/supersede older request)
-        rerouteTask?.cancel()
-        rerouteRequestGeneration &+= 1
-
-        let capturedSessionGen = navSession.sessionGeneration
-        let capturedRerouteGen = rerouteRequestGeneration
         let costing = valhallaCosting(for: transportMode)
-
-        navSession.setRerouting(true)
-        print("[ViewModel] 🔄 Rerouting session \(capturedSessionGen) (request \(capturedRerouteGen)) to \(dest.name ?? "destination")...")
-
-        let currentTask = Task<NavRoute, Error> {
-            try Task.checkCancellation()
-            let route = try await routing.calculateRoute(
-                from: userCoord,
-                to: dest.coordinate,
-                costing: costing
-            )
-            try Task.checkCancellation()
-            return route
-        }
-        rerouteTask = currentTask
-
-        do {
-            let newRoute = try await currentTask.value
-
-            // Strict validations:
-            guard !Task.isCancelled else {
-                print("[ViewModel] Reroute task cancelled")
-                return
-            }
-            guard self.navSession.state == .navigating else {
-                print("[ViewModel] Discarding reroute: navigation is no longer active")
-                return
-            }
-            guard self.navSession.sessionGeneration == capturedSessionGen else {
-                print("[ViewModel] Discarding reroute from obsolete session (\(capturedSessionGen) != \(self.navSession.sessionGeneration))")
-                return
-            }
-            guard self.rerouteRequestGeneration == capturedRerouteGen else {
-                print("[ViewModel] Discarding superseded reroute request (\(capturedRerouteGen) != \(self.rerouteRequestGeneration))")
-                return
-            }
-
-            // Atomically replace the active route in the current session
-            self.navSession.replaceActiveRoute(newRoute)
-            print("[ViewModel] ✅ Reroute committed successfully — \(newRoute.formattedDistance), \(newRoute.steps.count) steps")
-        } catch {
-            guard !Task.isCancelled,
-                  self.navSession.sessionGeneration == capturedSessionGen,
-                  self.rerouteRequestGeneration == capturedRerouteGen else {
-                return
-            }
-            self.navSession.setRerouting(false)
-            print("[ViewModel] ⚠️ Reroute failed: \(error.localizedDescription). Preserving existing active route.")
-        }
+        rerouteManager.startReroute(reason: .offRoute, origin: origin, costing: costing)
     }
 
     // MARK: - Navigation Control
@@ -258,6 +214,7 @@ public final class NavigationViewModel: ObservableObject {
         routeCalculationTask?.cancel()
         routeCalculationTask = nil
         routeRequestGeneration &+= 1
+        rerouteManager.cancel()
 
         let destination = NavigationDestination(
             coordinate: place.location.coordinate,
@@ -277,6 +234,7 @@ public final class NavigationViewModel: ObservableObject {
         rerouteTask?.cancel()
         rerouteTask = nil
         rerouteRequestGeneration &+= 1
+        rerouteManager.cancel()
 
         navSession.stopNavigation()
         navSession.clearRoute()
@@ -290,7 +248,8 @@ public final class NavigationViewModel: ObservableObject {
 
     public func recalculateForTransportMode() {
         if navSession.state == .navigating {
-            Task { await recalculateCurrentRoute() }
+            let costing = valhallaCosting(for: transportMode)
+            rerouteManager.requestTransportModeReroute(costing: costing)
         } else if let dest = selectedDestination?.location.coordinate {
             Task { await calculateRoute(to: dest) }
         }

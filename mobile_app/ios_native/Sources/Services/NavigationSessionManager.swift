@@ -140,15 +140,18 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: Thresholds
     private let stepAdvanceThresholdMeters: Double = 15.0
-    private let offRouteThresholdMeters: Double    = 15.0
-    private let offRouteConsecutiveRequired: Int   = 2
     private let maxAccuracyMeters: Double          = 20.0
     private let arrivalThresholdMeters: Double     = 15.0
 
+    // MARK: Off-Route Detection (P2)
+    public let offRouteDetector = OffRouteDetector()
+    @Published public private(set) var isOffRoute: Bool = false
+    @Published public private(set) var offRouteState: OffRouteState = .onRoute
+    @Published public private(set) var offRouteDecision: OffRouteDecision?
+    public var onOffRouteDecision: ((OffRouteDecision, CLLocation) -> Void)?
+
     // MARK: Private State
     private let locationManager = CLLocationManager()
-    private var offRouteConsecutiveCount: Int = 0
-    private var isOffRoute: Bool = false
     private var backgroundSession: Any? = nil
 
     // Kalman filter
@@ -198,8 +201,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
-        offRouteConsecutiveCount    = 0
+        offRouteDetector.reset()
         isOffRoute                  = false
+        offRouteState               = .onRoute
+        offRouteDecision            = nil
         isRerouting                 = false
         remainingPolyline           = route.coordinates
         kalmanTimestamp             = nil
@@ -223,8 +228,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
-        offRouteConsecutiveCount    = 0
+        offRouteDetector.reset()
         isOffRoute                  = false
+        offRouteState               = .onRoute
+        offRouteDecision            = nil
         remainingPolyline           = []
         disableBackgroundLocation()
         print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration), route rev \(activeRouteGeneration))")
@@ -256,8 +263,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
-        offRouteConsecutiveCount    = 0
+        offRouteDetector.reset()
         isOffRoute                  = false
+        offRouteState               = .onRoute
+        offRouteDecision            = nil
         isRerouting                 = false
         remainingPolyline           = route.coordinates
 
@@ -265,22 +274,16 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         if let loc = filteredLocation ?? userLocation {
             var stepIdx = 0
             var segIdx  = 0
-            var offCnt  = 0
-            var offFlag = false
             let result = computeProgress(
                 currentLocation: loc,
                 route: route,
                 lastProjection: nil,
                 lastMatchedTimestamp: nil,
                 maneuverStepIndex: &stepIdx,
-                polylineSegmentIndex: &segIdx,
-                offRouteCount: &offCnt,
-                offRoute: &offFlag
+                polylineSegmentIndex: &segIdx
             )
             currentManeuverStepIndex    = stepIdx
             currentPolylineSegmentIndex = segIdx
-            offRouteConsecutiveCount    = offCnt
-            isOffRoute                  = offFlag
             lastMatchedProjection       = result.projection
             lastMatchedTimestamp        = loc.timestamp
             currentProjection           = result.projection
@@ -303,6 +306,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         remainingPolyline           = []
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
+        offRouteDetector.reset()
+        isOffRoute                  = false
+        offRouteState               = .onRoute
+        offRouteDecision            = nil
         if state == .routePreview || state == .arrived { state = .idle }
     }
 
@@ -346,9 +353,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         lastProjection: RouteProjection?,
         lastMatchedTimestamp: Date?,
         maneuverStepIndex: inout Int,
-        polylineSegmentIndex: inout Int,
-        offRouteCount: inout Int,
-        offRoute: inout Bool
+        polylineSegmentIndex: inout Int
     ) -> (progress: NavigationProgress,
           projection: RouteProjection,
           remaining: [CLLocationCoordinate2D]) {
@@ -430,21 +435,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
         let curStep = route.steps[min(maneuverStepIndex, route.steps.count - 1)]
 
-        // Off-route detection reusing lateralDistanceMeters from projection (O(1))
-        let lateralDist = projection.lateralDistanceMeters
-        if lateralDist > offRouteThresholdMeters {
-            offRouteCount += 1
-            if !offRoute && offRouteCount >= offRouteConsecutiveRequired {
-                offRoute = true
-                print("[NavSession] OFF-ROUTE lateral=\(Int(lateralDist))m (count=\(offRouteCount))")
-            }
-        } else {
-            if offRouteCount > 0 {
-                print("[NavSession] Back on route lateral=\(Int(lateralDist))m")
-            }
-            offRouteCount = 0
-            offRoute = false
-        }
+
 
         // Distance to turn along route
         let distToTurn = route.geometry.distanceToManeuver(
@@ -532,8 +523,6 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
 
         var stepIdx = currentManeuverStepIndex
         var segIdx  = currentPolylineSegmentIndex
-        var offCnt  = offRouteConsecutiveCount
-        var offFlag = isOffRoute
         let prevProj = lastMatchedProjection
         let prevTime = lastMatchedTimestamp
 
@@ -543,9 +532,7 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
             lastProjection: prevProj,
             lastMatchedTimestamp: prevTime,
             maneuverStepIndex: &stepIdx,
-            polylineSegmentIndex: &segIdx,
-            offRouteCount: &offCnt,
-            offRoute: &offFlag
+            polylineSegmentIndex: &segIdx
         )
 
         Task { @MainActor in
@@ -566,15 +553,35 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
             self.currentProjection           = result.projection
             self.matchedLocation             = result.projection.coordinate
             self.snappedLocation             = result.projection.coordinate
-            self.offRouteConsecutiveCount    = offCnt
             if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
 
-            if offFlag && !self.isOffRoute {
-                self.isOffRoute = true
-                print("[NavSession] Triggering reroute")
+            // P2 Quality-Aware Off-Route Detection
+            let currentSegIdx = result.projection.segmentIndex
+            var routeBearing: Double? = nil
+            if currentSegIdx + 1 < route.coordinates.count {
+                routeBearing = RouteGeometry.bearing(from: route.coordinates[currentSegIdx], to: route.coordinates[currentSegIdx + 1])
+            }
+
+            let obs = OffRouteObservation(
+                timestamp: smLoc.timestamp,
+                lateralDistanceMeters: result.projection.lateralDistanceMeters,
+                horizontalAccuracyMeters: smLoc.horizontalAccuracy,
+                speedMetersPerSecond: max(0.0, smLoc.speed),
+                courseDegrees: smLoc.course >= 0.0 ? smLoc.course : nil,
+                routeBearingDegrees: routeBearing,
+                distanceAlongRouteMeters: result.projection.distanceAlongRouteMeters
+            )
+
+            let decision = self.offRouteDetector.evaluate(observation: obs)
+            self.offRouteDecision = decision
+            self.offRouteState = decision.state
+            self.isOffRoute = (decision.state == .confirmed)
+
+            self.onOffRouteDecision?(decision, smLoc)
+
+            if decision.becameConfirmed {
+                print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
                 self.onRerouteNeeded?()
-            } else if !offFlag {
-                self.isOffRoute = false
             }
 
             if result.progress.maneuver == .arrive && self.state == .navigating {

@@ -330,7 +330,7 @@ Phase P1.1 and P1.2 address all feedback and verification requirements from the 
 
 ## 20. Final P1 CI Evidence
 
-- **Commit SHA**: `0f7e3240ea855d045fb9f44ea595d24b8d7756aa`
+- **Commit SHA**: `0f7e3249349c97b107982decba1e5d60fdb1d319`
 - **GitHub Actions Run ID**: `35521300154`
 - **GitHub Actions Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35521300154
 - **Compile Native iOS Swift/SwiftUI**: **SUCCESS** (Job ID `106105744415`, duration: 4m 4s)
