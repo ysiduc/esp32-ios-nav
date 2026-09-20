@@ -30,6 +30,13 @@ public final class NavigationViewModel: ObservableObject {
     public var state: NavigationState { navSession.state }
     public var activeRoute: NavRoute?  { navSession.activeRoute }
     public var progress: NavigationProgress { navSession.activeProgress }
+    // MARK: - Location Pipeline Properties
+    public var rawLocation: CLLocation? { navSession.rawLocation }
+    public var filteredLocation: CLLocation? { navSession.filteredLocation }
+    public var matchedLocation: CLLocationCoordinate2D? { navSession.matchedLocation }
+    public var currentProjection: RouteProjection? { navSession.currentProjection }
+
+    // Backwards-compatible aliases
     public var userLocation: CLLocation? { navSession.userLocation }
     public var snappedLocation: CLLocationCoordinate2D? { navSession.snappedLocation }
     public var heading: Double { navSession.heading }
@@ -44,8 +51,8 @@ public final class NavigationViewModel: ObservableObject {
     private var rerouteTask: Task<NavRoute, Error>?
 
     public init() {
-        // Forward GPS location to Goong search for proximity-biased results
-        navSession.$userLocation
+        // Forward filtered physical GPS location to Goong search for proximity-biased results
+        navSession.$filteredLocation
             .compactMap { $0?.coordinate }
             .sink { [weak self] coord in
                 self?.searchService.userLocation = coord

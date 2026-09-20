@@ -18,6 +18,8 @@ public struct NavStep: Sendable {
     public let streetName: String
     public let maneuverType: ManeuverType
     public let instruction: String
+    public let beginShapeIndex: Int?
+    public let endShapeIndex: Int?
 
     public init(
         coordinate: CLLocationCoordinate2D,
@@ -25,7 +27,9 @@ public struct NavStep: Sendable {
         durationSeconds: Double,
         streetName: String,
         maneuverType: ManeuverType,
-        instruction: String
+        instruction: String,
+        beginShapeIndex: Int? = nil,
+        endShapeIndex: Int? = nil
     ) {
         self.coordinate = coordinate
         self.distanceMeters = distanceMeters
@@ -33,6 +37,8 @@ public struct NavStep: Sendable {
         self.streetName = streetName
         self.maneuverType = maneuverType
         self.instruction = instruction
+        self.beginShapeIndex = beginShapeIndex
+        self.endShapeIndex = endShapeIndex
     }
 }
 
@@ -42,6 +48,7 @@ public struct NavRoute: Sendable {
     public let steps: [NavStep]
     public let totalDistanceMeters: Double
     public let totalDurationSeconds: Double
+    public let geometry: RouteGeometry
 
     public init(
         coordinates: [CLLocationCoordinate2D],
@@ -53,6 +60,21 @@ public struct NavRoute: Sendable {
         self.steps = steps
         self.totalDistanceMeters = totalDistanceMeters
         self.totalDurationSeconds = totalDurationSeconds
+        self.geometry = RouteGeometry(coordinates: coordinates, steps: steps)
+    }
+
+    public init(
+        coordinates: [CLLocationCoordinate2D],
+        steps: [NavStep],
+        totalDistanceMeters: Double,
+        totalDurationSeconds: Double,
+        geometry: RouteGeometry
+    ) {
+        self.coordinates = coordinates
+        self.steps = steps
+        self.totalDistanceMeters = totalDistanceMeters
+        self.totalDurationSeconds = totalDurationSeconds
+        self.geometry = geometry
     }
 
     /// Formatted distance string (e.g. "12.3 km")
@@ -269,18 +291,63 @@ public final class ValhallaRoutingService: ObservableObject {
         let polylinePoints = firstRoute.polyline.coordinates
         var steps: [NavStep] = []
 
+        var searchIndex = 0
         for step in firstRoute.steps {
             guard step.distance > 0 else { continue }
             let stepCoords = step.polyline.coordinates
             let maneuverCoord = stepCoords.last ?? origin
             let maneuver = ManeuverType.fromMKInstruction(step.instructions)
+
+            // Forward-only monotonic mapping of step polyline to full polyline indices
+            let beginIdx: Int
+            let endIdx: Int
+            if !stepCoords.isEmpty && !polylinePoints.isEmpty {
+                let firstCoord = stepCoords.first!
+                let lastCoord = stepCoords.last!
+
+                var bestBegin = searchIndex
+                var bestBeginDist = Double.infinity
+                let maxSearch = min(polylinePoints.count, searchIndex + 100)
+                for i in searchIndex..<maxSearch {
+                    let d = CLLocation(latitude: firstCoord.latitude, longitude: firstCoord.longitude)
+                        .distance(from: CLLocation(latitude: polylinePoints[i].latitude, longitude: polylinePoints[i].longitude))
+                    if d < bestBeginDist {
+                        bestBeginDist = d
+                        bestBegin = i
+                        if d < 2.0 { break }
+                    }
+                }
+
+                var bestEnd = bestBegin
+                var bestEndDist = Double.infinity
+                let maxEndSearch = min(polylinePoints.count, bestBegin + max(20, stepCoords.count * 2))
+                for j in bestBegin..<maxEndSearch {
+                    let d = CLLocation(latitude: lastCoord.latitude, longitude: lastCoord.longitude)
+                        .distance(from: CLLocation(latitude: polylinePoints[j].latitude, longitude: polylinePoints[j].longitude))
+                    if d < bestEndDist {
+                        bestEndDist = d
+                        bestEnd = j
+                        if d < 2.0 { break }
+                    }
+                }
+
+                beginIdx = bestBegin
+                endIdx = max(bestBegin, bestEnd)
+                searchIndex = endIdx
+            } else {
+                beginIdx = searchIndex
+                endIdx = searchIndex
+            }
+
             steps.append(NavStep(
                 coordinate: maneuverCoord,
                 distanceMeters: step.distance,
                 durationSeconds: (step.distance / 10.0),
                 streetName: "",
                 maneuverType: maneuver,
-                instruction: step.instructions.isEmpty ? "Đi tiếp" : step.instructions
+                instruction: step.instructions.isEmpty ? "Đi tiếp" : step.instructions,
+                beginShapeIndex: beginIdx,
+                endShapeIndex: endIdx
             ))
         }
 
@@ -368,7 +435,9 @@ public final class ValhallaRoutingService: ObservableObject {
                 durationSeconds: vs.durationSeconds,
                 streetName: vs.streetName,
                 maneuverType: maneuver,
-                instruction: vs.instruction
+                instruction: vs.instruction,
+                beginShapeIndex: vs.beginShapeIndex,
+                endShapeIndex: vs.endShapeIndex
             ))
         }
 

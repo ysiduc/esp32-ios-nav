@@ -7,10 +7,12 @@
 //  Key behaviours:
 //  1. High-accuracy GPS (kCLLocationAccuracyBestForNavigation)
 //  2. Background location (iOS 17+)
-//  3. Ahead-only snap-to-route: projects GPS onto segments ahead of current step only
-//  4. Off-route detection 15m threshold, 2-frame debounce (faster reroute)
-//  5. Kalman filter smoothing to reduce GPS jitter
-//  6. remainingPolyline: trimmed ahead-only polyline published for MapViewContainer
+//  3. Explicit location pipeline: rawLocation -> filteredLocation -> matchedLocation
+//  4. Independent route indices: maneuverStepIndex vs polylineSegmentIndex
+//  5. Authoritative RouteGeometry projection with continuity gating & heading tie-breaker
+//  6. Along-route step advancement & conservative arrival logic
+//  7. remainingPolyline trimmed by actual polylineSegmentIndex
+//  8. Kalman filter smoothing to reduce GPS jitter
 //
 
 import CoreLocation
@@ -84,10 +86,21 @@ public struct NavigationProgress: Sendable {
 @MainActor
 public final class NavigationSessionManager: NSObject, ObservableObject {
 
-    // MARK: Published
-    @Published public var state: NavigationState            = .idle
+    // MARK: - Explicit Location Pipeline
+    /// Raw, unfiltered GPS location directly from CoreLocation (diagnostics/debug).
+    @Published public var rawLocation: CLLocation?
+    /// Filtered (Kalman-smoothed) physical GPS location (used for search bias and route matching).
+    @Published public var filteredLocation: CLLocation?
+    /// Authoritative matched coordinate along route polyline (used for navigation puck).
+    @Published public var matchedLocation: CLLocationCoordinate2D?
+    /// Authoritative projection metadata along route polyline.
+    @Published public var currentProjection: RouteProjection?
+
+    // Backwards-compatible aliases
     @Published public var userLocation: CLLocation?
     @Published public var snappedLocation: CLLocationCoordinate2D?
+
+    @Published public var state: NavigationState            = .idle
     @Published public var activeRoute: NavRoute?
     @Published public var activeProgress: NavigationProgress = NavigationProgress()
     @Published public var locationAuthStatus: CLAuthorizationStatus = .notDetermined
@@ -105,13 +118,25 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     /// Flag indicating background reroute computation is underway.
     @Published public private(set) var isRerouting: Bool = false
 
+    // MARK: - Independent Route Indices
+    /// Index into route.steps (maneuver step progress).
+    public private(set) var currentManeuverStepIndex: Int = 0
+    /// Backwards compatible alias for step index.
+    public var currentStepIndex: Int { currentManeuverStepIndex }
+
+    /// Index into route.coordinates / linear segments.
+    public private(set) var currentPolylineSegmentIndex: Int = 0
+
+    /// Last matched projection used for continuity gating.
+    public private(set) var lastMatchedProjection: RouteProjection?
+
     // MARK: Callbacks
     public var onProgressUpdate: ((NavigationProgress) -> Void)?
     public var onRerouteNeeded: (() -> Void)?
     public var onArrived: (() -> Void)?
 
     // MARK: Thresholds
-    private let stepAdvanceThresholdMeters: Double = 12.0
+    private let stepAdvanceThresholdMeters: Double = 15.0
     private let offRouteThresholdMeters: Double    = 15.0
     private let offRouteConsecutiveRequired: Int   = 2
     private let maxAccuracyMeters: Double          = 20.0
@@ -119,7 +144,6 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: Private State
     private let locationManager = CLLocationManager()
-    private var currentStepIndex: Int = 0
     private var offRouteConsecutiveCount: Int = 0
     private var isOffRoute: Bool = false
     private var backgroundSession: Any? = nil
@@ -157,15 +181,20 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     public func startNavigation(route: NavRoute, destination: NavigationDestination) {
         sessionGeneration &+= 1
         activeRouteGeneration &+= 1
-        navigationDestination    = destination
-        activeRoute              = route
-        currentStepIndex         = 0
-        offRouteConsecutiveCount = 0
-        isOffRoute               = false
-        isRerouting              = false
-        remainingPolyline        = route.coordinates
-        kalmanTimestamp          = nil
-        state                    = .navigating
+        navigationDestination       = destination
+        activeRoute                 = route
+        currentManeuverStepIndex    = 0
+        currentPolylineSegmentIndex = 0
+        lastMatchedProjection       = nil
+        currentProjection           = nil
+        matchedLocation             = nil
+        snappedLocation             = nil
+        offRouteConsecutiveCount    = 0
+        isOffRoute                  = false
+        isRerouting                 = false
+        remainingPolyline           = route.coordinates
+        kalmanTimestamp             = nil
+        state                       = .navigating
         enableBackgroundLocation()
         print("[NavSession] Navigation started (session \(sessionGeneration), route rev \(activeRouteGeneration)) — \(route.steps.count) steps to \(destination.name ?? "destination")")
     }
@@ -173,14 +202,20 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     public func stopNavigation() {
         sessionGeneration &+= 1
         activeRouteGeneration &+= 1
-        navigationDestination    = nil
-        isRerouting              = false
-        state                    = .idle
-        activeRoute              = nil
-        activeProgress           = NavigationProgress()
-        offRouteConsecutiveCount = 0
-        isOffRoute               = false
-        remainingPolyline        = []
+        navigationDestination       = nil
+        isRerouting                 = false
+        state                       = .idle
+        activeRoute                 = nil
+        activeProgress              = NavigationProgress()
+        currentManeuverStepIndex    = 0
+        currentPolylineSegmentIndex = 0
+        lastMatchedProjection       = nil
+        currentProjection           = nil
+        matchedLocation             = nil
+        snappedLocation             = nil
+        offRouteConsecutiveCount    = 0
+        isOffRoute                  = false
+        remainingPolyline           = []
         disableBackgroundLocation()
         print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration), route rev \(activeRouteGeneration))")
     }
@@ -196,38 +231,50 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     }
 
     /// Replaces active route during an active navigation session (reroute commit).
-    /// Maintains session identity and destination while atomically replacing path and resetting step progress.
+    /// Maintains session identity and destination while atomically replacing path and resetting step/segment progress.
     public func replaceActiveRoute(_ route: NavRoute) {
         guard state == .navigating else {
             print("[NavSession] Cannot replace route: not in navigating state")
             return
         }
         activeRouteGeneration &+= 1
-        activeRoute              = route
-        currentStepIndex         = 0
-        offRouteConsecutiveCount = 0
-        isOffRoute               = false
-        isRerouting              = false
-        remainingPolyline        = route.coordinates
+        activeRoute                 = route
+        currentManeuverStepIndex    = 0
+        currentPolylineSegmentIndex = 0
+        lastMatchedProjection       = nil
+        currentProjection           = nil
+        matchedLocation             = nil
+        snappedLocation             = nil
+        offRouteConsecutiveCount    = 0
+        isOffRoute                  = false
+        isRerouting                 = false
+        remainingPolyline           = route.coordinates
 
-        // Recompute progress immediately if userLocation is available
-        if let loc = userLocation {
+        // Recompute progress immediately on the new route if filtered location is available
+        if let loc = filteredLocation ?? userLocation {
             var stepIdx = 0
+            var segIdx  = 0
             var offCnt  = 0
             var offFlag = false
             let result = computeProgress(
                 currentLocation: loc,
                 route: route,
-                stepIndex: &stepIdx,
+                lastProjection: nil,
+                maneuverStepIndex: &stepIdx,
+                polylineSegmentIndex: &segIdx,
                 offRouteCount: &offCnt,
                 offRoute: &offFlag
             )
-            currentStepIndex         = stepIdx
-            offRouteConsecutiveCount = offCnt
-            isOffRoute               = offFlag
-            snappedLocation          = result.snapped
+            currentManeuverStepIndex    = stepIdx
+            currentPolylineSegmentIndex = segIdx
+            offRouteConsecutiveCount    = offCnt
+            isOffRoute                  = offFlag
+            lastMatchedProjection       = result.projection
+            currentProjection           = result.projection
+            matchedLocation             = result.projection.coordinate
+            snappedLocation             = result.projection.coordinate
             if result.remaining.count >= 2 { remainingPolyline = result.remaining }
-            activeProgress = result.progress
+            activeProgress              = result.progress
             onProgressUpdate?(result.progress)
         }
         print("[NavSession] Active route replaced successfully (session \(sessionGeneration)) — \(route.steps.count) steps")
@@ -279,139 +326,139 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     nonisolated private func computeProgress(
         currentLocation: CLLocation,
         route: NavRoute,
-        stepIndex: inout Int,
+        lastProjection: RouteProjection?,
+        maneuverStepIndex: inout Int,
+        polylineSegmentIndex: inout Int,
         offRouteCount: inout Int,
         offRoute: inout Bool
     ) -> (progress: NavigationProgress,
-          snapped: CLLocationCoordinate2D,
+          projection: RouteProjection,
           remaining: [CLLocationCoordinate2D]) {
 
-        guard !route.steps.isEmpty else {
-            return (NavigationProgress(maneuver: .arrive, nextStreetName: "Da den dich"),
-                    currentLocation.coordinate, [])
+        guard !route.steps.isEmpty, !route.coordinates.isEmpty else {
+            let fallbackProj = RouteProjection(
+                coordinate: currentLocation.coordinate,
+                segmentIndex: 0,
+                segmentFraction: 0,
+                lateralDistanceMeters: 0,
+                distanceAlongRouteMeters: 0
+            )
+            return (NavigationProgress(maneuver: .arrive, nextStreetName: "Đã đến đích"),
+                    fallbackProj, [])
         }
 
         let coords = route.coordinates
 
-        // Arrival check
-        let finalLoc = CLLocation(latitude: coords.last!.latitude,
-                                  longitude: coords.last!.longitude)
-        if currentLocation.distance(from: finalLoc) < arrivalThresholdMeters {
-            return (NavigationProgress(maneuver: .arrive, distanceToTurnMeters: 0,
-                                       remainingDistanceMeters: 0, remainingEtaSeconds: 0,
-                                       currentSpeedKmh: 0, speedLimitKmh: 0,
-                                       nextStreetName: "Da den dich"),
-                    coords.last!, [])
+        // Authoritative Route Projection with continuity gating
+        guard let projection = route.geometry.project(
+            location: currentLocation,
+            lastProjection: lastProjection
+        ) else {
+            let fallbackCoord = route.coordinates.first ?? currentLocation.coordinate
+            let fallbackProj = RouteProjection(
+                coordinate: fallbackCoord,
+                segmentIndex: 0,
+                segmentFraction: 0,
+                lateralDistanceMeters: 0,
+                distanceAlongRouteMeters: 0
+            )
+            return (NavigationProgress(maneuver: .none), fallbackProj, coords)
         }
 
-        // Ahead-only snap
-        let (snapped, segIdx) = snapAhead(
-            rawCoord: currentLocation.coordinate,
-            polyline: coords,
-            fromSeg: max(0, stepIndex)
-        )
-        let snappedLoc = CLLocation(latitude: snapped.latitude, longitude: snapped.longitude)
+        // Maintain polylineSegmentIndex strictly from geometry projection
+        polylineSegmentIndex = projection.segmentIndex
 
-        // Step advancement
-        func step(_ i: Int) -> NavStep { route.steps[min(i, route.steps.count - 1)] }
-        var cur = step(stepIndex)
-        var distToEnd = snappedLoc.distance(from: CLLocation(latitude: cur.coordinate.latitude,
-                                                              longitude: cur.coordinate.longitude))
-        while distToEnd < stepAdvanceThresholdMeters && stepIndex + 1 < route.steps.count {
-            stepIndex += 1
-            cur = step(stepIndex)
-            distToEnd = snappedLoc.distance(from: CLLocation(latitude: cur.coordinate.latitude,
-                                                              longitude: cur.coordinate.longitude))
-            print("[NavSession] -> Step \(stepIndex): \(cur.maneuverType.localizedInstruction)")
+        // Conservative arrival check:
+        // Requires physical proximity (<= arrivalThresholdMeters 15m) AND remaining along-route distance (<= 30m),
+        // or very close physical proximity (<= 7.5m) in case polyline end has slight coordinate offset.
+        let destCoord = coords.last!
+        let destLocation = CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude)
+        let physicalDistToDest = currentLocation.distance(from: destLocation)
+        let remDist = route.geometry.remainingDistance(from: projection.distanceAlongRouteMeters)
+
+        let isPhysicallyNear = physicalDistToDest <= arrivalThresholdMeters
+        let isRouteProgressNear = remDist <= 30.0
+        if (isPhysicallyNear && isRouteProgressNear) || physicalDistToDest <= 7.5 {
+            let arrivalProj = RouteProjection(
+                coordinate: destCoord,
+                segmentIndex: max(0, coords.count - 2),
+                segmentFraction: 1.0,
+                lateralDistanceMeters: physicalDistToDest,
+                distanceAlongRouteMeters: route.geometry.totalDistanceMeters
+            )
+            return (NavigationProgress(maneuver: .arrive,
+                                       distanceToTurnMeters: 0,
+                                       remainingDistanceMeters: 0,
+                                       remainingEtaSeconds: 0,
+                                       currentSpeedKmh: 0,
+                                       speedLimitKmh: 0,
+                                       nextStreetName: "Đã đến đích"),
+                    arrivalProj, [])
         }
 
-        // Off-route
-        let minDist = minDistToPolyline(point: currentLocation.coordinate, polyline: coords)
-        if minDist > offRouteThresholdMeters {
+        // Maneuver step advancement based on along-route progress
+        let stepDistances = route.geometry.maneuverDistancesAlongRoute
+        while maneuverStepIndex + 1 < route.steps.count {
+            let stepTriggerDist = stepDistances[maneuverStepIndex]
+            if projection.distanceAlongRouteMeters >= (stepTriggerDist - stepAdvanceThresholdMeters) {
+                maneuverStepIndex += 1
+                let nextStep = route.steps[maneuverStepIndex]
+                print("[NavSession] -> Step \(maneuverStepIndex): \(nextStep.maneuverType.localizedInstruction)")
+            } else {
+                break
+            }
+        }
+
+        let curStep = route.steps[min(maneuverStepIndex, route.steps.count - 1)]
+
+        // Off-route detection reusing lateralDistanceMeters from projection (O(1))
+        let lateralDist = projection.lateralDistanceMeters
+        if lateralDist > offRouteThresholdMeters {
             offRouteCount += 1
             if !offRoute && offRouteCount >= offRouteConsecutiveRequired {
                 offRoute = true
-                print("[NavSession] OFF-ROUTE \(Int(minDist))m")
+                print("[NavSession] OFF-ROUTE lateral=\(Int(lateralDist))m (count=\(offRouteCount))")
             }
         } else {
-            if offRouteCount > 0 { print("[NavSession] Back on route \(Int(minDist))m") }
-            offRouteCount = 0; offRoute = false
+            if offRouteCount > 0 {
+                print("[NavSession] Back on route lateral=\(Int(lateralDist))m")
+            }
+            offRouteCount = 0
+            offRoute = false
         }
 
-        // Trim remaining polyline
-        var remaining = [snapped]
+        // Distance to turn along route
+        let distToTurn = route.geometry.distanceToManeuver(
+            stepIndex: maneuverStepIndex,
+            from: projection.distanceAlongRouteMeters
+        )
+
+        // Remaining polyline: starts at projection point followed by coordinates strictly after projection.segmentIndex
+        var remaining = [projection.coordinate]
+        let segIdx = projection.segmentIndex
         if segIdx + 1 < coords.count {
             remaining.append(contentsOf: coords[(segIdx + 1)...])
-        } else if let last = coords.last { remaining.append(last) }
+        } else if let last = coords.last {
+            remaining.append(last)
+        }
 
-        // Remaining distance
-        var remDist = distToEnd
-        for i in (stepIndex + 1)..<route.steps.count { remDist += route.steps[i].distanceMeters }
-
-        let spd = currentLocation.speed > 0.5 ? currentLocation.speed : 8.33
-        let remSec = UInt32(remDist / spd)
+        // Stable proportional ETA
+        let totalGeomDist = route.geometry.totalDistanceMeters
+        let remainingRatio = totalGeomDist > 0 ? max(0.0, min(1.0, remDist / totalGeomDist)) : 0.0
+        let remSec = UInt32(round(route.totalDurationSeconds * remainingRatio))
         let kmh = UInt8(min(255, max(0, currentLocation.speed * 3.6)))
 
-        return (NavigationProgress(maneuver: cur.maneuverType,
-                                   distanceToTurnMeters: UInt32(max(0, distToEnd)),
-                                   remainingDistanceMeters: UInt32(max(0, remDist)),
-                                   remainingEtaSeconds: remSec,
-                                   currentSpeedKmh: kmh, speedLimitKmh: 0,
-                                   nextStreetName: cur.streetName),
-                snapped, remaining)
-    }
+        let progress = NavigationProgress(
+            maneuver: curStep.maneuverType,
+            distanceToTurnMeters: UInt32(max(0, round(distToTurn))),
+            remainingDistanceMeters: UInt32(max(0, round(remDist))),
+            remainingEtaSeconds: remSec,
+            currentSpeedKmh: kmh,
+            speedLimitKmh: 0,
+            nextStreetName: curStep.streetName
+        )
 
-    // MARK: - Geometry
-
-    nonisolated private func snapAhead(
-        rawCoord: CLLocationCoordinate2D,
-        polyline: [CLLocationCoordinate2D],
-        fromSeg: Int
-    ) -> (CLLocationCoordinate2D, Int) {
-        guard polyline.count >= 2 else { return (rawCoord, 0) }
-        var best = rawCoord; var bestDSq = Double.infinity; var bestSeg = max(0, fromSeg)
-        for i in max(0, fromSeg)..<(polyline.count - 1) {
-            let proj = projectOnSegment(p: rawCoord, a: polyline[i], b: polyline[i+1])
-            let dx = (proj.latitude  - rawCoord.latitude)  * 111_319.9
-            let dy = (proj.longitude - rawCoord.longitude) * 111_319.9 * cos(rawCoord.latitude * .pi / 180)
-            let dsq = dx*dx + dy*dy
-            if dsq < bestDSq { bestDSq = dsq; best = proj; bestSeg = i }
-        }
-        return (best, bestSeg)
-    }
-
-    nonisolated private func minDistToPolyline(
-        point: CLLocationCoordinate2D,
-        polyline: [CLLocationCoordinate2D]
-    ) -> Double {
-        guard polyline.count >= 2 else { return 0 }
-        var minD = Double.infinity
-        for i in 0..<(polyline.count - 1) {
-            let proj = projectOnSegment(p: point, a: polyline[i], b: polyline[i+1])
-            let d = CLLocation(latitude: point.latitude, longitude: point.longitude)
-                      .distance(from: CLLocation(latitude: proj.latitude, longitude: proj.longitude))
-            if d < minD { minD = d }
-        }
-        return minD
-    }
-
-    nonisolated private func projectOnSegment(
-        p: CLLocationCoordinate2D,
-        a: CLLocationCoordinate2D,
-        b: CLLocationCoordinate2D
-    ) -> CLLocationCoordinate2D {
-        let cosLat  = cos(a.latitude * .pi / 180)
-        let mLat    = 111_319.9
-        let mLon    = 111_319.9 * cosLat
-        let bx = (b.longitude - a.longitude) * mLon
-        let by = (b.latitude  - a.latitude)  * mLat
-        let px = (p.longitude - a.longitude) * mLon
-        let py = (p.latitude  - a.latitude)  * mLat
-        let len2 = bx*bx + by*by
-        guard len2 > 1e-10 else { return a }
-        let t = max(0, min(1, (px*bx + py*by) / len2))
-        return CLLocationCoordinate2D(latitude: a.latitude + t*by/mLat,
-                                      longitude: a.longitude + t*bx/mLon)
+        return (progress, projection, remaining)
     }
 }
 
@@ -443,6 +490,9 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
             return
         }
 
+        // Update raw location
+        rawLocation = loc
+
         // Kalman smooth
         let sm = kalmanSmooth(rawLat: loc.coordinate.latitude, rawLon: loc.coordinate.longitude,
                                accuracy: loc.horizontalAccuracy, timestamp: loc.timestamp)
@@ -451,7 +501,8 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
                                 verticalAccuracy: loc.verticalAccuracy,
                                 course: loc.course, speed: loc.speed,
                                 timestamp: loc.timestamp)
-        userLocation = smLoc
+        filteredLocation = smLoc
+        userLocation     = smLoc
 
         guard state == .navigating, let route = activeRoute else { return }
 
@@ -459,13 +510,21 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
         let capturedSessionGeneration = sessionGeneration
         let capturedRouteGeneration = activeRouteGeneration
 
-        var stepIdx = currentStepIndex
+        var stepIdx = currentManeuverStepIndex
+        var segIdx  = currentPolylineSegmentIndex
         var offCnt  = offRouteConsecutiveCount
         var offFlag = isOffRoute
+        let prevProj = lastMatchedProjection
 
-        let result = computeProgress(currentLocation: smLoc, route: route,
-                                      stepIndex: &stepIdx, offRouteCount: &offCnt,
-                                      offRoute: &offFlag)
+        let result = computeProgress(
+            currentLocation: smLoc,
+            route: route,
+            lastProjection: prevProj,
+            maneuverStepIndex: &stepIdx,
+            polylineSegmentIndex: &segIdx,
+            offRouteCount: &offCnt,
+            offRoute: &offFlag
+        )
 
         Task { @MainActor in
             guard self.state == .navigating else { return }
@@ -478,9 +537,13 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
                 return
             }
 
-            self.currentStepIndex         = stepIdx
-            self.offRouteConsecutiveCount = offCnt
-            self.snappedLocation          = result.snapped
+            self.currentManeuverStepIndex    = stepIdx
+            self.currentPolylineSegmentIndex = segIdx
+            self.lastMatchedProjection       = result.projection
+            self.currentProjection           = result.projection
+            self.matchedLocation             = result.projection.coordinate
+            self.snappedLocation             = result.projection.coordinate
+            self.offRouteConsecutiveCount    = offCnt
             if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
 
             if offFlag && !self.isOffRoute {
