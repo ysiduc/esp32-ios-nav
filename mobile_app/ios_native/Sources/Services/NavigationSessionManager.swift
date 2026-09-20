@@ -130,6 +130,9 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     /// Last matched projection used for continuity gating.
     public private(set) var lastMatchedProjection: RouteProjection?
 
+    /// Timestamp of last accepted matched projection for temporal continuity gating.
+    public private(set) var lastMatchedTimestamp: Date?
+
     // MARK: Callbacks
     public var onProgressUpdate: ((NavigationProgress) -> Void)?
     public var onRerouteNeeded: (() -> Void)?
@@ -186,6 +189,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
         lastMatchedProjection       = nil
+        lastMatchedTimestamp        = nil
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
@@ -210,6 +214,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
         lastMatchedProjection       = nil
+        lastMatchedTimestamp        = nil
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
@@ -242,6 +247,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
         lastMatchedProjection       = nil
+        lastMatchedTimestamp        = nil
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
@@ -260,6 +266,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
                 currentLocation: loc,
                 route: route,
                 lastProjection: nil,
+                lastMatchedTimestamp: nil,
                 maneuverStepIndex: &stepIdx,
                 polylineSegmentIndex: &segIdx,
                 offRouteCount: &offCnt,
@@ -270,6 +277,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
             offRouteConsecutiveCount    = offCnt
             isOffRoute                  = offFlag
             lastMatchedProjection       = result.projection
+            lastMatchedTimestamp        = loc.timestamp
             currentProjection           = result.projection
             matchedLocation             = result.projection.coordinate
             snappedLocation             = result.projection.coordinate
@@ -286,8 +294,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     public func clearRoute() {
         activeRouteGeneration &+= 1
-        activeRoute       = nil
-        remainingPolyline = []
+        activeRoute                 = nil
+        remainingPolyline           = []
+        lastMatchedProjection       = nil
+        lastMatchedTimestamp        = nil
         if state == .routePreview || state == .arrived { state = .idle }
     }
 
@@ -327,6 +337,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentLocation: CLLocation,
         route: NavRoute,
         lastProjection: RouteProjection?,
+        lastMatchedTimestamp: Date?,
         maneuverStepIndex: inout Int,
         polylineSegmentIndex: inout Int,
         offRouteCount: inout Int,
@@ -352,7 +363,8 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         // Authoritative Route Projection with continuity gating
         guard let projection = route.geometry.project(
             location: currentLocation,
-            lastProjection: lastProjection
+            lastProjection: lastProjection,
+            lastMatchedTimestamp: lastMatchedTimestamp
         ) else {
             let fallbackCoord = route.coordinates.first ?? currentLocation.coordinate
             let fallbackProj = RouteProjection(
@@ -485,13 +497,14 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
     public func locationManager(_ manager: CLLocationManager,
                                 didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
+
+        // Update raw location immediately for all incoming samples (including poor accuracy)
+        rawLocation = loc
+
         guard loc.horizontalAccuracy > 0, loc.horizontalAccuracy <= maxAccuracyMeters else {
             print("[NavSession] GPS discarded acc=\(Int(loc.horizontalAccuracy))m")
             return
         }
-
-        // Update raw location
-        rawLocation = loc
 
         // Kalman smooth
         let sm = kalmanSmooth(rawLat: loc.coordinate.latitude, rawLon: loc.coordinate.longitude,
@@ -515,11 +528,13 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
         var offCnt  = offRouteConsecutiveCount
         var offFlag = isOffRoute
         let prevProj = lastMatchedProjection
+        let prevTime = lastMatchedTimestamp
 
         let result = computeProgress(
             currentLocation: smLoc,
             route: route,
             lastProjection: prevProj,
+            lastMatchedTimestamp: prevTime,
             maneuverStepIndex: &stepIdx,
             polylineSegmentIndex: &segIdx,
             offRouteCount: &offCnt,
@@ -540,6 +555,7 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
             self.currentManeuverStepIndex    = stepIdx
             self.currentPolylineSegmentIndex = segIdx
             self.lastMatchedProjection       = result.projection
+            self.lastMatchedTimestamp        = smLoc.timestamp
             self.currentProjection           = result.projection
             self.matchedLocation             = result.projection.coordinate
             self.snappedLocation             = result.projection.coordinate

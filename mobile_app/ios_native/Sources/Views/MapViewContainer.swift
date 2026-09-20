@@ -82,8 +82,11 @@ public struct MapViewContainer: UIViewRepresentable {
             displayCoords = []
         }
 
+        c.isNavigating = isNavigating
+        c.userLocationView?.isHidden = isNavigating
         c.updatePolyline(displayCoords, on: mapView)
         c.updateDestination(destinationCoord, on: mapView)
+        c.updateMatchedPuck(snappedLocation, isNavigating: isNavigating, on: mapView)
 
         // Navigation tracking mode
         let wantedMode: MLNUserTrackingMode = isNavigating ? .followWithHeading : .follow
@@ -114,6 +117,11 @@ public struct MapViewContainer: UIViewRepresentable {
         private let routeSourceID = "route-source"
         private let routeLayerID  = "route-layer"
         private let arrowLayerID  = "route-arrows"
+        private let navigationPositionSourceID = "navigation-position-source"
+        private let navigationPositionLayerID  = "navigation-position-layer"
+
+        var isNavigating: Bool = false
+        var userLocationView: MLNUserLocationAnnotationView?
         private var destinationAnnotation: MLNPointAnnotation?
         private var lastDestinationCoord: CLLocationCoordinate2D?
 
@@ -185,6 +193,41 @@ public struct MapViewContainer: UIViewRepresentable {
             style.addLayer(arrowLayer)
         }
 
+        // MARK: - Matched Navigation Puck
+
+        func updateMatchedPuck(_ coord: CLLocationCoordinate2D?, isNavigating: Bool, on mapView: MLNMapView) {
+            guard let style = mapView.style else { return }
+
+            guard isNavigating, let coord = coord else {
+                // Clean up matched navigation puck when not actively navigating
+                if let layer = style.layer(withIdentifier: navigationPositionLayerID) {
+                    style.removeLayer(layer)
+                }
+                if let source = style.source(withIdentifier: navigationPositionSourceID) {
+                    style.removeSource(source)
+                }
+                return
+            }
+
+            let feature = MLNPointFeature()
+            feature.coordinate = coord
+
+            if let source = style.source(withIdentifier: navigationPositionSourceID) as? MLNShapeSource {
+                source.shape = feature
+            } else {
+                let source = MLNShapeSource(identifier: navigationPositionSourceID, shape: feature, options: nil)
+                style.addSource(source)
+
+                let layer = MLNCircleStyleLayer(identifier: navigationPositionLayerID, source: source)
+                layer.circleColor = NSExpression(forConstantValue: UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0))
+                layer.circleRadius = NSExpression(forConstantValue: 9)
+                layer.circleStrokeColor = NSExpression(forConstantValue: UIColor.white)
+                layer.circleStrokeWidth = NSExpression(forConstantValue: 3)
+                layer.circleOpacity = NSExpression(forConstantValue: 1.0)
+                style.addLayer(layer)
+            }
+        }
+
         // MARK: - Destination Annotation
 
         func updateDestination(_ coord: CLLocationCoordinate2D?, on mapView: MLNMapView) {
@@ -245,7 +288,15 @@ public struct MapViewContainer: UIViewRepresentable {
         }
 
         public func mapView(_ mapView: MLNMapView,
-                            viewFor annotation: MLNAnnotation) -> MLNAnnotationView? { nil }
+                            viewFor annotation: MLNAnnotation) -> MLNAnnotationView? {
+            if annotation is MLNUserLocation {
+                let view = userLocationView ?? MLNUserLocationAnnotationView(frame: .zero)
+                userLocationView = view
+                view.isHidden = isNavigating
+                return view
+            }
+            return nil
+        }
 
         public func mapView(_ mapView: MLNMapView,
                             imageFor annotation: MLNAnnotation) -> MLNAnnotationImage? {

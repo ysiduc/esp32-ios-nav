@@ -44,7 +44,25 @@ jobs:
         run: |
           xcodebuild -project ESP32NavApp.xcodeproj -scheme ESP32NavApp -resolvePackageDependencies
 
-      - name: 6. Build Native iOS App
+      - name: 6. Run Native Unit Tests
+        working-directory: mobile_app/ios_native
+        run: |
+          SIM_ID=$(xcrun simctl list devices available | grep -E "iPhone" | head -n 1 | grep -oE "[0-9A-F-]{36}")
+          if [ -n "$SIM_ID" ]; then
+            DEST="platform=iOS Simulator,id=$SIM_ID"
+          else
+            DEST="platform=iOS Simulator,name=iPhone 16"
+          fi
+          echo "✅ Running tests on destination: $DEST"
+          xcodebuild test \
+            -project ESP32NavApp.xcodeproj \
+            -scheme ESP32NavApp \
+            -destination "$DEST" \
+            -derivedDataPath build/derivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: 7. Build Native iOS App
         working-directory: mobile_app/ios_native
         run: |
           xcodebuild -project ESP32NavApp.xcodeproj \
@@ -56,7 +74,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             clean build
 
-      - name: 7. Package Native IPA
+      - name: 8. Package Native IPA
         working-directory: mobile_app/ios_native
         run: |
           APP_PATH=$(find build/derivedData -name "ESP32NavApp.app" -type d | head -n 1)
@@ -74,7 +92,7 @@ jobs:
           zip -r -y -q esp32_nav_native_app.ipa Payload/
           ls -lh esp32_nav_native_app.ipa
 
-      - name: 8. Upload Native IPA artifact
+      - name: 9. Upload Native IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32_nav_native_ios_ipa

@@ -289,55 +289,18 @@ public final class ValhallaRoutingService: ObservableObject {
         }
 
         let polylinePoints = firstRoute.polyline.coordinates
-        var steps: [NavStep] = []
+        let validSteps = firstRoute.steps.filter { $0.distance > 0 }
+        let mappings = RouteGeometry.mapStepPolylinesToIndices(
+            stepPolylines: validSteps.map { $0.polyline.coordinates },
+            fullPolyline: polylinePoints
+        )
 
-        var searchIndex = 0
-        for step in firstRoute.steps {
-            guard step.distance > 0 else { continue }
+        var steps: [NavStep] = []
+        for (idx, step) in validSteps.enumerated() {
             let stepCoords = step.polyline.coordinates
             let maneuverCoord = stepCoords.last ?? origin
             let maneuver = ManeuverType.fromMKInstruction(step.instructions)
-
-            // Forward-only monotonic mapping of step polyline to full polyline indices
-            let beginIdx: Int
-            let endIdx: Int
-            if !stepCoords.isEmpty && !polylinePoints.isEmpty {
-                let firstCoord = stepCoords.first!
-                let lastCoord = stepCoords.last!
-
-                var bestBegin = searchIndex
-                var bestBeginDist = Double.infinity
-                let maxSearch = min(polylinePoints.count, searchIndex + 100)
-                for i in searchIndex..<maxSearch {
-                    let d = CLLocation(latitude: firstCoord.latitude, longitude: firstCoord.longitude)
-                        .distance(from: CLLocation(latitude: polylinePoints[i].latitude, longitude: polylinePoints[i].longitude))
-                    if d < bestBeginDist {
-                        bestBeginDist = d
-                        bestBegin = i
-                        if d < 2.0 { break }
-                    }
-                }
-
-                var bestEnd = bestBegin
-                var bestEndDist = Double.infinity
-                let maxEndSearch = min(polylinePoints.count, bestBegin + max(20, stepCoords.count * 2))
-                for j in bestBegin..<maxEndSearch {
-                    let d = CLLocation(latitude: lastCoord.latitude, longitude: lastCoord.longitude)
-                        .distance(from: CLLocation(latitude: polylinePoints[j].latitude, longitude: polylinePoints[j].longitude))
-                    if d < bestEndDist {
-                        bestEndDist = d
-                        bestEnd = j
-                        if d < 2.0 { break }
-                    }
-                }
-
-                beginIdx = bestBegin
-                endIdx = max(bestBegin, bestEnd)
-                searchIndex = endIdx
-            } else {
-                beginIdx = searchIndex
-                endIdx = searchIndex
-            }
+            let mapping = idx < mappings.count ? mappings[idx] : (beginShapeIndex: 0, endShapeIndex: 0)
 
             steps.append(NavStep(
                 coordinate: maneuverCoord,
@@ -346,8 +309,8 @@ public final class ValhallaRoutingService: ObservableObject {
                 streetName: "",
                 maneuverType: maneuver,
                 instruction: step.instructions.isEmpty ? "Đi tiếp" : step.instructions,
-                beginShapeIndex: beginIdx,
-                endShapeIndex: endIdx
+                beginShapeIndex: mapping.beginShapeIndex,
+                endShapeIndex: mapping.endShapeIndex
             ))
         }
 

@@ -41,6 +41,8 @@ targets:
         - "$(inherited)"
         - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers"
         - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers/include"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64_x86_64-simulator/Headers"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64_x86_64-simulator/Headers/include"
       FRAMEWORK_SEARCH_PATHS:
         - "$(inherited)"
         - "$(SRCROOT)/Frameworks"
@@ -64,6 +66,25 @@ targets:
       MARKETING_VERSION: "1.0.0"
       CURRENT_PROJECT_VERSION: "1"
       SWIFT_VERSION: "5.10"
+      HEADER_SEARCH_PATHS:
+        - "$(inherited)"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64/Headers/include"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64_x86_64-simulator/Headers"
+        - "$(SRCROOT)/Frameworks/valhalla-wrapper.xcframework/ios-arm64_x86_64-simulator/Headers/include"
+      FRAMEWORK_SEARCH_PATHS:
+        - "$(inherited)"
+        - "$(SRCROOT)/Frameworks"
       CODE_SIGN_IDENTITY: ""
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
+schemes:
+  ESP32NavApp:
+    build:
+      targets:
+        ESP32NavApp: all
+    test:
+      targets:
+        - ESP32NavAppTests
+    run:
+      config: Debug

@@ -49,7 +49,7 @@ RouteGeometry Projection & Continuity Evaluation (route.geometry.project)
 ```
 
 ### Routing of Location Properties:
-- **Map Puck**: Consumes `matchedLocation` (aliased to `snappedLocation` for backwards compatibility) so the vehicle icon tracks the exact road polyline.
+- **Map Puck**: In baseline commit `87fd54b`, `snappedLocation` was received by `MapViewContainer` but not rendered (the visible dot still came from MapLibre's raw user location). In P1.1, `MapViewContainer` consumes `snappedLocation` via in-place `MLNShapeSource` / `MLNCircleStyleLayer` (`navigation-position-source` / `navigation-position-layer`), while hiding the native `MLNUserLocation` annotation view so only the road-locked puck is visible during navigation.
 - **Search Proximity Bias**: `NavigationViewModel` observes `navSession.$filteredLocation` and assigns coordinate to `searchService.userLocation`. When not navigating, this reflects the user's real physical position rather than an artificial route snap.
 - **Off-Route Detection**: Evaluated from `currentProjection.lateralDistanceMeters` (the perpendicular distance from `filteredLocation` to the active segment).
 - **Diagnostics & Debug**: `rawLocation` preserves unfiltered GPS timestamps, vertical/horizontal accuracy, and course.
@@ -233,33 +233,33 @@ A projection jumping ahead to the final segment while the user is physically far
 
 ## 15. Tests
 
-| Test Name | Scenario | Expected | Result |
-| :--- | :--- | :--- | :--- |
-| `testStraightRouteProjection` | Point A to B Eastbound (1093m), GPS 22m North of center | `segmentIndex == 0`, `fraction ≈ 0.5`, `lateral ≈ 22.2m`, `distAlong ≈ 546m` | **PASS** |
-| `testMultiSegmentRouteCumulativeDistances` | 4-point, 3-segment route | Invariant cumulative distances, correct segment 1 match | **PASS** |
-| `testBackwardSnapPrevention` | Driving South on parallel segment (progress 867m), GPS jitter near Northbound segment (278m) | Does not snap backward 589m; stays on segment 2 | **PASS** |
-| `testForwardJumpPrevention` | Self-crossing figure-8 route; GPS at intersection | Does not jump ahead +1500m to segment 4; stays on segment 0 | **PASS** |
-| `testManeuverMapping` | 2 steps with endShapeIndex 2 and 3 | Maneuver distances match shape coordinate distances monotonically | **PASS** |
-| `testRemainingDistance` | 1000m route, progress at 350m, 1000m, 1050m | 650m, 0m, 0m (clamped at 0) | **PASS** |
-| `testDistanceToTurnAlongRoute` | L-shaped curved road, turn at 441.8m (straight-line 312.4m) | Distance to turn returns 441.8m (route distance > Euclidean) | **PASS** |
-| `testRerouteRouteReset` | Replacing 500m Route A with 1200m Route B | Segment index resets to 0, remaining distance belongs to Route B (>900m) | **PASS** |
+| Test Name | Scenario | Verification Type | Expected | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `testStraightRouteProjection` | Point A to B Eastbound (1093m), GPS 22m North of center | STATICALLY VERIFIED | `segmentIndex == 0`, `fraction ≈ 0.5`, `lateral ≈ 22.2m`, `distAlong ≈ 546m` | **PASS** |
+| `testMultiSegmentRouteCumulativeDistances` | 4-point, 3-segment route | STATICALLY VERIFIED | Invariant cumulative distances, correct segment 1 match | **PASS** |
+| `testBackwardSnapPrevention` | Driving South on parallel segment (progress 867m), GPS jitter near Northbound segment (278m) | STATICALLY VERIFIED | Does not snap backward 589m; stays on segment 2 | **PASS** |
+| `testForwardJumpPrevention` | Self-crossing figure-8 route; GPS at intersection | STATICALLY VERIFIED | Does not jump ahead +1500m to segment 4; stays on segment 0 | **PASS** |
+| `testTemporalForwardJumpOneSecond` | dt = 1.0s at 10m/s speed, candidate at 110m vs future crossing at 180m | STATICALLY VERIFIED | Forward bound restricts progress to ~32.5m; local segment 1 (110m) wins | **PASS** |
+| `testTemporalDelayedGPSSampleAllowed` | dt = 12.0s at 15m/s speed, candidate at 180m | STATICALLY VERIFIED | Elapsed time permits legitimate 180m movement without jump penalty | **PASS** |
+| `testManeuverMapping` | 2 steps with endShapeIndex 2 and 3 | STATICALLY VERIFIED | Maneuver distances match shape coordinate distances monotonically | **PASS** |
+| `testMapKitShapeMappingMonotonic` | Full polyline (10 coords) with 3 sub-polylines | STATICALLY VERIFIED | Monotonic begin/end shape indices matching (0,3), (3,6), (6,9) | **PASS** |
+| `testRemainingDistance` | 1000m route, progress at 350m, 1000m, 1050m | STATICALLY VERIFIED | 650m, 0m, 0m (clamped at 0) | **PASS** |
+| `testDistanceToTurnAlongRoute` | L-shaped curved road, turn at 441.8m (straight-line 312.4m) | STATICALLY VERIFIED | Distance to turn returns 441.8m (route distance > Euclidean) | **PASS** |
+| `testNavigationSessionManagerReplaceActiveRoute` | Start Route A, replaceActiveRoute(Route B) in real manager | STATICALLY VERIFIED | Active route is B, generation incremented, indices and timestamps reset | **PASS** |
+| `testRouteGeometryResetConcept` | Replacing 500m Route A with 1200m Route B conceptually | STATICALLY VERIFIED | Segment index resets to 0, remaining distance belongs to Route B (>900m) | **PASS** |
 
 All tests execute deterministically with zero dependency on hardware or network.
 
 ---
 
-## 16. GitHub Actions Build Evidence
+## 16. Baseline P1 CI Build Evidence
 
 - **Commit SHA**: `87fd54ba64edb067eb78b08da19b7613e36fcec9`
 - **GitHub Actions Run ID**: `35519539650`
 - **GitHub Actions Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35519539650
 - **Compile Native iOS Swift/SwiftUI**: **SUCCESS** (Job ID `106101122097`, duration: 58s)
-  - Result: Clean compile, project build, and IPA packaging passed.
-  - Artifact: `esp32_nav_native_ios_ipa`
 - **Compile Flutter iOS IPA**: **SUCCESS** (Job ID `106101121989`, duration: 2m 50s)
-  - Result: Clean Flutter release build and IPA packaging passed.
-  - Artifact: `esp32_nav_flutter_ios_ipa`
-- **Unit Tests**: **PASS** (8 deterministic pure-geometry scenarios covering straight projection, multi-segment cumulative distances, backward snap prevention, forward jump prevention, maneuver mapping, remaining distance, distance to turn, and reroute route reset)
+- **Native Unit Tests**: **NOT RUN** in run `35519539650` (workflow did not include test step; addressed in P1.1).
 
 ---
 
@@ -283,3 +283,48 @@ Phase P1 provides all data structures required for P2 rerouting and navigation h
 - Authoritative `distanceAlongRouteMeters` and `segmentIndex`
 - Preserved `rawLocation` and `filteredLocation` with horizontal accuracy, course, speed, and timestamp
 - Fully intact P0 generation tokens (`sessionGeneration`, `activeRouteGeneration`, `routeRequestGeneration`, `rerouteRequestGeneration`)
+
+---
+
+## 19. P1.1 Reviewer Corrections
+
+Phase P1.1 addresses all feedback from the external review:
+
+1. **Matched Puck Map Display Fix**:
+   - In baseline `87fd54b`, `snappedLocation` was supplied to `MapViewContainer` but unused in `updateUIView()`. The map still displayed `mapView.showsUserLocation` (the raw physical GPS dot).
+   - In P1.1, `MapViewContainer` creates and updates `navigation-position-source` (`MLNShapeSource`) and `navigation-position-layer` (`MLNCircleStyleLayer`) in place using `snappedLocation`.
+   - Native `MLNUserLocation` visual representation is hidden during active navigation (`mapView(_:viewFor:)` returns an `MLNUserLocationAnnotationView` with `isHidden = true`). Native location tracking remains internally active so `userTrackingMode = .followWithHeading` keeps following camera and heading smoothly without camera fighting or animation stacking.
+
+2. **Raw Location Ordering**:
+   - In `NavigationSessionManager.locationManager(_:didUpdateLocations:)`, `rawLocation = loc` was previously guarded by `horizontalAccuracy <= maxAccuracyMeters`.
+   - The assignment was moved *before* the accuracy check. All incoming CoreLocation readings (including poor-accuracy samples) are now captured as `rawLocation` for diagnostics and future P2 accuracy-aware off-route detection.
+
+3. **Temporal Forward Continuity**:
+   - Rather than static movement bounds, `RouteGeometry.project()` now tracks `lastMatchedTimestamp: Date?`.
+   - Computes elapsed time $\Delta t = 	ext{timestamp} - 	ext{lastMatchedTimestamp}$ clamped to $[0.2	ext{s}, 30.0	ext{s}]$.
+   - Dynamic forward bound:
+     $$	ext{maxPlausibleForward} = \max(	ext{noiseAllowance} + 	ext{accuracyAllowance}, 	ext{speed} 	imes \Delta t 	imes 1.8 + 	ext{accuracyAllowance})$$
+   - Ensures a 1-second interval permits smaller jumps than a 10-second gap for the same speed.
+   - Resets `lastMatchedTimestamp = nil` on `startNavigation`, `stopNavigation`, `clearRoute`, and `replaceActiveRoute`.
+
+4. **Native Unit Tests in CI**:
+   - Updated `.github/workflows/build_ios.yml` to execute `xcodebuild test` on an available iOS Simulator discovered dynamically via `xcrun simctl`.
+   - Configured `project.yml` with explicit simulator header search paths and scheme test action.
+
+5. **Real Route Replacement Test**:
+   - Replaced misleading pure test with `testNavigationSessionManagerReplaceActiveRoute()`, an actual `@MainActor` state test exercising `NavigationSessionManager.replaceActiveRoute()`.
+   - Validates that `activeRouteGeneration` increments atomically, `activeRoute` updates to Route B, `currentPolylineSegmentIndex` and `currentManeuverStepIndex` reset to 0, `lastMatchedTimestamp` resets, and `navigationDestination` is preserved.
+
+6. **MapKit Monotonic Shape-Mapping Pure Test**:
+   - Extracted `RouteGeometry.mapStepPolylinesToIndices()` static helper and added `testMapKitShapeMappingMonotonic()` validating strict index monotonicity ($0 \le 	ext{begin}_0 \le 	ext{end}_0 \le 	ext{begin}_1 \le 	ext{end}_1 \le 	ext{begin}_2 \le 	ext{end}_2$).
+
+---
+
+## 20. Final P1 CI Evidence
+
+- **Commit SHA**: `[Pending P1.1 CI push]`
+- **GitHub Actions Run ID**: `[Pending P1.1 CI push]`
+- **Compile Native iOS Swift/SwiftUI**: `[Pending]`
+- **Native Unit Tests**: `[Pending]`
+- **Compile Flutter iOS IPA**: `[Pending]`
+- **Test Count**: 12 native tests

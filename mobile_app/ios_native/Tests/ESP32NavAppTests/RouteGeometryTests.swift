@@ -2,7 +2,8 @@
 //  RouteGeometryTests.swift
 //  ESP32NavAppTests
 //
-//  Pure geometry and route progress unit tests for P1 validation.
+//  Comprehensive pure geometry, temporal continuity, MapKit mapping,
+//  and navigation session state unit tests for P1 / P1.1 validation.
 //
 
 import XCTest
@@ -113,8 +114,7 @@ final class RouteGeometryTests: XCTestCase {
             distanceAlongRouteMeters: geometry.cumulativeDistances[2] + (geometry.cumulativeDistances[3] - geometry.cumulativeDistances[2]) * 0.5
         )
 
-        // GPS jitter places user equidistant (16m) between Segment 0 (Northbound at 278m) and Segment 2 (Southbound at 867m)
-        // In fact, place it slightly closer (14m) to Segment 0!
+        // GPS jitter places user closer (14m) to Segment 0 (Northbound at 278m) than Segment 2 (Southbound at 867m)
         let jitterLoc = CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: 10.0025, longitude: 106.00013),
             altitude: 0,
@@ -179,7 +179,99 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertLessThan(proj?.distanceAlongRouteMeters ?? 10000, 200.0)
     }
 
-    // MARK: - Test 5: Maneuver Step Mapping
+    // MARK: - Test 5: Temporal Continuity — 1-Second Forward Jump Gating
+
+    func testTemporalForwardJumpOneSecond() {
+        // Route:
+        // Segment 0: (10.0, 106.0) to (10.001, 106.0) [0m to 111m]
+        // Segment 1: (10.001, 106.0) to (10.002, 106.0) [111m to 222m]
+        // Segment 2: loop around and cross near 10.0012, 106.0 at ~500m
+        let p0 = CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0)
+        let p1 = CLLocationCoordinate2D(latitude: 10.001, longitude: 106.0)
+        let p2 = CLLocationCoordinate2D(latitude: 10.002, longitude: 106.0)
+        let p3 = CLLocationCoordinate2D(latitude: 10.002, longitude: 106.002)
+        let p4 = CLLocationCoordinate2D(latitude: 10.0012, longitude: 106.002)
+        let p5 = CLLocationCoordinate2D(latitude: 10.0012, longitude: 105.998) // crosses segment 1
+
+        let geometry = RouteGeometry(coordinates: [p0, p1, p2, p3, p4, p5])
+
+        let baseTime = Date()
+        let prevProj = RouteProjection(
+            coordinate: CLLocationCoordinate2D(latitude: 10.0009, longitude: 106.0),
+            segmentIndex: 0,
+            segmentFraction: 0.9,
+            lateralDistanceMeters: 0.0,
+            distanceAlongRouteMeters: 100.0
+        )
+
+        // GPS sample 1 second later (dt = 1.0s), vehicle speed 10 m/s (~36 km/h)
+        // Candidate near crossing (lat 10.0012, lon 106.0) is on Segment 1 (~133m) AND Segment 4 (~600m)
+        let oneSecondGPS = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 10.0012, longitude: 106.0),
+            altitude: 0,
+            horizontalAccuracy: 5,
+            verticalAccuracy: 5,
+            course: 0,
+            speed: 10.0,
+            timestamp: baseTime.addingTimeInterval(1.0)
+        )
+
+        let proj = geometry.project(
+            location: oneSecondGPS,
+            lastProjection: prevProj,
+            lastMatchedTimestamp: baseTime
+        )
+
+        XCTAssertNotNil(proj)
+        // In 1 second, vehicle could only move ~10-25m. Local candidate at ~133m (Segment 1) must win!
+        XCTAssertEqual(proj?.segmentIndex, 1)
+        XCTAssertLessThan(proj?.distanceAlongRouteMeters ?? 1000, 200.0)
+    }
+
+    // MARK: - Test 6: Temporal Continuity — Delayed GPS Sample Allowed
+
+    func testTemporalDelayedGPSSampleAllowed() {
+        let p0 = CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0)
+        let p1 = CLLocationCoordinate2D(latitude: 10.001, longitude: 106.0)      // ~111m
+        let p2 = CLLocationCoordinate2D(latitude: 10.002, longitude: 106.0)      // ~222m
+        let p3 = CLLocationCoordinate2D(latitude: 10.003, longitude: 106.0)      // ~333m
+
+        let geometry = RouteGeometry(coordinates: [p0, p1, p2, p3])
+
+        let baseTime = Date()
+        let prevProj = RouteProjection(
+            coordinate: p0,
+            segmentIndex: 0,
+            segmentFraction: 0.0,
+            lateralDistanceMeters: 0.0,
+            distanceAlongRouteMeters: 0.0
+        )
+
+        // Delayed GPS sample 12 seconds later (e.g. background sleep / tunnel exit)
+        // Vehicle traveled at 15 m/s (~54 km/h) for 12s = ~180m forward (Segment 1)
+        let delayedGPS = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 10.0016, longitude: 106.0),
+            altitude: 0,
+            horizontalAccuracy: 8,
+            verticalAccuracy: 5,
+            course: 0,
+            speed: 15.0,
+            timestamp: baseTime.addingTimeInterval(12.0)
+        )
+
+        let proj = geometry.project(
+            location: delayedGPS,
+            lastProjection: prevProj,
+            lastMatchedTimestamp: baseTime
+        )
+
+        XCTAssertNotNil(proj)
+        // Because 12s elapsed, a 180m advance is physically valid and must NOT be rejected by forward jump gating!
+        XCTAssertEqual(proj?.segmentIndex, 1)
+        XCTAssertGreaterThan(proj?.distanceAlongRouteMeters ?? 0, 150.0)
+    }
+
+    // MARK: - Test 7: Maneuver Step Mapping
 
     func testManeuverMapping() {
         let p0 = CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0)
@@ -216,7 +308,44 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertLessThan(geometry.maneuverDistancesAlongRoute[0], geometry.maneuverDistancesAlongRoute[1])
     }
 
-    // MARK: - Test 6: Remaining Distance
+    // MARK: - Test 8: MapKit Shape Mapping Monotonicity
+
+    func testMapKitShapeMappingMonotonic() {
+        // Full route with 10 coordinates
+        var fullCoords: [CLLocationCoordinate2D] = []
+        for i in 0..<10 {
+            fullCoords.append(CLLocationCoordinate2D(latitude: 10.0 + Double(i) * 0.001, longitude: 106.0))
+        }
+
+        // 3 sub-polylines representing steps
+        let step0Coords = Array(fullCoords[0...3])
+        let step1Coords = Array(fullCoords[3...6])
+        let step2Coords = Array(fullCoords[6...9])
+
+        let mappings = RouteGeometry.mapStepPolylinesToIndices(
+            stepPolylines: [step0Coords, step1Coords, step2Coords],
+            fullPolyline: fullCoords
+        )
+
+        XCTAssertEqual(mappings.count, 3)
+
+        // Verify shape index ranges
+        XCTAssertEqual(mappings[0].beginShapeIndex, 0)
+        XCTAssertEqual(mappings[0].endShapeIndex, 3)
+        XCTAssertEqual(mappings[1].beginShapeIndex, 3)
+        XCTAssertEqual(mappings[1].endShapeIndex, 6)
+        XCTAssertEqual(mappings[2].beginShapeIndex, 6)
+        XCTAssertEqual(mappings[2].endShapeIndex, 9)
+
+        // Strict monotonicity check: begin_0 <= end_0 <= begin_1 <= end_1 <= begin_2 <= end_2
+        XCTAssertLessThanOrEqual(mappings[0].beginShapeIndex, mappings[0].endShapeIndex)
+        XCTAssertLessThanOrEqual(mappings[0].endShapeIndex, mappings[1].beginShapeIndex)
+        XCTAssertLessThanOrEqual(mappings[1].beginShapeIndex, mappings[1].endShapeIndex)
+        XCTAssertLessThanOrEqual(mappings[1].endShapeIndex, mappings[2].beginShapeIndex)
+        XCTAssertLessThanOrEqual(mappings[2].beginShapeIndex, mappings[2].endShapeIndex)
+    }
+
+    // MARK: - Test 9: Remaining Distance
 
     func testRemainingDistance() {
         let p0 = CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0)
@@ -239,7 +368,7 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertEqual(rem3, 0.0, accuracy: 1e-4)
     }
 
-    // MARK: - Test 7: Distance To Turn (Along Route vs Straight-Line)
+    // MARK: - Test 10: Distance To Turn (Along Route vs Straight-Line)
 
     func testDistanceToTurnAlongRoute() {
         // L-shaped road:
@@ -274,9 +403,74 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertGreaterThan(dTurn, euclidean + 100.0)
     }
 
-    // MARK: - Test 8: Reroute Route Reset
+    // MARK: - Test 11: Real NavigationSessionManager Route Replacement State Test
 
-    func testRerouteRouteReset() {
+    @MainActor
+    func testNavigationSessionManagerReplaceActiveRoute() {
+        let manager = NavigationSessionManager()
+
+        let coordsA = [
+            CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0),
+            CLLocationCoordinate2D(latitude: 10.005, longitude: 106.0)
+        ]
+        let stepA = NavStep(
+            coordinate: coordsA[1],
+            distanceMeters: 556.0,
+            durationSeconds: 60.0,
+            streetName: "Route A St",
+            maneuverType: .arrive,
+            instruction: "Arrive"
+        )
+        let routeA = NavRoute(coordinates: coordsA, steps: [stepA], totalDistanceMeters: 556.0, totalDurationSeconds: 60.0)
+        let destination = NavigationDestination(name: "Test Destination", coordinate: coordsA[1])
+
+        // Start Navigation with Route A
+        manager.startNavigation(route: routeA, destination: destination)
+        let initialRouteGen = manager.activeRouteGeneration
+        let initialSessionGen = manager.sessionGeneration
+
+        XCTAssertEqual(manager.state, .navigating)
+        XCTAssertEqual(manager.activeRoute?.totalDistanceMeters, 556.0)
+        XCTAssertEqual(manager.currentManeuverStepIndex, 0)
+        XCTAssertEqual(manager.currentPolylineSegmentIndex, 0)
+
+        // Route B (replacement reroute)
+        let coordsB = [
+            CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0),
+            CLLocationCoordinate2D(latitude: 10.0, longitude: 106.012)
+        ]
+        let stepB = NavStep(
+            coordinate: coordsB[1],
+            distanceMeters: 1315.0,
+            durationSeconds: 150.0,
+            streetName: "Route B Ave",
+            maneuverType: .arrive,
+            instruction: "Arrive"
+        )
+        let routeB = NavRoute(coordinates: coordsB, steps: [stepB], totalDistanceMeters: 1315.0, totalDurationSeconds: 150.0)
+
+        // Replace active route with Route B
+        manager.replaceActiveRoute(routeB)
+
+        // Verifications:
+        // 1. Session generation preserved (no false session restart)
+        XCTAssertEqual(manager.sessionGeneration, initialSessionGen)
+        // 2. Route revision atomically incremented
+        XCTAssertEqual(manager.activeRouteGeneration, initialRouteGen + 1)
+        // 3. Active route swapped to Route B
+        XCTAssertEqual(manager.activeRoute?.totalDistanceMeters, 1315.0)
+        // 4. Maneuver step and polyline segment indices reset to 0 for Route B
+        XCTAssertEqual(manager.currentManeuverStepIndex, 0)
+        XCTAssertEqual(manager.currentPolylineSegmentIndex, 0)
+        // 5. Temporal state reset (no stale timestamps inherited from Route A)
+        XCTAssertNil(manager.lastMatchedTimestamp)
+        // 6. Navigation destination preserved
+        XCTAssertEqual(manager.navigationDestination?.name, "Test Destination")
+    }
+
+    // MARK: - Test 12: Route Geometry Reset Concept
+
+    func testRouteGeometryResetConcept() {
         // Route A: 500m
         let rACoords = [
             CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0),

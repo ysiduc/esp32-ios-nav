@@ -171,7 +171,8 @@ public struct RouteGeometry: Sendable {
     /// on parallel roads, hairpins, and self-intersecting loops.
     public func project(
         location: CLLocation,
-        lastProjection: RouteProjection? = nil
+        lastProjection: RouteProjection? = nil,
+        lastMatchedTimestamp: Date? = nil
     ) -> RouteProjection? {
         guard segmentCount > 0 else {
             if let first = coordinates.first {
@@ -187,6 +188,15 @@ public struct RouteGeometry: Sendable {
         }
 
         let point = location.coordinate
+
+        // Elapsed time delta calculation with safety clamps (dt in seconds)
+        let dt: Double
+        if let prevTime = lastMatchedTimestamp {
+            let rawDt = location.timestamp.timeIntervalSince(prevTime)
+            dt = (rawDt > 0 && rawDt.isFinite) ? max(0.2, min(30.0, rawDt)) : 1.0
+        } else {
+            dt = 1.0
+        }
 
         // Helper to evaluate a segment with continuity penalties
         func scoreCandidate(
@@ -210,9 +220,14 @@ public struct RouteGeometry: Sendable {
                     penalty += abs(delta + 20.0) * 5.0
                 }
 
-                // 2. Forward jump penalty: penalize physically implausible sudden advances
+                // 2. Temporal forward jump penalty: bound plausible movement using elapsed time, speed, and accuracy
                 let speedMps = max(0.0, location.speed)
-                let maxPlausibleForward = max(60.0, speedMps * 3.0 * 2.5 + location.horizontalAccuracy)
+                let accuracyAllowance = max(5.0, location.horizontalAccuracy * 1.5)
+                let minimumNoiseAllowance = 25.0
+                let maxPlausibleForward = max(
+                    minimumNoiseAllowance + accuracyAllowance,
+                    speedMps * dt * 1.8 + accuracyAllowance
+                )
                 if delta > maxPlausibleForward {
                     penalty += (delta - maxPlausibleForward) * 2.5
                 }
@@ -291,5 +306,56 @@ public struct RouteGeometry: Sendable {
         }
         let stepDist = maneuverDistancesAlongRoute[stepIndex]
         return max(0.0, stepDist - distanceAlongRouteMeters)
+    }
+    // MARK: - MapKit Step Mapping Helper
+
+    /// Pure helper to map sub-polylines (such as MKRouteStep polylines) monotonically into full route coordinates.
+    public static func mapStepPolylinesToIndices(
+        stepPolylines: [[CLLocationCoordinate2D]],
+        fullPolyline: [CLLocationCoordinate2D]
+    ) -> [(beginShapeIndex: Int, endShapeIndex: Int)] {
+        var results: [(beginShapeIndex: Int, endShapeIndex: Int)] = []
+        var searchIndex = 0
+
+        for stepCoords in stepPolylines {
+            guard !stepCoords.isEmpty && !fullPolyline.isEmpty else {
+                results.append((beginShapeIndex: searchIndex, endShapeIndex: searchIndex))
+                continue
+            }
+
+            let firstCoord = stepCoords.first!
+            let lastCoord = stepCoords.last!
+
+            var bestBegin = searchIndex
+            var bestBeginDist = Double.infinity
+            let maxBeginSearch = min(fullPolyline.count, searchIndex + 100)
+            for i in searchIndex..<maxBeginSearch {
+                let d = RouteGeometry.distanceBetween(firstCoord, fullPolyline[i])
+                if d < bestBeginDist {
+                    bestBeginDist = d
+                    bestBegin = i
+                    if d < 2.0 { break }
+                }
+            }
+
+            var bestEnd = bestBegin
+            var bestEndDist = Double.infinity
+            let maxEndSearch = min(fullPolyline.count, bestBegin + max(20, stepCoords.count * 2))
+            for j in bestBegin..<maxEndSearch {
+                let d = RouteGeometry.distanceBetween(lastCoord, fullPolyline[j])
+                if d < bestEndDist {
+                    bestEndDist = d
+                    bestEnd = j
+                    if d < 2.0 { break }
+                }
+            }
+
+            let beginIdx = bestBegin
+            let endIdx = max(bestBegin, bestEnd)
+            results.append((beginShapeIndex: beginIdx, endShapeIndex: endIdx))
+            searchIndex = endIdx
+        }
+
+        return results
     }
 }
