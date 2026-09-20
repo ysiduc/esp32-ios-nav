@@ -117,6 +117,24 @@ let enterThreshold = max(baseLateralThresholdMeters, obs.horizontalAccuracyMeter
 ```
 
 ### Exact Constants:
+### Exact Constants Summary Table (Section 58 Compliance):
+| Parameter | Value | Unit | Role |
+| :--- | :--- | :--- | :--- |
+| `baseLateralThresholdMeters` | `15.0` | meters | Minimum lateral deviation required to suspect off-route |
+| `accuracyMultiplier` | `1.2` | ratio | Multiplier applied to `horizontalAccuracy` ($T_{\text{enter}} = \max(15.0, \text{acc} \times 1.2)$) |
+| `recoveryLateralThresholdMeters` | `10.0` | meters | Maximum lateral distance required to qualify for recovery |
+| `movingConfirmationSeconds` | `2.5` | seconds | Temporal dwell required for normal moving vehicle ($v \ge 1.0\text{ m/s}$) |
+| `courseDivergenceConfirmationSeconds` | `1.5` | seconds | Accelerated temporal dwell when course diverges $\ge 45^\circ$ ($v \ge 3.0\text{ m/s}$) |
+| `stationaryConfirmationSeconds` | `5.0` | seconds | Conservative temporal dwell when stationary or drifting ($v < 1.0\text{ m/s}$) |
+| `strongDeviationConfirmationSeconds` | `1.0` | seconds | Temporal dwell for large physical departures ($d \ge 2 \times T_{\text{enter}}$) |
+| `recoveryConfirmationSeconds` | `1.0` | seconds | Temporal persistence required below 10.0m before confirming recovery |
+| `courseDivergenceThresholdDegrees` | `45.0` | degrees | Angular divergence threshold between travel course and route bearing |
+| `minSpeedForCourseMetersPerSec` | `3.0` | m/s | Minimum speed (~10.8 km/h) before travel course is considered reliable |
+| `strongLateralDeviationMultiplier` | `2.0` | ratio | Multiplier for strong deviation ($d \ge 2 \times T_{\text{enter}}$, min 30.0m) |
+| `backoffDelays` | `[2.0, 4.0, 8.0, 15.0]` | seconds | Bounded retry delays after consecutive routing request failures |
+| Maximum Backoff | `15.0` | seconds | Maximum upper cap on retry backoff delay |
+| `postSuccessStabilizationSeconds` | `2.0` | seconds | Stabilization window following Route B installation |
+
 - **`baseLateralThresholdMeters`**: `15.0` meters
 - **`accuracyMultiplier`**: `1.2`
 - **`recoveryLateralThresholdMeters`**: `10.0` meters
@@ -307,19 +325,27 @@ Native unit testing suite in `mobile_app/ios_native/Tests/ESP32NavAppTests/`:
 ## 18. GitHub Actions Evidence
 
 - **Baseline Commit**: `e00f13bdb71162aa7a10ab1258f899c1c9c130cc`
-- **P2 Implementation & Test Commit**: `4718111`
-- **GitHub Actions Run ID**: `35522625628`
+- **Verified Implementation & Test Commit**: `841de77fa351e79250d01866566c3b7e1c4c8825`
+- **Verified GitHub Actions Run ID**: `35523209459`
 
 ### Test & Build Execution Matrix:
 | Job / Suite | Status | Execution Details |
 | :--- | :--- | :--- |
-| `RouteGeometryTests` | **PASS (12/12)** | CI TESTED — 0 failures |
-| `OffRouteDetectorTests` | **PASS (10/10)** | CI TESTED — 0 failures |
-| `RerouteManagerTests` | **PASS (10/10)** | CI TESTED — 0 failures |
-| **Total Unit Tests** | **PASS (32/32)** | **0 failures** |
-| `Build Native iOS App` (Release) | **SUCCESS** | CI TESTED |
+| `RouteGeometryTests` | **PASS (12/12)** | CI TESTED — 0 failures in 0.111s |
+| `OffRouteDetectorTests` | **PASS (10/10)** | CI TESTED — 0 failures in 0.010s |
+| `RerouteManagerTests` | **PASS (10/10)** | CI TESTED — 0 failures in 2.814s |
+| **Total Unit Tests** | **PASS (32/32)** | **CI TESTED — 0 failures in 2.935s** |
+| `Build Native iOS App` (Release) | **SUCCESS** | CI TESTED (Xcode release compilation in 4m 57s) |
 | `Package Native IPA` | **SUCCESS** | CI TESTED (`ESP32NavApp.ipa`) |
-| `Compile Flutter iOS IPA` | **SUCCESS** | CI TESTED (`Runner.ipa`) |
+| `Compile Flutter iOS IPA` | **SUCCESS** | CI TESTED (`Runner.ipa` in 3m 6s) |
+
+### Verification Status Classification:
+- Deterministic Geometry & Projection Engine: **CI TESTED**
+- Pure State Machine & Accuracy Scaling: **CI TESTED**
+- Single-Flight Request & Bounded Backoff Coordinator: **CI TESTED**
+- Native Release & IPA Packaging: **CI TESTED**
+- Flutter iOS Framework Build: **CI TESTED**
+- Real-World On-Road Vehicle Driving: **NOT TESTED** (Unit tests run on simulated coordinates and mock routing providers, not on a physical vehicle on public roads)
 
 ---
 
