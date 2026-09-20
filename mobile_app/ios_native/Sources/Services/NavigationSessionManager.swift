@@ -95,6 +95,14 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     /// Remaining (undriven) polyline — trimmed from snapped position to destination.
     @Published public var remainingPolyline: [CLLocationCoordinate2D] = []
 
+    // MARK: - Session Identity & Destination Lifecycle
+    /// Monotonically increasing session generation. Incremented on start and stop.
+    public private(set) var sessionGeneration: UInt64 = 0
+    /// Active navigation destination frozen at start of navigation session.
+    public private(set) var navigationDestination: NavigationDestination?
+    /// Flag indicating background reroute computation is underway.
+    @Published public private(set) var isRerouting: Bool = false
+
     // MARK: Callbacks
     public var onProgressUpdate: ((NavigationProgress) -> Void)?
     public var onRerouteNeeded: (() -> Void)?
@@ -144,19 +152,30 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         locationManager.requestAlwaysAuthorization()
     }
 
-    public func startNavigation(route: NavRoute) {
+    public func startNavigation(route: NavRoute, destination: NavigationDestination) {
+        sessionGeneration &+= 1
+        navigationDestination    = destination
         activeRoute              = route
         currentStepIndex         = 0
         offRouteConsecutiveCount = 0
         isOffRoute               = false
+        isRerouting              = false
         remainingPolyline        = route.coordinates
         kalmanTimestamp          = nil
         state                    = .navigating
         enableBackgroundLocation()
-        print("[NavSession] Navigation started — \(route.steps.count) steps")
+        print("[NavSession] Navigation started (session \(sessionGeneration)) — \(route.steps.count) steps to \(destination.name ?? "destination")")
+    }
+
+    public func startNavigation(route: NavRoute) {
+        let destCoord = route.coordinates.last ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
+        startNavigation(route: route, destination: NavigationDestination(coordinate: destCoord))
     }
 
     public func stopNavigation() {
+        sessionGeneration &+= 1
+        navigationDestination    = nil
+        isRerouting              = false
         state                    = .idle
         activeRoute              = nil
         activeProgress           = NavigationProgress()
@@ -164,12 +183,58 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         isOffRoute               = false
         remainingPolyline        = []
         disableBackgroundLocation()
+        print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration))")
     }
 
     public func setRoutePreview(_ route: NavRoute) {
+        guard state != .navigating else {
+            print("[NavSession] setRoutePreview rejected: active navigation in progress")
+            return
+        }
         activeRoute       = route
         remainingPolyline = route.coordinates
         state             = .routePreview
+    }
+
+    /// Replaces active route during an active navigation session (reroute commit).
+    /// Maintains session identity and destination while atomically replacing path and resetting step progress.
+    public func replaceActiveRoute(_ route: NavRoute) {
+        guard state == .navigating else {
+            print("[NavSession] Cannot replace route: not in navigating state")
+            return
+        }
+        activeRoute              = route
+        currentStepIndex         = 0
+        offRouteConsecutiveCount = 0
+        isOffRoute               = false
+        isRerouting              = false
+        remainingPolyline        = route.coordinates
+
+        // Recompute progress immediately if userLocation is available
+        if let loc = userLocation {
+            var stepIdx = 0
+            var offCnt  = 0
+            var offFlag = false
+            let result = computeProgress(
+                currentLocation: loc,
+                route: route,
+                stepIndex: &stepIdx,
+                offRouteCount: &offCnt,
+                offRoute: &offFlag
+            )
+            currentStepIndex         = stepIdx
+            offRouteConsecutiveCount = offCnt
+            isOffRoute               = offFlag
+            snappedLocation          = result.snapped
+            if result.remaining.count >= 2 { remainingPolyline = result.remaining }
+            activeProgress = result.progress
+            onProgressUpdate?(result.progress)
+        }
+        print("[NavSession] Active route replaced successfully (session \(sessionGeneration)) — \(route.steps.count) steps")
+    }
+
+    public func setRerouting(_ rerouting: Bool) {
+        isRerouting = rerouting
     }
 
     public func clearRoute() {
@@ -398,6 +463,7 @@ extension NavigationSessionManager: CLLocationManagerDelegate {
                                       offRoute: &offFlag)
 
         Task { @MainActor in
+            guard self.state == .navigating else { return }
             self.currentStepIndex         = stepIdx
             self.offRouteConsecutiveCount = offCnt
             self.snappedLocation          = result.snapped

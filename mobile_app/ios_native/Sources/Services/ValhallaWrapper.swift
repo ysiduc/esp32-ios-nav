@@ -208,11 +208,9 @@ public final class ValhallaRoutingService: ObservableObject {
         do {
             return try await calculateMapKitRoute(from: origin, to: destination)
         } catch {
-            print("[ValhallaWrapper] MapKit routing error: \(error.localizedDescription). Using straight fallback...")
+            print("[ValhallaWrapper] MapKit routing error: \(error.localizedDescription).")
+            throw ValhallaRoutingError.noRouteFound("Không tìm thấy đường từ cả Valhalla và MapKit: \(error.localizedDescription)")
         }
-
-        // 3. Simple straight line fallback
-        return makeFallbackRoute(from: origin, to: destination)
     }
 
     private func calculateValhallaRoute(
@@ -294,61 +292,12 @@ public final class ValhallaRoutingService: ObservableObject {
         )
     }
 
-    private func makeFallbackRoute(
-        from origin: CLLocationCoordinate2D,
-        to destination: CLLocationCoordinate2D
-    ) -> NavRoute {
-        let mid = CLLocationCoordinate2D(
-            latitude: (origin.latitude + destination.latitude) / 2.0,
-            longitude: (origin.longitude + destination.longitude) / 2.0
-        )
-        let coords = [origin, mid, destination]
-        let dlat = (destination.latitude - origin.latitude) * 111319.9
-        let dlon = (destination.longitude - origin.longitude) * 111319.9 * cos(origin.latitude * .pi / 180.0)
-        let totalMeters = sqrt(dlat * dlat + dlon * dlon)
-
-        let step1 = NavStep(
-            coordinate: mid,
-            distanceMeters: totalMeters / 2.0,
-            durationSeconds: (totalMeters / 2.0) / 10.0,
-            streetName: "Đường Thẳng",
-            maneuverType: .straight,
-            instruction: "Đi thẳng tới điểm đích"
-        )
-        let step2 = NavStep(
-            coordinate: destination,
-            distanceMeters: totalMeters / 2.0,
-            durationSeconds: (totalMeters / 2.0) / 10.0,
-            streetName: "",
-            maneuverType: .arrive,
-            instruction: "Đến đích"
-        )
-
-        return NavRoute(
-            coordinates: coords,
-            steps: [step1, step2],
-            totalDistanceMeters: totalMeters,
-            totalDurationSeconds: totalMeters / 10.0
-        )
-    }
-
     // MARK: - Coordinate Decoding
 
     private static func decodeRouteCoordinates(from route: ValhallaRoute) -> [CLLocationCoordinate2D] {
         if !route.encodedPolyline6.isEmpty {
             return decodePolyline6(route.encodedPolyline6)
         }
-
-        if !route.rawJSON.isEmpty,
-           let data = route.rawJSON.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let stubCoords = json["_stub_coords"] as? [[Double]] {
-            return stubCoords.compactMap { pair in
-                guard pair.count == 2 else { return nil }
-                return CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0])
-            }
-        }
-
         return []
     }
 

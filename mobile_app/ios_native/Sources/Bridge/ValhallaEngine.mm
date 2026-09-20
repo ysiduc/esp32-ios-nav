@@ -178,9 +178,14 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return success;
 
 #else
-    NSLog(@"[ValhallaEngine] STUB mode — loadConfig pretending success.");
-    self.configLoaded = YES;
-    return YES;
+    NSLog(@"[ValhallaEngine] Library missing — loadConfig returning error.");
+    if (error) {
+        *error = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                     code:ValhallaEngineErrorLibraryMissing
+                                 userInfo:@{NSLocalizedDescriptionKey: @"Valhalla C++ library is not compiled or available."}];
+    }
+    self.configLoaded = NO;
+    return NO;
 #endif
 }
 
@@ -243,53 +248,14 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return result;
 
 #else
-    // STUB IMPLEMENTATION
-    NSLog(@"[ValhallaEngine] STUB — returning fake route from (%.4f,%.4f) to (%.4f,%.4f)",
-          fromLat, fromLon, toLat, toLon);
-
-    double midLat = (fromLat + toLat) / 2.0;
-    double midLon = (fromLon + toLon) / 2.0;
-
-    double dlat = (toLat - fromLat) * 111319.9;
-    double dlon = (toLon - fromLon) * 111319.9 * cos(fromLat * M_PI / 180.0);
-    double totalMeters = sqrt(dlat * dlat + dlon * dlon);
-
-    ValhallaStep *step1 = [[ValhallaStep alloc] init];
-    step1.distanceMeters  = totalMeters / 2.0;
-    step1.durationSeconds = (totalMeters / 2.0) / 10.0;
-    step1.streetName      = @"Đường Thẳng";
-    step1.maneuverType    = 1;
-    step1.instruction     = @"Đi thẳng";
-    step1.beginShapeIndex = 0;
-    step1.endShapeIndex   = 1;
-
-    ValhallaStep *step2 = [[ValhallaStep alloc] init];
-    step2.distanceMeters  = totalMeters / 2.0;
-    step2.durationSeconds = (totalMeters / 2.0) / 10.0;
-    step2.streetName      = @"";
-    step2.maneuverType    = 6;
-    step2.instruction     = @"Đến đích";
-    step2.beginShapeIndex = 1;
-    step2.endShapeIndex   = 2;
-
-    step1.encodedPolyline = @"";
-    step2.encodedPolyline = @"";
-
-    ValhallaRoute *route          = [[ValhallaRoute alloc] init];
-    route.totalDistanceMeters     = totalMeters;
-    route.totalDurationSeconds    = totalMeters / 10.0;
-    route.encodedPolyline6        = @"";
-    route.steps                   = @[step1, step2];
-    route.rawJSON = [NSString stringWithFormat:
-        @"{\"_stub_coords\":[[%.7f,%.7f],[%.7f,%.7f],[%.7f,%.7f]],"
-        @"\"trip\":{\"summary\":{\"length\":%.4f,\"time\":%.1f},\"status\":0}}",
-        fromLon, fromLat,
-        midLon, midLat,
-        toLon, toLat,
-        totalMeters / 1000.0,
-        totalMeters / 10.0];
-
-    return route;
+    // UNAVAILABLE / STUB IMPLEMENTATION
+    NSLog(@"[ValhallaEngine] Unavailable — Valhalla C++ library not compiled. Returning explicit error.");
+    if (error) {
+        *error = [NSError errorWithDomain:ValhallaEngineErrorDomain
+                                     code:ValhallaEngineErrorLibraryMissing
+                                 userInfo:@{NSLocalizedDescriptionKey: @"Valhalla C++ library is not compiled or available"}];
+    }
+    return nil;
 #endif
 }
 

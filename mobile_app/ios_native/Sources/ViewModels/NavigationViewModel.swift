@@ -37,6 +37,12 @@ public final class NavigationViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
+    // MARK: - Lifecycle & Concurrency Control
+    private var routeRequestGeneration: UInt64 = 0
+    private var rerouteRequestGeneration: UInt64 = 0
+    private var routeCalculationTask: Task<Void, Never>?
+    private var rerouteTask: Task<Void, Never>?
+
     public init() {
         // Forward GPS location to Goong search for proximity-biased results
         navSession.$userLocation
@@ -53,7 +59,9 @@ public final class NavigationViewModel: ObservableObject {
 
         // Auto-reroute when off-route detected
         navSession.onRerouteNeeded = { [weak self] in
-            Task { await self?.recalculateCurrentRoute() }
+            Task { @MainActor in
+                await self?.recalculateCurrentRoute()
+            }
         }
 
         // Handle arrival
@@ -94,41 +102,136 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Route Calculation
 
-    /// Calculate route from current GPS location to destination.
+    /// Calculate route from current GPS location to destination (Preview mode).
     public func calculateRoute(to destination: CLLocationCoordinate2D) async {
+        // Cancel any pending preview route calculation and increment request generation
+        routeCalculationTask?.cancel()
+        routeRequestGeneration &+= 1
+        let thisRequestGen = routeRequestGeneration
+
         guard let userCoord = navSession.userLocation?.coordinate else {
             routeErrorMessage = "Chưa nhận được tín hiệu định vị GPS"
             return
         }
 
-        isCalculatingRoute  = true
-        routeErrorMessage   = nil
+        isCalculatingRoute = true
+        routeErrorMessage  = nil
 
         let costing = valhallaCosting(for: transportMode)
 
-        do {
-            let route = try await routing.calculateRoute(
+        let task = Task { () throws -> NavRoute in
+            try await routing.calculateRoute(
                 from: userCoord,
                 to: destination,
                 costing: costing
             )
-            navSession.setRoutePreview(route)
-            print("[ViewModel] Route: \(route.formattedDistance), \(route.formattedDuration), \(route.steps.count) steps")
-        } catch {
-            routeErrorMessage = "Không thể tìm đường: \(error.localizedDescription)"
-            print("[ViewModel] Routing error: \(error)")
+        }
+        routeCalculationTask = Task {
+            _ = try? await task.value
         }
 
-        isCalculatingRoute = false
+        do {
+            let route = try await task.value
+
+            // Post-await validations:
+            guard !Task.isCancelled else {
+                print("[ViewModel] Route calculation cancelled (gen \(thisRequestGen))")
+                return
+            }
+            guard self.routeRequestGeneration == thisRequestGen else {
+                print("[ViewModel] Discarding stale route calculation (gen \(thisRequestGen) != current \(self.routeRequestGeneration))")
+                return
+            }
+            guard self.navSession.state != .navigating else {
+                print("[ViewModel] Discarding route preview: session is navigating")
+                return
+            }
+
+            self.navSession.setRoutePreview(route)
+            self.isCalculatingRoute = false
+            print("[ViewModel] Route: \(route.formattedDistance), \(route.formattedDuration), \(route.steps.count) steps")
+        } catch {
+            guard !Task.isCancelled else { return }
+            guard self.routeRequestGeneration == thisRequestGen else { return }
+            guard self.navSession.state != .navigating else { return }
+
+            self.isCalculatingRoute = false
+            self.routeErrorMessage = "Không thể tìm đường: \(error.localizedDescription)"
+            print("[ViewModel] Routing error: \(error)")
+        }
     }
 
-    /// Reroute from current position to original destination (triggered on off-route).
+    /// Reroute from current position to active navigation destination (triggered on off-route).
+    /// Safe lifecycle: captures session & reroute generation, cancels superseded reroutes (Strategy B),
+    /// and commits directly via replaceActiveRoute without touching route preview or resetting session identity.
     public func recalculateCurrentRoute() async {
-        guard let dest = selectedDestination?.location.coordinate else { return }
-        print("[ViewModel] 🔄 Rerouting from current position…")
-        await calculateRoute(to: dest)
-        if let route = navSession.activeRoute {
-            navSession.startNavigation(route: route)
+        guard navSession.state == .navigating else {
+            print("[ViewModel] Skipping reroute: navigation session not active")
+            return
+        }
+        guard let dest = navSession.navigationDestination else {
+            print("[ViewModel] Skipping reroute: no active navigation destination")
+            return
+        }
+        guard let userCoord = navSession.userLocation?.coordinate else {
+            print("[ViewModel] Skipping reroute: no GPS coordinate available")
+            return
+        }
+
+        // Cancel previous reroute task (Strategy B: cancel/supersede older request)
+        rerouteTask?.cancel()
+        rerouteRequestGeneration &+= 1
+
+        let capturedSessionGen = navSession.sessionGeneration
+        let capturedRerouteGen = rerouteRequestGeneration
+        let costing = valhallaCosting(for: transportMode)
+
+        navSession.setRerouting(true)
+        print("[ViewModel] 🔄 Rerouting session \(capturedSessionGen) (request \(capturedRerouteGen)) to \(dest.name ?? "destination")...")
+
+        let currentTask = Task { () throws -> NavRoute in
+            try await routing.calculateRoute(
+                from: userCoord,
+                to: dest.coordinate,
+                costing: costing
+            )
+        }
+        rerouteTask = Task {
+            _ = try? await currentTask.value
+        }
+
+        do {
+            let newRoute = try await currentTask.value
+
+            // Strict validations:
+            guard !Task.isCancelled else {
+                print("[ViewModel] Reroute task cancelled")
+                return
+            }
+            guard self.navSession.state == .navigating else {
+                print("[ViewModel] Discarding reroute: navigation is no longer active")
+                return
+            }
+            guard self.navSession.sessionGeneration == capturedSessionGen else {
+                print("[ViewModel] Discarding reroute from obsolete session (\(capturedSessionGen) != \(self.navSession.sessionGeneration))")
+                return
+            }
+            guard self.rerouteRequestGeneration == capturedRerouteGen else {
+                print("[ViewModel] Discarding superseded reroute request (\(capturedRerouteGen) != \(self.rerouteRequestGeneration))")
+                return
+            }
+
+            // Atomically replace the active route in the current session
+            self.navSession.replaceActiveRoute(newRoute)
+            print("[ViewModel] ✅ Reroute committed successfully — \(newRoute.formattedDistance), \(newRoute.steps.count) steps")
+        } catch {
+            guard !Task.isCancelled,
+                  self.navSession.sessionGeneration == capturedSessionGen,
+                  self.rerouteRequestGeneration == capturedRerouteGen else {
+                return
+            }
+            self.navSession.setRerouting(false)
+            print("[ViewModel] ⚠️ Reroute failed: \(error.localizedDescription). Preserving existing active route.")
         }
     }
 
@@ -136,21 +239,61 @@ public final class NavigationViewModel: ObservableObject {
 
     public func startNavigation() {
         guard let route = navSession.activeRoute else { return }
-        navSession.startNavigation(route: route)
+
+        // Cancel any pending preview route calculation and invalidate old preview requests
+        routeCalculationTask?.cancel()
+        routeCalculationTask = nil
+        routeRequestGeneration &+= 1
+
+        // Freeze active destination from UI selection or route coordinate
+        let destination: NavigationDestination
+        if let place = selectedDestination {
+            destination = NavigationDestination(
+                coordinate: place.location.coordinate,
+                name: place.name,
+                placeID: place.placeID
+            )
+        } else if let lastCoord = route.coordinates.last {
+            destination = NavigationDestination(
+                coordinate: lastCoord,
+                name: selectedPrediction?.structuredFormatting?.mainText,
+                placeID: selectedPrediction?.placeID
+            )
+        } else {
+            destination = NavigationDestination(
+                coordinate: kCLLocationCoordinate2DInvalid
+            )
+        }
+
+        navSession.startNavigation(route: route, destination: destination)
     }
 
     public func stopNavigation() {
+        // Cancel all pending route and reroute tasks
+        routeCalculationTask?.cancel()
+        routeCalculationTask = nil
+        routeRequestGeneration &+= 1
+
+        rerouteTask?.cancel()
+        rerouteTask = nil
+        rerouteRequestGeneration &+= 1
+
         navSession.stopNavigation()
         navSession.clearRoute()
         selectedDestination = nil
         selectedPrediction  = nil
+        isCalculatingRoute  = false
+
         let end = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
         bleManager.sendNavigationPacket(end)
     }
 
     public func recalculateForTransportMode() {
-        guard let dest = selectedDestination?.location.coordinate else { return }
-        Task { await calculateRoute(to: dest) }
+        if navSession.state == .navigating {
+            Task { await recalculateCurrentRoute() }
+        } else if let dest = selectedDestination?.location.coordinate {
+            Task { await calculateRoute(to: dest) }
+        }
     }
 
     // MARK: - Helpers

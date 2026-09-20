@@ -115,6 +115,7 @@ public struct MapViewContainer: UIViewRepresentable {
         private let routeLayerID  = "route-layer"
         private let arrowLayerID  = "route-arrows"
         private var destinationAnnotation: MLNPointAnnotation?
+        private var lastDestinationCoord: CLLocationCoordinate2D?
 
         // Track last drawn coords to avoid redundant redraws.
         // Use coordinate count + first/last coords as a lightweight hash.
@@ -187,10 +188,28 @@ public struct MapViewContainer: UIViewRepresentable {
         // MARK: - Destination Annotation
 
         func updateDestination(_ coord: CLLocationCoordinate2D?, on mapView: MLNMapView) {
+            // Avoid recreating annotation if destination coordinate has not changed
+            let isSame: Bool
+            switch (lastDestinationCoord, coord) {
+            case (.none, .none):
+                isSame = true
+            case let (.some(c1), .some(c2)):
+                isSame = abs(c1.latitude - c2.latitude) < 0.000001 &&
+                         abs(c1.longitude - c2.longitude) < 0.000001
+            default:
+                isSame = false
+            }
+
+            if isSame && (destinationAnnotation != nil || coord == nil) {
+                return
+            }
+
             if let existing = destinationAnnotation {
                 mapView.removeAnnotation(existing)
                 destinationAnnotation = nil
             }
+            lastDestinationCoord = coord
+
             guard let coord = coord else { return }
             let ann        = MLNPointAnnotation()
             ann.coordinate = coord
