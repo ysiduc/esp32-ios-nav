@@ -193,7 +193,7 @@ public final class GoongPlacesHTTPClient: GoongPlacesClientProtocol {
 
     // MARK: - Response Parsing (public & testable)
 
-    public static func parseAutocompleteResponse(_ data: Data) throws -> [GoongRawPrediction] {
+    nonisolated public static func parseAutocompleteResponse(_ data: Data) throws -> [GoongRawPrediction] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw GoongSearchError.decodingError("Invalid JSON root")
         }
@@ -257,7 +257,7 @@ public final class GoongPlacesHTTPClient: GoongPlacesClientProtocol {
         }
     }
 
-    public static func parsePlaceDetailResponse(_ data: Data) throws -> GoongPlace {
+    nonisolated public static func parsePlaceDetailResponse(_ data: Data) throws -> GoongPlace {
         guard let root   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = root["result"] as? [String: Any] else {
             throw GoongSearchError.decodingError("Missing result field")

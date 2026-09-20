@@ -8,6 +8,7 @@ import CoreLocation
 import XCTest
 @testable import ESP32NavApp
 
+@MainActor
 final class SearchRankingTests: XCTestCase {
 
     // MARK: - Normalization
