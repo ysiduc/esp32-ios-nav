@@ -407,7 +407,7 @@ final class RouteGeometryTests: XCTestCase {
 
     @MainActor
     func testNavigationSessionManagerReplaceActiveRoute() {
-        let manager = NavigationSessionManager()
+        let manager = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
 
         let coordsA = [
             CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0),

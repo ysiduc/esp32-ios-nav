@@ -21,26 +21,13 @@ public final class BLEManager: NSObject, ObservableObject {
 
     public override init() {
         super.init()
-        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
-                        NSClassFromString("XCTestCase") != nil
-        #if targetEnvironment(simulator)
-        let enableRestoration = false
-        #else
-        let enableRestoration = !isTesting
-        #endif
-
-        var options: [String: Any] = [
-            CBCentralManagerOptionShowPowerAlertKey: false
-        ]
-        if enableRestoration {
-            options[CBCentralManagerOptionRestoreIdentifierKey] = "ESP32NavCentralManager"
-            options[CBCentralManagerOptionShowPowerAlertKey] = true
-        }
-
         self.centralManager = CBCentralManager(
             delegate: self,
             queue: nil,
-            options: options
+            options: [
+                CBCentralManagerOptionRestoreIdentifierKey: "ESP32NavCentralManager",
+                CBCentralManagerOptionShowPowerAlertKey: true
+            ]
         )
     }
 

@@ -158,24 +158,21 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     private var kalmanTimestamp: Date?
     private let kalmanQ: Double = 3.0 // m/s process noise
 
-    override public init() {
+    public init(requestLocationAuthorizationOnInit: Bool = true) {
         super.init()
-        setupLocationManager()
+        setupLocationManager(requestAuthorization: requestLocationAuthorizationOnInit)
     }
 
     // MARK: - Setup
 
-    private func setupLocationManager() {
+    private func setupLocationManager(requestAuthorization: Bool) {
         locationManager.delegate        = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter  = kCLDistanceFilterNone
         locationManager.headingFilter   = 2.0
         locationManager.activityType    = .automotiveNavigation
         locationManager.pausesLocationUpdatesAutomatically = false
-
-        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
-                        NSClassFromString("XCTestCase") != nil
-        if !isTesting {
+        if requestAuthorization {
             locationManager.requestWhenInUseAuthorization()
         }
     }
