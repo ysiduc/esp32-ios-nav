@@ -21,6 +21,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     public override init() {
         super.init()
+        guard !ProcessInfo.isRunningUnitTests else { return }
         self.centralManager = CBCentralManager(
             delegate: self,
             queue: nil,
@@ -33,7 +34,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Start scanning for ESP32 peripherals
     public func startScanning() {
-        guard centralManager.state == .poweredOn else { return }
+        guard centralManager != nil, centralManager.state == .poweredOn else { return }
         connectionState = .scanning
         discoveredDevices.removeAll()
 
@@ -54,7 +55,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Stop scanning
     public func stopScanning() {
-        centralManager.stopScan()
+        centralManager?.stopScan()
         if connectionState == .scanning {
             connectionState = .disconnected
         }
@@ -66,7 +67,7 @@ public final class BLEManager: NSObject, ObservableObject {
         connectionState = .connecting
         targetPeripheralUUID = peripheral.identifier
         peripheral.delegate = self
-        centralManager.connect(peripheral, options: [
+        centralManager?.connect(peripheral, options: [
             CBConnectPeripheralOptionNotifyOnConnectionKey: true,
             CBConnectPeripheralOptionNotifyOnDisconnectionKey: true
         ])
@@ -80,7 +81,7 @@ public final class BLEManager: NSObject, ObservableObject {
         targetPeripheralUUID = nil
 
         if let p = connectedPeripheral {
-            centralManager.cancelPeripheralConnection(p)
+            centralManager?.cancelPeripheralConnection(p)
         }
         connectionState = .disconnected
     }

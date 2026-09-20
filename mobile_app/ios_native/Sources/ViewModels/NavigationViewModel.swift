@@ -12,10 +12,10 @@ import Foundation
 public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Child Services
-    public let navSession    = NavigationSessionManager()
-    public let searchService = GoongSearchService()
-    public let routing       = ValhallaRoutingService.shared
-    public let bleManager    = BLEManager()
+    public let navSession: NavigationSessionManager
+    public let searchService: GoongSearchService
+    public let routing: RoutingServiceProtocol
+    public let bleManager: BLEManager
     public let rerouteManager: RerouteManager
 
     // MARK: - Published UI State
@@ -47,16 +47,22 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Lifecycle & Concurrency Control
     private var routeRequestGeneration: UInt64 = 0
-    private var rerouteRequestGeneration: UInt64 = 0
     private var routeCalculationTask: Task<NavRoute, Error>?
-    private var rerouteTask: Task<NavRoute, Error>?
 
-    public init(routingService: RoutingServiceProtocol = ValhallaRoutingService.shared) {
-        let reroute = RerouteManager(routingService: routingService, navSession: navSession)
-        self.rerouteManager = reroute
+    public init(
+        routingService: RoutingServiceProtocol = ValhallaRoutingService.shared,
+        navSession: NavigationSessionManager = NavigationSessionManager(requestLocationAuthorizationOnInit: !ProcessInfo.isRunningUnitTests),
+        searchService: GoongSearchService = GoongSearchService(),
+        bleManager: BLEManager = BLEManager()
+    ) {
+        self.navSession = navSession
+        self.searchService = searchService
+        self.routing = routingService
+        self.bleManager = bleManager
+        self.rerouteManager = RerouteManager(routingService: routingService, navSession: navSession)
 
         // Forward filtered physical GPS location to Goong search for proximity-biased results
-        navSession.$filteredLocation
+        self.navSession.$filteredLocation
             .compactMap { $0?.coordinate }
             .sink { [weak self] coord in
                 self?.searchService.userLocation = coord
@@ -64,12 +70,12 @@ public final class NavigationViewModel: ObservableObject {
             .store(in: &cancellables)
 
         // Forward navigation progress → BLE ESP32 display
-        navSession.onProgressUpdate = { [weak self] progress in
+        self.navSession.onProgressUpdate = { [weak self] progress in
             self?.bleManager.sendNavigationPacket(progress)
         }
 
-        // Wire P2 quality-aware off-route decisions directly to RerouteManager
-        navSession.onOffRouteDecision = { [weak self] decision, location in
+        // Wire P2 quality-aware off-route decisions directly to RerouteManager (Single Authoritative Path)
+        self.navSession.onOffRouteDecision = { [weak self] decision, location in
             guard let self = self else { return }
             let costing = self.valhallaCosting(for: self.transportMode)
             self.rerouteManager.handleObservation(
@@ -79,15 +85,8 @@ public final class NavigationViewModel: ObservableObject {
             )
         }
 
-        // Auto-reroute callback fallback
-        navSession.onRerouteNeeded = { [weak self] in
-            Task { @MainActor in
-                await self?.recalculateCurrentRoute()
-            }
-        }
-
         // Handle arrival
-        navSession.onArrived = {
+        self.navSession.onArrived = {
             print("[ViewModel] 🏁 Arrived at destination!")
         }
     }
@@ -231,9 +230,6 @@ public final class NavigationViewModel: ObservableObject {
         routeCalculationTask = nil
         routeRequestGeneration &+= 1
 
-        rerouteTask?.cancel()
-        rerouteTask = nil
-        rerouteRequestGeneration &+= 1
         rerouteManager.cancel()
 
         navSession.stopNavigation()

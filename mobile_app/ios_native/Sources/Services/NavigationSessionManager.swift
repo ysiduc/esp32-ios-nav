@@ -581,7 +581,6 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
 
             if decision.becameConfirmed {
                 print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
-                self.onRerouteNeeded?()
             }
 
             if result.progress.maneuver == .arrive && self.state == .navigating {

@@ -14,10 +14,13 @@ public enum RerouteReason: String, Sendable, Equatable {
 @MainActor
 public final class RerouteManager: ObservableObject {
 
+    public typealias NowProvider = @Sendable () -> Date
+
     // MARK: - Dependencies
 
     public let routingService: RoutingServiceProtocol
     public weak var navSession: NavigationSessionManager?
+    private let now: NowProvider
 
     // MARK: - Published State
 
@@ -43,10 +46,12 @@ public final class RerouteManager: ObservableObject {
 
     public init(
         routingService: RoutingServiceProtocol,
-        navSession: NavigationSessionManager? = nil
+        navSession: NavigationSessionManager? = nil,
+        now: @escaping NowProvider = { Date() }
     ) {
         self.routingService = routingService
         self.navSession = navSession
+        self.now = now
     }
 
     // MARK: - Observation Handling (Called on each location pipeline decision)
@@ -55,13 +60,15 @@ public final class RerouteManager: ObservableObject {
         location: CLLocation,
         decision: OffRouteDecision,
         costing: String = "motorcycle",
-        currentTime: Date = Date()
+        currentTime: Date? = nil
     ) {
+        let obsTime = currentTime ?? now()
+
         // 1. Recovery handling: if user returned to route, cancel pending off-route reroute
         if decision.recovered {
             if isRerouting && currentReason == .offRoute {
                 print("[RerouteManager] User recovered to route before reroute completed — cancelling in-flight request")
-                cancelInFlightReroute()
+                invalidateActiveRequest()
             }
             failureCount = 0
             nextEligibleRerouteAt = nil
@@ -76,14 +83,14 @@ public final class RerouteManager: ObservableObject {
             return
         }
 
-        // Check backoff eligibility
-        if let nextAt = nextEligibleRerouteAt, currentTime < nextAt {
+        // Check backoff eligibility against observation time
+        if let nextAt = nextEligibleRerouteAt, obsTime < nextAt {
             return
         }
 
-        // Check post-success stabilization window
+        // Check post-success stabilization window against observation time
         if let lastCommitted = lastCommittedAt,
-           currentTime.timeIntervalSince(lastCommitted) < postSuccessStabilizationSeconds {
+           obsTime.timeIntervalSince(lastCommitted) < postSuccessStabilizationSeconds {
             return
         }
 
@@ -91,8 +98,7 @@ public final class RerouteManager: ObservableObject {
         startReroute(
             reason: .offRoute,
             origin: location.coordinate,
-            costing: costing,
-            currentTime: currentTime
+            costing: costing
         )
     }
 
@@ -101,7 +107,7 @@ public final class RerouteManager: ObservableObject {
     public func requestTransportModeReroute(
         costing: String,
         origin: CLLocationCoordinate2D? = nil,
-        currentTime: Date = Date()
+        currentTime: Date? = nil
     ) {
         guard let session = navSession, session.state == .navigating else { return }
         guard let resolvedOrigin = origin ?? session.filteredLocation?.coordinate ?? session.userLocation?.coordinate else {
@@ -111,7 +117,7 @@ public final class RerouteManager: ObservableObject {
 
         // User action supersedes any in-flight off-route reroute
         if isRerouting {
-            cancelInFlightReroute()
+            invalidateActiveRequest()
         }
 
         // Transport mode change bypasses off-route backoff delay
@@ -120,8 +126,7 @@ public final class RerouteManager: ObservableObject {
         startReroute(
             reason: .transportModeChanged,
             origin: resolvedOrigin,
-            costing: costing,
-            currentTime: currentTime
+            costing: costing
         )
     }
 
@@ -130,8 +135,7 @@ public final class RerouteManager: ObservableObject {
     public func startReroute(
         reason: RerouteReason,
         origin: CLLocationCoordinate2D,
-        costing: String,
-        currentTime: Date = Date()
+        costing: String
     ) {
         guard let session = navSession, session.state == .navigating else {
             print("[RerouteManager] Skipping reroute: navigation session not active")
@@ -142,9 +146,10 @@ public final class RerouteManager: ObservableObject {
             return
         }
 
-        // Ensure any previous task is cancelled
-        cancelInFlightReroute()
+        // Invalidate any previous task before starting a new one
+        invalidateActiveRequest()
 
+        // Allocate a new request generation and capture state
         rerouteRequestGeneration &+= 1
         let capturedRerouteGen = rerouteRequestGeneration
         let capturedSessionGen = session.sessionGeneration
@@ -197,19 +202,24 @@ public final class RerouteManager: ObservableObject {
                 // Successful commit: atomically replace active route
                 s.replaceActiveRoute(newRoute)
 
+                let commitTime = self.now()
                 self.failureCount = 0
                 self.nextEligibleRerouteAt = nil
-                self.lastCommittedAt = currentTime
+                self.lastCommittedAt = commitTime
                 self.isRerouting = false
                 self.currentReason = nil
                 self.activeTask = nil
 
-                print("[RerouteManager] ✅ Reroute committed successfully — \(newRoute.formattedDistance), \(newRoute.steps.count) steps")
+                print("[RerouteManager] ✅ Reroute committed successfully at \(commitTime) — \(newRoute.formattedDistance), \(newRoute.steps.count) steps")
             } catch {
+                // Distinguish cancellation from actual routing failure
                 guard !Task.isCancelled,
+                      !(error is CancellationError),
+                      !((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled),
                       let s = self.navSession,
                       s.sessionGeneration == capturedSessionGen,
                       self.rerouteRequestGeneration == capturedRerouteGen else {
+                    // Cancelled, obsolete session, or superseded request — NOT a failure!
                     return
                 }
 
@@ -222,8 +232,9 @@ public final class RerouteManager: ObservableObject {
                     self.failureCount += 1
                     let delayIndex = min(self.failureCount - 1, self.backoffDelays.count - 1)
                     let delay = self.backoffDelays[delayIndex]
-                    self.nextEligibleRerouteAt = currentTime.addingTimeInterval(delay)
-                    print("[RerouteManager] ⚠️ Off-route reroute failed (attempt \(self.failureCount)). Next retry in \(delay)s at \(self.nextEligibleRerouteAt!)")
+                    let failureCompletionTime = self.now()
+                    self.nextEligibleRerouteAt = failureCompletionTime.addingTimeInterval(delay)
+                    print("[RerouteManager] ⚠️ Off-route reroute failed at \(failureCompletionTime) (attempt \(self.failureCount)). Next retry in \(delay)s at \(self.nextEligibleRerouteAt!)")
                 } else {
                     print("[RerouteManager] ⚠️ Transport mode reroute failed: \(error.localizedDescription)")
                 }
@@ -234,19 +245,18 @@ public final class RerouteManager: ObservableObject {
     // MARK: - Lifecycle Cancellation
 
     public func cancel() {
-        cancelInFlightReroute()
+        invalidateActiveRequest()
         failureCount = 0
         nextEligibleRerouteAt = nil
         lastCommittedAt = nil
-        currentReason = nil
-        rerouteRequestGeneration &+= 1
-        navSession?.setRerouting(false)
     }
 
-    private func cancelInFlightReroute() {
+    private func invalidateActiveRequest() {
         activeTask?.cancel()
         activeTask = nil
+        rerouteRequestGeneration &+= 1
         isRerouting = false
+        currentReason = nil
         navSession?.setRerouting(false)
     }
 }

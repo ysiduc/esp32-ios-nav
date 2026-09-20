@@ -120,17 +120,18 @@ let enterThreshold = max(baseLateralThresholdMeters, obs.horizontalAccuracyMeter
 ### Exact Constants Summary Table (Section 58 Compliance):
 | Parameter | Value | Unit | Role |
 | :--- | :--- | :--- | :--- |
-| `baseLateralThresholdMeters` | `15.0` | meters | Minimum lateral deviation required to suspect off-route |
-| `accuracyMultiplier` | `1.2` | ratio | Multiplier applied to `horizontalAccuracy` ($T_{\text{enter}} = \max(15.0, \text{acc} \times 1.2)$) |
-| `recoveryLateralThresholdMeters` | `10.0` | meters | Maximum lateral distance required to qualify for recovery |
-| `movingConfirmationSeconds` | `2.5` | seconds | Temporal dwell required for normal moving vehicle ($v \ge 1.0\text{ m/s}$) |
-| `courseDivergenceConfirmationSeconds` | `1.5` | seconds | Accelerated temporal dwell when course diverges $\ge 45^\circ$ ($v \ge 3.0\text{ m/s}$) |
-| `stationaryConfirmationSeconds` | `5.0` | seconds | Conservative temporal dwell when stationary or drifting ($v < 1.0\text{ m/s}$) |
-| `strongDeviationConfirmationSeconds` | `1.0` | seconds | Temporal dwell for large physical departures ($d \ge 2 \times T_{\text{enter}}$) |
-| `recoveryConfirmationSeconds` | `1.0` | seconds | Temporal persistence required below 10.0m before confirming recovery |
-| `courseDivergenceThresholdDegrees` | `45.0` | degrees | Angular divergence threshold between travel course and route bearing |
-| `minSpeedForCourseMetersPerSec` | `3.0` | m/s | Minimum speed (~10.8 km/h) before travel course is considered reliable |
-| `strongLateralDeviationMultiplier` | `2.0` | ratio | Multiplier for strong deviation ($d \ge 2 \times T_{\text{enter}}$, min 30.0m) |
+| `baseEnterThresholdMeters` | `15.0` | meters | Minimum lateral deviation required to suspect off-route under good GPS |
+| `accuracyMultiplier` | `1.2` | ratio | Multiplier applied to `horizontalAccuracy`: $T_{\text{enter}} = \max(15.0, \text{acc} \times 1.2)$ |
+| `recoveryThresholdFormula` | $\min(10.0, T_{\text{enter}} \times 0.65)$ | meters | Dynamic recovery threshold ($9.75\text{m}$ for $T_{\text{enter}}=15.0\text{m}$) |
+| `standardDwellSeconds` | `2.5` | seconds | Temporal dwell for moving vehicle ($v \ge 3.0\text{ m/s}$) |
+| `courseDivergenceDwellSeconds` | `1.5` | seconds | Accelerated temporal dwell when course diverges $\ge 45^\circ$ ($v \ge 3.0\text{ m/s}$) |
+| `stationaryDwellSeconds` | `5.0` | seconds | Conservative temporal dwell when stationary/low-speed ($v < 3.0\text{ m/s}$) |
+| `strongDeviationDwellSeconds` | `1.0` | seconds | Accelerated dwell for large physical departures ($d \ge 40.0\text{m}$, $\text{acc} \le 15.0\text{m}$) |
+| `strongDeviationThresholdMeters` | `40.0` | meters | Lateral threshold for strong deviation fast-tracking |
+| `strongDeviationMaxAccuracyMeters` | `15.0` | meters | Maximum allowable horizontal accuracy for strong deviation fast-tracking |
+| `recoveryDwellSeconds` | `1.0` | seconds | Temporal persistence required below recovery threshold before confirming recovery |
+| `courseMismatchAngleDegrees` | `45.0` | degrees | Angular divergence threshold between travel course and route bearing |
+| `minSpeedForCourseMetersPerSecond` | `3.0` | m/s | Minimum speed (~10.8 km/h) before travel course is considered reliable |
 | `backoffDelays` | `[2.0, 4.0, 8.0, 15.0]` | seconds | Bounded retry delays after consecutive routing request failures |
 | Maximum Backoff | `15.0` | seconds | Maximum upper cap on retry backoff delay |
 | `postSuccessStabilizationSeconds` | `2.0` | seconds | Stabilization window following Route B installation |
@@ -156,10 +157,10 @@ Confirmation occurs when:
 $$\Delta t = \text{obs.timestamp} - \text{suspectStartedAt} \ge D_{\text{required}}$$
 
 ### Required Dwell Durations ($D_{\text{required}}$):
-1. **Normal Moving**: `2.5` seconds ($v \ge 1.0\text{m/s}$).
+1. **Normal Moving**: `2.5` seconds ($v \ge 3.0\text{ m/s}$ / ~10.8 km/h).
 2. **Moving with Course Divergence**: `1.5` seconds ($v \ge 3.0\text{m/s}$ and angular difference $\ge 45^\circ$).
-3. **Stationary / Low Speed**: `5.0` seconds ($v < 1.0\text{m/s}$). Prevents false alarms due to GPS drift at intersections.
-4. **Strong Physical Deviation**: `1.0` second ($d \ge 2 \times T_{\text{enter}}$). Confirms rapid physical departures while preventing single-spike triggers.
+3. **Stationary / Low Speed**: `5.0` seconds ($v < 3.0\text{ m/s}$). Prevents false alarms due to GPS drift at intersections or traffic lights.
+4. **Strong Physical Deviation**: `1.0` second ($d \ge 40.0\text{m}$ with $\text{acc} \le 15.0\text{m}$). Confirms rapid physical departures while preventing single-spike triggers.
 
 ---
 
@@ -180,8 +181,8 @@ $$\Delta t = \text{obs.timestamp} - \text{suspectStartedAt} \ge D_{\text{require
 
 To prevent oscillation around threshold boundaries (e.g. 14m <-> 16m), asymmetric thresholds and recovery persistence are enforced:
 - **Entry Threshold**: $T_{\text{enter}} = \max(15.0\text{m}, \text{acc} \times 1.2) \ge 15.0\text{m}$.
-- **Recovery Threshold**: $T_{\text{recovery}} = 10.0\text{m}$.
-- **Recovery Persistence**: Must remain $\le 10.0\text{m}$ for at least `1.0` second (`recoveryConfirmationSeconds = 1.0`) before transitioning from `.confirmed` or `.suspected` back to `.onRoute`.
+- **Recovery Threshold**: $T_{\text{recovery}} = \min(10.0\text{m}, T_{\text{enter}} \times 0.65) = 9.75\text{m}$ at base.
+- **Recovery Persistence**: Must remain below $T_{\text{recovery}}$ for at least `1.0` second (`recoveryDwellSeconds = 1.0`) before transitioning back to `.onRoute`.
 
 ---
 
@@ -362,3 +363,52 @@ With Phase P2 complete, the navigation session maintains a robust off-route dete
 - Unit test suite expanded to 32 deterministic tests (12 geometry + 10 detector + 10 reroute).
 - All P0 and P1 invariants (session generation, route generation, frozen destination, 16-byte BLE packet protocol) remain intact.
 - The codebase is clean, verified in CI, and fully ready for Phase P3 (Search improvements).
+
+
+---
+
+## 21. P2.1 Reviewer Corrections
+
+Phase P2.1 addresses crucial integration and lifecycle edge cases identified during reviewer audit:
+
+### 1. Elimination of Duplicate Reroute Triggering:
+- **Problem**: When off-route became confirmed, `NavigationSessionManager` simultaneously fired both `onOffRouteDecision` and legacy `onRerouteNeeded`. `NavigationViewModel` responded to `onOffRouteDecision` by starting Request #1 in `RerouteManager`, while `onRerouteNeeded` immediately invoked `recalculateCurrentRoute()`, cancelling Request #1 and starting Request #2.
+- **Correction**: Removed `onRerouteNeeded` invocation from `NavigationSessionManager` on confirmed off-route. Removed `navSession.onRerouteNeeded` listener from `NavigationViewModel`. There is now exactly ONE authoritative path for automatic off-route rerouting:
+  `NavigationSessionManager -> onOffRouteDecision -> RerouteManager.handleObservation`
+- **Integration Test Added**: `testProductionCallbackIntegrationSingleFlight` verifies that a confirmed decision causes exactly one call to `calculateRoute()`.
+
+### 2. Elimination of Fake Routing Failures on Cancellation:
+- **Problem**: When a user returned to route or stopped navigation while an off-route reroute was in flight, the cancelled routing task threw `CancellationError`. The async catch block did not distinguish cancellation from network/Valhalla failures, resulting in an erroneous increment to `failureCount` and scheduling a phantom backoff timer even after recovery.
+- **Correction**:
+  - `CancellationError` and `NSURLErrorCancelled` are explicitly checked in the catch block and returned immediately without mutating `failureCount` or `nextEligibleRerouteAt`.
+  - Authoritative cancellation via `invalidateActiveRequest()` increments `rerouteRequestGeneration`, instantly invalidating any late unwinding catch blocks.
+- **Unit Tests Added/Strengthened**:
+  - `testRecoveryCancelsInFlightOffRouteRequestWithoutFakeFailure`: Verifies that after recovery cancellation unwinds, `failureCount == 0`, `nextEligibleRerouteAt == nil`, `currentReason == nil`, and `isRerouting == false`.
+  - `testTransportSupersessionDoesNotCountAsFailure`: Verifies that cancelling an in-flight off-route request when switching transport mode does not increment failure count.
+  - `testCancelDoesNotRecordFailureAfterUnwind`: Verifies that explicit `cancel()` leaves clean state after async task completion.
+
+### 3. Anchoring Retry Backoff to Failure Completion Time:
+- **Problem**: Failure backoff delay was previously calculated as `currentTime.addingTimeInterval(delay)`, where `currentTime` was the timestamp when the request started. On slow networks (e.g. 6s timeout with 2s backoff), the scheduled backoff was already 4 seconds in the past when the failure occurred, allowing immediate retry storms.
+- **Correction**: Backoff calculation now uses `failureCompletionTime = self.now()`. Retry delay is strictly measured from the moment of request failure:
+  `nextEligibleRerouteAt = failureCompletionTime.addingTimeInterval(delay)`
+- **Unit Test Added**: `testFailureBackoffBeginsAtFailureCompletionTimeNotRequestStart` verifies with simulated latency that a failure at $t=106$ with 2s backoff schedules retry for $t=108$, rejecting observations at $t=107.9$ and retrying at $t=108.1$.
+
+### 4. Anchoring Post-Success Stabilization to Route B Commit Time:
+- **Problem**: `lastCommittedAt` was previously recorded as the request start time. If route computation took longer than the 2.0s stabilization window, stabilization expired before the new route was installed.
+- **Correction**: `lastCommittedAt` is now recorded as `self.now()` at the exact moment `navSession.replaceActiveRoute(newRoute)` commits.
+- **Unit Test Added**: `testSuccessStabilizationBeginsAtCommitTimeNotRequestStart` verifies that Route B committed at $t=205$ suppresses new reroutes until $t=207$.
+
+### 5. Injected Testable Clock (`NowProvider`):
+- Introduced `public typealias NowProvider = @Sendable () -> Date` into `RerouteManager` (defaulting to `{ Date() }`).
+- Enables unit tests to advance simulated time deterministically without real multi-second sleeps.
+
+### 6. Cleaned Legacy ViewModel Reroute State:
+- Removed unused legacy properties `rerouteTask` and `rerouteRequestGeneration` from `NavigationViewModel`.
+- `NavigationViewModel.stopNavigation()` now delegates reroute cancellation solely to `rerouteManager.cancel()`.
+- Added test-safe constructor dependency injection to `NavigationViewModel` for unit test isolation.
+
+### 7. Documentation Accuracy Synchronized with Implementation:
+- Corrected normal moving speed threshold description to $v \ge 3.0\text{ m/s}$ (~10.8 km/h).
+- Corrected stationary/drift dwell threshold description to $v < 3.0\text{ m/s}$.
+- Corrected strong deviation description to $d \ge 40.0\text{m}$ with horizontal accuracy $\le 15.0\text{m}$.
+- Corrected recovery threshold formula to $\min(10.0\text{m}, T_{\text{enter}} \times 0.65) = 9.75\text{m}$ at base.
