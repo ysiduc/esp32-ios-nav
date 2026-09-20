@@ -162,7 +162,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
     // MARK: - 4. Stale RouteSet Response Discarded
 
-    func testStaleRouteSetResponse_IsDiscarded() async {
+    func testStaleRouteSetResponse_IsDiscarded() async throws {
         // Slow request 1
         let service = ControlledMockRoutingService()
         let vm = NavigationViewModel(
@@ -177,9 +177,21 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
         // Start request 1 (async)
         let t1 = Task { await vm.calculateRoute(to: dest1) }
+        var waitCount = 0
+        while service.pendingCount < 1 && waitCount < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            waitCount += 1
+        }
+        XCTAssertEqual(service.pendingCount, 1)
 
         // Immediately start request 2 which supersedes request 1
         let t2 = Task { await vm.calculateRoute(to: dest2) }
+        waitCount = 0
+        while service.pendingCount < 2 && waitCount < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            waitCount += 1
+        }
+        XCTAssertEqual(service.pendingCount, 2)
 
         // Resume request 2 first with fast result
         let fastSet = RouteSet(candidates: [candidate1])
@@ -245,6 +257,7 @@ final class ControlledMockRoutingService: RoutingServiceProtocol {
         let continuation: CheckedContinuation<RouteSet, Error>
     }
     private var pendings: [Pending] = []
+    var pendingCount: Int { pendings.count }
 
     func resume(destination: CLLocationCoordinate2D, with routeSet: RouteSet) {
         if let idx = pendings.firstIndex(where: { abs($0.destination.latitude - destination.latitude) < 1e-5 }) {
