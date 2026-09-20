@@ -309,7 +309,7 @@ Native unit testing suite in `mobile_app/ios_native/Tests/ESP32NavAppTests/`:
 9. `testDetectorResetClearsAllSuspicionAndState`: Calling `reset()` clears suspect timestamps and returns state to `.onRoute`.
 10. `testStrongDeviationFasterConfirmation`: 40m deviation (>2x threshold) at 6 m/s confirms after 1.1s.
 
-### `RerouteManagerTests.swift` (10 tests, 10 passed):
+### `RerouteManagerTests.swift` (15 tests, 15 passed):
 1. `testSingleInFlightRequestGuarantee`: Multiple rapid off-route observations while request is in flight result in exactly 1 call.
 2. `testBoundedBackoffRetryAfterFailure`: Failed attempt schedules retry in 2.0s; observation at t=1.0s is rejected; observation at t=2.1s triggers attempt 2 without requiring `.onRoute` transition.
 3. `testRetryUsesFreshPhysicalOrigin`: Attempt 1 uses origin A (10.001, 106.001); attempt 2 after movement uses origin B (10.003, 106.004).
@@ -318,27 +318,34 @@ Native unit testing suite in `mobile_app/ios_native/Tests/ESP32NavAppTests/`:
 6. `testStaleResponseFromObsoleteSessionDiscarded`: Starting Session B while Session A reroute is in flight discards late Session A response.
 7. `testActiveRouteRevisionRaceDiscardsSupersededReroute`: Route C committed during Route B computation causes Route B to be safely discarded.
 8. `testSuccessfulAtomicRouteBReplacement`: Route B replaces Route A atomically; `activeRouteGeneration` increments; destination and session preserved.
-9. `testRecoveryCancelsInFlightOffRouteRequest`: Vehicle returning to route while off-route request is in flight cancels request.
+9. `testRecoveryCancelsInFlightOffRouteRequestWithoutFakeFailure`: Returning to route while off-route request is pending cancels request cleanly without counting as failure or scheduling backoff (`failureCount == 0`, `nextEligibleRerouteAt == nil`, `currentReason == nil`, `isRerouting == false`).
 10. `testTransportModeChangeSupersedesAndIgnoresBackoff`: Transport mode change cancels off-route request and bypasses failure backoff.
+11. `testFailureBackoffBeginsAtFailureCompletionTimeNotRequestStart`: Failure at t=106 after 50ms latency with 2.0s backoff sets `nextEligibleRerouteAt` to t=108.0 (not t=102.0). Observation at t=107.9 rejected, observation at t=108.1 accepted.
+12. `testSuccessStabilizationBeginsAtCommitTimeNotRequestStart`: Route B commit at t=205 after 50ms latency sets `lastCommittedAt` to t=205.0. With 2.0s stabilization window, observation at t=206.0 discarded, observation at t=207.5 accepted.
+13. `testProductionCallbackIntegrationSingleFlight`: Integration test with real `NavigationViewModel` ensuring a confirmed off-route decision triggers exactly ONE `calculateRoute` request without duplicate triggering from `onRerouteNeeded`.
+14. `testTransportSupersessionDoesNotCountAsFailure`: Transport mode change cancels in-flight off-route request as cancellation (not failure), does not increment `failureCount`, does not schedule backoff, and commits Route B with new costing.
+15. `testCancelDoesNotRecordFailureAfterUnwind`: Explicit `cancel()` unwinds without incrementing `failureCount` or setting backoff.
+
 
 ---
 
 ## 18. GitHub Actions Evidence
 
-- **Baseline Commit**: `e00f13bdb71162aa7a10ab1258f899c1c9c130cc`
-- **Verified Implementation & Test Commit**: `841de77fa351e79250d01866566c3b7e1c4c8825`
-- **Verified GitHub Actions Run ID**: `35523209459`
+- **Baseline Commit**: `a98c8fdca511bf787cecb9158d7ff4c9ae49a124`
+- **Verified Implementation & Test Commit**: `ec7ed1b8026779e51c8e104f7bdfbe661f0e8fef`
+- **Verified GitHub Actions Run ID**: `35525166373`
 
 ### Test & Build Execution Matrix:
 | Job / Suite | Status | Execution Details |
 | :--- | :--- | :--- |
-| `RouteGeometryTests` | **PASS (12/12)** | CI TESTED — 0 failures in 0.111s |
-| `OffRouteDetectorTests` | **PASS (10/10)** | CI TESTED — 0 failures in 0.010s |
-| `RerouteManagerTests` | **PASS (10/10)** | CI TESTED — 0 failures in 2.814s |
-| **Total Unit Tests** | **PASS (32/32)** | **CI TESTED — 0 failures in 2.935s** |
-| `Build Native iOS App` (Release) | **SUCCESS** | CI TESTED (Xcode release compilation in 4m 57s) |
+| `RouteGeometryTests` | **PASS (12/12)** | CI TESTED — 0 failures in 0.123s |
+| `OffRouteDetectorTests` | **PASS (10/10)** | CI TESTED — 0 failures in 0.019s |
+| `RerouteManagerTests` | **PASS (15/15)** | CI TESTED — 0 failures in 8.196s |
+| **Total Unit Tests** | **PASS (37/37)** | **CI TESTED — 0 failures in 8.338s** |
+| `Build Native iOS App` (Release) | **SUCCESS** | CI TESTED (Xcode release compilation in 3m 42s) |
 | `Package Native IPA` | **SUCCESS** | CI TESTED (`ESP32NavApp.ipa`) |
-| `Compile Flutter iOS IPA` | **SUCCESS** | CI TESTED (`Runner.ipa` in 3m 6s) |
+| `Compile Flutter iOS IPA` | **SUCCESS** | CI TESTED (`Runner.ipa` in 3m 31s) |
+
 
 ### Verification Status Classification:
 - Deterministic Geometry & Projection Engine: **CI TESTED**
@@ -360,7 +367,7 @@ Native unit testing suite in `mobile_app/ios_native/Tests/ESP32NavAppTests/`:
 ## 20. P3 Readiness
 
 With Phase P2 complete, the navigation session maintains a robust off-route detector and reroute coordinator:
-- Unit test suite expanded to 32 deterministic tests (12 geometry + 10 detector + 10 reroute).
+- Unit test suite expanded to 37 deterministic tests (12 geometry + 10 detector + 15 reroute).
 - All P0 and P1 invariants (session generation, route generation, frozen destination, 16-byte BLE packet protocol) remain intact.
 - The codebase is clean, verified in CI, and fully ready for Phase P3 (Search improvements).
 
