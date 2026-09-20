@@ -109,6 +109,28 @@ public struct MainMapView: View {
                     .padding(.top, 6)
             }
 
+            // Empty-results feedback
+            if viewModel.isSearchActive
+                && viewModel.searchQuery.count >= 2
+                && !viewModel.searchService.isLoading
+                && viewModel.searchService.predictions.isEmpty
+                && viewModel.searchService.errorMessage == nil {
+                Text("Không tìm thấy địa điểm phù hợp")
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+            }
+
+            // Search error banner
+            if viewModel.isSearchActive, let err = viewModel.searchService.errorMessage {
+                Text(err)
+                    .font(.system(size: 13))
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+            }
+
             // Transport mode chips (visible when a destination is selected)
             if viewModel.navSession.state == .idle || viewModel.navSession.state == .searching {
                 if viewModel.selectedDestination != nil || viewModel.isCalculatingRoute {
@@ -136,26 +158,16 @@ public struct MainMapView: View {
                 .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchActive)
 
             TextField("Tìm kiếm địa điểm…", text: Binding(
-                get: { viewModel.searchService.predictions.isEmpty
-                    ? (viewModel.selectedPrediction?.mainText ?? "")
-                    : viewModel.searchService.predictions.first.map { _ in "" } ?? "" },
-                set: { query in
-                    viewModel.activateSearch()
-                    viewModel.searchService.search(query)
-                }
+                get: { viewModel.searchQuery },
+                set: { viewModel.updateSearchQuery($0) }
             ))
             .font(.system(size: 15))
             .foregroundColor(.white)
             .accentColor(Color(red: 0, green: 0.75, blue: 1.0))
-            .onTapGesture { viewModel.activateSearch() }
+            .onTapGesture { viewModel.beginSearch() }
 
             if viewModel.isSearchActive || viewModel.selectedPrediction != nil {
-                Button(action: {
-                    viewModel.deactivateSearch()
-                    viewModel.navSession.clearRoute()
-                    viewModel.selectedDestination = nil
-                    viewModel.selectedPrediction  = nil
-                }) {
+                Button(action: { viewModel.clearSearch() }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.gray)
                         .font(.system(size: 16))

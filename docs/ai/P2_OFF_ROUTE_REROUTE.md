@@ -332,7 +332,7 @@ Native unit testing suite in `mobile_app/ios_native/Tests/ESP32NavAppTests/`:
 ## 18. GitHub Actions Evidence
 
 - **Baseline Commit**: `a98c8fdca511bf787cecb9158d7ff4c9ae49a124`
-- **Verified Implementation & Test Commit**: `ec7ed1b8026779e51c8e104f7bdfbe661f0e8fef`
+- **Verified Implementation & Test Commit**: `ec7ed1b008c3c125d52e64dd54231034305b1496`
 - **Verified GitHub Actions Run ID**: `35525166373`
 
 ### Test & Build Execution Matrix:

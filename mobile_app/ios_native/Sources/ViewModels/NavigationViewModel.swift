@@ -3,6 +3,13 @@
 //  Main view model — wires GoongSearchService → ValhallaRoutingService → NavigationSessionManager → BLE.
 //  Observes state changes and drives the UI.
 //
+//  Search lifecycle:
+//    beginSearch()           → isSearchActive = true
+//    updateSearchQuery(text) → searchQuery updated; searchService.updateQuery(text) called
+//    selectPrediction(pred)  → destinationSelectionGeneration incremented; Place Detail fetched
+//    clearSearch()           → all pending tasks cancelled; full reset
+//    cancelSearch()          → isSearchActive = false; autocomplete cancelled; searchQuery preserved
+//
 
 import Combine
 import CoreLocation
@@ -27,6 +34,10 @@ public final class NavigationViewModel: ObservableObject {
     @Published public var selectedDestination: GoongPlace? = nil
     @Published public var transportMode: String = "motorcycle" // "motorcycle" | "auto" | "bicycle" | "pedestrian"
 
+    /// Authoritative source-of-truth for the text shown in the search bar.
+    /// Views must bind to this; never derive from predictions or selectedPrediction.
+    @Published public var searchQuery: String = ""
+
     // Convenience mirrors from navSession
     public var state: NavigationState { navSession.state }
     public var activeRoute: NavRoute?  { navSession.activeRoute }
@@ -45,9 +56,13 @@ public final class NavigationViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - Lifecycle & Concurrency Control
+    // MARK: - Lifecycle & Concurrency Control (Route)
     private var routeRequestGeneration: UInt64 = 0
     private var routeCalculationTask: Task<NavRoute, Error>?
+
+    // MARK: - Lifecycle & Concurrency Control (Search/Destination)
+    private var destinationSelectionGeneration: UInt64 = 0
+    private var placeDetailTask: Task<Void, Never>?
 
     public init(
         routingService: RoutingServiceProtocol? = nil,
@@ -98,32 +113,102 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Search Flow
 
-    public func activateSearch() {
+    /// Activate the search bar (keyboard focus / expand UI).
+    /// Does NOT clear existing searchQuery — allows resuming a previous session.
+    public func beginSearch() {
         isSearchActive = true
     }
 
-    public func deactivateSearch() {
-        isSearchActive = false
-        searchService.clear()
+    /// Update the authoritative search query and trigger debounced autocomplete.
+    /// If a destination was already selected, editing the field begins a fresh session:
+    /// clears the old destination, route preview, and invalidates pending tasks.
+    public func updateSearchQuery(_ text: String) {
+        if selectedDestination != nil && text != searchQuery {
+            // User is editing after a selection — start fresh
+            _cancelPendingSelectionTask()
+            _cancelPendingRouteCalculation()
+            selectedDestination = nil
+            selectedPrediction  = nil
+            navSession.clearRoute()
+            searchService.endSearchSession()
+        }
+        searchQuery = text
+        searchService.updateQuery(text)
     }
 
-    /// User selected a Goong autocomplete prediction.
-    /// Fetches Place Detail (lat/lng) then calculates route.
+    /// Dismiss the search UI without clearing the selected destination or query.
+    /// Cancels in-flight autocomplete only (not Place Detail or route calculation).
+    public func cancelSearch() {
+        isSearchActive = false
+        searchService.cancelAutocomplete()
+        searchService.clearPredictions()
+    }
+
+    /// User selected an autocomplete prediction.
+    ///
+    /// Flow:
+    ///   1. Increment `destinationSelectionGeneration` to invalidate any prior selection.
+    ///   2. Set searchQuery to prediction.mainText immediately (search bar shows name).
+    ///   3. Hide autocomplete list (cancel + clear predictions), preserve session token.
+    ///   4. Fetch Place Detail using the current session token.
+    ///   5. On success: set selectedDestination, rotate session token, calculate route.
+    ///   6. On failure: show error; preserve selectedPrediction for retry context.
     public func selectPrediction(_ prediction: GoongPrediction) {
+        _cancelPendingSelectionTask()
+        destinationSelectionGeneration &+= 1
+        let mySelGen = destinationSelectionGeneration
+
+        searchQuery        = prediction.mainText
         selectedPrediction = prediction
         isSearchActive     = false
-        searchService.clear()
 
-        Task {
+        // Hide autocomplete list but preserve token for the upcoming Place Detail call
+        searchService.cancelAutocomplete()
+        searchService.clearPredictions()
+
+        placeDetailTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                let place = try await searchService.getPlaceDetail(placeID: prediction.placeID)
+                let place = try await self.searchService.getPlaceDetail(placeID: prediction.placeID)
+
+                // Generation guard: a newer selection may have superseded this one
+                guard !Task.isCancelled,
+                      self.destinationSelectionGeneration == mySelGen,
+                      self.selectedPrediction?.placeID == prediction.placeID else {
+                    print("[ViewModel] Discarding stale Place Detail (gen \(mySelGen) vs \(self.destinationSelectionGeneration))")
+                    return
+                }
+
                 self.selectedDestination = place
+                // Rotate session token now that Place Detail succeeded
+                self.searchService.endSearchSession()
                 await self.calculateRoute(to: place.location.coordinate)
+
+            } catch is CancellationError {
+                // Superseded by newer selection — silent
             } catch {
+                guard self.destinationSelectionGeneration == mySelGen else { return }
                 self.routeErrorMessage = "Không thể lấy thông tin địa điểm: \(error.localizedDescription)"
                 print("[ViewModel] Place detail error: \(error)")
+                // Preserve selectedPrediction so the user can retry
             }
         }
+    }
+
+    /// Cancel all pending search/route tasks and reset all search state.
+    /// Called when user taps the × button or explicitly cancels the search.
+    public func clearSearch() {
+        _cancelPendingSelectionTask()
+        _cancelPendingRouteCalculation()
+
+        isSearchActive     = false
+        searchQuery        = ""
+        selectedPrediction = nil
+        selectedDestination = nil
+        routeErrorMessage  = nil
+
+        searchService.resetAll()
+        navSession.clearRoute()
     }
 
     // MARK: - Route Calculation
@@ -235,12 +320,14 @@ public final class NavigationViewModel: ObservableObject {
         routeCalculationTask = nil
         routeRequestGeneration &+= 1
 
+        _cancelPendingSelectionTask()
         rerouteManager.cancel()
 
         navSession.stopNavigation()
         navSession.clearRoute()
         selectedDestination = nil
         selectedPrediction  = nil
+        searchQuery         = ""
         isCalculatingRoute  = false
 
         let end = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
@@ -256,7 +343,19 @@ public final class NavigationViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Private Helpers
+
+    private func _cancelPendingSelectionTask() {
+        placeDetailTask?.cancel()
+        placeDetailTask = nil
+        destinationSelectionGeneration &+= 1
+    }
+
+    private func _cancelPendingRouteCalculation() {
+        routeCalculationTask?.cancel()
+        routeCalculationTask = nil
+        routeRequestGeneration &+= 1
+    }
 
     private func valhallaCosting(for mode: String) -> String {
         switch mode {

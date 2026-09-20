@@ -2,28 +2,40 @@
 //  GoongSearchService.swift
 //  Goong Maps REST API — Autocomplete + Place Detail
 //
-//  Endpoints used:
-//    GET https://rsapi.goong.io/Place/AutoComplete
-//      Params: input={query}&api_key={key}&sessiontoken={uuid}&radius=50000&location={lat,lng}
-//    GET https://rsapi.goong.io/Place/Detail
-//      Params: place_id={id}&api_key={key}
+//  Architecture:
+//    - All Goong HTTP calls are delegated to a GoongPlacesClientProtocol (injectable for tests).
+//    - Autocomplete uses a generation counter to discard stale responses from rapid typing.
+//    - Session token is preserved across autocomplete + Place Detail calls for the same
+//      search session and rotated only after a successful Place Detail or full session reset.
+//    - Results are ranked via SearchRanking before being published.
+//
+//  Token lifecycle:
+//    new query typed     → same token (session in progress)
+//    Place Detail called → same token
+//    Place Detail OK     → endSearchSession() → token rotated
+//    cancelSearch()      → token preserved (search may resume)
+//    clearSearch()       → endSearchSession() → token rotated
 //
 //  Documentation: https://docs.goong.io/rest/place/
-//
 
 import CoreLocation
 import Foundation
 
 // MARK: - Goong Data Models
 
-/// A single autocomplete prediction from Goong.
+/// A single autocomplete prediction from Goong (post-ranking).
 public struct GoongPrediction: Identifiable, Sendable {
-    public let id: String           // place_id
+    public let id: String            // == placeID
     public let placeID: String
-    public let mainText: String     // primary name (street number + street)
+    public let mainText: String      // primary name (street number + street)
     public let secondaryText: String // district, city, province
-    public let description: String  // full combined address
+    public let description: String   // full combined address
     public let structuredFormatting: GoongStructuredFormatting
+    public let providerScore: Double?
+    public let providerIndex: Int
+    public let district: String?
+    public let commune: String?
+    public let province: String?
 }
 
 public struct GoongStructuredFormatting: Sendable {
@@ -49,235 +61,210 @@ public struct GoongPlace: Sendable {
     public let types: [String]
 }
 
-// MARK: - GoongSearchService
+// MARK: - Search Errors
 
 public enum GoongSearchError: LocalizedError {
     case invalidURL
-    case networkError(Error)
+    case networkError(URLError)
     case decodingError(String)
     case noResults
 
     public var errorDescription: String? {
         switch self {
-        case .invalidURL:           return "URL không hợp lệ"
-        case .networkError(let e): return "Lỗi mạng: \(e.localizedDescription)"
-        case .decodingError(let m):return "Lỗi đọc dữ liệu: \(m)"
-        case .noResults:           return "Không tìm thấy kết quả"
+        case .invalidURL:             return "URL không hợp lệ"
+        case .networkError(let e):    return "Lỗi mạng: \(e.localizedDescription)"
+        case .decodingError(let m):   return "Lỗi đọc dữ liệu: \(m)"
+        case .noResults:              return "Không tìm thấy kết quả"
         }
     }
 }
+
+// MARK: - Search Service
 
 @MainActor
 public final class GoongSearchService: ObservableObject {
 
     // MARK: - Configuration
-    /// Goong API key (autocomplete + place detail).
-    /// Get your key at: https://account.goong.io/keys
-    private let apiKey = "LyG3pKyU88XZHKpKudhyUoG9jsB5i8twzm8vXfIq"
-    private let baseURL = "https://rsapi.goong.io"
 
-    // Search radius around user location (metres)
-    private let searchRadius: Int = 50_000
-
-    // Session token groups autocomplete + detail calls for billing
-    private var sessionToken: String = UUID().uuidString
+    /// Autocomplete bias radius in **kilometres** (not metres).
+    /// 2000 km covers all of Vietnam including cross-province searches.
+    private let searchRadius: Int = 2_000
+    private let searchLimit:  Int = 10
 
     // MARK: - Published State
+
     @Published public var predictions: [GoongPrediction] = []
     @Published public var isLoading: Bool = false
     @Published public var errorMessage: String?
 
-    // MARK: - Debouncing
-    private var debounceTask: Task<Void, Never>?
-    private let debounceDelay: UInt64 = 300_000_000 // 300ms in nanoseconds
+    // MARK: - Session Token
+    // One token per search session; preserved across autocomplete + detail calls.
+    // Rotated only by endSearchSession() or resetAll().
+    private var sessionToken: String = UUID().uuidString
 
-    // User location for biasing results
+    // MARK: - Autocomplete Concurrency
+
+    /// Monotonically increasing counter — incremented on every new query.
+    /// A response from generation N is discarded if the current generation is N+k.
+    private var autocompleteGeneration: UInt64 = 0
+    private var debounceTask: Task<Void, Never>?
+    private let debounceDelay: UInt64 = 300_000_000 // 300 ms
+
+    // MARK: - User Location (proximity bias)
+
     public var userLocation: CLLocationCoordinate2D?
 
-    private let urlSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 30
-        return URLSession(configuration: config)
-    }()
+    // MARK: - Dependency
 
-    public init() {}
+    private let client: GoongPlacesClientProtocol
+
+    public init(client: GoongPlacesClientProtocol? = nil) {
+        if let injected = client {
+            self.client = injected
+        } else {
+            self.client = GoongPlacesHTTPClient()
+        }
+    }
 
     // MARK: - Autocomplete
 
-    /// Trigger debounced autocomplete search.
-    /// Cancels any in-flight request and waits 300ms before firing.
-    public func search(_ query: String) {
+    /// Update the search query and trigger a debounced autocomplete request.
+    /// Concurrent calls within 300 ms cancel the previous debounce.
+    public func updateQuery(_ query: String) {
+        // Cancel the previous debounce task and invalidate its generation
         debounceTask?.cancel()
         debounceTask = nil
+        autocompleteGeneration &+= 1
+        let myGeneration = autocompleteGeneration
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+
         guard trimmed.count >= 2 else {
-            predictions = []
-            isLoading   = false
+            // Short query: clear results immediately; any in-flight response is stale
+            predictions  = []
+            isLoading    = false
+            errorMessage = nil
             return
         }
+
+        isLoading = true
 
         debounceTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await Task.sleep(nanoseconds: self.debounceDelay)
-                await self.performAutocomplete(trimmed)
+                await self.performAutocomplete(trimmed, generation: myGeneration)
             } catch {
-                // Task cancelled — this is expected on rapid typing
+                // Task cancelled by next keystroke — expected
+                await MainActor.run {
+                    // Only clear loading if still our generation
+                    if self.autocompleteGeneration == myGeneration {
+                        self.isLoading = false
+                    }
+                }
             }
         }
     }
 
-    /// Cancel active search and clear results.
-    public func clear() {
+    /// Cancel debounce + invalidate generation. Does NOT rotate session token.
+    public func cancelAutocomplete() {
         debounceTask?.cancel()
         debounceTask = nil
+        autocompleteGeneration &+= 1
+        isLoading = false
+    }
+
+    /// Clear published prediction/error state. Does NOT rotate session token.
+    public func clearPredictions() {
         predictions  = []
-        isLoading    = false
         errorMessage = nil
-        // Rotate session token after a completed search session
+        isLoading    = false
+    }
+
+    /// Rotate the session token and fully cancel autocomplete + clear results.
+    /// Call after a successful Place Detail fetch or when the user explicitly cancels
+    /// the entire search session.
+    public func endSearchSession() {
+        cancelAutocomplete()
+        clearPredictions()
         sessionToken = UUID().uuidString
     }
 
-    private func performAutocomplete(_ query: String) async {
-        isLoading = true
-        errorMessage = nil
-
-        // Encode query
-        var components = URLComponents(string: "\(baseURL)/Place/AutoComplete")!
-        var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "input",        value: query),
-            URLQueryItem(name: "api_key",      value: apiKey),
-            URLQueryItem(name: "sessiontoken", value: sessionToken),
-            URLQueryItem(name: "radius",       value: "\(searchRadius)"),
-        ]
-
-        // Bias towards user location if available
-        if let loc = userLocation {
-            queryItems.append(URLQueryItem(
-                name: "location",
-                value: String(format: "%.6f,%.6f", loc.latitude, loc.longitude)
-            ))
-        }
-
-        components.queryItems = queryItems
-
-        guard let url = components.url else {
-            isLoading    = false
-            errorMessage = GoongSearchError.invalidURL.localizedDescription
-            return
-        }
-
-        do {
-            let (data, response) = try await urlSession.data(from: url)
-
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw GoongSearchError.networkError(
-                    URLError(.badServerResponse)
-                )
-            }
-
-            let decoded = try parseAutocompleteResponse(data)
-            self.predictions = decoded
-            self.isLoading   = false
-
-        } catch is CancellationError {
-            isLoading = false
-        } catch let err as GoongSearchError {
-            isLoading    = false
-            errorMessage = err.localizedDescription
-            predictions  = []
-        } catch {
-            isLoading    = false
-            errorMessage = error.localizedDescription
-            predictions  = []
-        }
+    /// Full reset: rotate token, clear everything.
+    public func resetAll() {
+        endSearchSession()
     }
 
     // MARK: - Place Detail
 
-    /// Resolve a prediction's `placeID` to a precise `GoongPlace` with lat/lng.
+    /// Resolve a prediction's `placeID` to a `GoongPlace` with lat/lng.
+    /// Uses the current session token — caller must NOT have rotated the token since autocomplete.
     public func getPlaceDetail(placeID: String) async throws -> GoongPlace {
-        var components = URLComponents(string: "\(baseURL)/Place/Detail")!
-        components.queryItems = [
-            URLQueryItem(name: "place_id",     value: placeID),
-            URLQueryItem(name: "api_key",      value: apiKey),
-            URLQueryItem(name: "sessiontoken", value: sessionToken),
-        ]
-
-        guard let url = components.url else {
-            throw GoongSearchError.invalidURL
-        }
-
-        let (data, response) = try await urlSession.data(from: url)
-
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw GoongSearchError.networkError(URLError(.badServerResponse))
-        }
-
-        return try parsePlaceDetailResponse(data)
+        try await client.placeDetail(placeID: placeID, sessionToken: sessionToken)
     }
 
-    // MARK: - JSON Parsing
+    // MARK: - Private
 
-    private func parseAutocompleteResponse(_ data: Data) throws -> [GoongPrediction] {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw GoongSearchError.decodingError("Invalid JSON root")
-        }
+    private func performAutocomplete(_ query: String, generation: UInt64) async {
+        let token    = sessionToken
+        let location = userLocation
 
-        // Goong returns: {"predictions": [...], "status": "OK"}
-        guard let predictions = root["predictions"] as? [[String: Any]] else {
-            // status != OK or empty result
-            return []
-        }
-
-        return predictions.compactMap { p -> GoongPrediction? in
-            guard let placeID = p["place_id"] as? String,
-                  let desc    = p["description"] as? String else { return nil }
-
-            let sf = p["structured_formatting"] as? [String: Any]
-            let mainText      = sf?["main_text"]      as? String ?? desc
-            let secondaryText = sf?["secondary_text"] as? String ?? ""
-
-            return GoongPrediction(
-                id: placeID,
-                placeID: placeID,
-                mainText: mainText,
-                secondaryText: secondaryText,
-                description: desc,
-                structuredFormatting: GoongStructuredFormatting(
-                    mainText: mainText,
-                    secondaryText: secondaryText
-                )
+        do {
+            let raw = try await client.autocomplete(
+                query:        query,
+                location:     location,
+                radius:       searchRadius,
+                limit:        searchLimit,
+                sessionToken: token
             )
+
+            // Generation guard: discard if a newer query has already been issued
+            guard autocompleteGeneration == generation else {
+                print("[Search] Discarding stale autocomplete response (gen \(generation) vs current \(autocompleteGeneration))")
+                return
+            }
+
+            let ranked   = SearchRanking.rank(raw, query: query)
+            let unique   = deduplicated(ranked)
+            predictions  = unique.map(toPrediction)
+            isLoading    = false
+            errorMessage = nil
+
+        } catch is CancellationError {
+            // Debounce cancellation — isLoading cleared by the cancellation handler above
+        } catch {
+            guard autocompleteGeneration == generation else { return }
+            isLoading    = false
+            predictions  = []
+            errorMessage = error.localizedDescription
         }
     }
 
-    private func parsePlaceDetailResponse(_ data: Data) throws -> GoongPlace {
-        guard let root   = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = root["result"] as? [String: Any] else {
-            throw GoongSearchError.decodingError("Missing result field")
-        }
+    // MARK: - Deduplication
 
-        guard let placeID   = result["place_id"]          as? String,
-              let name      = result["name"]               as? String,
-              let address   = result["formatted_address"]  as? String,
-              let geometry  = result["geometry"]           as? [String: Any],
-              let location  = geometry["location"]         as? [String: Any],
-              let lat       = location["lat"]               as? Double,
-              let lng       = location["lng"]               as? Double else {
-            throw GoongSearchError.decodingError("Missing required fields in Place Detail response")
-        }
+    private func deduplicated(_ raw: [GoongRawPrediction]) -> [GoongRawPrediction] {
+        var seen = Set<String>()
+        return raw.filter { seen.insert($0.placeID).inserted }
+    }
 
-        let types = result["types"] as? [String] ?? []
+    // MARK: - Mapping
 
-        return GoongPlace(
-            placeID: placeID,
-            name: name,
-            formattedAddress: address,
-            location: GoongLocation(latitude: lat, longitude: lng),
-            types: types
+    private func toPrediction(_ raw: GoongRawPrediction) -> GoongPrediction {
+        GoongPrediction(
+            id:            raw.placeID,
+            placeID:       raw.placeID,
+            mainText:      raw.mainText,
+            secondaryText: raw.secondaryText,
+            description:   raw.description,
+            structuredFormatting: GoongStructuredFormatting(
+                mainText:      raw.mainText,
+                secondaryText: raw.secondaryText
+            ),
+            providerScore: raw.providerScore,
+            providerIndex: raw.providerIndex,
+            district:      raw.district,
+            commune:       raw.commune,
+            province:      raw.province
         )
     }
 }
