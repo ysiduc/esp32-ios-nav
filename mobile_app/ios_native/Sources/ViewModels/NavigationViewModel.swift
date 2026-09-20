@@ -50,16 +50,21 @@ public final class NavigationViewModel: ObservableObject {
     private var routeCalculationTask: Task<NavRoute, Error>?
 
     public init(
-        routingService: RoutingServiceProtocol = ValhallaRoutingService.shared,
-        navSession: NavigationSessionManager = NavigationSessionManager(requestLocationAuthorizationOnInit: !ProcessInfo.isRunningUnitTests),
-        searchService: GoongSearchService = GoongSearchService(),
-        bleManager: BLEManager = BLEManager()
+        routingService: RoutingServiceProtocol? = nil,
+        navSession: NavigationSessionManager? = nil,
+        searchService: GoongSearchService? = nil,
+        bleManager: BLEManager? = nil
     ) {
-        self.navSession = navSession
-        self.searchService = searchService
-        self.routing = routingService
-        self.bleManager = bleManager
-        self.rerouteManager = RerouteManager(routingService: routingService, navSession: navSession)
+        let session = navSession ?? NavigationSessionManager(requestLocationAuthorizationOnInit: !ProcessInfo.isRunningUnitTests)
+        let routing = routingService ?? ValhallaRoutingService.shared
+        let search = searchService ?? GoongSearchService()
+        let ble = bleManager ?? BLEManager()
+
+        self.navSession = session
+        self.searchService = search
+        self.routing = routing
+        self.bleManager = ble
+        self.rerouteManager = RerouteManager(routingService: routing, navSession: session)
 
         // Forward filtered physical GPS location to Goong search for proximity-biased results
         self.navSession.$filteredLocation
