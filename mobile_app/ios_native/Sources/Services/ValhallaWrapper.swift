@@ -1,119 +1,19 @@
 //
 //  ValhallaWrapper.swift
-//  Swift interface to the embedded Valhalla C++ routing engine.
-//  Bridges ValhallaEngine (ObjC++) to async/await Swift with MapKit fallback.
+//  Swift routing service managing native offline Valhalla and mode-safe Apple MapKit fallback.
 //
 
 import CoreLocation
 import Foundation
 import MapKit
 
-// MARK: - NavigationRoute (rich route model)
+// MARK: - Routing Service Protocol
 
-/// A single decoded navigation step from Valhalla or MapKit.
-public struct NavStep: Sendable {
-    public let coordinate: CLLocationCoordinate2D   // end-point of the step (maneuver point)
-    public let distanceMeters: Double               // distance from this step's start to maneuver
-    public let durationSeconds: Double
-    public let streetName: String
-    public let maneuverType: ManeuverType
-    public let instruction: String
-    public let beginShapeIndex: Int?
-    public let endShapeIndex: Int?
+public protocol RoutingServiceProtocol: Sendable {
+    /// Calculate route candidates (primary + alternatives) based on RoutingRequest.
+    func calculateRoutes(request: RoutingRequest) async throws -> RouteSet
 
-    public init(
-        coordinate: CLLocationCoordinate2D,
-        distanceMeters: Double,
-        durationSeconds: Double,
-        streetName: String,
-        maneuverType: ManeuverType,
-        instruction: String,
-        beginShapeIndex: Int? = nil,
-        endShapeIndex: Int? = nil
-    ) {
-        self.coordinate = coordinate
-        self.distanceMeters = distanceMeters
-        self.durationSeconds = durationSeconds
-        self.streetName = streetName
-        self.maneuverType = maneuverType
-        self.instruction = instruction
-        self.beginShapeIndex = beginShapeIndex
-        self.endShapeIndex = endShapeIndex
-    }
-}
-
-/// Complete navigation route.
-public struct NavRoute: Sendable {
-    public let coordinates: [CLLocationCoordinate2D]  // full polyline
-    public let steps: [NavStep]
-    public let totalDistanceMeters: Double
-    public let totalDurationSeconds: Double
-    public let geometry: RouteGeometry
-
-    public init(
-        coordinates: [CLLocationCoordinate2D],
-        steps: [NavStep],
-        totalDistanceMeters: Double,
-        totalDurationSeconds: Double
-    ) {
-        self.coordinates = coordinates
-        self.steps = steps
-        self.totalDistanceMeters = totalDistanceMeters
-        self.totalDurationSeconds = totalDurationSeconds
-        self.geometry = RouteGeometry(coordinates: coordinates, steps: steps)
-    }
-
-    public init(
-        coordinates: [CLLocationCoordinate2D],
-        steps: [NavStep],
-        totalDistanceMeters: Double,
-        totalDurationSeconds: Double,
-        geometry: RouteGeometry
-    ) {
-        self.coordinates = coordinates
-        self.steps = steps
-        self.totalDistanceMeters = totalDistanceMeters
-        self.totalDurationSeconds = totalDurationSeconds
-        self.geometry = geometry
-    }
-
-    /// Formatted distance string (e.g. "12.3 km")
-    public var formattedDistance: String {
-        if totalDistanceMeters >= 1000 {
-            return String(format: "%.1f km", totalDistanceMeters / 1000)
-        }
-        return "\(Int(totalDistanceMeters)) m"
-    }
-
-    /// Formatted duration string (e.g. "23 phút" or "1h 5m")
-    public var formattedDuration: String {
-        let mins = Int(totalDurationSeconds / 60)
-        if mins >= 60 { return "\(mins / 60)h \(mins % 60)m" }
-        return "\(mins) phút"
-    }
-}
-
-// MARK: - ValhallaRoutingService
-
-public enum ValhallaRoutingError: LocalizedError {
-    case configLoadFailed(String)
-    case noRouteFound(String)
-    case engineUnavailable
-    case decodingFailed(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .configLoadFailed(let m):  return "Lỗi tải cấu hình Valhalla: \(m)"
-        case .noRouteFound(let m):      return "Không tìm được đường: \(m)"
-        case .engineUnavailable:        return "Engine định tuyến chưa sẵn sàng"
-        case .decodingFailed(let m):    return "Lỗi giải mã lộ trình: \(m)"
-        }
-    }
-}
-
-/// Protocol abstracting route calculation for testability and provider substitution.
-@MainActor
-public protocol RoutingServiceProtocol: AnyObject {
+    /// Calculate a single route for a given transport costing (backward-compatible / reroute usage).
     func calculateRoute(
         from origin: CLLocationCoordinate2D,
         to destination: CLLocationCoordinate2D,
@@ -121,161 +21,282 @@ public protocol RoutingServiceProtocol: AnyObject {
     ) async throws -> NavRoute
 }
 
-@MainActor
-public final class ValhallaRoutingService: ObservableObject, RoutingServiceProtocol {
+public extension RoutingServiceProtocol {
+    func calculateRoute(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        costing: String = "motorcycle"
+    ) async throws -> NavRoute {
+        let mode = NavigationTransportMode(costingValue: costing)
+        let profile = RoutingProfile.profile(for: mode)
+        let request = RoutingRequest(
+            origin: origin,
+            destination: destination,
+            profile: profile,
+            requestedAlternatives: 0
+        )
+        let routeSet = try await calculateRoutes(request: request)
+        guard let primary = routeSet.primaryRoute else {
+            throw ValhallaRoutingError.noRouteFound("Không tìm thấy lộ trình phù hợp")
+        }
+        return primary
+    }
 
-    public static let shared = ValhallaRoutingService()
-    private init() { Task { await loadValhalla() } }
+    func calculateRoutes(request: RoutingRequest) async throws -> RouteSet {
+        let route = try await calculateRoute(
+            from: request.origin,
+            to: request.destination,
+            costing: request.profile.valhallaCosting
+        )
+        let candidate = RouteCandidate(
+            id: "route_0",
+            route: route,
+            provider: .valhalla,
+            requestedMode: request.profile.transportMode,
+            profileID: request.profile.id,
+            isPrimary: true,
+            isDegradedFallback: false,
+            label: "Đề xuất"
+        )
+        return RouteSet(candidates: [candidate])
+    }
+}
 
-    // Background queue for blocking Valhalla calls
-    private let routingQueue = DispatchQueue(
-        label: "com.ysiduc.valhalla.routing",
-        qos: .userInitiated
-    )
+// MARK: - Error Definitions
 
-    @Published public private(set) var isLoaded = false
-    @Published public private(set) var loadError: String?
+public enum RoutingErrorCategory: String, Sendable {
+    case engineUnavailable
+    case tileCoverageMissing
+    case noRouteFound
+    case invalidRequest
+    case unknown
+}
 
-    // MARK: - Lifecycle
+public enum ValhallaRoutingError: LocalizedError, Sendable {
+    case configMissing
+    case noRouteFound(String)
+    case decodingFailed(String)
+    case modeUnavailable(String)
 
-    private func loadValhalla() async {
-        let engine = ValhallaEngine.shared()
+    public var errorDescription: String? {
+        switch self {
+        case .configMissing:
+            return "Không tìm thấy file cấu hình Valhalla"
+        case .noRouteFound(let msg):
+            return "Không tìm thấy đường: \(msg)"
+        case .decodingFailed(let msg):
+            return "Lỗi giải mã lộ trình: \(msg)"
+        case .modeUnavailable(let msg):
+            return msg
+        }
+    }
+}
 
-        guard engine.isAvailable else {
-            print("[ValhallaWrapper] STUB mode.")
-            isLoaded = true
+// MARK: - Pure MapKit Mode Mapper
+
+public enum MapKitModeMapper {
+    public struct MappingResult: Sendable, Equatable {
+        public let transportType: MKDirectionsTransportType
+        public let isDegraded: Bool
+        public let degradedReason: String?
+    }
+
+    public static func mapTransportMode(
+        _ mode: NavigationTransportMode,
+        policy: FallbackPolicy
+    ) throws -> MappingResult {
+        switch mode {
+        case .auto:
+            return MappingResult(
+                transportType: .automobile,
+                isDegraded: false,
+                degradedReason: nil
+            )
+        case .pedestrian:
+            return MappingResult(
+                transportType: .walking,
+                isDegraded: false,
+                degradedReason: nil
+            )
+        case .motorcycle:
+            if case .degradedApproximation(let reason) = policy.mapKitCapability {
+                return MappingResult(
+                    transportType: .automobile,
+                    isDegraded: true,
+                    degradedReason: reason
+                )
+            } else {
+                throw ValhallaRoutingError.modeUnavailable("Chế độ xe máy không được hỗ trợ bởi Apple MapKit.")
+            }
+        case .bicycle:
+            if case .degradedApproximation(let reason) = policy.mapKitCapability {
+                return MappingResult(
+                    transportType: .walking,
+                    isDegraded: true,
+                    degradedReason: reason
+                )
+            } else {
+                throw ValhallaRoutingError.modeUnavailable("Chế độ xe đạp không được hỗ trợ bởi Apple MapKit.")
+            }
+        }
+    }
+}
+
+// MARK: - ValhallaWrapper Service
+
+public final class ValhallaWrapper: RoutingServiceProtocol, @unchecked Sendable {
+
+    public static let shared = ValhallaWrapper()
+
+    private let routingQueue = DispatchQueue(label: "com.ysiduc.valhalla.swift", qos: .userInitiated)
+    public private(set) var isLoaded: Bool = false
+
+    private init() {
+        loadConfig()
+    }
+
+    // MARK: - Engine Initialization
+
+    public func loadConfig() {
+        guard let configPath = Bundle.main.path(forResource: "valhalla", ofType: "json") else {
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let docConfig = docsDir.appendingPathComponent("valhalla.json").path
+            if FileManager.default.fileExists(atPath: docConfig) {
+                initEngine(at: docConfig)
+            } else {
+                print("[ValhallaWrapper] valhalla.json not found in Bundle or Documents.")
+            }
             return
         }
+        initEngine(at: configPath)
+    }
 
-        // 1. Locate valhalla_tiles.tar
-        let tilesURL = locateTilesTar()
-        guard let configBaseURL = bundleConfigURL() ?? documentConfigURL() else {
-            loadError = "valhalla.json not found."
-            print("[ValhallaWrapper] ❌ \(loadError!)")
-            return
-        }
-
+    private func initEngine(at path: String) {
         do {
-            // Prepare dynamic valhalla config pointing to actual tile location
-            let activeConfigURL = try prepareActiveConfig(from: configBaseURL, tilesURL: tilesURL)
-            try engine.loadConfig(atPath: activeConfigURL.path)
+            try ValhallaEngine.shared().loadConfig(atPath: path)
             isLoaded = true
-            print("[ValhallaWrapper] ✅ Native Valhalla initialized with tiles: \(tilesURL?.path ?? "none")")
+            print("[ValhallaWrapper] Valhalla initialized with config at: \(path)")
         } catch {
-            loadError = error.localizedDescription
-            print("[ValhallaWrapper] ⚠️ Valhalla tiles not loaded (\(loadError!)). Online fallback ready.")
+            print("[ValhallaWrapper] Failed to load config: \(error.localizedDescription)")
+            isLoaded = false
         }
     }
 
-    private func locateTilesTar() -> URL? {
-        // Check bundle first
-        if let bundleTar = Bundle.main.url(forResource: "valhalla_tiles", withExtension: "tar") {
-            return bundleTar
+    // MARK: - RoutingServiceProtocol Implementation
+
+    public func calculateRoutes(request: RoutingRequest) async throws -> RouteSet {
+        // 1. Try Valhalla native engine if loaded and available
+        if isLoaded && ValhallaEngine.shared().isAvailable {
+            do {
+                let candidates = try await calculateValhallaRoutes(request: request)
+                if !candidates.isEmpty {
+                    let deduped = RouteSet.deduplicate(candidates: candidates)
+                    return RouteSet(candidates: deduped)
+                }
+            } catch {
+                let category = classifyValhallaError(error)
+                print("[ValhallaWrapper] ⚠️ Primary routing failure: provider=Valhalla, mode=\(request.profile.transportMode), category=\(category), details=\(error.localizedDescription). Evaluating fallback...")
+            }
+        } else {
+            print("[ValhallaWrapper] ⚠️ Valhalla offline or not loaded (isLoaded=\(isLoaded)). Evaluating fallback for mode=\(request.profile.transportMode)...)
         }
-        // Check Application Support
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        if let appSupportTar = appSupport?.appendingPathComponent("valhalla_data/valhalla_tiles.tar"),
-           FileManager.default.fileExists(atPath: appSupportTar.path) {
-            return appSupportTar
+
+        // 2. Check fallback capability
+        guard request.profile.fallbackPolicy.allowMapKitFallback else {
+            throw ValhallaRoutingError.modeUnavailable(
+                "Chế độ \(request.profile.transportMode.displayName) không khả dụng khi hệ thống định tuyến ngoại tuyến."
+            )
         }
-        // Check Documents
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        if let docsTar = docs?.appendingPathComponent("valhalla_tiles.tar"),
-           FileManager.default.fileExists(atPath: docsTar.path) {
-            return docsTar
+
+        // 3. Fallback to Apple MapKit MKDirections
+        do {
+            let candidates = try await calculateMapKitRoutes(request: request)
+            let deduped = RouteSet.deduplicate(candidates: candidates)
+            return RouteSet(candidates: deduped)
+        } catch {
+            print("[ValhallaWrapper] ❌ MapKit routing error: \(error.localizedDescription)")
+            throw ValhallaRoutingError.noRouteFound(
+                "Không tìm thấy đường từ cả Valhalla và MapKit: \(error.localizedDescription)"
+            )
         }
-        return nil
     }
 
-    private func prepareActiveConfig(from baseConfigURL: URL, tilesURL: URL?) throws -> URL {
-        let data = try Data(contentsOf: baseConfigURL)
-        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return baseConfigURL
-        }
-
-        if let tiles = tilesURL, var mjolnir = json["mjolnir"] as? [String: Any] {
-            mjolnir["tile_extract"] = tiles.path
-            json["mjolnir"] = mjolnir
-        }
-
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        let activeURL = appSupport.appendingPathComponent("active_valhalla.json")
-        let updatedData = try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted)
-        try updatedData.write(to: activeURL)
-        return activeURL
-    }
-
-    private func bundleConfigURL() -> URL? {
-        Bundle.main.url(forResource: "valhalla", withExtension: "json")
-    }
-
-    private func documentConfigURL() -> URL? {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        return appSupport?.appendingPathComponent("valhalla_data/valhalla.json")
-    }
-
-    // MARK: - Route Calculation
-
-    /// Compute a route with Valhalla native engine as primary, MapKit as fallback.
     public func calculateRoute(
         from origin: CLLocationCoordinate2D,
         to destination: CLLocationCoordinate2D,
         costing: String = "motorcycle"
     ) async throws -> NavRoute {
-
-        // 1. If Valhalla engine is loaded and ready, use offline native routing
-        if isLoaded && ValhallaEngine.shared().isAvailable {
-            do {
-                return try await calculateValhallaRoute(from: origin, to: destination, costing: costing)
-            } catch {
-                print("[ValhallaWrapper] Valhalla routing error: \(error.localizedDescription). Trying MapKit...")
-            }
+        let mode = NavigationTransportMode(costingValue: costing)
+        let profile = RoutingProfile.profile(for: mode)
+        let request = RoutingRequest(
+            origin: origin,
+            destination: destination,
+            profile: profile,
+            requestedAlternatives: 0
+        )
+        let set = try await calculateRoutes(request: request)
+        guard let primary = set.primaryRoute else {
+            throw ValhallaRoutingError.noRouteFound("Không tìm thấy lộ trình phù hợp")
         }
-
-        // 2. Fallback to Apple MapKit MKDirections (Zero cost, high precision in VN)
-        do {
-            return try await calculateMapKitRoute(from: origin, to: destination)
-        } catch {
-            print("[ValhallaWrapper] MapKit routing error: \(error.localizedDescription).")
-            throw ValhallaRoutingError.noRouteFound("Không tìm thấy đường từ cả Valhalla và MapKit: \(error.localizedDescription)")
-        }
+        return primary
     }
 
-    private func calculateValhallaRoute(
-        from origin: CLLocationCoordinate2D,
-        to destination: CLLocationCoordinate2D,
-        costing: String
-    ) async throws -> NavRoute {
+    // MARK: - Valhalla Private Routing
+
+    private func calculateValhallaRoutes(request: RoutingRequest) async throws -> [RouteCandidate] {
+        let jsonString = try ValhallaRequestBuilder.buildRequestJSON(
+            origin: request.origin,
+            destination: request.destination,
+            profile: request.profile,
+            alternates: request.requestedAlternatives
+        )
+
         return try await withCheckedThrowingContinuation { continuation in
             routingQueue.async {
                 do {
-                    let vr = try ValhallaEngine.shared().computeRoute(
-                        fromLat: origin.latitude,
-                        fromLon: origin.longitude,
-                        toLat: destination.latitude,
-                        toLon: destination.longitude,
-                        costing: costing
+                    let result = try ValhallaEngine.shared().computeRoutes(
+                        withRequestJSON: jsonString
                     )
 
-                    let coords = Self.decodeRouteCoordinates(from: vr)
-                    if coords.isEmpty {
-                        continuation.resume(throwing: ValhallaRoutingError.decodingFailed("Empty coordinate list"))
+                    let allRoutes = result.allRoutes
+                    guard !allRoutes.isEmpty else {
+                        continuation.resume(throwing: ValhallaRoutingError.noRouteFound("Empty routes array"))
                         return
                     }
 
-                    let steps = Self.decodeSteps(vr.steps, fullPolyline: coords)
+                    var candidates: [RouteCandidate] = []
+                    for (idx, vr) in allRoutes.enumerated() {
+                        let coords = Self.decodeRouteCoordinates(from: vr)
+                        guard !coords.isEmpty else { continue }
+                        let steps = Self.decodeSteps(vr.steps, fullPolyline: coords)
+                        let navRoute = NavRoute(
+                            coordinates: coords,
+                            steps: steps,
+                            totalDistanceMeters: vr.totalDistanceMeters,
+                            totalDurationSeconds: vr.totalDurationSeconds
+                        )
 
-                    let navRoute = NavRoute(
-                        coordinates: coords,
-                        steps: steps,
-                        totalDistanceMeters: vr.totalDistanceMeters,
-                        totalDurationSeconds: vr.totalDurationSeconds
-                    )
-                    continuation.resume(returning: navRoute)
+                        let isPrim = (idx == 0)
+                        let candidate = RouteCandidate(
+                            id: "valhalla_\(idx)",
+                            route: navRoute,
+                            provider: .valhalla,
+                            requestedMode: request.profile.transportMode,
+                            profileID: request.profile.id,
+                            isPrimary: isPrim,
+                            isDegradedFallback: false,
+                            degradedReason: nil,
+                            label: isPrim ? "Đề xuất" : "Tuyến \(idx + 1)"
+                        )
+                        candidates.append(candidate)
+                    }
+
+                    guard !candidates.isEmpty else {
+                        continuation.resume(throwing: ValhallaRoutingError.decodingFailed("Could not decode route coordinates"))
+                        return
+                    }
+
+                    continuation.resume(returning: candidates)
                 } catch {
                     continuation.resume(throwing: ValhallaRoutingError.noRouteFound(error.localizedDescription))
                 }
@@ -283,56 +304,116 @@ public final class ValhallaRoutingService: ObservableObject, RoutingServiceProto
         }
     }
 
-    private func calculateMapKitRoute(
-        from origin: CLLocationCoordinate2D,
-        to destination: CLLocationCoordinate2D
-    ) async throws -> NavRoute {
+    // MARK: - MapKit Private Routing
+
+    private func calculateMapKitRoutes(request: RoutingRequest) async throws -> [RouteCandidate] {
+        let mapping = try MapKitModeMapper.mapTransportMode(
+            request.profile.transportMode,
+            policy: request.profile.fallbackPolicy
+        )
+
         let req = MKDirections.Request()
-        req.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
-        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
-        req.transportType = .automobile
+        req.source = MKMapItem(placemark: MKPlacemark(coordinate: request.origin))
+        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: request.destination))
+        req.transportType = mapping.transportType
+        req.requestsAlternateRoutes = (request.requestedAlternatives > 0)
 
         let directions = MKDirections(request: req)
         let resp = try await directions.calculate()
-        guard let firstRoute = resp.routes.first else {
+        guard !resp.routes.isEmpty else {
             throw ValhallaRoutingError.noRouteFound("Không tìm thấy đường MapKit")
         }
 
-        let polylinePoints = firstRoute.polyline.coordinates
-        let validSteps = firstRoute.steps.filter { $0.distance > 0 }
-        let mappings = RouteGeometry.mapStepPolylinesToIndices(
-            stepPolylines: validSteps.map { $0.polyline.coordinates },
-            fullPolyline: polylinePoints
-        )
+        let maxCount = min(resp.routes.count, 1 + request.requestedAlternatives)
+        var candidates: [RouteCandidate] = []
 
-        var steps: [NavStep] = []
-        for (idx, step) in validSteps.enumerated() {
-            let stepCoords = step.polyline.coordinates
-            let maneuverCoord = stepCoords.last ?? origin
-            let maneuver = ManeuverType.fromMKInstruction(step.instructions)
-            let mapping = idx < mappings.count ? mappings[idx] : (beginShapeIndex: 0, endShapeIndex: 0)
+        for idx in 0..<maxCount {
+            let mkRoute = resp.routes[idx]
+            let polylinePoints = mkRoute.polyline.coordinates
+            guard !polylinePoints.isEmpty else { continue }
 
-            steps.append(NavStep(
-                coordinate: maneuverCoord,
-                distanceMeters: step.distance,
-                durationSeconds: (step.distance / 10.0),
-                streetName: "",
-                maneuverType: maneuver,
-                instruction: step.instructions.isEmpty ? "Đi tiếp" : step.instructions,
-                beginShapeIndex: mapping.beginShapeIndex,
-                endShapeIndex: mapping.endShapeIndex
-            ))
+            let validSteps = mkRoute.steps.filter { $0.distance > 0 }
+            let mappings = RouteGeometry.mapStepPolylinesToIndices(
+                stepPolylines: validSteps.map { $0.polyline.coordinates },
+                fullPolyline: polylinePoints
+            )
+
+            let totalDist = mkRoute.distance
+            let totalDur = mkRoute.expectedTravelTime
+
+            var steps: [NavStep] = []
+            for (stepIdx, step) in validSteps.enumerated() {
+                let stepCoords = step.polyline.coordinates
+                let maneuverCoord = stepCoords.last ?? request.origin
+                let maneuver = ManeuverType.fromMKInstruction(step.instructions)
+                let mappingIndices = stepIdx < mappings.count ? mappings[stepIdx] : (beginShapeIndex: 0, endShapeIndex: 0)
+
+                // Proportional step duration derived from total expectedTravelTime based on step distance
+                let stepDuration: Double = totalDist > 0 ? (step.distance / totalDist) * totalDur : 0
+
+                steps.append(NavStep(
+                    coordinate: maneuverCoord,
+                    distanceMeters: step.distance,
+                    durationSeconds: stepDuration,
+                    streetName: "",
+                    maneuverType: maneuver,
+                    instruction: step.instructions.isEmpty ? "Đi tiếp" : step.instructions,
+                    beginShapeIndex: mappingIndices.beginShapeIndex,
+                    endShapeIndex: mappingIndices.endShapeIndex
+                ))
+            }
+
+            let navRoute = NavRoute(
+                coordinates: polylinePoints,
+                steps: steps,
+                totalDistanceMeters: totalDist,
+                totalDurationSeconds: totalDur
+            )
+
+            let isPrim = (idx == 0)
+            let candidate = RouteCandidate(
+                id: "mapkit_\(idx)",
+                route: navRoute,
+                provider: .mapKit,
+                requestedMode: request.profile.transportMode,
+                profileID: request.profile.id,
+                isPrimary: isPrim,
+                isDegradedFallback: mapping.isDegraded,
+                degradedReason: mapping.degradedReason,
+                label: isPrim ? "Đề xuất" : "Tuyến \(idx + 1)"
+            )
+            candidates.append(candidate)
         }
 
-        return NavRoute(
-            coordinates: polylinePoints,
-            steps: steps,
-            totalDistanceMeters: firstRoute.distance,
-            totalDurationSeconds: firstRoute.expectedTravelTime
-        )
+        guard !candidates.isEmpty else {
+            throw ValhallaRoutingError.noRouteFound("Không thể tạo danh sách ứng viên MapKit")
+        }
+
+        return candidates
     }
 
-    // MARK: - Coordinate Decoding
+    // MARK: - Helper & Coordinate Decoding
+
+    private func classifyValhallaError(_ error: Error) -> RoutingErrorCategory {
+        let msg = error.localizedDescription.lowercased()
+        let ns = error as NSError
+        if ns.domain == ValhallaEngineErrorDomain {
+            if ns.code == ValhallaEngineError.configNotLoaded.rawValue ||
+               ns.code == ValhallaEngineError.libraryMissing.rawValue {
+                return .engineUnavailable
+            }
+            if ns.code == ValhallaEngineError.noRouteFound.rawValue {
+                if msg.contains("edge") || msg.contains("disconnected") || msg.contains("tile") || msg.contains("boundary") {
+                    return .tileCoverageMissing
+                }
+                return .noRouteFound
+            }
+        }
+        if msg.contains("tile") || msg.contains("coverage") || msg.contains("no suitable edge") {
+            return .tileCoverageMissing
+        }
+        return .unknown
+    }
 
     nonisolated private static func decodeRouteCoordinates(from route: ValhallaRoute) -> [CLLocationCoordinate2D] {
         if !route.encodedPolyline6.isEmpty {

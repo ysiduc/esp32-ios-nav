@@ -417,6 +417,20 @@ public struct MainMapView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
 
+            // Alternative route choices (P4)
+            if viewModel.routeCandidates.count > 1 {
+                alternativeRouteChips
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
+
+            // Degraded fallback banner if applicable (P4)
+            if viewModel.isDegradedRoute {
+                degradedWarningBanner
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+            }
+
             // Transport chips row
             transportChips
                 .padding(.horizontal, 20)
@@ -495,6 +509,76 @@ public struct MainMapView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 30)
         }
+    }
+
+    // MARK: - Alternative Route Choices (P4)
+
+    private var alternativeRouteChips: some View {
+        HStack(spacing: 8) {
+            ForEach(viewModel.routeCandidates) { candidate in
+                let isSelected = (candidate.id == viewModel.selectedRouteCandidateID)
+                Button(action: {
+                    viewModel.selectRouteCandidate(id: candidate.id)
+                }) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Text(candidate.label)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(isSelected ? .black : .white)
+                            if candidate.isPrimary {
+                                Image(systemName: "star.fill")
+                                    .font(.system(size: 8))
+                                    .foregroundColor(isSelected ? .black : .yellow)
+                            }
+                        }
+
+                        Text(candidate.route.formattedDuration)
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundColor(isSelected ? .black : Color(red: 0.2, green: 0.9, blue: 0.5))
+
+                        Text(candidate.route.formattedDistance)
+                            .font(.system(size: 10))
+                            .foregroundColor(isSelected ? Color.black.opacity(0.7) : .gray)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(
+                        isSelected
+                            ? Color(red: 0, green: 0.85, blue: 0.42)
+                            : Color.white.opacity(0.08)
+                    )
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                isSelected
+                                    ? Color(red: 0, green: 0.95, blue: 0.5)
+                                    : Color.white.opacity(0.15),
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+    }
+
+    private var degradedWarningBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.yellow)
+                .font(.system(size: 13))
+            Text(viewModel.degradedReason ?? "Lộ trình ô tô tạm thời (MapKit fallback)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.yellow)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(Color.yellow.opacity(0.12))
+        .cornerRadius(8)
     }
 
     // MARK: - Helpers

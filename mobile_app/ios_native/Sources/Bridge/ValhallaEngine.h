@@ -3,11 +3,6 @@
 //  Pure Objective-C interface to the Valhalla C++ routing engine.
 //  Swift calls this ObjC interface; C++ is hidden in ValhallaEngine.mm.
 //
-//  To use with actual Valhalla:
-//    1. Build valhalla as a static .a library for iOS arm64 (see DataPreparationGuide.md)
-//    2. Add libvalhalla.a + libprotobuf.a to "Link Binary With Libraries" in Xcode
-//    3. Remove the VALHALLA_UNAVAILABLE guard and import valhalla headers
-//
 
 #import <Foundation/Foundation.h>
 
@@ -51,6 +46,21 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+/// Container for primary route and alternative routes returned by Valhalla.
+@interface ValhallaRouteResult : NSObject
+
+/// Primary / recommended route from Valhalla.
+@property (nonatomic, strong) ValhallaRoute *primaryRoute;
+/// Zero, one, or two alternative routes.
+@property (nonatomic, strong) NSArray<ValhallaRoute *> *alternativeRoutes;
+/// Convenience array containing primaryRoute followed by all alternative routes.
+@property (nonatomic, readonly) NSArray<ValhallaRoute *> *allRoutes;
+
+- (instancetype)initWithPrimaryRoute:(ValhallaRoute *)primary
+                   alternativeRoutes:(nullable NSArray<ValhallaRoute *> *)alternatives;
+
+@end
+
 /// Errors the Valhalla engine can produce.
 typedef NS_ENUM(NSInteger, ValhallaEngineError) {
     ValhallaEngineErrorConfigNotLoaded = 1001,
@@ -81,22 +91,34 @@ extern NSString *const ValhallaEngineErrorDomain;
 /// @return YES on success.
 - (BOOL)loadConfigAtPath:(NSString *)configPath error:(NSError **)error;
 
-/// Compute a driving / motorcycling / walking route.
-/// This method BLOCKS the calling thread while Valhalla computes the route.
-/// Always call from a background queue (ValhallaWrapper.swift handles this).
-/// @param fromLat  Origin latitude
-/// @param fromLon  Origin longitude
-/// @param toLat    Destination latitude
-/// @param toLon    Destination longitude
-/// @param costing  Valhalla costing model: "auto", "motorcycle", "bicycle", "pedestrian"
-/// @param error    Output NSError on failure
-/// @return Parsed ValhallaRoute, or nil on error.
+/// Compute routes given a pre-built structured JSON request.
+- (nullable ValhallaRouteResult *)computeRoutesWithRequestJSON:(NSString *)requestJSON
+                                                         error:(NSError **)error;
+
+/// Compute routes given parameters (constructs structured JSON internally).
+- (nullable ValhallaRouteResult *)computeRoutesFromLat:(double)fromLat
+                                               fromLon:(double)fromLon
+                                                 toLat:(double)toLat
+                                                 toLon:(double)toLon
+                                               costing:(NSString *)costing
+                                        costingOptions:(nullable NSDictionary<NSString *, id> *)costingOptions
+                                            alternates:(NSInteger)alternates
+                                                 error:(NSError **)error;
+
+/// Backward-compatible single route calculation (returns primary route).
 - (nullable ValhallaRoute *)computeRouteFromLat:(double)fromLat
                                           fromLon:(double)fromLon
                                             toLat:(double)toLat
                                             toLon:(double)toLon
                                           costing:(NSString *)costing
                                             error:(NSError **)error;
+
+/// Pure parser methods exposed for deterministic unit testing.
+- (nullable ValhallaRouteResult *)parseValhallaJSONResult:(NSString *)jsonString
+                                                    error:(NSError **)error;
+
+- (nullable ValhallaRoute *)parseValhallaJSON:(NSString *)jsonString
+                                        error:(NSError **)error;
 
 @end
 

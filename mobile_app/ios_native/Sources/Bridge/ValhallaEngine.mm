@@ -6,7 +6,7 @@
 #import "ValhallaEngine.h"
 #import <Foundation/Foundation.h>
 
-// Valhalla is now compiled and linked via valhalla-wrapper.xcframework (libvalhalla_all.a)
+// Valhalla is compiled and linked via valhalla-wrapper.xcframework (libvalhalla_all.a)
 #define VALHALLA_AVAILABLE 1
 
 #if VALHALLA_AVAILABLE
@@ -69,6 +69,33 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         _rawJSON              = @"";
     }
     return self;
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+// MARK: - ValhallaRouteResult
+// ---------------------------------------------------------------------------
+
+@implementation ValhallaRouteResult
+
+- (instancetype)initWithPrimaryRoute:(ValhallaRoute *)primary
+                   alternativeRoutes:(nullable NSArray<ValhallaRoute *> *)alternatives {
+    self = [super init];
+    if (self) {
+        _primaryRoute = primary;
+        _alternativeRoutes = alternatives ?: @[];
+    }
+    return self;
+}
+
+- (NSArray<ValhallaRoute *> *)allRoutes {
+    NSMutableArray *all = [NSMutableArray arrayWithCapacity:1 + _alternativeRoutes.count];
+    if (_primaryRoute) {
+        [all addObject:_primaryRoute];
+    }
+    [all addObjectsFromArray:_alternativeRoutes];
+    return [all copy];
 }
 
 @end
@@ -142,23 +169,22 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     __block NSError *loadError = nil;
 
     dispatch_sync(self.queue, ^{
-        try {
-            if (_actor) {
-                delete_valhalla_actor(_actor);
-                _actor = nullptr;
-            }
+        if (_actor) {
+            delete_valhalla_actor(_actor);
+            _actor = nullptr;
+        }
 
-            std::string path = [configPath UTF8String];
-            _actor = create_valhalla_actor(path.c_str(), nullptr);
-            if (_actor != nullptr) {
+        try {
+            _actor = create_valhalla_actor([configPath UTF8String], nullptr);
+            if (_actor) {
                 self.configLoaded = YES;
                 success = YES;
-                NSLog(@"[ValhallaEngine] ✅ Native Valhalla engine initialized successfully from: %@", configPath);
+                NSLog(@"[ValhallaEngine] ✅ Actor created from: %@", configPath);
             } else {
                 loadError = [NSError errorWithDomain:ValhallaEngineErrorDomain
-                                               code:ValhallaEngineErrorEngineException
-                                           userInfo:@{NSLocalizedDescriptionKey: @"Failed to create Valhalla actor. Check config and tile paths."}];
-                NSLog(@"[ValhallaEngine] ❌ create_valhalla_actor returned null");
+                                               code:ValhallaEngineErrorConfigNotLoaded
+                                           userInfo:@{NSLocalizedDescriptionKey: @"create_valhalla_actor returned null"}];
+                NSLog(@"[ValhallaEngine] ❌ Failed to create actor");
             }
         } catch (const std::exception &e) {
             loadError = [NSError errorWithDomain:ValhallaEngineErrorDomain
@@ -189,13 +215,8 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 #endif
 }
 
-- (nullable ValhallaRoute *)computeRouteFromLat:(double)fromLat
-                                          fromLon:(double)fromLon
-                                            toLat:(double)toLat
-                                            toLon:(double)toLon
-                                          costing:(NSString *)costing
-                                            error:(NSError **)error {
-
+- (nullable ValhallaRouteResult *)computeRoutesWithRequestJSON:(NSString *)requestJSON
+                                                         error:(NSError **)error {
     if (!self.configLoaded) {
         if (error) {
             *error = [NSError errorWithDomain:ValhallaEngineErrorDomain
@@ -206,7 +227,7 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     }
 
 #if VALHALLA_AVAILABLE
-    __block ValhallaRoute *result = nil;
+    __block ValhallaRouteResult *result = nil;
     __block NSError *routeError  = nil;
 
     dispatch_sync(self.queue, ^{
@@ -218,19 +239,11 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         }
 
         try {
-            // Build Valhalla JSON request
-            NSString *requestJSON = [NSString stringWithFormat:
-                @"{\"locations\":[{\"lon\":%.7f,\"lat\":%.7f},{\"lon\":%.7f,\"lat\":%.7f}],"
-                @"\"costing\":\"%@\","
-                @"\"directions_options\":{\"language\":\"vi\",\"units\":\"kilometers\","
-                @"\"narrative\":true},\"format\":\"json\"}",
-                fromLon, fromLat, toLon, toLat, costing];
-
             std::string req([requestJSON UTF8String]);
             std::string resp = route(req.c_str(), _actor);
 
             NSString *jsonString = [NSString stringWithUTF8String:resp.c_str()];
-            result = [self parseValhallaJSON:jsonString error:&routeError];
+            result = [self parseValhallaJSONResult:jsonString error:&routeError];
 
         } catch (const std::exception &e) {
             routeError = [NSError errorWithDomain:ValhallaEngineErrorDomain
@@ -248,7 +261,6 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     return result;
 
 #else
-    // UNAVAILABLE / STUB IMPLEMENTATION
     NSLog(@"[ValhallaEngine] Unavailable — Valhalla C++ library not compiled. Returning explicit error.");
     if (error) {
         *error = [NSError errorWithDomain:ValhallaEngineErrorDomain
@@ -259,12 +271,77 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
 #endif
 }
 
+- (nullable ValhallaRouteResult *)computeRoutesFromLat:(double)fromLat
+                                               fromLon:(double)fromLon
+                                                 toLat:(double)toLat
+                                                 toLon:(double)toLon
+                                               costing:(NSString *)costing
+                                        costingOptions:(nullable NSDictionary<NSString *, id> *)costingOptions
+                                            alternates:(NSInteger)alternates
+                                                 error:(NSError **)error {
+    NSMutableDictionary *req = [NSMutableDictionary dictionary];
+    req[@"locations"] = @[
+        @{@"lon": @(fromLon), @"lat": @(fromLat)},
+        @{@"lon": @(toLon), @"lat": @(toLat)}
+    ];
+    req[@"costing"] = costing ?: @"motorcycle";
+    req[@"directions_options"] = @{
+        @"language": @"vi",
+        @"units": @"kilometers",
+        @"narrative": @YES
+    };
+    req[@"format"] = @"json";
+
+    if (alternates > 0) {
+        req[@"alternates"] = @(alternates);
+    }
+
+    if (costingOptions && costingOptions.count > 0) {
+        req[@"costing_options"] = @{
+            costing ?: @"motorcycle": costingOptions
+        };
+    }
+
+    NSError *jsonError = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:req options:0 error:&jsonError];
+    if (!data || jsonError) {
+        if (error) *error = jsonError;
+        return nil;
+    }
+
+    NSString *requestJSON = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [self computeRoutesWithRequestJSON:requestJSON error:error];
+}
+
+- (nullable ValhallaRoute *)computeRouteFromLat:(double)fromLat
+                                          fromLon:(double)fromLon
+                                            toLat:(double)toLat
+                                            toLon:(double)toLon
+                                          costing:(NSString *)costing
+                                            error:(NSError **)error {
+    ValhallaRouteResult *res = [self computeRoutesFromLat:fromLat
+                                                  fromLon:fromLon
+                                                    toLat:toLat
+                                                    toLon:toLon
+                                                  costing:costing
+                                           costingOptions:nil
+                                               alternates:0
+                                                    error:error];
+    return res.primaryRoute;
+}
+
 // ---------------------------------------------------------------------------
-// MARK: - JSON Parser (real Valhalla response)
+// MARK: - JSON Parsers
 // ---------------------------------------------------------------------------
 
 - (nullable ValhallaRoute *)parseValhallaJSON:(NSString *)jsonString
                                         error:(NSError **)error {
+    ValhallaRouteResult *res = [self parseValhallaJSONResult:jsonString error:error];
+    return res.primaryRoute;
+}
+
+- (nullable ValhallaRouteResult *)parseValhallaJSONResult:(NSString *)jsonString
+                                                    error:(NSError **)error {
     NSData *data = [jsonString dataUsingEncoding:NSUTF8StringEncoding];
     if (!data) {
         if (error) {
@@ -284,8 +361,8 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         return nil;
     }
 
-    NSDictionary *trip = root[@"trip"];
-    if (!trip) {
+    NSDictionary *primaryTrip = root[@"trip"];
+    if (!primaryTrip) {
         NSString *msg = @"No route found";
         if ([root[@"error"] isKindOfClass:[NSDictionary class]]) {
             msg = root[@"error"][@"message"] ?: @"No route found";
@@ -302,6 +379,39 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         return nil;
     }
 
+    ValhallaRoute *primaryRoute = [self parseSingleTrip:primaryTrip rawJSON:jsonString error:error];
+    if (!primaryRoute) {
+        return nil;
+    }
+
+    NSMutableArray<ValhallaRoute *> *altRoutes = [NSMutableArray array];
+    NSArray *rawAlternates = root[@"alternates"];
+    if ([rawAlternates isKindOfClass:[NSArray class]]) {
+        for (id altItem in rawAlternates) {
+            NSDictionary *altTrip = nil;
+            if ([altItem isKindOfClass:[NSDictionary class]]) {
+                if (altItem[@"trip"] && [altItem[@"trip"] isKindOfClass:[NSDictionary class]]) {
+                    altTrip = altItem[@"trip"];
+                } else {
+                    altTrip = altItem;
+                }
+            }
+            if (altTrip) {
+                ValhallaRoute *altRoute = [self parseSingleTrip:altTrip rawJSON:@"" error:nil];
+                if (altRoute) {
+                    [altRoutes addObject:altRoute];
+                }
+            }
+        }
+    }
+
+    return [[ValhallaRouteResult alloc] initWithPrimaryRoute:primaryRoute
+                                           alternativeRoutes:[altRoutes copy]];
+}
+
+- (nullable ValhallaRoute *)parseSingleTrip:(NSDictionary *)trip
+                                    rawJSON:(NSString *)rawJSON
+                                      error:(NSError **)error {
     NSDictionary *summary = trip[@"summary"];
     double totalKm  = [summary[@"length"] doubleValue];
     double totalSec = [summary[@"time"]   doubleValue];
@@ -316,6 +426,8 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
         return nil;
     }
 
+    // P4 turn-by-turn routes are origin + destination single-leg navigation paths.
+    // If multiple legs are present, leg0 is the primary navigation leg.
     NSDictionary *leg0 = legs[0];
     NSString *legPolyline = leg0[@"shape"] ?: @"";
     NSArray *maneuvers    = leg0[@"maneuvers"] ?: @[];
@@ -348,7 +460,7 @@ NSString *const ValhallaEngineErrorDomain = @"com.ysiduc.ValhallaEngine";
     route.totalDurationSeconds = totalSec;
     route.encodedPolyline6    = legPolyline;
     route.steps               = [steps copy];
-    route.rawJSON             = jsonString;
+    route.rawJSON             = rawJSON;
 
     return route;
 }

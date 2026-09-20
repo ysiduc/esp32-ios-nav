@@ -34,6 +34,14 @@ public final class NavigationViewModel: ObservableObject {
     @Published public var selectedDestination: GoongPlace? = nil
     @Published public var transportMode: String = "motorcycle" // "motorcycle" | "auto" | "bicycle" | "pedestrian"
 
+    // MARK: - Route Candidates & Alternatives (P4)
+    @Published public private(set) var currentTransportMode: NavigationTransportMode = .motorcycle
+    @Published public private(set) var routeCandidates: [RouteCandidate] = []
+    @Published public private(set) var selectedRouteCandidateID: String? = nil
+    @Published public private(set) var currentRoutingProvider: RoutingProvider? = nil
+    @Published public private(set) var isDegradedRoute: Bool = false
+    @Published public private(set) var degradedReason: String? = nil
+
     /// Authoritative source-of-truth for the text shown in the search bar.
     /// Views must bind to this; never derive from predictions or selectedPrediction.
     @Published public var searchQuery: String = ""
@@ -58,7 +66,7 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Lifecycle & Concurrency Control (Route)
     private var routeRequestGeneration: UInt64 = 0
-    private var routeCalculationTask: Task<NavRoute, Error>?
+    private var routeCalculationTask: Task<RouteSet, Error>?
 
     // MARK: - Lifecycle & Concurrency Control (Search/Destination)
     private var destinationSelectionGeneration: UInt64 = 0
@@ -210,17 +218,34 @@ public final class NavigationViewModel: ObservableObject {
         }
     }
 
+    /// Select an alternative route candidate in preview mode.
+    public func selectRouteCandidate(id: String) {
+        guard let candidate = routeCandidates.first(where: { $0.id == id }) else { return }
+        selectedRouteCandidateID = candidate.id
+        currentRoutingProvider = candidate.provider
+        isDegradedRoute = candidate.isDegradedFallback
+        degradedReason = candidate.degradedReason
+        navSession.setRoutePreview(candidate.route)
+        print("[ViewModel] Switched to candidate \(candidate.label) (\(candidate.id)) provider=\(candidate.provider.rawValue)")
+    }
+
     /// Cancel all pending search/route tasks and reset all search state.
     /// Called when user taps the × button or explicitly cancels the search.
     public func clearSearch() {
         _cancelPendingSelectionTask()
         _cancelPendingRouteCalculation()
 
-        isSearchActive     = false
-        searchQuery        = ""
-        selectedPrediction = nil
+        isSearchActive      = false
+        searchQuery         = ""
+        selectedPrediction  = nil
         selectedDestination = nil
-        routeErrorMessage  = nil
+        routeErrorMessage   = nil
+
+        routeCandidates          = []
+        selectedRouteCandidateID = nil
+        currentRoutingProvider   = nil
+        isDegradedRoute          = false
+        degradedReason           = nil
 
         searchService.resetAll()
         navSession.clearRoute()
@@ -228,7 +253,7 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Route Calculation
 
-    /// Calculate route from current GPS location to destination (Preview mode).
+    /// Calculate route candidates from current GPS location to destination (Preview mode).
     public func calculateRoute(to destination: CLLocationCoordinate2D) async {
         // Cancel any pending preview route calculation and increment request generation
         routeCalculationTask?.cancel()
@@ -243,22 +268,25 @@ public final class NavigationViewModel: ObservableObject {
         isCalculatingRoute = true
         routeErrorMessage  = nil
 
-        let costing = valhallaCosting(for: transportMode)
+        currentTransportMode = NavigationTransportMode(costingValue: transportMode)
+        let profile = RoutingProfile.profile(for: currentTransportMode)
+        let request = RoutingRequest(
+            origin: userCoord,
+            destination: destination,
+            profile: profile,
+            requestedAlternatives: 2
+        )
 
-        let task = Task<NavRoute, Error> {
+        let task = Task<RouteSet, Error> {
             try Task.checkCancellation()
-            let route = try await routing.calculateRoute(
-                from: userCoord,
-                to: destination,
-                costing: costing
-            )
+            let routeSet = try await routing.calculateRoutes(request: request)
             try Task.checkCancellation()
-            return route
+            return routeSet
         }
         routeCalculationTask = task
 
         do {
-            let route = try await task.value
+            let routeSet = try await task.value
 
             // Post-await validations:
             guard !Task.isCancelled else {
@@ -274,15 +302,28 @@ public final class NavigationViewModel: ObservableObject {
                 return
             }
 
-            self.navSession.setRoutePreview(route)
+            self.routeCandidates = routeSet.candidates
+            if let primary = routeSet.candidates.first {
+                self.selectedRouteCandidateID = primary.id
+                self.currentRoutingProvider = primary.provider
+                self.isDegradedRoute = primary.isDegradedFallback
+                self.degradedReason = primary.degradedReason
+                self.navSession.setRoutePreview(primary.route)
+                print("[ViewModel] Set preview to primary candidate (\(primary.id)), \(routeSet.candidates.count) total candidates")
+            }
+
             self.isCalculatingRoute = false
-            print("[ViewModel] Route: \(route.formattedDistance), \(route.formattedDuration), \(route.steps.count) steps")
         } catch {
             guard !Task.isCancelled else { return }
             guard self.routeRequestGeneration == thisRequestGen else { return }
             guard self.navSession.state != .navigating else { return }
 
             self.isCalculatingRoute = false
+            self.routeCandidates = []
+            self.selectedRouteCandidateID = nil
+            self.currentRoutingProvider = nil
+            self.isDegradedRoute = false
+            self.degradedReason = nil
             self.routeErrorMessage = "Không thể tìm đường: \(error.localizedDescription)"
             print("[ViewModel] Routing error: \(error)")
         }
@@ -307,7 +348,8 @@ public final class NavigationViewModel: ObservableObject {
     // MARK: - Navigation Control
 
     public func startNavigation() {
-        guard let route = navSession.activeRoute else { return }
+        let selectedCandidate = routeCandidates.first(where: { $0.id == selectedRouteCandidateID })
+        guard let route = selectedCandidate?.route ?? navSession.activeRoute else { return }
         guard let place = selectedDestination else {
             routeErrorMessage = "Không xác định được điểm đến"
             print("[ViewModel] startNavigation rejected: no selectedDestination available")
@@ -345,14 +387,20 @@ public final class NavigationViewModel: ObservableObject {
         searchQuery         = ""
         isCalculatingRoute  = false
 
+        routeCandidates          = []
+        selectedRouteCandidateID = nil
+        currentRoutingProvider   = nil
+        isDegradedRoute          = false
+        degradedReason           = nil
+
         let end = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
         bleManager.sendNavigationPacket(end)
     }
 
     public func recalculateForTransportMode() {
+        currentTransportMode = NavigationTransportMode(costingValue: transportMode)
         if navSession.state == .navigating {
-            let costing = valhallaCosting(for: transportMode)
-            rerouteManager.requestTransportModeReroute(costing: costing)
+            rerouteManager.requestTransportModeReroute(costing: currentTransportMode.rawValue)
         } else if let dest = selectedDestination?.location.coordinate {
             Task { await calculateRoute(to: dest) }
         }
@@ -373,11 +421,7 @@ public final class NavigationViewModel: ObservableObject {
     }
 
     private func valhallaCosting(for mode: String) -> String {
-        switch mode {
-        case "auto":       return "auto"
-        case "bicycle":    return "bicycle"
-        case "pedestrian": return "pedestrian"
-        default:           return "motorcycle"
-        }
+        let tm = NavigationTransportMode(costingValue: mode)
+        return RoutingProfile.profile(for: tm).valhallaCosting
     }
 }

@@ -159,11 +159,22 @@ Tie-breaks (ascending priority):
 
 ### Normalization
 
-```swift
-String.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+```text
+fixed vi_VN locale
+lowercase
+Đ/đ → d
+punctuation/symbol → whitespace
+whitespace collapse
 ```
 
-Followed by whitespace collapse. Example: `"Đường Trần Hưng Đạo"` → `"duong tran hung dao"`.
+Implementation details in `SearchRanking.swift`:
+1. Diacritic folding via fixed `Locale(identifier: "vi_VN")` (deterministic, independent of host device locale)
+2. Lowercase
+3. Transliterate `Đ` and `đ` to `d` (Foundation `diacriticInsensitive` does not fold Vietnamese barred D)
+4. Convert basic punctuation and symbols to whitespace
+5. Collapse runs of whitespace and trim
+
+Example: `"Đường Trần Hưng Đạo"` → `"duong tran hung dao"`.
 
 ## 14. Deduplication
 
