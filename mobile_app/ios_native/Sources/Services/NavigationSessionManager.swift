@@ -98,6 +98,8 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     // MARK: - Session Identity & Destination Lifecycle
     /// Monotonically increasing session generation. Incremented on start and stop.
     public private(set) var sessionGeneration: UInt64 = 0
+    /// Monotonically increasing active route revision. Increments on route start, route replace, and stop.
+    public private(set) var activeRouteGeneration: UInt64 = 0
     /// Active navigation destination frozen at start of navigation session.
     public private(set) var navigationDestination: NavigationDestination?
     /// Flag indicating background reroute computation is underway.
@@ -154,6 +156,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     public func startNavigation(route: NavRoute, destination: NavigationDestination) {
         sessionGeneration &+= 1
+        activeRouteGeneration &+= 1
         navigationDestination    = destination
         activeRoute              = route
         currentStepIndex         = 0
@@ -164,16 +167,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         kalmanTimestamp          = nil
         state                    = .navigating
         enableBackgroundLocation()
-        print("[NavSession] Navigation started (session \(sessionGeneration)) — \(route.steps.count) steps to \(destination.name ?? "destination")")
-    }
-
-    public func startNavigation(route: NavRoute) {
-        let destCoord = route.coordinates.last ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
-        startNavigation(route: route, destination: NavigationDestination(coordinate: destCoord))
+        print("[NavSession] Navigation started (session \(sessionGeneration), route rev \(activeRouteGeneration)) — \(route.steps.count) steps to \(destination.name ?? "destination")")
     }
 
     public func stopNavigation() {
         sessionGeneration &+= 1
+        activeRouteGeneration &+= 1
         navigationDestination    = nil
         isRerouting              = false
         state                    = .idle
@@ -183,7 +182,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         isOffRoute               = false
         remainingPolyline        = []
         disableBackgroundLocation()
-        print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration))")
+        print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration), route rev \(activeRouteGeneration))")
     }
 
     public func setRoutePreview(_ route: NavRoute) {
@@ -203,6 +202,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
             print("[NavSession] Cannot replace route: not in navigating state")
             return
         }
+        activeRouteGeneration &+= 1
         activeRoute              = route
         currentStepIndex         = 0
         offRouteConsecutiveCount = 0
@@ -238,6 +238,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     }
 
     public func clearRoute() {
+        activeRouteGeneration &+= 1
         activeRoute       = nil
         remainingPolyline = []
         if state == .routePreview || state == .arrived { state = .idle }
@@ -416,7 +417,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
 // MARK: - CLLocationManagerDelegate
 
-extension NavigationSessionManager: CLLocationManagerDelegate {
+extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
 
     public func locationManager(_ manager: CLLocationManager,
                                 didChangeAuthorization status: CLAuthorizationStatus) {
@@ -454,6 +455,10 @@ extension NavigationSessionManager: CLLocationManagerDelegate {
 
         guard state == .navigating, let route = activeRoute else { return }
 
+        // Capture session & route revision at computation time
+        let capturedSessionGeneration = sessionGeneration
+        let capturedRouteGeneration = activeRouteGeneration
+
         var stepIdx = currentStepIndex
         var offCnt  = offRouteConsecutiveCount
         var offFlag = isOffRoute
@@ -464,6 +469,15 @@ extension NavigationSessionManager: CLLocationManagerDelegate {
 
         Task { @MainActor in
             guard self.state == .navigating else { return }
+            guard self.sessionGeneration == capturedSessionGeneration else {
+                print("[NavSession] Discarding stale GPS progress (session \(capturedSessionGeneration) != current \(self.sessionGeneration))")
+                return
+            }
+            guard self.activeRouteGeneration == capturedRouteGeneration else {
+                print("[NavSession] Discarding stale GPS progress (route rev \(capturedRouteGeneration) != current \(self.activeRouteGeneration))")
+                return
+            }
+
             self.currentStepIndex         = stepIdx
             self.offRouteConsecutiveCount = offCnt
             self.snappedLocation          = result.snapped

@@ -235,7 +235,7 @@ public final class ValhallaRoutingService: ObservableObject {
                         return
                     }
 
-                    let steps = Self.decodeSteps(vr.steps as! [ValhallaStep], fullPolyline: coords)
+                    let steps = Self.decodeSteps(vr.steps, fullPolyline: coords)
 
                     let navRoute = NavRoute(
                         coordinates: coords,
@@ -294,14 +294,14 @@ public final class ValhallaRoutingService: ObservableObject {
 
     // MARK: - Coordinate Decoding
 
-    private static func decodeRouteCoordinates(from route: ValhallaRoute) -> [CLLocationCoordinate2D] {
+    nonisolated private static func decodeRouteCoordinates(from route: ValhallaRoute) -> [CLLocationCoordinate2D] {
         if !route.encodedPolyline6.isEmpty {
             return decodePolyline6(route.encodedPolyline6)
         }
         return []
     }
 
-    private static func decodePolyline6(_ encoded: String) -> [CLLocationCoordinate2D] {
+    nonisolated private static func decodePolyline6(_ encoded: String) -> [CLLocationCoordinate2D] {
         var coordinates: [CLLocationCoordinate2D] = []
         var lat = 0
         var lng = 0
@@ -343,7 +343,7 @@ public final class ValhallaRoutingService: ObservableObject {
         return coordinates
     }
 
-    private static func decodeSteps(
+    nonisolated private static func decodeSteps(
         _ valhallaSteps: [ValhallaStep],
         fullPolyline: [CLLocationCoordinate2D]
     ) -> [NavStep] {

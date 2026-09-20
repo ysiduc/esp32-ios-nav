@@ -40,8 +40,8 @@ public final class NavigationViewModel: ObservableObject {
     // MARK: - Lifecycle & Concurrency Control
     private var routeRequestGeneration: UInt64 = 0
     private var rerouteRequestGeneration: UInt64 = 0
-    private var routeCalculationTask: Task<Void, Never>?
-    private var rerouteTask: Task<Void, Never>?
+    private var routeCalculationTask: Task<NavRoute, Error>?
+    private var rerouteTask: Task<NavRoute, Error>?
 
     public init() {
         // Forward GPS location to Goong search for proximity-biased results
@@ -65,7 +65,7 @@ public final class NavigationViewModel: ObservableObject {
         }
 
         // Handle arrival
-        navSession.onArrived = { [weak self] in
+        navSession.onArrived = {
             print("[ViewModel] 🏁 Arrived at destination!")
         }
     }
@@ -119,16 +119,17 @@ public final class NavigationViewModel: ObservableObject {
 
         let costing = valhallaCosting(for: transportMode)
 
-        let task = Task { () throws -> NavRoute in
-            try await routing.calculateRoute(
+        let task = Task<NavRoute, Error> {
+            try Task.checkCancellation()
+            let route = try await routing.calculateRoute(
                 from: userCoord,
                 to: destination,
                 costing: costing
             )
+            try Task.checkCancellation()
+            return route
         }
-        routeCalculationTask = Task {
-            _ = try? await task.value
-        }
+        routeCalculationTask = task
 
         do {
             let route = try await task.value
@@ -189,16 +190,17 @@ public final class NavigationViewModel: ObservableObject {
         navSession.setRerouting(true)
         print("[ViewModel] 🔄 Rerouting session \(capturedSessionGen) (request \(capturedRerouteGen)) to \(dest.name ?? "destination")...")
 
-        let currentTask = Task { () throws -> NavRoute in
-            try await routing.calculateRoute(
+        let currentTask = Task<NavRoute, Error> {
+            try Task.checkCancellation()
+            let route = try await routing.calculateRoute(
                 from: userCoord,
                 to: dest.coordinate,
                 costing: costing
             )
+            try Task.checkCancellation()
+            return route
         }
-        rerouteTask = Task {
-            _ = try? await currentTask.value
-        }
+        rerouteTask = currentTask
 
         do {
             let newRoute = try await currentTask.value
@@ -239,31 +241,22 @@ public final class NavigationViewModel: ObservableObject {
 
     public func startNavigation() {
         guard let route = navSession.activeRoute else { return }
+        guard let place = selectedDestination else {
+            routeErrorMessage = "Không xác định được điểm đến"
+            print("[ViewModel] startNavigation rejected: no selectedDestination available")
+            return
+        }
 
         // Cancel any pending preview route calculation and invalidate old preview requests
         routeCalculationTask?.cancel()
         routeCalculationTask = nil
         routeRequestGeneration &+= 1
 
-        // Freeze active destination from UI selection or route coordinate
-        let destination: NavigationDestination
-        if let place = selectedDestination {
-            destination = NavigationDestination(
-                coordinate: place.location.coordinate,
-                name: place.name,
-                placeID: place.placeID
-            )
-        } else if let lastCoord = route.coordinates.last {
-            destination = NavigationDestination(
-                coordinate: lastCoord,
-                name: selectedPrediction?.structuredFormatting?.mainText,
-                placeID: selectedPrediction?.placeID
-            )
-        } else {
-            destination = NavigationDestination(
-                coordinate: kCLLocationCoordinate2DInvalid
-            )
-        }
+        let destination = NavigationDestination(
+            coordinate: place.location.coordinate,
+            name: place.name,
+            placeID: place.placeID
+        )
 
         navSession.startNavigation(route: route, destination: destination)
     }
