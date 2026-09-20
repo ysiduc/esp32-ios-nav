@@ -1,16 +1,151 @@
 //
 //  ValhallaWrapper.swift
-//  Swift routing service managing native offline Valhalla and mode-safe Apple MapKit fallback.
+//  Swift interface to the embedded Valhalla C++ routing engine.
+//  Bridges ValhallaEngine (ObjC++) to async/await Swift with mode-safe MapKit fallback.
 //
 
 import CoreLocation
 import Foundation
 import MapKit
 
+// MARK: - NavigationRoute (rich route model)
+
+/// A single decoded navigation step from Valhalla or MapKit.
+public struct NavStep: Sendable, Equatable {
+    public let coordinate: CLLocationCoordinate2D   // end-point of the step (maneuver point)
+    public let distanceMeters: Double               // distance from this step's start to maneuver
+    public let durationSeconds: Double
+    public let streetName: String
+    public let maneuverType: ManeuverType
+    public let instruction: String
+    public let beginShapeIndex: Int?
+    public let endShapeIndex: Int?
+
+    public init(
+        coordinate: CLLocationCoordinate2D,
+        distanceMeters: Double,
+        durationSeconds: Double,
+        streetName: String,
+        maneuverType: ManeuverType,
+        instruction: String,
+        beginShapeIndex: Int? = nil,
+        endShapeIndex: Int? = nil
+    ) {
+        self.coordinate = coordinate
+        self.distanceMeters = distanceMeters
+        self.durationSeconds = durationSeconds
+        self.streetName = streetName
+        self.maneuverType = maneuverType
+        self.instruction = instruction
+        self.beginShapeIndex = beginShapeIndex
+        self.endShapeIndex = endShapeIndex
+    }
+
+    public static func == (lhs: NavStep, rhs: NavStep) -> Bool {
+        return abs(lhs.coordinate.latitude - rhs.coordinate.latitude) < 1e-6 &&
+               abs(lhs.coordinate.longitude - rhs.coordinate.longitude) < 1e-6 &&
+               abs(lhs.distanceMeters - rhs.distanceMeters) < 1e-3 &&
+               abs(lhs.durationSeconds - rhs.durationSeconds) < 1e-3 &&
+               lhs.streetName == rhs.streetName &&
+               lhs.maneuverType == rhs.maneuverType &&
+               lhs.instruction == rhs.instruction &&
+               lhs.beginShapeIndex == rhs.beginShapeIndex &&
+               lhs.endShapeIndex == rhs.endShapeIndex
+    }
+}
+
+/// Complete navigation route.
+public struct NavRoute: Sendable, Equatable {
+    public let coordinates: [CLLocationCoordinate2D]  // full polyline
+    public let steps: [NavStep]
+    public let totalDistanceMeters: Double
+    public let totalDurationSeconds: Double
+    public let geometry: RouteGeometry
+
+    public init(
+        coordinates: [CLLocationCoordinate2D],
+        steps: [NavStep],
+        totalDistanceMeters: Double,
+        totalDurationSeconds: Double
+    ) {
+        self.coordinates = coordinates
+        self.steps = steps
+        self.totalDistanceMeters = totalDistanceMeters
+        self.totalDurationSeconds = totalDurationSeconds
+        self.geometry = RouteGeometry(coordinates: coordinates, steps: steps)
+    }
+
+    public init(
+        coordinates: [CLLocationCoordinate2D],
+        steps: [NavStep],
+        totalDistanceMeters: Double,
+        totalDurationSeconds: Double,
+        geometry: RouteGeometry
+    ) {
+        self.coordinates = coordinates
+        self.steps = steps
+        self.totalDistanceMeters = totalDistanceMeters
+        self.totalDurationSeconds = totalDurationSeconds
+        self.geometry = geometry
+    }
+
+    /// Formatted distance string (e.g. "12.3 km")
+    public var formattedDistance: String {
+        if totalDistanceMeters >= 1000 {
+            return String(format: "%.1f km", totalDistanceMeters / 1000)
+        }
+        return "\(Int(totalDistanceMeters)) m"
+    }
+
+    /// Formatted duration string (e.g. "23 phút" or "1h 5m")
+    public var formattedDuration: String {
+        let mins = Int(totalDurationSeconds / 60)
+        if mins >= 60 { return "\(mins / 60)h \(mins % 60)m" }
+        return "\(mins) phút"
+    }
+
+    public static func == (lhs: NavRoute, rhs: NavRoute) -> Bool {
+        return abs(lhs.totalDistanceMeters - rhs.totalDistanceMeters) < 1e-3 &&
+               abs(lhs.totalDurationSeconds - rhs.totalDurationSeconds) < 1e-3 &&
+               lhs.coordinates.count == rhs.coordinates.count &&
+               lhs.steps.count == rhs.steps.count
+    }
+}
+
+// MARK: - ValhallaRoutingService Errors
+
+public enum ValhallaRoutingError: LocalizedError, Sendable {
+    case configLoadFailed(String)
+    case noRouteFound(String)
+    case engineUnavailable
+    case decodingFailed(String)
+    case modeUnavailable(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .configLoadFailed(let m):  return "Lỗi tải cấu hình Valhalla: \(m)"
+        case .noRouteFound(let m):      return "Không tìm được đường: \(m)"
+        case .engineUnavailable:        return "Engine định tuyến chưa sẵn sàng"
+        case .decodingFailed(let m):    return "Lỗi giải mã lộ trình: \(m)"
+        case .modeUnavailable(let m):   return m
+        }
+    }
+}
+
+public enum RoutingErrorCategory: String, Sendable {
+    case engineUnavailable
+    case tileCoverageMissing
+    case noRouteFound
+    case invalidRequest
+    case unknown
+}
+
 // MARK: - Routing Service Protocol
 
-public protocol RoutingServiceProtocol: Sendable {
-    /// Calculate route candidates (primary + alternatives) based on RoutingRequest.
+/// Protocol abstracting route calculation for testability, multi-route preview, and provider substitution.
+@MainActor
+public protocol RoutingServiceProtocol: AnyObject, Sendable {
+    /// Calculate multiple route candidates (primary + alternatives) based on RoutingRequest.
     func calculateRoutes(request: RoutingRequest) async throws -> RouteSet
 
     /// Calculate a single route for a given transport costing (backward-compatible / reroute usage).
@@ -59,36 +194,6 @@ public extension RoutingServiceProtocol {
             label: "Đề xuất"
         )
         return RouteSet(candidates: [candidate])
-    }
-}
-
-// MARK: - Error Definitions
-
-public enum RoutingErrorCategory: String, Sendable {
-    case engineUnavailable
-    case tileCoverageMissing
-    case noRouteFound
-    case invalidRequest
-    case unknown
-}
-
-public enum ValhallaRoutingError: LocalizedError, Sendable {
-    case configMissing
-    case noRouteFound(String)
-    case decodingFailed(String)
-    case modeUnavailable(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .configMissing:
-            return "Không tìm thấy file cấu hình Valhalla"
-        case .noRouteFound(let msg):
-            return "Không tìm thấy đường: \(msg)"
-        case .decodingFailed(let msg):
-            return "Lỗi giải mã lộ trình: \(msg)"
-        case .modeUnavailable(let msg):
-            return msg
-        }
     }
 }
 
@@ -142,44 +247,103 @@ public enum MapKitModeMapper {
     }
 }
 
-// MARK: - ValhallaWrapper Service
+// MARK: - ValhallaRoutingService
 
-public final class ValhallaWrapper: RoutingServiceProtocol, @unchecked Sendable {
+@MainActor
+public final class ValhallaRoutingService: ObservableObject, RoutingServiceProtocol {
 
-    public static let shared = ValhallaWrapper()
+    public static let shared = ValhallaRoutingService()
+    private init() { Task { await loadValhalla() } }
 
-    private let routingQueue = DispatchQueue(label: "com.ysiduc.valhalla.swift", qos: .userInitiated)
-    public private(set) var isLoaded: Bool = false
+    // Background queue for blocking Valhalla calls
+    private let routingQueue = DispatchQueue(
+        label: "com.ysiduc.valhalla.routing",
+        qos: .userInitiated
+    )
 
-    private init() {
-        loadConfig()
-    }
+    @Published public private(set) var isLoaded = false
+    @Published public private(set) var loadError: String?
 
-    // MARK: - Engine Initialization
+    // MARK: - Lifecycle
 
-    public func loadConfig() {
-        guard let configPath = Bundle.main.path(forResource: "valhalla", ofType: "json") else {
-            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let docConfig = docsDir.appendingPathComponent("valhalla.json").path
-            if FileManager.default.fileExists(atPath: docConfig) {
-                initEngine(at: docConfig)
-            } else {
-                print("[ValhallaWrapper] valhalla.json not found in Bundle or Documents.")
-            }
+    private func loadValhalla() async {
+        let engine = ValhallaEngine.shared()
+
+        guard engine.isAvailable else {
+            print("[ValhallaWrapper] STUB mode.")
+            isLoaded = true
             return
         }
-        initEngine(at: configPath)
+
+        // 1. Locate valhalla_tiles.tar
+        let tilesURL = locateTilesTar()
+        guard let configBaseURL = bundleConfigURL() ?? documentConfigURL() else {
+            loadError = "valhalla.json not found."
+            print("[ValhallaWrapper] ❌ \(loadError!)")
+            return
+        }
+
+        do {
+            // Prepare dynamic valhalla config pointing to actual tile location
+            let activeConfigURL = try prepareActiveConfig(from: configBaseURL, tilesURL: tilesURL)
+            try engine.loadConfig(atPath: activeConfigURL.path)
+            isLoaded = true
+            print("[ValhallaWrapper] ✅ Native Valhalla initialized with tiles: \(tilesURL?.path ?? "none")")
+        } catch {
+            loadError = error.localizedDescription
+            print("[ValhallaWrapper] ⚠️ Valhalla tiles not loaded (\(loadError!)). Online fallback ready.")
+        }
     }
 
-    private func initEngine(at path: String) {
-        do {
-            try ValhallaEngine.shared().loadConfig(atPath: path)
-            isLoaded = true
-            print("[ValhallaWrapper] Valhalla initialized with config at: \(path)")
-        } catch {
-            print("[ValhallaWrapper] Failed to load config: \(error.localizedDescription)")
-            isLoaded = false
+    private func locateTilesTar() -> URL? {
+        // Check bundle first
+        if let bundleTar = Bundle.main.url(forResource: "valhalla_tiles", withExtension: "tar") {
+            return bundleTar
         }
+        // Check Application Support
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        if let appSupportTar = appSupport?.appendingPathComponent("valhalla_data/valhalla_tiles.tar"),
+           FileManager.default.fileExists(atPath: appSupportTar.path) {
+            return appSupportTar
+        }
+        // Check Documents
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        if let docsTar = docs?.appendingPathComponent("valhalla_tiles.tar"),
+           FileManager.default.fileExists(atPath: docsTar.path) {
+            return docsTar
+        }
+        return nil
+    }
+
+    private func prepareActiveConfig(from baseConfigURL: URL, tilesURL: URL?) throws -> URL {
+        let data = try Data(contentsOf: baseConfigURL)
+        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return baseConfigURL
+        }
+
+        if let tiles = tilesURL, var mjolnir = json["mjolnir"] as? [String: Any] {
+            mjolnir["tile_extract"] = tiles.path
+            json["mjolnir"] = mjolnir
+        }
+
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        let activeURL = appSupport.appendingPathComponent("active_valhalla.json")
+        let updatedData = try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted)
+        try updatedData.write(to: activeURL)
+        return activeURL
+    }
+
+    private func bundleConfigURL() -> URL? {
+        Bundle.main.url(forResource: "valhalla", withExtension: "json")
+    }
+
+    private func documentConfigURL() -> URL? {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first
+        return appSupport?.appendingPathComponent("valhalla_data/valhalla.json")
     }
 
     // MARK: - RoutingServiceProtocol Implementation
@@ -198,7 +362,7 @@ public final class ValhallaWrapper: RoutingServiceProtocol, @unchecked Sendable 
                 print("[ValhallaWrapper] ⚠️ Primary routing failure: provider=Valhalla, mode=\(request.profile.transportMode), category=\(category), details=\(error.localizedDescription). Evaluating fallback...")
             }
         } else {
-            print("[ValhallaWrapper] ⚠️ Valhalla offline or not loaded (isLoaded=\(isLoaded)). Evaluating fallback for mode=\(request.profile.transportMode)...)
+            print("[ValhallaWrapper] ⚠️ Valhalla offline or not loaded (isLoaded=\(isLoaded)). Evaluating fallback for mode=\(request.profile.transportMode)...")
         }
 
         // 2. Check fallback capability
@@ -498,6 +662,8 @@ public final class ValhallaWrapper: RoutingServiceProtocol, @unchecked Sendable 
         return steps
     }
 }
+
+public typealias ValhallaWrapper = ValhallaRoutingService
 
 // MARK: - MKPolyline helper
 extension MKPolyline {
