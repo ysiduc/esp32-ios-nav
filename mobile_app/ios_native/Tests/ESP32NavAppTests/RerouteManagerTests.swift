@@ -80,6 +80,18 @@ final class RerouteManagerTests: XCTestCase {
         navSession.startNavigation(route: initialRoute, destination: destination)
     }
 
+    override func tearDown() {
+        rerouteManager?.cancel()
+        navSession?.stopNavigation()
+        rerouteManager = nil
+        navSession = nil
+        mockRouting = nil
+        destination = nil
+        initialRoute = nil
+        replacementRoute = nil
+        super.tearDown()
+    }
+
     // MARK: - Test 1: Single In-Flight Request Guarantee (No Concurrent Reroutes)
 
     func testSingleInFlightRequestGuarantee() async {
@@ -99,6 +111,7 @@ final class RerouteManagerTests: XCTestCase {
         // Fire observation 1 -> starts request
         rerouteManager.handleObservation(location: loc, decision: confirmedDecision, currentTime: baseDate)
         XCTAssertTrue(rerouteManager.isRerouting)
+        try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 1)
 
         // Fire observation 2 and 3 while request 1 is still in flight
@@ -144,6 +157,7 @@ final class RerouteManagerTests: XCTestCase {
 
         // Observation after backoff expires (t = 2.1s) -> Attempt 2 triggered without requiring onRoute return!
         rerouteManager.handleObservation(location: loc1, decision: confirmedDecision, currentTime: baseDate.addingTimeInterval(2.1))
+        try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 2)
     }
 
@@ -317,7 +331,13 @@ final class RerouteManagerTests: XCTestCase {
         mockRouting.resultToReturn = .success(replacementRoute)
 
         // Simulate failure backoff active
-        let loc = CLLocation(latitude: 10.001, longitude: 106.001)
+        let loc = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 10.001, longitude: 106.001),
+            altitude: 0,
+            horizontalAccuracy: 5.0,
+            verticalAccuracy: 5.0,
+            timestamp: baseDate
+        )
         navSession.locationManager(CLLocationManager(), didUpdateLocations: [loc])
 
         rerouteManager.startReroute(reason: .offRoute, origin: loc.coordinate, costing: "motorcycle", currentTime: baseDate)
@@ -328,12 +348,13 @@ final class RerouteManagerTests: XCTestCase {
 
         // User changes transport mode to auto -> MUST bypass backoff!
         mockRouting.resultToReturn = .success(replacementRoute)
-        rerouteManager.requestTransportModeReroute(costing: "auto", currentTime: baseDate.addingTimeInterval(0.5))
+        rerouteManager.requestTransportModeReroute(costing: "auto", origin: loc.coordinate, currentTime: baseDate.addingTimeInterval(0.5))
 
         XCTAssertEqual(rerouteManager.currentReason, .transportModeChanged)
+        try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.lastCosting, "auto")
 
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        try? await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, 500.0)
     }

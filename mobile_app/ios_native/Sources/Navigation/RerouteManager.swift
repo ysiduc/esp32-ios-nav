@@ -100,10 +100,11 @@ public final class RerouteManager: ObservableObject {
 
     public func requestTransportModeReroute(
         costing: String,
+        origin: CLLocationCoordinate2D? = nil,
         currentTime: Date = Date()
     ) {
         guard let session = navSession, session.state == .navigating else { return }
-        guard let origin = session.filteredLocation?.coordinate ?? session.userLocation?.coordinate else {
+        guard let resolvedOrigin = origin ?? session.filteredLocation?.coordinate ?? session.userLocation?.coordinate else {
             print("[RerouteManager] Cannot recalculate transport mode: no GPS coordinate available")
             return
         }
@@ -118,7 +119,7 @@ public final class RerouteManager: ObservableObject {
 
         startReroute(
             reason: .transportModeChanged,
-            origin: origin,
+            origin: resolvedOrigin,
             costing: costing,
             currentTime: currentTime
         )
