@@ -116,7 +116,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
             placeID: "dest_1",
             name: "Hồ Gươm",
             formattedAddress: "Hà Nội",
-            location: CLLocation(latitude: coordB.latitude, longitude: coordB.longitude)
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
         )
         viewModel.selectedDestination = testDest
 
@@ -143,7 +143,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
             placeID: "dest_1",
             name: "Hồ Gươm",
             formattedAddress: "Hà Nội",
-            location: CLLocation(latitude: coordB.latitude, longitude: coordB.longitude)
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
         )
         viewModel.selectedDestination = testDest
 
@@ -220,7 +220,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
             placeID: "dest_1",
             name: "Hồ Gươm",
             formattedAddress: "Hà Nội",
-            location: CLLocation(latitude: coordB.latitude, longitude: coordB.longitude)
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
         )
         viewModel.selectedDestination = testDest
 
