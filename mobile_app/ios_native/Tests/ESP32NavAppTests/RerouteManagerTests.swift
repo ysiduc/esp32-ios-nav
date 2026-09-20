@@ -66,7 +66,7 @@ final class RerouteManagerTests: XCTestCase {
             CLLocationCoordinate2D(latitude: 10.0, longitude: 106.0),
             CLLocationCoordinate2D(latitude: 10.005, longitude: 106.0)
         ]
-        let step0 = NavStep(coordinate: coordsA[0], distanceMeters: 300.0, durationSeconds: 30.0, streetName: "A", maneuverType: .depart, instruction: "Depart")
+        let step0 = NavStep(coordinate: coordsA[0], distanceMeters: 300.0, durationSeconds: 30.0, streetName: "A", maneuverType: .straight, instruction: "Straight")
         let stepA = NavStep(coordinate: coordsA[1], distanceMeters: 256.0, durationSeconds: 30.0, streetName: "A", maneuverType: .arrive, instruction: "Arrive")
         initialRoute = NavRoute(coordinates: coordsA, steps: [step0, stepA], totalDistanceMeters: 556.0, totalDurationSeconds: 60.0)
         destination = NavigationDestination(coordinate: coordsA[1], name: "Goal")
@@ -75,7 +75,7 @@ final class RerouteManagerTests: XCTestCase {
             CLLocationCoordinate2D(latitude: 10.001, longitude: 106.001),
             CLLocationCoordinate2D(latitude: 10.005, longitude: 106.0)
         ]
-        let stepB0 = NavStep(coordinate: coordsB[0], distanceMeters: 250.0, durationSeconds: 25.0, streetName: "B", maneuverType: .depart, instruction: "Depart")
+        let stepB0 = NavStep(coordinate: coordsB[0], distanceMeters: 250.0, durationSeconds: 25.0, streetName: "B", maneuverType: .straight, instruction: "Straight")
         let stepB = NavStep(coordinate: coordsB[1], distanceMeters: 250.0, durationSeconds: 25.0, streetName: "B", maneuverType: .arrive, instruction: "Arrive")
         replacementRoute = NavRoute(coordinates: coordsB, steps: [stepB0, stepB], totalDistanceMeters: 500.0, totalDurationSeconds: 50.0)
 
