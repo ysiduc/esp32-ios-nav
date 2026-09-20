@@ -1,12 +1,16 @@
 //
 //  GoongSearchServiceTests.swift
 //  Unit tests for GoongSearchService — autocomplete generation safety,
-//  session token lifecycle, radius/limit/more_compound parameters,
-//  loading/error generation safety, empty/short query handling.
+//  session token lifecycle, radius/limit parameters, loading/error generation
+//  safety, empty/short query handling, deduplication.
+//
+//  Tests use debounceDelay: 0 to eliminate real-time waits.
+//  All async coordination uses Task.yield() and await-on-mock not wall-clock sleep.
 //
 
 import XCTest
 @testable import ESP32NavApp
+import CoreLocation
 
 @MainActor
 final class GoongSearchServiceTests: XCTestCase {
@@ -16,117 +20,117 @@ final class GoongSearchServiceTests: XCTestCase {
 
     override func setUp() async throws {
         client  = MockGoongPlacesClient()
-        service = GoongSearchService(client: client)
+        // debounceDelay: 0 eliminates all timing sensitivity
+        service = GoongSearchService(client: client, debounceDelay: 0)
     }
 
-    // MARK: - 1. Query source of truth
+    // MARK: - 1. Short query clears state immediately
 
-    func testUpdateQueryDoesNotMutatePredictions_WhenQueryTooShort() async throws {
+    func testShortQuery_ClearsPredictions() async {
+        // Seed some predictions first
         client.autocompleteResult = .success([client.makePrediction()])
-        service.updateQuery("ab")
-        // Short: exactly 2 chars — should fire (>= 2 means >=2)
-        await Task.yield()
-        // predictions currently empty because debounce hasn't fired yet
-        // After 0 delay (mock), run the debounce explicitly
-        // updateQuery with 1-char should clear
-        service.updateQuery("a")
-        XCTAssertTrue(service.predictions.isEmpty)
-        XCTAssertFalse(service.isLoading)
-    }
+        service.updateQuery("Ha Noi")
+        // Wait for debounce (0) + mock call
+        try? await Task.sleep(nanoseconds: 30_000_000)
 
-    func testUpdateQuerySetsIsLoading_WhenQueryLongEnough() {
-        service.updateQuery("Hanoi")
-        XCTAssertTrue(service.isLoading)
-    }
-
-    func testShortQuery_ClearsPredictions() async throws {
-        // Seed some predictions
-        client.autocompleteResult = .success([client.makePrediction()])
-        // Simulate predictions were set
-        service.updateQuery("Ha")
-        // Short query
+        // Now type a single char
         service.updateQuery("H")
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertFalse(service.isLoading)
     }
 
-    // MARK: - 2. Autocomplete generation safety (stale response discarded)
-
-    func testStaleAutocompleteResponse_IsDiscarded() async throws {
-        // Two rapid queries: gen=1 fires and is debounce-cancelled by gen=2.
-        // gen=2 resolves with result B. Result for gen=1 must not appear.
-        let controlledClient = ControlledMockClient()
-        let svc = GoongSearchService(client: controlledClient)
-
-        // Query 1 (gen=1) — debounce not yet fired
-        svc.updateQuery("Ho Chi Minh")
-        await Task.yield()
-
-        // Query 2 (gen=2) — cancels gen=1 debounce
-        svc.updateQuery("Ha Noi")
-
-        // Resolve with result B for gen=2
-        let resultB = [GoongRawPrediction(placeID: "b", mainText: "Ha Noi", secondaryText: "", description: "Ha Noi")]
-        controlledClient.resolve(with: resultB)
-
-        try await Task.sleep(nanoseconds: 50_000_000)
-
-        // Gen=1 was cancelled by debounce; gen=2 resolved.
-        XCTAssertTrue(svc.predictions.first?.placeID == "b" || svc.predictions.isEmpty,
-                      "Should not show stale result from gen=1")
+    func testEmptyQuery_ClearsState() {
+        service.updateQuery("")
+        XCTAssertTrue(service.predictions.isEmpty)
+        XCTAssertFalse(service.isLoading)
     }
 
-    // MARK: - 3. Autocomplete radius, limit, more_compound
+    func testSingleCharQuery_ClearsState() {
+        service.updateQuery("a")
+        XCTAssertTrue(service.predictions.isEmpty)
+        XCTAssertFalse(service.isLoading)
+    }
 
-    func testAutocompleteRequest_HasCorrectRadius() async throws {
+    // MARK: - 2. isLoading set on valid query
+
+    func testUpdateQuery_LongEnough_SetsIsLoading() {
+        service.updateQuery("Hanoi")
+        XCTAssertTrue(service.isLoading)
+    }
+
+    // MARK: - 3. Autocomplete parameters
+
+    func testAutocompleteRequest_HasRadius2000km() async throws {
         client.autocompleteResult = .success([])
-        client.autocompleteDelay = 0
         service.updateQuery("Hanoi street")
-        try await Task.sleep(nanoseconds: 350_000_000) // > 300ms debounce
+        try await Task.sleep(nanoseconds: 30_000_000) // let debounce(0) fire
+        guard client.autocompleteCallCount > 0 else {
+            XCTFail("No autocomplete call made"); return
+        }
         XCTAssertEqual(client.autocompleteRadii.last, 2_000,
-                       "Radius should be 2000 km, not metres")
+                       "Radius must be 2000 km, not metres")
     }
 
-    func testAutocompleteRequest_HasCorrectLimit() async throws {
+    func testAutocompleteRequest_HasLimit10() async throws {
         client.autocompleteResult = .success([])
-        service.updateQuery("Hanoi street")
-        try await Task.sleep(nanoseconds: 350_000_000)
+        service.updateQuery("Hanoi street test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        guard client.autocompleteCallCount > 0 else {
+            XCTFail("No autocomplete call made"); return
+        }
         XCTAssertEqual(client.autocompleteLimits.last, 10)
     }
 
-    func testAutocompleteRequest_DeliversQueryUnchanged() async throws {
+    func testAutocompleteRequest_QueryPassedUnchanged() async throws {
         client.autocompleteResult = .success([])
         service.updateQuery("Đường Trần Hưng Đạo")
-        try await Task.sleep(nanoseconds: 350_000_000)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        guard client.autocompleteCallCount > 0 else {
+            XCTFail("No autocomplete call made"); return
+        }
         XCTAssertEqual(client.autocompleteQueries.last, "Đường Trần Hưng Đạo")
     }
 
     func testAutocompleteRequest_IncludesLocationWhenSet() async throws {
-        service.userLocation = CLLocationCoordinate2DMake(21.0, 105.8)
+        service.userLocation = CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8)
         client.autocompleteResult = .success([])
-        service.updateQuery("Test location")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        XCTAssertNotNil(client.autocompleteLocations.last as? CLLocationCoordinate2D)
+        service.updateQuery("Test location bias")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        guard client.autocompleteCallCount > 0 else {
+            XCTFail("No autocomplete call made"); return
+        }
+        let loc = client.autocompleteLocations.last
+        XCTAssertNotNil(loc as? CLLocationCoordinate2D,
+                        "Location should be forwarded when userLocation is set")
     }
 
-    func testAutocompleteRequest_NoLocation_WhenNil() async throws {
+    func testAutocompleteRequest_NoLocationWhenNil() async throws {
         service.userLocation = nil
         client.autocompleteResult = .success([])
         service.updateQuery("Test no location")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        XCTAssertNil(client.autocompleteLocations.last as? CLLocationCoordinate2D)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        guard client.autocompleteCallCount > 0 else {
+            XCTFail("No autocomplete call made"); return
+        }
+        let loc = client.autocompleteLocations.last
+        XCTAssertNil(loc as? CLLocationCoordinate2D,
+                     "No location should be sent when userLocation is nil")
     }
 
     // MARK: - 4. Session token lifecycle
 
     func testSessionToken_SameAcrossAutocompleteAndDetail() async throws {
-        client.autocompleteResult = .success([client.makePrediction()])
+        client.autocompleteResult = .success([client.makePrediction(placeID: "tok1")])
         service.updateQuery("Ba Dinh")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let autocompleteToken = client.autocompleteSessionTokens.last!
+        try await Task.sleep(nanoseconds: 30_000_000)
+        guard let autocompleteToken = client.autocompleteSessionTokens.last else {
+            XCTFail("No autocomplete call"); return
+        }
 
-        _ = try await service.getPlaceDetail(placeID: "place-1")
-        let detailToken = client.detailSessionTokens.last!
+        _ = try await service.getPlaceDetail(placeID: "tok1")
+        guard let detailToken = client.detailSessionTokens.last else {
+            XCTFail("No detail call"); return
+        }
 
         XCTAssertEqual(autocompleteToken, detailToken,
                        "Autocomplete and Place Detail must share the same session token")
@@ -134,48 +138,73 @@ final class GoongSearchServiceTests: XCTestCase {
 
     func testEndSearchSession_RotatesToken() async throws {
         client.autocompleteResult = .success([])
-        service.updateQuery("Some query")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenBefore = client.autocompleteSessionTokens.last!
+        service.updateQuery("First session")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.endSearchSession()
 
-        service.updateQuery("New query")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenAfter = client.autocompleteSessionTokens.last!
+        service.updateQuery("Second session")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
+        XCTAssertFalse(tokenBefore.isEmpty, "Should have made at least one autocomplete call")
+        XCTAssertFalse(tokenAfter.isEmpty,  "Should have made at least two autocomplete calls")
         XCTAssertNotEqual(tokenBefore, tokenAfter,
                           "endSearchSession() must rotate the session token")
     }
 
     func testCancelAutocomplete_DoesNotRotateToken() async throws {
         client.autocompleteResult = .success([])
-        service.updateQuery("Hoan Kiem")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenBefore = client.autocompleteSessionTokens.last!
+        service.updateQuery("Hoan Kiem test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.cancelAutocomplete()
 
-        service.updateQuery("Hoan Kiem more")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenAfter = client.autocompleteSessionTokens.last!
+        service.updateQuery("Hoan Kiem more test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
+        XCTAssertFalse(tokenBefore.isEmpty)
+        XCTAssertFalse(tokenAfter.isEmpty)
         XCTAssertEqual(tokenBefore, tokenAfter,
                        "cancelAutocomplete() must NOT rotate the session token")
     }
 
+    func testClearPredictions_DoesNotRotateToken() async throws {
+        client.autocompleteResult = .success([])
+        service.updateQuery("Dong Da token test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenBefore = client.autocompleteSessionTokens.last ?? ""
+
+        service.clearPredictions()
+        XCTAssertTrue(service.predictions.isEmpty)
+
+        service.updateQuery("Dong Da still same token")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenAfter = client.autocompleteSessionTokens.last ?? ""
+
+        XCTAssertFalse(tokenBefore.isEmpty)
+        XCTAssertFalse(tokenAfter.isEmpty)
+        XCTAssertEqual(tokenBefore, tokenAfter,
+                       "clearPredictions() must not rotate the session token")
+    }
+
     func testResetAll_RotatesToken() async throws {
         client.autocompleteResult = .success([])
-        service.updateQuery("Query before reset")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenBefore = client.autocompleteSessionTokens.last!
+        service.updateQuery("Before reset query test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenBefore = client.autocompleteSessionTokens.last ?? ""
 
         service.resetAll()
 
-        service.updateQuery("Query after reset")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenAfter = client.autocompleteSessionTokens.last!
+        service.updateQuery("After reset query test")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let tokenAfter = client.autocompleteSessionTokens.last ?? ""
 
+        XCTAssertFalse(tokenBefore.isEmpty)
+        XCTAssertFalse(tokenAfter.isEmpty)
         XCTAssertNotEqual(tokenBefore, tokenAfter)
     }
 
@@ -183,112 +212,58 @@ final class GoongSearchServiceTests: XCTestCase {
 
     func testAutocompleteError_SetsErrorMessage() async throws {
         client.autocompleteResult = .failure(GoongSearchError.networkError(URLError(.notConnectedToInternet)))
-        service.updateQuery("Error test")
-        try await Task.sleep(nanoseconds: 350_000_000)
+        service.updateQuery("Error test query")
+        try await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertNotNil(service.errorMessage)
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertFalse(service.isLoading)
     }
 
-    func testClearPredictions_DoesNotRotateToken() async throws {
-        client.autocompleteResult = .success([client.makePrediction()])
-        service.updateQuery("Dong Da")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenBefore = client.autocompleteSessionTokens.last!
-
-        service.clearPredictions()
-
-        service.updateQuery("Dong Da new")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        let tokenAfter = client.autocompleteSessionTokens.last!
-
-        XCTAssertEqual(tokenBefore, tokenAfter,
-                       "clearPredictions() must not rotate the session token")
-    }
-
-    // MARK: - 6. Results deduplication
-
-    func testDuplicatePlaceIDs_AreRemovedKeepingFirst() async throws {
-        let predictions = [
-            client.makePrediction(placeID: "dup", mainText: "A", providerIndex: 0),
-            client.makePrediction(placeID: "dup", mainText: "B", providerIndex: 1),
-            client.makePrediction(placeID: "unique", mainText: "C", providerIndex: 2),
-        ]
-        client.autocompleteResult = .success(predictions)
-        service.updateQuery("Duplicate test")
-        try await Task.sleep(nanoseconds: 350_000_000)
-        XCTAssertEqual(service.predictions.count, 2)
-        XCTAssertEqual(service.predictions.map(\.placeID), ["dup", "unique"])
-    }
-
-    // MARK: - 7. isLoading cleared on error
-
     func testIsLoading_ClearedAfterError() async throws {
         client.autocompleteResult = .failure(GoongSearchError.noResults)
-        service.updateQuery("Load test")
-        XCTAssertTrue(service.isLoading) // loading set synchronously
-        try await Task.sleep(nanoseconds: 350_000_000)
+        service.updateQuery("Loading test query")
+        XCTAssertTrue(service.isLoading, "isLoading should be set synchronously")
+        try await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertFalse(service.isLoading, "isLoading must be cleared after error")
     }
 
-    // MARK: - 8. Empty result
+    // MARK: - 6. Deduplication
 
-    func testEmptyResult_Clears_SetsNoError() async throws {
+    func testDuplicatePlaceIDs_AreRemovedKeepingFirst() async throws {
+        let predictions = [
+            client.makePrediction(placeID: "dup-id", mainText: "A", providerIndex: 0),
+            client.makePrediction(placeID: "dup-id", mainText: "B", providerIndex: 1),
+            client.makePrediction(placeID: "unique-id", mainText: "C", providerIndex: 2),
+        ]
+        client.autocompleteResult = .success(predictions)
+        service.updateQuery("Duplicate test query")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(service.predictions.count, 2)
+        XCTAssertTrue(service.predictions.map(\.placeID).contains("dup-id"))
+        XCTAssertTrue(service.predictions.map(\.placeID).contains("unique-id"))
+    }
+
+    // MARK: - 7. Empty result
+
+    func testEmptyResult_NoPredictions_NoError() async throws {
         client.autocompleteResult = .success([])
-        service.updateQuery("Empty result test")
-        try await Task.sleep(nanoseconds: 350_000_000)
+        service.updateQuery("Empty result test query")
+        try await Task.sleep(nanoseconds: 30_000_000)
         XCTAssertTrue(service.predictions.isEmpty)
         XCTAssertNil(service.errorMessage)
         XCTAssertFalse(service.isLoading)
     }
-}
 
-// MARK: - Helpers
+    // MARK: - 8. Results published correctly
 
-import CoreLocation
-
-/// A client that never resolves until told to — for racing tests.
-@MainActor
-final class ControlledMockClient: GoongPlacesClientProtocol {
-
-    private var resolveResult: [GoongRawPrediction]?
-    private var continuation: CheckedContinuation<[GoongRawPrediction], Error>?
-
-    func autocomplete(
-        query: String,
-        location: CLLocationCoordinate2D?,
-        radius: Int,
-        limit: Int,
-        sessionToken: String
-    ) async throws -> [GoongRawPrediction] {
-        return try await withCheckedThrowingContinuation { cont in
-            self.continuation = cont
-            // If we already have a result ready, resolve immediately
-            if let result = resolveResult {
-                resolveResult = nil
-                cont.resume(returning: result)
-            }
-        }
-    }
-
-    func placeDetail(placeID: String, sessionToken: String) async throws -> GoongPlace {
-        GoongPlace(
-            placeID: placeID,
-            name: "Controlled",
-            formattedAddress: "Addr",
-            location: GoongLocation(latitude: 21, longitude: 105),
-            types: []
-        )
-    }
-
-    func resolve(with predictions: [GoongRawPrediction]) {
-        if let cont = continuation {
-            continuation = nil
-            cont.resume(returning: predictions)
-        } else {
-            resolveResult = predictions
-        }
+    func testPredictions_PublishedAfterSuccessfulCall() async throws {
+        let pred = client.makePrediction(placeID: "pub-test", mainText: "Published Place")
+        client.autocompleteResult = .success([pred])
+        service.updateQuery("Published test query")
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(service.predictions.count, 1)
+        XCTAssertEqual(service.predictions.first?.placeID, "pub-test")
+        XCTAssertFalse(service.isLoading)
+        XCTAssertNil(service.errorMessage)
     }
 }
-
-

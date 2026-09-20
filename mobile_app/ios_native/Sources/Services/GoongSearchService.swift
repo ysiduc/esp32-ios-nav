@@ -108,7 +108,9 @@ public final class GoongSearchService: ObservableObject {
     /// A response from generation N is discarded if the current generation is N+k.
     private var autocompleteGeneration: UInt64 = 0
     private var debounceTask: Task<Void, Never>?
-    private let debounceDelay: UInt64 = 300_000_000 // 300 ms
+    /// Debounce delay in nanoseconds. Defaults to 300ms.
+    /// Injected in tests as 0 to eliminate timing dependencies.
+    private let debounceDelay: UInt64
 
     // MARK: - User Location (proximity bias)
 
@@ -118,12 +120,13 @@ public final class GoongSearchService: ObservableObject {
 
     private let client: GoongPlacesClientProtocol
 
-    public init(client: GoongPlacesClientProtocol? = nil) {
+    public init(client: GoongPlacesClientProtocol? = nil, debounceDelay: UInt64 = 300_000_000) {
         if let injected = client {
             self.client = injected
         } else {
             self.client = GoongPlacesHTTPClient()
         }
+        self.debounceDelay = debounceDelay
     }
 
     // MARK: - Autocomplete
