@@ -158,7 +158,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     private var kalmanTimestamp: Date?
     private let kalmanQ: Double = 3.0 // m/s process noise
 
+    private let requestLocationAuthorizationOnInit: Bool
+
     public init(requestLocationAuthorizationOnInit: Bool = true) {
+        self.requestLocationAuthorizationOnInit = requestLocationAuthorizationOnInit
         super.init()
         setupLocationManager(requestAuthorization: requestLocationAuthorizationOnInit)
     }
@@ -306,10 +309,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     // MARK: - Background
 
     private func enableBackgroundLocation() {
+        guard requestLocationAuthorizationOnInit else { return }
         locationManager.allowsBackgroundLocationUpdates = true
     }
 
     private func disableBackgroundLocation() {
+        guard requestLocationAuthorizationOnInit else { return }
         locationManager.allowsBackgroundLocationUpdates = false
         backgroundSession = nil
     }
