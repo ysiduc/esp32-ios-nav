@@ -172,7 +172,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         locationManager.headingFilter   = 2.0
         locationManager.activityType    = .automotiveNavigation
         locationManager.pausesLocationUpdatesAutomatically = false
-        locationManager.requestWhenInUseAuthorization()
+
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
+                        NSClassFromString("XCTestCase") != nil
+        if !isTesting {
+            locationManager.requestWhenInUseAuthorization()
+        }
     }
 
     // MARK: - Public API
