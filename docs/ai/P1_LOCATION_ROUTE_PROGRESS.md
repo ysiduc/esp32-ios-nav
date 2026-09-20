@@ -235,18 +235,18 @@ A projection jumping ahead to the final segment while the user is physically far
 
 | Test Name | Scenario | Verification Type | Expected | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `testStraightRouteProjection` | Point A to B Eastbound (1093m), GPS 22m North of center | STATICALLY VERIFIED | `segmentIndex == 0`, `fraction ≈ 0.5`, `lateral ≈ 22.2m`, `distAlong ≈ 546m` | **PASS** |
-| `testMultiSegmentRouteCumulativeDistances` | 4-point, 3-segment route | STATICALLY VERIFIED | Invariant cumulative distances, correct segment 1 match | **PASS** |
-| `testBackwardSnapPrevention` | Driving South on parallel segment (progress 867m), GPS jitter near Northbound segment (278m) | STATICALLY VERIFIED | Does not snap backward 589m; stays on segment 2 | **PASS** |
-| `testForwardJumpPrevention` | Self-crossing figure-8 route; GPS at intersection | STATICALLY VERIFIED | Does not jump ahead +1500m to segment 4; stays on segment 0 | **PASS** |
-| `testTemporalForwardJumpOneSecond` | dt = 1.0s at 10m/s speed, candidate at 110m vs future crossing at 180m | STATICALLY VERIFIED | Forward bound restricts progress to ~32.5m; local segment 1 (110m) wins | **PASS** |
-| `testTemporalDelayedGPSSampleAllowed` | dt = 12.0s at 15m/s speed, candidate at 180m | STATICALLY VERIFIED | Elapsed time permits legitimate 180m movement without jump penalty | **PASS** |
-| `testManeuverMapping` | 2 steps with endShapeIndex 2 and 3 | STATICALLY VERIFIED | Maneuver distances match shape coordinate distances monotonically | **PASS** |
-| `testMapKitShapeMappingMonotonic` | Full polyline (10 coords) with 3 sub-polylines | STATICALLY VERIFIED | Monotonic begin/end shape indices matching (0,3), (3,6), (6,9) | **PASS** |
-| `testRemainingDistance` | 1000m route, progress at 350m, 1000m, 1050m | STATICALLY VERIFIED | 650m, 0m, 0m (clamped at 0) | **PASS** |
-| `testDistanceToTurnAlongRoute` | L-shaped curved road, turn at 441.8m (straight-line 312.4m) | STATICALLY VERIFIED | Distance to turn returns 441.8m (route distance > Euclidean) | **PASS** |
-| `testNavigationSessionManagerReplaceActiveRoute` | Start Route A, replaceActiveRoute(Route B) in real manager | STATICALLY VERIFIED | Active route is B, generation incremented, indices and timestamps reset | **PASS** |
-| `testRouteGeometryResetConcept` | Replacing 500m Route A with 1200m Route B conceptually | STATICALLY VERIFIED | Segment index resets to 0, remaining distance belongs to Route B (>900m) | **PASS** |
+| `testStraightRouteProjection` | Point A to B Eastbound (1093m), GPS 22m North of center | CI TESTED | `segmentIndex == 0`, `fraction ≈ 0.5`, `lateral ≈ 22.2m`, `distAlong ≈ 546m` | **PASS** |
+| `testMultiSegmentRouteCumulativeDistances` | 4-point, 3-segment route | CI TESTED | Invariant cumulative distances, correct segment 1 match | **PASS** |
+| `testBackwardSnapPrevention` | Driving South on parallel segment (progress 867m), GPS jitter near Northbound segment (278m) | CI TESTED | Does not snap backward 589m; stays on segment 2 | **PASS** |
+| `testForwardJumpPrevention` | Self-crossing figure-8 route; GPS at intersection | CI TESTED | Does not jump ahead +1500m to segment 4; stays on segment 0 | **PASS** |
+| `testTemporalForwardJumpOneSecond` | dt = 1.0s at 10m/s speed, candidate at 110m vs future crossing at 180m | CI TESTED | Forward bound restricts progress to ~32.5m; local segment 1 (110m) wins | **PASS** |
+| `testTemporalDelayedGPSSampleAllowed` | dt = 12.0s at 15m/s speed, candidate at 180m | CI TESTED | Elapsed time permits legitimate 180m movement without jump penalty | **PASS** |
+| `testManeuverMapping` | 2 steps with endShapeIndex 2 and 3 | CI TESTED | Maneuver distances match shape coordinate distances monotonically | **PASS** |
+| `testMapKitShapeMappingMonotonic` | Full polyline (10 coords) with 3 sub-polylines | CI TESTED | Monotonic begin/end shape indices matching (0,3), (3,6), (6,9) | **PASS** |
+| `testRemainingDistance` | 1000m route, progress at 350m, 1000m, 1050m | CI TESTED | 650m, 0m, 0m (clamped at 0) | **PASS** |
+| `testDistanceToTurnAlongRoute` | L-shaped curved road, turn at 441.8m (straight-line 312.4m) | CI TESTED | Distance to turn returns 441.8m (route distance > Euclidean) | **PASS** |
+| `testNavigationSessionManagerReplaceActiveRoute` | Start Route A, replaceActiveRoute(Route B) in real manager | CI TESTED | Active route is B, generation incremented, indices and timestamps reset | **PASS** |
+| `testRouteGeometryResetConcept` | Replacing 500m Route A with 1200m Route B conceptually | CI TESTED | Segment index resets to 0, remaining distance belongs to Route B (>900m) | **PASS** |
 
 All tests execute deterministically with zero dependency on hardware or network.
 
@@ -286,9 +286,9 @@ Phase P1 provides all data structures required for P2 rerouting and navigation h
 
 ---
 
-## 19. P1.1 Reviewer Corrections
+## 19. P1.1 / P1.2 Reviewer Corrections
 
-Phase P1.1 addresses all feedback from the external review:
+Phase P1.1 and P1.2 address all feedback and verification requirements from the external review:
 
 1. **Matched Puck Map Display Fix**:
    - In baseline `87fd54b`, `snappedLocation` was supplied to `MapViewContainer` but unused in `updateUIView()`. The map still displayed `mapView.showsUserLocation` (the raw physical GPS dot).
@@ -301,9 +301,9 @@ Phase P1.1 addresses all feedback from the external review:
 
 3. **Temporal Forward Continuity**:
    - Rather than static movement bounds, `RouteGeometry.project()` now tracks `lastMatchedTimestamp: Date?`.
-   - Computes elapsed time $\Delta t = 	ext{timestamp} - 	ext{lastMatchedTimestamp}$ clamped to $[0.2	ext{s}, 30.0	ext{s}]$.
+   - Computes elapsed time $\Delta t = \text{timestamp} - \text{lastMatchedTimestamp}$ clamped to $[0.2\text{s}, 30.0\text{s}]$.
    - Dynamic forward bound:
-     $$	ext{maxPlausibleForward} = \max(	ext{noiseAllowance} + 	ext{accuracyAllowance}, 	ext{speed} 	imes \Delta t 	imes 1.8 + 	ext{accuracyAllowance})$$
+     $$ \text{maxPlausibleForward} = \max(\text{noiseAllowance} + \text{accuracyAllowance}, \text{speed} \times \Delta t \times 1.8 + \text{accuracyAllowance}) $$
    - Ensures a 1-second interval permits smaller jumps than a 10-second gap for the same speed.
    - Resets `lastMatchedTimestamp = nil` on `startNavigation`, `stopNavigation`, `clearRoute`, and `replaceActiveRoute`.
 
@@ -316,15 +316,41 @@ Phase P1.1 addresses all feedback from the external review:
    - Validates that `activeRouteGeneration` increments atomically, `activeRoute` updates to Route B, `currentPolylineSegmentIndex` and `currentManeuverStepIndex` reset to 0, `lastMatchedTimestamp` resets, and `navigationDestination` is preserved.
 
 6. **MapKit Monotonic Shape-Mapping Pure Test**:
-   - Extracted `RouteGeometry.mapStepPolylinesToIndices()` static helper and added `testMapKitShapeMappingMonotonic()` validating strict index monotonicity ($0 \le 	ext{begin}_0 \le 	ext{end}_0 \le 	ext{begin}_1 \le 	ext{end}_1 \le 	ext{begin}_2 \le 	ext{end}_2$).
+   - Extracted `RouteGeometry.mapStepPolylinesToIndices()` static helper and added `testMapKitShapeMappingMonotonic()` validating strict index monotonicity ($0 \le \text{begin}_0 \le \text{end}_0 \le \text{begin}_1 \le \text{end}_1 \le \text{begin}_2 \le \text{end}_2$).
+
+7. **P1.2 Test Host Isolation & Background Location Authorization Safety**:
+   - **Traceability of Failed Run `35520441403`**: In run `35520441403`, the test bundle compiled, but the application crashed with SIGABRT before test execution began (`0` tests run). The crash occurred because the hosted application bootstrapped the production UI tree (`NavigationApp` -> `MainMapView` -> `NavigationViewModel` -> `BLEManager` -> `CBCentralManager`), throwing `NSInternalInconsistencyException` due to `CBCentralManagerOptionRestoreIdentifierKey` in a hosted test environment.
+   - **Traceability of Failed Run `35520977559`**: In run `35520977559`, test host isolation resolved the initial crash and 11 out of 12 tests passed immediately. However, `testNavigationSessionManagerReplaceActiveRoute` failed on `locationManager.allowsBackgroundLocationUpdates = true` (`!stayUp || CLClientIsBackgroundable`).
+   - **Clarification**: Both failures occurred strictly within host bootstrapping and permission lifecycle invocations, not due to any RouteGeometry or route progress mathematical defects.
+   - **Definitive Fix**:
+     - Added `ProcessInfo.isRunningUnitTests` to render an inert view (`Color.clear`) in `NavigationApp` when running under XCTest, preventing premature UI/BLE instantiation while preserving all production BLE state restoration.
+     - Added `public init(requestLocationAuthorizationOnInit: Bool = true)` to `NavigationSessionManager`. When set to `false`, location authorization and `allowsBackgroundLocationUpdates` are safely bypassed, allowing the test suite to validate manager route replacement deterministically without host side effects.
 
 ---
 
 ## 20. Final P1 CI Evidence
 
-- **Commit SHA**: `[Pending P1.1 CI push]`
-- **GitHub Actions Run ID**: `[Pending P1.1 CI push]`
-- **Compile Native iOS Swift/SwiftUI**: `[Pending]`
-- **Native Unit Tests**: `[Pending]`
-- **Compile Flutter iOS IPA**: `[Pending]`
-- **Test Count**: 12 native tests
+- **Commit SHA**: `0f7e3240ea855d045fb9f44ea595d24b8d7756aa`
+- **GitHub Actions Run ID**: `35521300154`
+- **GitHub Actions Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35521300154
+- **Compile Native iOS Swift/SwiftUI**: **SUCCESS** (Job ID `106105744415`, duration: 4m 4s)
+  - `4. Generate Xcode Project`: **SUCCESS**
+  - `5. Resolve Swift Packages`: **SUCCESS**
+  - `6. Run Native Unit Tests`: **SUCCESS** (`Executed 12 tests, with 0 failures (0 unexpected) in 3.965 seconds`)
+  - `7. Build Native iOS App`: **SUCCESS** (Release configuration)
+  - `8. Package Native IPA`: **SUCCESS** (`esp32_nav_native_app.ipa`)
+  - `9. Upload Native IPA artifact`: **SUCCESS**
+- **Compile Flutter iOS IPA**: **SUCCESS** (Job ID `106105744519`, duration: 3m 46s, artifact `esp32_nav_flutter_ios_ipa`)
+- **Native Unit Tests Executed (12/12 PASS)**:
+  1. `testBackwardSnapPrevention`: **PASS**
+  2. `testDistanceToTurnAlongRoute`: **PASS**
+  3. `testForwardJumpPrevention`: **PASS**
+  4. `testManeuverMapping`: **PASS**
+  5. `testMapKitShapeMappingMonotonic`: **PASS**
+  6. `testMultiSegmentRouteCumulativeDistances`: **PASS**
+  7. `testNavigationSessionManagerReplaceActiveRoute`: **PASS**
+  8. `testRemainingDistance`: **PASS**
+  9. `testRouteGeometryResetConcept`: **PASS**
+  10. `testStraightRouteProjection`: **PASS**
+  11. `testTemporalDelayedGPSSampleAllowed`: **PASS**
+  12. `testTemporalForwardJumpOneSecond`: **PASS**
