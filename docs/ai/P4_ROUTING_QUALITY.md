@@ -277,7 +277,11 @@ Candidates record provider origin:
 | `bicycle` | Valhalla | MapKit | `.walking` | **Yes** | Approximated; marked degraded with banner |
 
 Proportional step duration calculation:
-$$	ext{stepDuration} = \left(rac{	ext{stepDistance}}{	ext{totalDistance}}ight) 	imes 	ext{expectedTravelTime}$$
+
+```text
+stepDuration = (stepDistance / totalDistance) * expectedTravelTime
+```
+
 Preserves total route duration exactly as returned by Apple MapKit.
 
 ---
@@ -325,7 +329,43 @@ Total tests: 129 (103 pre-P4 + 26 new P4)
 
 ## 20. GitHub Actions Evidence
 
-*(To be recorded following CI execution)*
+- **Workflow Run ID**: `35533694130`
+- **Commit SHA**: `6af4b63c0ea07ea51e58da571081196437d4e64e`
+- **Workflow Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35533694130
+
+### CI Verification Results
+
+```text
+Job: Compile Native iOS Swift/SwiftUI (ID 106138800589)
+Duration: 3m 16s
+Status: SUCCESS
+
+Test Results:
+Test Suite 'DestinationSelectionTests' passed (13 tests, 0 failures)
+Test Suite 'GoongSearchServiceTests' passed (22 tests, 0 failures)
+Test Suite 'OffRouteDetectorTests' passed (10 tests, 0 failures)
+Test Suite 'RerouteManagerTests' passed (15 tests, 0 failures)
+Test Suite 'RouteCandidateSelectionTests' passed (6 tests, 0 failures)
+Test Suite 'RouteGeometryTests' passed (12 tests, 0 failures)
+Test Suite 'RoutingFallbackTests' passed (7 tests, 0 failures)
+Test Suite 'RoutingProfileTests' passed (8 tests, 0 failures)
+Test Suite 'SearchRankingTests' passed (31 tests, 0 failures)
+Test Suite 'ValhallaRouteSetParserTests' passed (5 tests, 0 failures)
+
+Total: 129 tests executed, 0 failures (0 unexpected)
+Result: 129/129 PASS
+
+Native Release App Build: SUCCESS
+Native IPA Package: SUCCESS
+Native IPA Artifact Upload: SUCCESS (esp32_nav_native_ios_ipa)
+
+Job: Compile Flutter iOS IPA (ID 106138800515)
+Duration: 4m 2s
+Status: SUCCESS
+Flutter Release App Build: SUCCESS
+Flutter IPA Package: SUCCESS
+Flutter IPA Artifact Upload: SUCCESS (esp32_nav_flutter_ios_ipa)
+```
 
 ---
 
