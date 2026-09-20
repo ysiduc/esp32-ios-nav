@@ -44,6 +44,28 @@ final class MockRoutingService: RoutingServiceProtocol {
 
 // MARK: - Test Suite
 
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _currentDate: Date
+
+    init(date: Date) {
+        self._currentDate = date
+    }
+
+    var currentDate: Date {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _currentDate
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _currentDate = newValue
+        }
+    }
+}
+
 @MainActor
 final class RerouteManagerTests: XCTestCase {
 
@@ -51,7 +73,7 @@ final class RerouteManagerTests: XCTestCase {
     var mockRouting: MockRoutingService!
     var rerouteManager: RerouteManager!
 
-    var simulatedNow: Date = Date(timeIntervalSince1970: 1700000000.0)
+    var clock: TestClock!
     let baseDate = Date(timeIntervalSince1970: 1700000000.0)
     var destination: NavigationDestination!
     var initialRoute: NavRoute!
@@ -59,13 +81,14 @@ final class RerouteManagerTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        simulatedNow = baseDate
+        clock = TestClock(date: baseDate)
+        let testClock = clock!
         navSession = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         mockRouting = MockRoutingService()
         rerouteManager = RerouteManager(
             routingService: mockRouting,
             navSession: navSession,
-            now: { [weak self] in self?.simulatedNow ?? Date() }
+            now: { testClock.currentDate }
         )
 
         let coordsA = [
@@ -164,8 +187,8 @@ final class RerouteManagerTests: XCTestCase {
         XCTAssertEqual(mockRouting.callCount, 1)
 
         // Observation after backoff expires (t = 2.1s) -> Attempt 2 triggered without requiring onRoute return!
-        simulatedNow = baseDate.addingTimeInterval(2.1)
-        rerouteManager.handleObservation(location: loc1, decision: confirmedDecision, currentTime: simulatedNow)
+        clock.currentDate = baseDate.addingTimeInterval(2.1)
+        rerouteManager.handleObservation(location: loc1, decision: confirmedDecision, currentTime: clock.currentDate)
         try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 2)
     }
@@ -187,8 +210,8 @@ final class RerouteManagerTests: XCTestCase {
         let locB = CLLocation(latitude: 10.003, longitude: 106.004)
 
         // Attempt 2 after backoff (t = 2.5s)
-        simulatedNow = baseDate.addingTimeInterval(2.5)
-        rerouteManager.handleObservation(location: locB, decision: decision, currentTime: simulatedNow)
+        clock.currentDate = baseDate.addingTimeInterval(2.5)
+        rerouteManager.handleObservation(location: locB, decision: decision, currentTime: clock.currentDate)
         try? await Task.sleep(nanoseconds: 10_000_000)
 
         XCTAssertEqual(mockRouting.callCount, 2)
@@ -379,7 +402,7 @@ final class RerouteManagerTests: XCTestCase {
     // MARK: - Test 11 (P2.1): Failure Backoff Begins at Failure Completion Time Not Request Start
 
     func testFailureBackoffBeginsAtFailureCompletionTimeNotRequestStart() async {
-        simulatedNow = Date(timeIntervalSince1970: 100.0)
+        clock.currentDate = Date(timeIntervalSince1970: 100.0)
         mockRouting.resultToReturn = .failure(NSError(domain: "test", code: 504))
         mockRouting.delayNanoseconds = 50_000_000 // 50ms simulated async latency
 
@@ -394,11 +417,11 @@ final class RerouteManagerTests: XCTestCase {
         )
 
         // Request starts at t=100.0
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         XCTAssertTrue(rerouteManager.isRerouting)
 
         // Advance simulated clock to t=106.0 while routing request is pending
-        simulatedNow = Date(timeIntervalSince1970: 106.0)
+        clock.currentDate = Date(timeIntervalSince1970: 106.0)
 
         // Allow routing failure to complete
         try? await Task.sleep(nanoseconds: 70_000_000)
@@ -414,13 +437,13 @@ final class RerouteManagerTests: XCTestCase {
         )
 
         // Observation at t=107.9 (before completion-based backoff expires) -> No retry
-        simulatedNow = Date(timeIntervalSince1970: 107.9)
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        clock.currentDate = Date(timeIntervalSince1970: 107.9)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         XCTAssertEqual(mockRouting.callCount, 1)
 
         // Observation at t=108.1 (after completion-based backoff expires) -> Retry triggered!
-        simulatedNow = Date(timeIntervalSince1970: 108.1)
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        clock.currentDate = Date(timeIntervalSince1970: 108.1)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 2)
     }
@@ -428,7 +451,7 @@ final class RerouteManagerTests: XCTestCase {
     // MARK: - Test 12 (P2.1): Success Stabilization Begins at Commit Time Not Request Start
 
     func testSuccessStabilizationBeginsAtCommitTimeNotRequestStart() async {
-        simulatedNow = Date(timeIntervalSince1970: 200.0)
+        clock.currentDate = Date(timeIntervalSince1970: 200.0)
         mockRouting.resultToReturn = .success(replacementRoute)
         mockRouting.delayNanoseconds = 50_000_000 // 50ms simulated async latency
 
@@ -443,11 +466,11 @@ final class RerouteManagerTests: XCTestCase {
         )
 
         // Request starts at t=200.0
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         XCTAssertTrue(rerouteManager.isRerouting)
 
         // Advance clock to t=205.0 while routing request is pending
-        simulatedNow = Date(timeIntervalSince1970: 205.0)
+        clock.currentDate = Date(timeIntervalSince1970: 205.0)
 
         // Allow routing success to complete and commit
         try? await Task.sleep(nanoseconds: 70_000_000)
@@ -461,13 +484,13 @@ final class RerouteManagerTests: XCTestCase {
         )
 
         // Observation at t=206.0 (within 2s post-success stabilization window) -> Discarded
-        simulatedNow = Date(timeIntervalSince1970: 206.0)
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        clock.currentDate = Date(timeIntervalSince1970: 206.0)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         XCTAssertEqual(mockRouting.callCount, 1)
 
         // Observation at t=207.5 (after stabilization window expires at t=207.0) -> New reroute eligible!
-        simulatedNow = Date(timeIntervalSince1970: 207.5)
-        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: simulatedNow)
+        clock.currentDate = Date(timeIntervalSince1970: 207.5)
+        rerouteManager.handleObservation(location: loc, decision: decision, currentTime: clock.currentDate)
         try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 2)
     }
@@ -489,7 +512,8 @@ final class RerouteManagerTests: XCTestCase {
             placeID: "dest",
             name: "Goal",
             formattedAddress: "Address",
-            location: CLLocation(latitude: 10.005, longitude: 106.0)
+            location: GoongLocation(latitude: 10.005, longitude: 106.0),
+            types: ["establishment"]
         )
         viewModel.selectedDestination = place
         viewModel.startNavigation()
