@@ -581,6 +581,7 @@ final class RerouteManagerTests: XCTestCase {
         // User changes transport mode to auto while request A is in flight -> Supersedes A
         rerouteManager.requestTransportModeReroute(costing: "auto", origin: loc.coordinate)
         XCTAssertEqual(rerouteManager.currentReason, .transportModeChanged)
+        try? await Task.sleep(nanoseconds: 10_000_000)
         XCTAssertEqual(mockRouting.callCount, 2)
 
         // Wait for request A and request B to settle
