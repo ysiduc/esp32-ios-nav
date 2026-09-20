@@ -274,9 +274,12 @@ During the review of P0.1, the reviewer identified the following defects, which 
 
 ## 15. CI Build Evidence
 
-*(Updated after GitHub Actions verification of the P0.2 commit)*
-
-- **Commit SHA**: [Pending Commit]
-- **GitHub Actions Run ID**: [Pending Run]
-- **Compile Native iOS Swift/SwiftUI**: [Pending Execution]
-- **Compile Flutter iOS IPA**: [Pending Execution]
+- **Commit SHA**: `bb42a2de285c7985c6fd3d56f0c55904a9763de0`
+- **GitHub Actions Run ID**: `35518547315`
+- **GitHub Actions Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35518547315
+- **Compile Native iOS Swift/SwiftUI**: **SUCCESS** (Job ID `106098515969`, duration: 1m 16s)
+  - Result: Clean compile, project build, and IPA packaging passed.
+  - Artifact: `esp32_nav_native_ios_ipa`
+- **Compile Flutter iOS IPA**: **SUCCESS** (Job ID `106098516006`, duration: 3m 23s)
+  - Result: Clean Flutter release build and IPA packaging passed.
+  - Artifact: `esp32_nav_flutter_ios_ipa`
