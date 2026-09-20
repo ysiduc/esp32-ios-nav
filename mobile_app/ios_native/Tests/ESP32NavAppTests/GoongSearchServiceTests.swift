@@ -263,17 +263,22 @@ final class GoongSearchServiceTests: XCTestCase {
 
     // MARK: - 9. Race conditions with controllable continuations
 
+    private func waitForPendingAutocompletes(count: Int = 1) async throws {
+        for _ in 0..<100 {
+            if client.pendingAutocompletes.count >= count { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     func testStaleAutocomplete_AReturnsAfterB_Discarded() async throws {
         client.useContinuationForAutocomplete = true
 
         service.updateQuery("ha")
-        await Task.yield()
-
+        try await waitForPendingAutocompletes(count: 1)
         XCTAssertEqual(client.pendingAutocompletes.count, 1)
 
         service.updateQuery("hanoi")
-        await Task.yield()
-
+        try await waitForPendingAutocompletes(count: 2)
         XCTAssertEqual(client.pendingAutocompletes.count, 2)
 
         let predA = client.makePrediction(placeID: "id-a", mainText: "Ha")
@@ -281,14 +286,17 @@ final class GoongSearchServiceTests: XCTestCase {
 
         // Resume B first (index 1)
         client.resumeAutocomplete(at: 1, with: .success([predB]))
-        await Task.yield()
+        for _ in 0..<100 {
+            if !service.predictions.isEmpty { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
                        "Service should publish B results immediately")
 
         // Resume A late (now index 0)
         client.resumeAutocomplete(at: 0, with: .success([predA]))
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
                        "Late response from query A must be discarded and not overwrite B")
@@ -298,19 +306,20 @@ final class GoongSearchServiceTests: XCTestCase {
         client.useContinuationForAutocomplete = true
 
         service.updateQuery("ha")
-        await Task.yield()
-
+        try await waitForPendingAutocompletes(count: 1)
         XCTAssertEqual(client.pendingAutocompletes.count, 1)
 
         service.updateQuery("hanoi")
-        await Task.yield()
-
+        try await waitForPendingAutocompletes(count: 2)
         XCTAssertEqual(client.pendingAutocompletes.count, 2)
         XCTAssertTrue(service.isLoading, "isLoading must stay true while B is still pending")
 
         let predB = client.makePrediction(placeID: "id-b", mainText: "Hanoi")
         client.resumeAutocomplete(at: 1, with: .success([predB]))
-        await Task.yield()
+        for _ in 0..<100 {
+            if !service.isLoading { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         XCTAssertFalse(service.isLoading, "isLoading must be cleared once B completes")
         XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"])
@@ -323,23 +332,25 @@ final class GoongSearchServiceTests: XCTestCase {
         client.useContinuationForAutocomplete = true
 
         service.updateQuery("ha")
-        await Task.yield()
+        try await waitForPendingAutocompletes(count: 1)
 
         service.updateQuery("hanoi")
-        await Task.yield()
-
+        try await waitForPendingAutocompletes(count: 2)
         XCTAssertEqual(client.pendingAutocompletes.count, 2)
 
         let predB = client.makePrediction(placeID: "id-b", mainText: "Hanoi")
         client.resumeAutocomplete(at: 1, with: .success([predB]))
-        await Task.yield()
+        for _ in 0..<100 {
+            if !service.predictions.isEmpty { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"])
         XCTAssertNil(service.errorMessage)
 
         // Late failure for A
         client.resumeAutocomplete(at: 0, with: .failure(URLError(.timedOut)))
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         XCTAssertEqual(service.predictions.map(\.placeID), ["id-b"],
                        "Late error from A must not clear B's predictions")

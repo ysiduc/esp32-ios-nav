@@ -224,13 +224,27 @@ final class DestinationSelectionTests: XCTestCase {
 
     // MARK: - 10. Pending Detail cancellation on new query (P3.1 Requirement 10)
 
+    private func waitForPendingDetails(count: Int = 1) async throws {
+        for _ in 0..<100 {
+            if mockClient.pendingDetails.count >= count { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    private func waitForPendingRoutes(count: Int = 1) async throws {
+        for _ in 0..<100 {
+            if routingService.pendingRoutes.count >= count { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     func testNewQuery_CancelsPendingDetail_AndDiscardsLateDetail() async throws {
         // Step 1: establish initial search session
         mockClient.autocompleteResult = .success([
             mockClient.makePrediction(placeID: "pred-A", mainText: "Place A")
         ])
         viewModel.updateSearchQuery("Place A")
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         let firstToken = mockClient.autocompleteSessionTokens.last ?? ""
         XCTAssertFalse(firstToken.isEmpty)
@@ -239,7 +253,7 @@ final class DestinationSelectionTests: XCTestCase {
         mockClient.useContinuationForDetail = true
         let predA = makeGoongPrediction(placeID: "pred-A", mainText: "Place A")
         viewModel.selectPrediction(predA)
-        await Task.yield()
+        try await waitForPendingDetails(count: 1)
 
         XCTAssertEqual(mockClient.pendingDetails.count, 1)
         XCTAssertEqual(viewModel.selectedPrediction?.placeID, "pred-A")
@@ -247,7 +261,7 @@ final class DestinationSelectionTests: XCTestCase {
 
         // Step 3: User edits query to "Place B" while Detail A is still pending
         viewModel.updateSearchQuery("Place B")
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         // Verify: Detail A cancelled, selectedPrediction cleared, new search started
         XCTAssertNotEqual(viewModel.selectedPrediction?.placeID, "pred-A")
@@ -261,7 +275,7 @@ final class DestinationSelectionTests: XCTestCase {
         // Step 4: Detail A now returns late
         let placeA = mockClient.makePlace(placeID: "pred-A", name: "Place A")
         mockClient.resumeDetail(at: 0, with: .success(placeA))
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         // Verify: A's result is discarded, selectedDestination is not A, no route calculated
         XCTAssertNotEqual(viewModel.selectedDestination?.placeID, "pred-A")
@@ -284,7 +298,7 @@ final class DestinationSelectionTests: XCTestCase {
         mockClient.detailDelay = 0
 
         viewModel.selectPrediction(predA)
-        await Task.yield()
+        try await waitForPendingRoutes(count: 1)
 
         // Detail A resolves, triggering Route A calculation which suspends
         XCTAssertEqual(routingService.pendingRoutes.count, 1)
@@ -298,7 +312,7 @@ final class DestinationSelectionTests: XCTestCase {
         mockClient.detailResult = .success(placeB)
 
         viewModel.selectPrediction(predB)
-        await Task.yield()
+        try await waitForPendingRoutes(count: 2)
 
         // Detail B resolves, triggering Route B calculation which suspends
         XCTAssertEqual(routingService.pendingRoutes.count, 2)
@@ -312,7 +326,10 @@ final class DestinationSelectionTests: XCTestCase {
             totalDurationSeconds: 600
         )
         routingService.resumeRoute(at: 1, with: routeB)
-        await Task.yield()
+        for _ in 0..<100 {
+            if viewModel.selectedDestination?.placeID == "B" && viewModel.navSession.activeRoute != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         // Active route preview should now be Route B
         XCTAssertEqual(viewModel.selectedPrediction?.placeID, "B")
@@ -327,7 +344,7 @@ final class DestinationSelectionTests: XCTestCase {
             totalDurationSeconds: 120
         )
         routingService.resumeRoute(at: 0, with: routeA)
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         // Verify: Route A cannot overwrite Route B!
         XCTAssertEqual(viewModel.selectedPrediction?.placeID, "B")
@@ -343,7 +360,7 @@ final class DestinationSelectionTests: XCTestCase {
         let predA = makeGoongPrediction(placeID: "clear-detail-id", mainText: "Detail Pending Place")
 
         viewModel.selectPrediction(predA)
-        await Task.yield()
+        try await waitForPendingDetails(count: 1)
 
         XCTAssertEqual(mockClient.pendingDetails.count, 1)
 
@@ -357,7 +374,7 @@ final class DestinationSelectionTests: XCTestCase {
         // Late detail resolution
         let place = mockClient.makePlace(placeID: "clear-detail-id")
         mockClient.resumeDetail(at: 0, with: .success(place))
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         XCTAssertNil(viewModel.selectedPrediction)
         XCTAssertNil(viewModel.selectedDestination)
@@ -373,7 +390,7 @@ final class DestinationSelectionTests: XCTestCase {
         mockClient.detailDelay = 0
 
         viewModel.selectPrediction(pred)
-        await Task.yield()
+        try await waitForPendingRoutes(count: 1)
 
         XCTAssertEqual(routingService.pendingRoutes.count, 1)
 
@@ -387,7 +404,7 @@ final class DestinationSelectionTests: XCTestCase {
         // Late route completion
         let route = NavRoute(coordinates: [], steps: [], totalDistanceMeters: 200, totalDurationSeconds: 30)
         routingService.resumeRoute(at: 0, with: route)
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 30_000_000)
 
         XCTAssertNil(viewModel.navSession.activeRoute, "Route preview must remain nil after clearSearch")
     }
