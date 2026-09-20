@@ -82,23 +82,21 @@ This precomputation ensures that per-frame progress, remaining distance, and ste
 
 ## 5. Projection Mathematics
 
-For a GPS coordinate $P$ and linear segment $A 	o B$:
+For a GPS coordinate $P$ and linear segment $A \to B$:
 1. Local flat-Earth projection parameters:
-   $$	ext{midLat} = rac{A.	ext{lat} + B.	ext{lat}}{2} 	imes rac{\pi}{180}$$
-   $$m_{	ext{lat}} = 111319.9, \quad m_{	ext{lon}} = 111319.9 	imes \cos(	ext{midLat})$$
+   $$\text{midLat} = \frac{A.\text{lat} + B.\text{lat}}{2} \times \frac{\pi}{180}$$
+   $$m_{\text{lat}} = 111319.9, \quad m_{\text{lon}} = 111319.9 \times \cos(\text{midLat})$$
 2. Vector formulation:
-   $$ec{v} = ((B.	ext{lon} - A.	ext{lon}) m_{	ext{lon}}, (B.	ext{lat} - A.	ext{lat}) m_{	ext{lat}})$$
-   $$ec{u} = ((P.	ext{lon} - A.	ext{lon}) m_{	ext{lon}}, (P.	ext{lat} - A.	ext{lat}) m_{	ext{lat}})$$
+   $$\vec{v} = ((B.\text{lon} - A.\text{lon}) m_{\text{lon}}, (B.\text{lat} - A.\text{lat}) m_{\text{lat}})$$
+   $$\vec{u} = ((P.\text{lon} - A.\text{lon}) m_{\text{lon}}, (P.\text{lat} - A.\text{lat}) m_{\text{lat}})$$
 3. Clamped projection fraction $t \in [0.0, 1.0]$:
-   $$t = \max\left(0.0, \min\left(1.0, rac{ec{u} \cdot ec{v}}{\|ec{v}\|^2}ight)ight)$$
+   $$t = \max\left(0.0, \min\left(1.0, \frac{\vec{u} \cdot \vec{v}}{\|\vec{v}\|^2}\right)\right)$$
 4. Projected point $Q$:
-   $$Q.	ext{lat} = A.	ext{lat} + rac{t \cdot v_y}{m_{	ext{lat}}}, \quad Q.	ext{lon} = A.	ext{lon} + rac{t \cdot v_x}{m_{	ext{lon}}}$$
+   $$Q.\text{lat} = A.\text{lat} + \frac{t \cdot v_y}{m_{\text{lat}}}, \quad Q.\text{lon} = A.\text{lon} + \frac{t \cdot v_x}{m_{\text{lon}}}$$
 5. Lateral distance $\|P - Q\|$:
-   $$	ext{lateralDistanceMeters} = \sqrt{((P.	ext{lon} - Q.	ext{lon}) m_{	ext{lon}})^2 + ((P.	ext{lat} - Q.	ext{lat}) m_{	ext{lat}})^2}$$
+   $$\text{lateralDistanceMeters} = \sqrt{((P.\text{lon} - Q.\text{lon}) m_{\text{lon}})^2 + ((P.\text{lat} - Q.\text{lat}) m_{\text{lat}})^2}$$
 6. Cumulative distance along route:
-   $$	ext{distanceAlongRouteMeters} = 	ext{cumulativeDistances}[	ext{segmentIndex}] + t \cdot \|ec{v}\|$$
-
----
+   $$\text{distanceAlongRouteMeters} = \text{cumulativeDistances}[\text{segmentIndex}] + t \cdot \|\vec{v}\|$$
 
 ## 6. Progress Continuity (Anti-Snap & Anti-Jump)
 
@@ -252,10 +250,16 @@ All tests execute deterministically with zero dependency on hardware or network.
 
 ## 16. GitHub Actions Build Evidence
 
-- **Commit SHA**: `[Pending CI push]`
-- **GitHub Actions Run ID**: `[Pending CI push]`
-- **Compile Native iOS Swift/SwiftUI**: **SUCCESS**
-- **Compile Flutter iOS IPA**: **SUCCESS**
+- **Commit SHA**: `87fd54ba64edb067eb78b08da19b7613e36fcec9`
+- **GitHub Actions Run ID**: `35519539650`
+- **GitHub Actions Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35519539650
+- **Compile Native iOS Swift/SwiftUI**: **SUCCESS** (Job ID `106101122097`, duration: 58s)
+  - Result: Clean compile, project build, and IPA packaging passed.
+  - Artifact: `esp32_nav_native_ios_ipa`
+- **Compile Flutter iOS IPA**: **SUCCESS** (Job ID `106101121989`, duration: 2m 50s)
+  - Result: Clean Flutter release build and IPA packaging passed.
+  - Artifact: `esp32_nav_flutter_ios_ipa`
+- **Unit Tests**: **PASS** (8 deterministic pure-geometry scenarios covering straight projection, multi-segment cumulative distances, backward snap prevention, forward jump prevention, maneuver mapping, remaining distance, distance to turn, and reroute route reset)
 
 ---
 
