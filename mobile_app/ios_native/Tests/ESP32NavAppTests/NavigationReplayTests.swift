@@ -90,10 +90,11 @@ final class NavigationReplayTests: XCTestCase {
 
         runner.replay(samples: samples)
 
-        // Progress distance along route should increase monotonically
-        let alongRouteDists = runner.recordedProgress.map { Double(1112 - $0.remainingDistanceMeters) }
-        for i in 1..<alongRouteDists.count {
-            XCTAssertGreaterThanOrEqual(alongRouteDists[i], alongRouteDists[i-1] - 5.0, "Progress should advance monotonically")
+        // Progress distance along route should increase monotonically (remaining distance decreases)
+        XCTAssertGreaterThanOrEqual(runner.recordedProgress.count, 2)
+        let remDists = runner.recordedProgress.map { Double($0.remainingDistanceMeters) }
+        for i in 1..<remDists.count {
+            XCTAssertLessThanOrEqual(remDists[i], remDists[i-1] + 5.0, "Remaining distance should decrease monotonically")
         }
 
         XCTAssertEqual(runner.arrivalCount, 1, "Arrival must fire exactly once")
