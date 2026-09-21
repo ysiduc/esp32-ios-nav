@@ -388,11 +388,15 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         print("[NavSession] Active route replaced (rev \(activeRouteGeneration), \(route.coordinates.count) pts)")
     }
 
-    public func setIsRerouting(_ value: Bool) {
-        isRerouting = value
-        if value {
+    public func setRerouting(_ rerouting: Bool) {
+        isRerouting = rerouting
+        if rerouting {
             diagnostics.rerouteRequests += 1
         }
+    }
+
+    public func setIsRerouting(_ value: Bool) {
+        setRerouting(value)
     }
 
     // MARK: - Location Ingestion Pipeline (P5)
