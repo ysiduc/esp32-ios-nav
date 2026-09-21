@@ -529,3 +529,19 @@ The pure state policy is implemented in `EspStreamService` (`mobile_app/lib/serv
 ### 6. Automated PlatformIO Firmware Compilation in CI
 - Added `build-firmware` job to `.github/workflows/build_ios.yml` running `pio run` on `ubuntu-latest`.
 - Firmware compiles cleanly with PlatformIO (Flash: 35.9%, RAM: 41.3%).
+
+### 7. Verified CI Evidence (P5.4.1.4)
+- **Workflow Run ID**: [`35640501082`](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35640501082)
+- **Git Commit**: `a98820c`
+- **Compile ESP32-S3 Firmware** (Job ID: `106468365078`):
+  - PlatformIO Build: **SUCCESS** (1m29s)
+  - Firmware Binary Artifact: **SUCCESS** (`esp32_firmware_bin`)
+- **Compile Flutter iOS IPA** (Job ID: `106468364942`):
+  - Unit & Widget Tests: **76 / 76 PASS** (0 failures, 0 socket conflicts)
+  - iOS Release (No CodeSign): **SUCCESS**
+  - Flutter IPA Package & Upload: **SUCCESS** (`esp32_nav_flutter_ios_ipa`)
+- **Compile Native iOS Swift/SwiftUI** (Job ID: `106468364786`):
+  - Native Unit Tests: **241 / 241 PASS** (0 failures, 24 test suites)
+  - Native Release Build: **SUCCESS**
+  - Native IPA Package & Upload: **SUCCESS** (`esp32_nav_native_ios_ipa`)
+- **Final Acceptance**: P5.4.1.4 ESP streaming restoration, elimination of MapLibre `RepaintBoundary` platform-view capture, deletion of firmware synthetic vector map fallback, restoration of stable raster tile JPEG pipeline, pure four-state matrix with background parity, and Bright Liquid Glass UI redesign verified with green CI across all three jobs.
