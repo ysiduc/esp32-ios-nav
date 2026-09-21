@@ -331,9 +331,9 @@ Preserves total route duration exactly as returned by Apple MapKit.
 ## 19. Tests
 
 Total test suites: 10
-Total tests: 129 (103 pre-P4 + 26 new P4)
+Total tests: 142 (103 pre-P4 + 26 P4 initial + 13 P4.1/P4.1.1 corrections)
 
-| Test Suite | Baseline | P4 New | P4.1 New | Total | Status |
+| Test Suite | Baseline | P4 New | P4.1/P4.1.1 New | Total | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | `RouteGeometryTests` | 12 | 0 | 0 | 12 | PASS |
 | `OffRouteDetectorTests` | 10 | 0 | 0 | 10 | PASS |
@@ -344,45 +344,62 @@ Total tests: 129 (103 pre-P4 + 26 new P4)
 | `RoutingProfileTests` | 0 | 8 | 1 | 9 | PASS |
 | `ValhallaRouteSetParserTests` | 0 | 5 | 1 | 6 | PASS |
 | `RoutingFallbackTests` | 0 | 7 | 0 | 7 | PASS |
-| `RouteCandidateSelectionTests` | 0 | 6 | 10 | 16 | PASS |
-| **Total** | **103** | **26** | **12** | **141** | **ALL PASS** |
+| `RouteCandidateSelectionTests` | 0 | 6 | 11 | 17 | PASS |
+| **Total** | **103** | **26** | **13** | **142** | **ALL PASS** |
 
 ---
 
 ## 20. GitHub Actions Evidence
 
+### Historical Run 1: Initial P4 Implementation
 - **Workflow Run ID**: `35533694130`
 - **Commit SHA**: `6af4b63c0ea07ea51e58da571081196437d4e64e`
 - **Workflow Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35533694130
+- **Total Tests**: 129 executed, 0 failures (129/129 PASS)
+- **Native Release & IPA**: SUCCESS
+- **Flutter iOS IPA**: SUCCESS
 
-### CI Verification Results
+### Historical Run 2: Interim P4.1 Reviewer Corrections
+- **Workflow Run ID**: `35564593760`
+- **Commit SHA**: `0cd569ba05fe910df78bbd8e857f56155a17305d`
+- **Workflow Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35564593760
+- **Total Tests**: 141 executed, 0 failures (141/141 PASS)
+- **Native Release & IPA**: SUCCESS
+- **Flutter iOS IPA**: SUCCESS
+
+### Final Run 3: P4.1.1 Production Encapsulation & Reroute Commit Proof
+- **Workflow Run ID**: `35566129892`
+- **Commit SHA**: `33216d261179da2486fb3320e4ac09d9247b1b07`
+- **Workflow Run URL**: https://github.com/ysiduc/esp32-ios-nav/actions/runs/35566129892
+
+#### CI Verification Results
 
 ```text
-Job: Compile Native iOS Swift/SwiftUI (ID 106138800589)
-Duration: 3m 16s
+Job: Compile Native iOS Swift/SwiftUI (ID 106228199706)
+Duration: 5m 4s
 Status: SUCCESS
 
-Test Results:
-Test Suite 'DestinationSelectionTests' passed (13 tests, 0 failures)
-Test Suite 'GoongSearchServiceTests' passed (22 tests, 0 failures)
-Test Suite 'OffRouteDetectorTests' passed (10 tests, 0 failures)
-Test Suite 'RerouteManagerTests' passed (15 tests, 0 failures)
-Test Suite 'RouteCandidateSelectionTests' passed (6 tests, 0 failures)
-Test Suite 'RouteGeometryTests' passed (12 tests, 0 failures)
-Test Suite 'RoutingFallbackTests' passed (7 tests, 0 failures)
-Test Suite 'RoutingProfileTests' passed (8 tests, 0 failures)
-Test Suite 'SearchRankingTests' passed (31 tests, 0 failures)
-Test Suite 'ValhallaRouteSetParserTests' passed (5 tests, 0 failures)
+Test Suite Execution Breakdown:
+- DestinationSelectionTests:    13 executed, 0 failures (2.008s)
+- GoongSearchServiceTests:      22 executed, 0 failures (1.493s)
+- OffRouteDetectorTests:        10 executed, 0 failures (0.058s)
+- RerouteManagerTests:          15 executed, 0 failures (1.906s)
+- RouteCandidateSelectionTests: 17 executed, 0 failures (0.898s)
+- RouteGeometryTests:           12 executed, 0 failures (0.013s)
+- RoutingFallbackTests:          7 executed, 0 failures (0.078s)
+- RoutingProfileTests:           9 executed, 0 failures (0.017s)
+- SearchRankingTests:           31 executed, 0 failures (0.118s)
+- ValhallaRouteSetParserTests:   6 executed, 0 failures (0.009s)
 
-Total: 129 tests executed, 0 failures (0 unexpected)
-Result: 129/129 PASS
+Total: 142 tests executed, 0 failures (0 unexpected) in 6.600s
+Result: 142/142 PASS
 
 Native Release App Build: SUCCESS
 Native IPA Package: SUCCESS
 Native IPA Artifact Upload: SUCCESS (esp32_nav_native_ios_ipa)
 
-Job: Compile Flutter iOS IPA (ID 106138800515)
-Duration: 4m 2s
+Job: Compile Flutter iOS IPA (ID 106228199882)
+Duration: 5m 25s
 Status: SUCCESS
 Flutter Release App Build: SUCCESS
 Flutter IPA Package: SUCCESS
