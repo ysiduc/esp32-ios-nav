@@ -464,3 +464,16 @@ The resolution pipeline now strictly adheres to the following hierarchy:
 - Unit & widget test count: **75 / 75 PASS** (0 failures, 0 socket conflicts).
 - Added `test/liquid_glass_test.dart`: verifies glass container backdrop, dark mode adaptation, reduced motion bypass, button taps, and capsule layouts.
 - Updated `test/stream_thermal_test.dart`: covers BLE-only activation, Wi-Fi 14 FPS restoration, background 5-6 FPS, gradual thermal reduction, BLE throughput adaptation, backpressure, and snapshot cache reuse.
+
+## 39. Verified CI Evidence (P5.4.1.3)
+- **Workflow Run ID**: `35636080190` (https://github.com/ysiduc/esp32-ios-nav/actions/runs/35636080190)
+- **Git Commit**: `9b0b04506181973bfe5c2e100644a2647b461099`
+- **Compile Flutter iOS IPA** (Job ID: `106453702161`):
+  - Unit & Widget Tests: **75 / 75 PASS** (0 failures, 0 socket conflicts)
+  - iOS Release (No CodeSign): **SUCCESS**
+  - Flutter IPA Package & Upload: **SUCCESS** (`esp32_nav_flutter_ios_ipa`)
+- **Compile Native iOS Swift/SwiftUI** (Job ID: `106453701721`):
+  - Native Unit Tests: **241 / 241 PASS** (0 failures, 24 test suites)
+  - Native Release Build: **SUCCESS**
+  - Native IPA Package & Upload: **SUCCESS** (`esp32_nav_native_ios_ipa`)
+- **Final Acceptance**: P5.4.1.3 smooth ESP JPEG streaming restoration across all transports, removal of custom vector map renderer in favor of the unified raster snapshot pipeline, centralized background keep-alive coordination, and modern Liquid Glass UI redesign verified.
