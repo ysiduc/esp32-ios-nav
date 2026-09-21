@@ -79,15 +79,13 @@ public struct NavigationProgress: Sendable {
         return "\(distanceToTurnMeters) m"
     }
 
-    public var formattedEta: String {
-        let mins = remainingEtaSeconds / 60
-        if mins >= 60 {
-            let hours = mins / 60
-            let remainMins = mins % 60
-            return "\(hours) giờ \(remainMins) phút"
-        }
-        return "\(mins) phút"
+    public var formattedRemainingEta: String {
+        let mins = Int(remainingEtaSeconds / 60)
+        if mins >= 60 { return "\(mins / 60)h \(mins % 60)m" }
+        return "\(mins) phut"
     }
+
+    public var formattedEta: String { formattedRemainingEta }
 }
 
 // MARK: - NavigationSessionManager
@@ -160,6 +158,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     // MARK: Thresholds
     private let stepAdvanceThresholdMeters: Double = 15.0
     private let arrivalRadiusMeters: Double        = 25.0
+    private let arrivalThresholdMeters: Double     = 15.0
     private let maxAccuracyMeters: Double          = 50.0
 
     // MARK: Private State
@@ -292,11 +291,15 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
     }
 
-    public func setRoutePreview(route: NavRoute) {
+    public func setRoutePreview(_ route: NavRoute) {
         activeRoute       = route
         remainingPolyline = route.coordinates
         state             = .routePreview
         applyTrackingProfile(isForeground ? .routePreview : .suspended)
+    }
+
+    public func setRoutePreview(route: NavRoute) {
+        setRoutePreview(route)
     }
 
     public func clearRoute() {
@@ -542,126 +545,126 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: - Progress Computation
 
-    private struct ProgressComputationResult {
-        let projection: RouteProjection
-        let progress: NavigationProgress
-        let remaining: [CLLocationCoordinate2D]
-    }
-
-    private func computeProgress(
+    nonisolated private func computeProgress(
         currentLocation: CLLocation,
         route: NavRoute,
         lastProjection: RouteProjection?,
         lastMatchedTimestamp: Date?,
         maneuverStepIndex: inout Int,
         polylineSegmentIndex: inout Int
-    ) -> ProgressComputationResult {
+    ) -> (progress: NavigationProgress,
+          projection: RouteProjection,
+          remaining: [CLLocationCoordinate2D]) {
+
+        guard !route.steps.isEmpty, !route.coordinates.isEmpty else {
+            let fallbackProj = RouteProjection(
+                coordinate: currentLocation.coordinate,
+                segmentIndex: 0,
+                segmentFraction: 0,
+                lateralDistanceMeters: 0,
+                distanceAlongRouteMeters: 0
+            )
+            return (NavigationProgress(maneuver: .arrive, nextStreetName: "Đã đến đích"),
+                    fallbackProj, [])
+        }
+
         let coords = route.coordinates
-        guard coords.count >= 2 else {
-            return ProgressComputationResult(
-                projection: RouteProjection(
-                    coordinate: currentLocation.coordinate,
-                    segmentIndex: 0,
-                    fractionAlongSegment: 0.0,
-                    distanceAlongRouteMeters: 0.0,
-                    lateralDistanceMeters: 0.0
-                ),
-                progress: NavigationProgress(),
-                remaining: coords
+
+        // Authoritative Route Projection with continuity gating
+        guard let projection = route.geometry.project(
+            location: currentLocation,
+            lastProjection: lastProjection,
+            lastMatchedTimestamp: lastMatchedTimestamp
+        ) else {
+            let fallbackCoord = route.coordinates.first ?? currentLocation.coordinate
+            let fallbackProj = RouteProjection(
+                coordinate: fallbackCoord,
+                segmentIndex: 0,
+                segmentFraction: 0,
+                lateralDistanceMeters: 0,
+                distanceAlongRouteMeters: 0
             )
+            return (NavigationProgress(maneuver: .none), fallbackProj, coords)
         }
 
-        let timeDelta = lastMatchedTimestamp.map { currentLocation.timestamp.timeIntervalSince($0) }
-        let currentSpeed = max(0.0, currentLocation.speed)
+        // Maintain polylineSegmentIndex strictly from geometry projection
+        polylineSegmentIndex = projection.segmentIndex
 
-        let projection = route.geometry.project(
-            coordinate: currentLocation.coordinate,
-            heading: currentLocation.course >= 0 ? currentLocation.course : nil,
-            previousProjection: lastProjection,
-            speedMetersPerSecond: currentSpeed,
-            timeDeltaSeconds: timeDelta
-        )
+        // Conservative arrival check:
+        // Requires physical proximity (<= arrivalThresholdMeters 15m) AND remaining along-route distance (<= 30m),
+        // or very close physical proximity (<= 7.5m) in case polyline end has slight coordinate offset.
+        let destCoord = coords.last!
+        let destLocation = CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude)
+        let physicalDistToDest = currentLocation.distance(from: destLocation)
+        let remDist = route.geometry.remainingDistance(from: projection.distanceAlongRouteMeters)
 
-        polylineSegmentIndex = max(polylineSegmentIndex, projection.segmentIndex)
-
-        let totalDist = route.totalDistanceMeters
-        let remainingDist = max(0.0, totalDist - projection.distanceAlongRouteMeters)
-
-        let speedMps = currentSpeed > 0 ? currentSpeed : 8.33
-        let remainingEta = remainingDist / speedMps
-
-        let destCoord = coords.last ?? currentLocation.coordinate
-        let physicalDistToDest = currentLocation.distance(from: CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude))
-
-        let isArrived = (physicalDistToDest <= arrivalRadiusMeters) &&
-                        (remainingDist <= arrivalRadiusMeters * 1.5 || projection.distanceAlongRouteMeters >= totalDist * 0.95)
-
-        if isArrived {
-            let p = NavigationProgress(
-                maneuver: .arrive,
-                distanceToTurnMeters: 0,
-                remainingDistanceMeters: 0,
-                remainingEtaSeconds: 0,
-                currentSpeedKmh: UInt8(clamping: Int(currentLocation.speed * 3.6)),
-                speedLimitKmh: 0,
-                nextStreetName: "Đã đến điểm đích"
+        let isPhysicallyNear = physicalDistToDest <= arrivalThresholdMeters
+        let isRouteProgressNear = remDist <= 30.0
+        if (isPhysicallyNear && isRouteProgressNear) || physicalDistToDest <= 7.5 {
+            let arrivalProj = RouteProjection(
+                coordinate: destCoord,
+                segmentIndex: max(0, coords.count - 2),
+                segmentFraction: 1.0,
+                lateralDistanceMeters: physicalDistToDest,
+                distanceAlongRouteMeters: route.geometry.totalDistanceMeters
             )
-            return ProgressComputationResult(
-                projection: projection,
-                progress: p,
-                remaining: []
-            )
+            return (NavigationProgress(maneuver: .arrive,
+                                       distanceToTurnMeters: 0,
+                                       remainingDistanceMeters: 0,
+                                       remainingEtaSeconds: 0,
+                                       currentSpeedKmh: 0,
+                                       speedLimitKmh: 0,
+                                       nextStreetName: "Đã đến đích"),
+                    arrivalProj, [])
         }
 
-        let steps = route.steps
-        if !steps.isEmpty {
-            while maneuverStepIndex < steps.count - 1 {
-                let nextStep = steps[maneuverStepIndex + 1]
-                let distToNextManeuver = currentLocation.distance(from: CLLocation(latitude: nextStep.coordinate.latitude, longitude: nextStep.coordinate.longitude))
-
-                var passedShapeThreshold = false
-                if let nextBeginIdx = nextStep.beginShapeIndex {
-                    passedShapeThreshold = (projection.segmentIndex >= nextBeginIdx)
-                }
-
-                if distToNextManeuver < stepAdvanceThresholdMeters || passedShapeThreshold {
-                    maneuverStepIndex += 1
-                } else {
-                    break
-                }
+        // Maneuver step advancement based on along-route progress
+        let stepDistances = route.geometry.maneuverDistancesAlongRoute
+        while maneuverStepIndex + 1 < route.steps.count {
+            let stepTriggerDist = stepDistances[maneuverStepIndex]
+            if projection.distanceAlongRouteMeters >= (stepTriggerDist - stepAdvanceThresholdMeters) {
+                maneuverStepIndex += 1
+                let nextStep = route.steps[maneuverStepIndex]
+                print("[NavSession] -> Step \(maneuverStepIndex): \(nextStep.maneuverType.localizedInstruction)")
+            } else {
+                break
             }
         }
 
-        let currentStep: NavStep? = maneuverStepIndex < steps.count ? steps[maneuverStepIndex] : nil
-        let nextStep: NavStep? = (maneuverStepIndex + 1) < steps.count ? steps[maneuverStepIndex + 1] : nil
+        let curStep = route.steps[min(maneuverStepIndex, route.steps.count - 1)]
 
-        let distToTurn: Double
-        if let target = (nextStep ?? currentStep) {
-            distToTurn = currentLocation.distance(from: CLLocation(latitude: target.coordinate.latitude, longitude: target.coordinate.longitude))
-        } else {
-            distToTurn = remainingDist
+        // Distance to turn along route
+        let distToTurn = route.geometry.distanceToManeuver(
+            stepIndex: maneuverStepIndex,
+            from: projection.distanceAlongRouteMeters
+        )
+
+        // Remaining polyline: starts at projection point followed by coordinates strictly after projection.segmentIndex
+        var remaining = [projection.coordinate]
+        let segIdx = projection.segmentIndex
+        if segIdx + 1 < coords.count {
+            remaining.append(contentsOf: coords[(segIdx + 1)...])
+        } else if let last = coords.last {
+            remaining.append(last)
         }
 
-        let activeManeuver = nextStep?.maneuverType ?? currentStep?.maneuverType ?? .none
-        let nextStreet = nextStep?.streetName ?? currentStep?.streetName ?? ""
+        // Stable proportional ETA
+        let totalGeomDist = route.geometry.totalDistanceMeters
+        let remainingRatio = totalGeomDist > 0 ? max(0.0, min(1.0, remDist / totalGeomDist)) : 0.0
+        let remSec = UInt32(round(route.totalDurationSeconds * remainingRatio))
+        let kmh = UInt8(min(255, max(0, currentLocation.speed * 3.6)))
 
         let progress = NavigationProgress(
-            maneuver: activeManeuver,
-            distanceToTurnMeters: UInt32(clamping: Int(distToTurn)),
-            remainingDistanceMeters: UInt32(clamping: Int(remainingDist)),
-            remainingEtaSeconds: UInt32(clamping: Int(remainingEta)),
-            currentSpeedKmh: UInt8(clamping: Int(max(0.0, currentLocation.speed) * 3.6)),
+            maneuver: curStep.maneuverType,
+            distanceToTurnMeters: UInt32(max(0, round(distToTurn))),
+            remainingDistanceMeters: UInt32(max(0, round(remDist))),
+            remainingEtaSeconds: remSec,
+            currentSpeedKmh: kmh,
             speedLimitKmh: 0,
-            nextStreetName: nextStreet
+            nextStreetName: curStep.streetName
         )
 
-        let remainingCoords = RouteGeometry.remainingPolyline(from: coords, currentSegmentIndex: polylineSegmentIndex)
-
-        return ProgressComputationResult(
-            projection: projection,
-            progress: progress,
-            remaining: remainingCoords
-        )
+        return (progress, projection, remaining)
     }
 }
 

@@ -60,7 +60,7 @@ public final class NavigationViewModel: ObservableObject {
     // Backwards-compatible aliases
     public var userLocation: CLLocation? { navSession.userLocation }
     public var snappedLocation: CLLocationCoordinate2D? { navSession.snappedLocation }
-    public var heading: Double { navSession.heading }
+    public var heading: Double { navSession.heading ?? 0.0 }
     public var isNavigating: Bool { navSession.state == .navigating }
 
     private var cancellables = Set<AnyCancellable>()

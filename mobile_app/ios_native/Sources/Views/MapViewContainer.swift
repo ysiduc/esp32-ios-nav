@@ -294,7 +294,7 @@ public struct MapViewContainer: UIViewRepresentable {
         // MARK: - MLNMapViewDelegate
 
         public func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
-            lastPolylineHash = -1 // force redraw after style reload
+            renderPolicy.reset() // force rebuild after style reload
         }
 
         public func mapView(_ mapView: MLNMapView,
