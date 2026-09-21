@@ -158,7 +158,8 @@ final class MapRenderPolicyTests: XCTestCase {
         XCTAssertTrue(policy.shouldZoomToFit(routeIdentifier: "route-A"),
                       "After cache invalidation, same identifier must re-trigger")
     }
-}    // MARK: - Fix 5 & 7: Authoritative Candidate Identity Test
+
+    // MARK: - Fix 5 & 7: Authoritative Candidate Identity Test
 
     func testAuthoritativeCandidateIdentity_DifferentiatesAlternativeRoutes_WithoutRelyingOnCoordinates() {
         let policy = MapRenderPolicy()

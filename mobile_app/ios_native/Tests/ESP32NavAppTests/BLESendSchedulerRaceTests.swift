@@ -157,7 +157,8 @@ final class BLESendSchedulerRaceTests: XCTestCase {
         let delay = scheduler.nextEligibleFlushDelay(now: baseDate.addingTimeInterval(0.20))
         XCTAssertNil(delay, "Past the window, flush is immediately eligible — no timer needed")
     }
-}    // MARK: - Fix 21 & 22: Shared Policy Early-Ready / Early-ACK Helper Tests
+
+    // MARK: - Fix 21 & 22: Shared Policy Early-Ready / Early-ACK Helper Tests
 
     func testHandleTransportBecameReady_EarlyReady_ArmsTimerWithRemainingDelay() {
         // 1. Send first packet at baseDate
