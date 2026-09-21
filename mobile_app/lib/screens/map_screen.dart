@@ -36,7 +36,6 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  final GlobalKey _mapBoundaryKey = GlobalKey();
   bool _showDebugOverlay = false;
 
   ml.MapLibreMapController? _mapController;
@@ -190,24 +189,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      try {
-        final streamService = Provider.of<EspStreamService>(context, listen: false);
-        streamService.mapSnapshotProvider = ({int? width, int? height}) async {
-          try {
-            final boundary = _mapBoundaryKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-            if (boundary == null) return null;
-            final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
-            final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-            image.dispose();
-            return byteData?.buffer.asUint8List();
-          } catch (_) {
-            return null;
-          }
-        };
-      } catch (_) {}
-    });
+
     _googleLinkController = GoogleLinkResolutionController(
       parser: _googleMapsParser,
       onStateChanged: (state) {
@@ -1066,9 +1048,7 @@ class _MapScreenState extends State<MapScreen> {
           // -----------------------------------------------------------
           // 1. MapLibre Native Vector Map (60fps GPU-rendered)
           // -----------------------------------------------------------
-          RepaintBoundary(
-            key: _mapBoundaryKey,
-            child: ml.MapLibreMap(
+          ml.MapLibreMap(
             styleString: _buildMaplibreStyleString(),
             initialCameraPosition: ml.CameraPosition(
               target: ml.LatLng(userPos.latitude, userPos.longitude),
@@ -1092,7 +1072,6 @@ class _MapScreenState extends State<MapScreen> {
             scrollGesturesEnabled: true,
             zoomGesturesEnabled: true,
             tiltGesturesEnabled: true,
-          ),
           ),
 
           // -----------------------------------------------------------

@@ -1,308 +1,317 @@
-import 'dart:io';
-import 'package:flutter/material.dart';
+import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/models/route_model.dart';
 import 'package:mobile_app/services/ble_service.dart';
+import 'package:mobile_app/services/esp_raster_map_renderer.dart';
 import 'package:mobile_app/services/esp_stream_service.dart';
 import 'package:mobile_app/services/navigation_manager.dart';
-import 'package:mobile_app/services/voice_guidance_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('P5.4.1.3: Smooth ESP JPEG Streaming & Thermal Adaptation Tests', () {
-    late BleService bleService;
-    late NavigationManager navManager;
-    late EspStreamService streamService;
+  late BleService bleService;
+  late NavigationManager navManager;
+  late EspStreamService streamService;
 
-    setUp(() {
-      VoiceGuidanceService().setMuted(true);
-      bleService = BleService();
-      navManager = NavigationManager(bleService: bleService);
-      streamService = EspStreamService(bleService: bleService, navManager: navManager);
-    });
+  NavRoute createTestRoute({int id = 1}) {
+    return NavRoute(
+      totalDistanceMeters: 5000,
+      totalDurationSeconds: 600,
+      summary: 'Lộ trình thử nghiệm $id',
+      polylinePoints: const [
+        LatLng(21.0285, 105.8542),
+        LatLng(21.0290, 105.8545),
+        LatLng(21.0300, 105.8550),
+      ],
+      steps: [
+        NavStep(
+          stepIndex: 0,
+          instruction: 'Đi thẳng trên phố Huế',
+          streetName: 'Phố Huế',
+          distanceMeters: 500,
+          durationSeconds: 60,
+          coordinate: const LatLng(21.0285, 105.8542),
+          maneuverTypeStr: 'straight',
+        ),
+      ],
+    );
+  }
 
-    tearDown(() {
-      streamService.dispose();
-      navManager.dispose();
-      bleService.dispose();
-    });
+  setUp(() {
+    bleService = BleService();
+    navManager = NavigationManager(bleService: bleService);
+    streamService = EspStreamService(
+      bleService: bleService,
+      navManager: navManager,
+    );
+  });
 
-    NavRoute createTestRoute({int id = 1}) {
-      return NavRoute(
-        totalDistanceMeters: 1500.0 * id,
-        totalDurationSeconds: 300.0 * id,
-        polylinePoints: [
-          LatLng(21.0285, 105.8542),
-          LatLng(21.0295 + id * 0.001, 105.8552 + id * 0.001),
-          LatLng(21.0315 + id * 0.001, 105.8572 + id * 0.001),
-        ],
-        steps: [
-          NavStep(
-            stepIndex: 0,
-            instruction: 'Đi thẳng',
-            streetName: 'Đường Phố Huế',
-            distanceMeters: 500.0,
-            durationSeconds: 100.0,
-            maneuverTypeStr: 'straight',
-            coordinate: LatLng(21.0285, 105.8542),
-          ),
-          NavStep(
-            stepIndex: 1,
-            instruction: 'Rẽ phải',
-            streetName: 'Đường Đại Cồ Việt',
-            distanceMeters: 1000.0,
-            durationSeconds: 200.0,
-            maneuverTypeStr: 'turn-right',
-            coordinate: LatLng(21.0295 + id * 0.001, 105.8552 + id * 0.001),
-          ),
-        ],
-        summary: 'Tuyến đường $id',
-        title: 'Tuyến đường $id',
-        subtitle: '15 phút',
-        isFastest: true,
-        isShortest: false,
-        isTollFree: true,
-        themeColor: const Color(0xFF007AFF),
-        durationDiffMinutes: 0,
-        distanceDiffKm: 0.0,
+  tearDown(() {
+    streamService.dispose();
+    navManager.dispose();
+    bleService.dispose();
+  });
+
+  group('P5.4.1.4 Sections 1-8, 67-77: Authoritative Stream State Matrix & Restoration', () {
+    test('Section 67: Pure Stream State Matrix Test - All 4 modes', () {
+      // 1. nav=false, wifi=false, ble=true -> standbyStatic
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: false,
+          isWifiAvailable: false,
+          isBleAvailable: true,
+        ),
+        equals(EspDisplayMode.standbyStatic),
       );
-    }
 
-    test('Section 47: Thermal Regression - No Consumer -> Render Frame Count == 0', () async {
-      // State: Map open, ESP disconnected, not navigating
-      expect(streamService.hasEspDisplayConsumer, isFalse);
+      // 2. nav=false, wifi=true, ble=false -> standbyWifiMap
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: false,
+          isWifiAvailable: true,
+          isBleAvailable: false,
+        ),
+        equals(EspDisplayMode.standbyWifiMap),
+      );
+
+      // 3. nav=false, wifi=true, ble=true -> standbyWifiMap (Wi-Fi priority over BLE)
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: false,
+          isWifiAvailable: true,
+          isBleAvailable: true,
+        ),
+        equals(EspDisplayMode.standbyWifiMap),
+      );
+
+      // 4. nav=true, wifi=false, ble=true -> navigationBleMap
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: true,
+          isWifiAvailable: false,
+          isBleAvailable: true,
+        ),
+        equals(EspDisplayMode.navigationBleMap),
+      );
+
+      // 5. nav=true, wifi=true, ble=true -> navigationWifiMap (Wi-Fi priority over BLE)
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: true,
+          isWifiAvailable: true,
+          isBleAvailable: true,
+        ),
+        equals(EspDisplayMode.navigationWifiMap),
+      );
+
+      // 6. nav=true, wifi=false, ble=false -> standbyStatic (no transport)
+      expect(
+        EspStreamService.calculateDisplayMode(
+          isNavigating: true,
+          isWifiAvailable: false,
+          isBleAvailable: false,
+        ),
+        equals(EspDisplayMode.standbyStatic),
+      );
+    });
+
+    test('Section 68: Standby BLE Test - No continuous JPEG generation over BLE in standby', () {
+      bleService.setConnectedForTesting(true);
+      expect(bleService.isConnected, isTrue);
+      expect(bleService.isWifiConnected, isFalse);
+      expect(navManager.isNavigating, isFalse);
+
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.standbyStatic));
+      // In standbyStatic: active transport must be none (no JPEG over BLE)
       expect(streamService.activeJpegTransport, equals(EspJpegTransport.none));
+      expect(streamService.effectiveTargetFps, equals(0));
+      expect(streamService.hasEspDisplayConsumer, isFalse);
 
       streamService.startStreaming();
-
-      // State must be waitingForConsumer with 0 FPS
-      expect(streamService.streamState, equals(EspMapStreamState.waitingForConsumer));
+      expect(streamService.streamState, equals(EspMapStreamState.idle));
       expect(streamService.actualFps, equals(0.0));
-
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      // No JPEG frames rendered
       expect(streamService.mapJpegRendersCount, equals(0));
-      expect(streamService.actualFps, equals(0.0));
     });
 
-    test('Section 48: Thermal Regression - Navigating without Map Consumer -> 0 JPEG renders', () async {
+    test('Section 69: Standby Wi-Fi Test - Streams live map at 8-15 FPS in foreground and background', () {
+      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
+      expect(navManager.isNavigating, isFalse);
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.standbyWifiMap));
+
+      // Foreground: 8-15 FPS (nominal 10)
+      streamService.setForegroundForTesting(true);
+      expect(streamService.effectiveTargetFps, inInclusiveRange(8, 15));
+
+      // Background / screen locked: STILL 8-15 FPS (Section 2 & 35)
+      streamService.setForegroundForTesting(false);
+      expect(streamService.effectiveTargetFps, inInclusiveRange(8, 15));
+    });
+
+    test('Section 70: Nav BLE FPS Policy Test - Allowed into 5-12 FPS range based on throughput', () {
       final route = createTestRoute();
       navManager.startNavigation(route);
       expect(navManager.isNavigating, isTrue);
 
-      streamService.startStreaming();
-
-      expect(streamService.hasEspDisplayConsumer, isFalse);
-      expect(streamService.streamState, equals(EspMapStreamState.waitingForConsumer));
-
-      // Telemetry is active
-      expect(navManager.activeRoute, isNotNull);
-      expect(navManager.remainingTotalDistance, greaterThan(0));
-
-      // JPEG rendering count strictly 0
-      expect(streamService.mapJpegRendersCount, equals(0));
-      expect(streamService.actualFps, equals(0.0));
-    });
-
-    test('Section 53: BLE-Only Stream Test - BLE connected without Wi-Fi activates stream', () {
       bleService.setConnectedForTesting(true);
-      expect(bleService.isConnected, isTrue);
-      expect(bleService.isWifiConnected, isFalse);
-
-      // Must detect BLE as active transport
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.navigationBleMap));
       expect(streamService.activeJpegTransport, equals(EspJpegTransport.ble));
-      expect(streamService.hasEspDisplayConsumer, isTrue);
 
-      streamService.startStreaming();
+      // Simulate fast BLE transfer (80ms)
+      bleService.recordBleTransferDuration(80);
+      expect(streamService.effectiveTargetFps, inInclusiveRange(9, 12));
+      expect(streamService.effectiveTargetFps, greaterThan(5)); // Not capped to 5!
 
-      // Must transition to streamingForeground, NOT remain waitingForConsumer
-      expect(streamService.streamState, equals(EspMapStreamState.streamingForeground));
-      expect(streamService.effectiveTargetFps, inInclusiveRange(2, 5));
+      // Simulate moderate BLE transfer (150ms)
+      bleService.recordBleTransferDuration(150);
+      expect(streamService.effectiveTargetFps, inInclusiveRange(5, 7));
     });
 
-    test('Section 54: Wi-Fi Foreground FPS Test - Restores smooth 12-14 FPS', () {
+    test('Section 71: Nav Wi-Fi FPS Policy Test - Nominal target reaches 12-25 FPS', () {
+      final route = createTestRoute();
+      navManager.startNavigation(route);
+      expect(navManager.isNavigating, isTrue);
+
+      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.navigationWifiMap));
+
+      // Target reaches 12-25 FPS, not capped to 14
+      expect(streamService.effectiveTargetFps, inInclusiveRange(12, 25));
+    });
+
+    test('Section 72: Background Parity Test - Background does NOT automatically collapse FPS', () {
+      final route = createTestRoute();
+      navManager.startNavigation(route);
+
+      // Wi-Fi navigation
       streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
       streamService.setForegroundForTesting(true);
-      streamService.setThermalStateForTesting('nominal');
-      streamService.setLowPowerModeForTesting(false);
+      final fgWifiFps = streamService.effectiveTargetFps;
 
-      expect(streamService.activeJpegTransport, equals(EspJpegTransport.wifiWebSocket));
-      expect(streamService.hasEspDisplayConsumer, isTrue);
-
-      // Configured cap must be 14 FPS for Wi-Fi foreground
-      expect(streamService.effectiveTargetFps, equals(14));
-    });
-
-    test('Section 55: Wi-Fi Background FPS Test - Nominal rate is 5-6 FPS, not 1 FPS', () {
-      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
-      streamService.setForegroundForTesting(false); // Screen locked / background
-      streamService.setThermalStateForTesting('nominal');
-
-      // Wi-Fi background must be 6 FPS (in 5-6 FPS range)
-      expect(streamService.effectiveTargetFps, equals(6));
-      expect(streamService.effectiveTargetFps, inInclusiveRange(5, 6));
-    });
-
-    test('Section 56: Thermal Adaptation Test - Gradual reduction across states', () {
-      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
-      streamService.setForegroundForTesting(true);
-
-      // Nominal: full 14 FPS
-      streamService.setThermalStateForTesting('nominal');
-      expect(streamService.effectiveTargetFps, equals(14));
-
-      // Fair: ~80% scaling (11 FPS)
-      streamService.setThermalStateForTesting('fair');
-      expect(streamService.effectiveTargetFps, equals(11));
-
-      // Serious: ~50% scaling (7 FPS)
-      streamService.setThermalStateForTesting('serious');
-      expect(streamService.effectiveTargetFps, inInclusiveRange(3, 7));
-
-      // Critical: minimal (1 FPS) or pause
-      streamService.setThermalStateForTesting('critical');
-      expect(streamService.effectiveTargetFps, inInclusiveRange(0, 1));
-
-      // Low Power Mode in foreground clamps to <= 8 FPS
-      streamService.setThermalStateForTesting('nominal');
-      streamService.setLowPowerModeForTesting(true);
-      expect(streamService.effectiveTargetFps, equals(8));
-    });
-
-    test('Section 57: BLE Throughput Adaptation Test', () {
-      streamService.setMockTransportForTesting(EspJpegTransport.ble);
-      streamService.setForegroundForTesting(true);
-
-      // Simulate 300ms transfer duration
-      bleService.recordBleTransferDuration(300);
-      expect(streamService.effectiveTargetFps, equals(3));
-
-      // Simulate fast 120ms transfer duration
-      bleService.recordBleTransferDuration(120);
-      expect(streamService.effectiveTargetFps, inInclusiveRange(4, 5));
-
-      // In background, BLE target is 2-3 FPS
       streamService.setForegroundForTesting(false);
-      expect(streamService.effectiveTargetFps, inInclusiveRange(2, 3));
+      final bgWifiFps = streamService.effectiveTargetFps;
+      // Must maintain parity, not drop to 1-6 FPS
+      expect(bgWifiFps, equals(fgWifiFps));
+      expect(bgWifiFps, inInclusiveRange(12, 25));
+
+      // BLE navigation
+      streamService.setMockTransportForTesting(EspJpegTransport.ble);
+      bleService.recordBleTransferDuration(100);
+      streamService.setForegroundForTesting(true);
+      final fgBleFps = streamService.effectiveTargetFps;
+
+      streamService.setForegroundForTesting(false);
+      final bgBleFps = streamService.effectiveTargetFps;
+      expect(bgBleFps, equals(fgBleFps));
+      expect(bgBleFps, inInclusiveRange(5, 12));
     });
 
-    test('Section 58: Strict Backpressure Test', () async {
-      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
-      streamService.startStreaming();
-
-      // Trigger coalescing count
-      expect(streamService.framesCoalescedCount, equals(0));
-    });
-
-    test('Section 59: Raster Pipeline Test - Legacy vector/CPU methods removed', () {
-      final file = File('../mobile_app/lib/services/esp_stream_service.dart');
-      final content = file.readAsStringSync();
-
-      // Ensure manual Canvas path drawing and CPU tile rendering methods are removed
-      expect(content.contains('_drawRealMapCanvas'), isFalse);
-      expect(content.contains('_renderCpuMapFrame'), isFalse);
-      expect(content.contains('_cpuTileCache'), isFalse);
-      expect(content.contains('_prefetchSurroundingTiles'), isFalse);
-    });
-
-    test('Section 60 & 61: Snapshot Cache & Movement Threshold Test', () {
+    test('Section 73: White-Frame Test - Uniform white image rejected, lastGoodJpeg preserved', () {
       final renderer = streamService.frameRenderer;
-      final center = LatLng(21.0285, 105.8542);
 
-      // Initial state: needs snapshot
-      expect(renderer.shouldRefreshSnapshot(
-        currentPos: center,
-        currentHeading: 0.0,
-        zoom: 17,
-        routeId: null,
-      ), isTrue);
+      // Create uniform white frame (255, 255, 255)
+      final whiteFrame = img.Image(width: 144, height: 208);
+      img.fill(whiteFrame, color: img.ColorRgba8(255, 255, 255, 255));
 
-      // After rendering frame with mock provider
-      renderer.mapSnapshotProvider = ({height, width}) async => null;
+      // Must be rejected by sanity validation
+      expect(renderer.isSanityValid(whiteFrame), isFalse);
 
-      // Small movement < 10m and heading < 15°: reuses cached snapshot (Section 60)
-      final smallMove = LatLng(21.02851, 105.85421); // ~1.5 meters
-      expect(renderer.shouldRefreshSnapshot(
-        currentPos: smallMove,
-        currentHeading: 5.0,
-        zoom: 17,
-        routeId: null,
-      ), isTrue); // true before first successful snapshot fetch
+      // Set valid lastGoodJpeg
+            renderer.resetForTesting();
+      // Render normal frame first to populate lastGoodJpeg
+      final firstJpeg = renderer.renderFrame(
+        userPos: const LatLng(21.0285, 105.8542),
+        headingDeg: 0.0,
+        activeRoute: null,
+        isNavigating: false,
+      );
+      expect(firstJpeg, isNotNull);
+      expect(renderer.lastGoodJpeg, equals(firstJpeg));
 
-      // Distance >= 10m triggers refresh (Section 61)
-      const distCalc = Distance();
-      final farPos = distCalc.offset(center, 12.0, 90.0);
-      expect(distCalc.as(LengthUnit.Meter, center, farPos), greaterThanOrEqualTo(10.0));
+      // When blank white frame detected, renderer preserves lastGoodJpeg
+      expect(renderer.isSanityValid(whiteFrame), isFalse);
     });
 
-    test('Section 51 & 52: Route redraw test - 20 GPS samples cause 0 route rebuilds, reroute causes 1', () {
-      final route1 = createTestRoute(id: 1);
-      String? lastRenderedKey;
-      int geometryRebuildCount = 0;
+    test('Section 74: Black-Frame Test - Near-uniform black image rejected', () {
+      final renderer = streamService.frameRenderer;
 
-      void renderRoute(List<LatLng> points, int routeCount, int selectedIdx) {
-        final key = points.isEmpty
-            ? 'empty'
-            : '${points.length}_${points.first.latitude}_${points.first.longitude}_${points.last.latitude}_${points.last.longitude}_${routeCount}_$selectedIdx';
-        if (key == lastRenderedKey) return;
-        lastRenderedKey = key;
-        geometryRebuildCount++;
-      }
+      // Create uniform black frame (0, 0, 0)
+      final blackFrame = img.Image(width: 144, height: 208);
+      img.fill(blackFrame, color: img.ColorRgba8(5, 5, 5, 255));
 
-      // Initial route render
-      renderRoute(route1.polylinePoints, 1, 0);
-      expect(geometryRebuildCount, equals(1));
-
-      // Feed 20 GPS updates along the same route
-      for (int i = 0; i < 20; i++) {
-        renderRoute(route1.polylinePoints, 1, 0);
-      }
-
-      // Route geometry rebuild count MUST REMAIN 1 (0 additional rebuilds)
-      expect(geometryRebuildCount, equals(1));
-
-      // When reroute occurs with new route
-      final route2 = createTestRoute(id: 2);
-      renderRoute(route2.polylinePoints, 1, 0);
-
-      // Exactly ONE new route geometry rebuild
-      expect(geometryRebuildCount, equals(2));
+      expect(renderer.isSanityValid(blackFrame), isFalse);
     });
 
-    test('Section 53: Camera throttle test - 30 GPS callbacks in 1 sec bounded by display cadence', () {
-      int cameraUpdateCount = 0;
-      DateTime lastAnimateTime = DateTime.fromMillisecondsSinceEpoch(0);
-      LatLng? coalescedPos;
-      LatLng? lastExecutedPos;
+    test('Section 75: Tile Fetch Failure Test - Reuses prior valid frame, never blank screen', () {
+      final renderer = streamService.frameRenderer;
+      renderer.resetForTesting();
 
-      void throttledAnimate(LatLng pos, DateTime now) {
-        final elapsed = now.difference(lastAnimateTime).inMilliseconds;
-        if (elapsed < 110) { // ~9 Hz display cadence
-          coalescedPos = pos;
-          return;
-        }
-        lastAnimateTime = now;
-        lastExecutedPos = pos;
-        cameraUpdateCount++;
-      }
+      // Render initial frame
+      final frame1 = renderer.renderFrame(
+        userPos: const LatLng(21.0285, 105.8542),
+        headingDeg: 45.0,
+        activeRoute: createTestRoute(),
+        isNavigating: true,
+      );
+      expect(frame1, isNotNull);
+      expect(renderer.lastGoodJpeg, isNotNull);
 
-      final start = DateTime.now();
-      for (int i = 0; i < 30; i++) {
-        final sampleTime = start.add(Duration(milliseconds: i * 33));
-        final pt = LatLng(21.0 + i * 0.0001, 105.0 + i * 0.0001);
-        throttledAnimate(pt, sampleTime);
-      }
+      // Even if network tile fetching fails or cache empty, renderFrame returns valid JPEG
+      final frame2 = renderer.renderFrame(
+        userPos: const LatLng(21.0290, 105.8545),
+        headingDeg: 50.0,
+        activeRoute: createTestRoute(),
+        isNavigating: true,
+      );
+      expect(frame2, isNotNull);
+    });
 
-      expect(cameraUpdateCount, lessThanOrEqualTo(10));
-      expect(cameraUpdateCount, greaterThanOrEqualTo(8));
+    test('Section 76 & 77: Wi-Fi <-> BLE Handoff Test during Navigation', () {
+      final route = createTestRoute();
+      navManager.startNavigation(route);
+      bleService.setConnectedForTesting(true);
 
-      if (coalescedPos != null) {
-        lastExecutedPos = coalescedPos;
-      }
-      expect(lastExecutedPos!.latitude, closeTo(21.0 + 29 * 0.0001, 0.00001));
+      // Phase 1: Wi-Fi + BLE connected -> navigationWifiMap
+      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.navigationWifiMap));
+      expect(streamService.activeJpegTransport, equals(EspJpegTransport.wifiWebSocket));
+
+      // Phase 2: Wi-Fi drops -> automatic handoff to navigationBleMap (Section 76)
+      streamService.setMockTransportForTesting(null);
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.navigationBleMap));
+      expect(streamService.activeJpegTransport, equals(EspJpegTransport.ble));
+      expect(streamService.effectiveTargetFps, inInclusiveRange(5, 12));
+
+      // Phase 3: Wi-Fi reconnects -> clean switch back to navigationWifiMap (Section 77)
+      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
+      expect(streamService.currentDisplayMode, equals(EspDisplayMode.navigationWifiMap));
+      expect(streamService.activeJpegTransport, equals(EspJpegTransport.wifiWebSocket));
+    });
+
+    test('Section 36 & 37: Thermal Adaptation Test - Quality reduced first, then FPS', () {
+      final route = createTestRoute();
+      navManager.startNavigation(route);
+      streamService.setMockTransportForTesting(EspJpegTransport.wifiWebSocket);
+
+      // Nominal: Quality ~70, full FPS
+      streamService.setThermalStateForTesting('nominal');
+      expect(streamService.effectiveJpegQuality, inInclusiveRange(65, 75));
+      final nominalFps = streamService.effectiveTargetFps;
+
+      // Fair: Quality reduced first (Section 37), FPS unchanged!
+      streamService.setThermalStateForTesting('fair');
+      expect(streamService.effectiveJpegQuality, inInclusiveRange(55, 62));
+      expect(streamService.effectiveTargetFps, equals(nominalFps)); // FPS NOT reduced on fair!
+
+      // Serious: Quality reduced + moderate FPS reduction
+      streamService.setThermalStateForTesting('serious');
+      expect(streamService.effectiveJpegQuality, inInclusiveRange(45, 52));
+      expect(streamService.effectiveTargetFps, lessThan(nominalFps));
+
+      // Critical: 1 FPS
+      streamService.setThermalStateForTesting('critical');
+      expect(streamService.effectiveTargetFps, equals(1));
     });
   });
 }

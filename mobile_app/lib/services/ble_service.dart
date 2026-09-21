@@ -170,6 +170,8 @@ class BleService extends ChangeNotifier {
   }
 
   /// Mark Hotspot WebSocket stream active from iPhone
+  void setWifiConnected([String ip = '172.20.10.1', int port = 8080]) => setHotspotConnected(ip, port);
+
   void setHotspotConnected(String ip, int port) {
     _wifiStatus = 'connected';
     _wifiIp = ip;

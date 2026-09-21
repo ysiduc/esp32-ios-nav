@@ -17,6 +17,8 @@ extern U8g2_for_TFT_eSPI u8f;
 extern TFT_eSPI tft;
 extern TFT_eSprite marqueeSpr;
 extern U8g2_for_TFT_eSPI u8f_marquee;
+extern TFT_eSprite notifMarqueeSpr;
+extern U8g2_for_TFT_eSPI u8f_notif;
 #endif
 
 #include "icons.h"
@@ -52,10 +54,27 @@ struct NavStateData {
   int16_t heading = 0;
 };
 
+enum AppSourceType : uint8_t {
+  APP_SOURCE_SIM = 0,
+  APP_SOURCE_ZALO = 1,
+  APP_SOURCE_MESSENGER = 2,
+  APP_SOURCE_SMS = 3,
+  APP_SOURCE_OTHER = 4
+};
+
 struct AncsPopupData {
-  char title[32] = "";
-  char message[64] = "";
+  char title[64] = "";
+  char message[160] = "";
+  AppSourceType appSource = APP_SOURCE_SIM;
   uint32_t expireMillis = 0;
+};
+
+struct HistoryNotification {
+  char title[64] = "";
+  char message[160] = "";
+  char timeStr[16] = "";
+  AppSourceType appSource = APP_SOURCE_SIM;
+  bool isCall = false;
 };
 
 class DisplayManager {
@@ -63,6 +82,16 @@ private:
   DisplayState _currentState = STATE_PAIRING_WAIT;
   NavStateData _navData;
   AncsPopupData _popupData;
+  HistoryNotification _historyNotifs[10];
+  uint8_t _historyNotifCount = 0;
+  bool _isNotifCenterOpen = false;
+  bool _needNotifCenterRedraw = false;
+  bool _touchActive = false;
+  uint16_t _touchStartX = 0;
+  uint16_t _touchStartY = 0;
+  uint16_t _touchLastX = 0;
+  uint16_t _touchLastY = 0;
+  unsigned long _touchStartTime = 0;
   bool _needFullRedraw = true;
   bool _lastIsNavigating = false;
   bool _lastStreamingState = false;
@@ -71,8 +100,17 @@ private:
   int _songScrollOffset = 0;
   unsigned long _lastSongScrollTime = 0;
   unsigned long _songScrollPauseUntil = 0;
+  int _notifScrollOffset = 0;
+  unsigned long _lastNotifScrollTime = 0;
+  unsigned long _notifScrollPauseUntil = 0;
   bool _isAppConnected = false;
   bool _pairingBgDrawn = false;
+  bool _pairingCustomBg = false;
+  char _lastPairingSong[48] = "";
+  char _lastPairingArtist[32] = "";
+  char _lastPairingClock[16] = "";
+  bool _lastPairingBleConn = false;
+  uint8_t _pairingEqFrame = 0;
   uint8_t _clockHour = 12;
   uint8_t _clockMin = 0;
   uint8_t _clockSec = 0;
@@ -93,6 +131,15 @@ private:
   char _lastDockClock[16] = "";
   uint8_t _lastDockBat = 255;
 
+  // Cached state to eliminate left vector map blinking/flicker
+  bool _mapVectorDrawn = false;
+  bool _lastMapIsNavigating = false;
+  uint8_t _lastMapTurn = 255;
+  uint16_t _lastMapDist = 65535;
+  uint8_t _lastMapRouteCount = 255;
+  bool _hudCardDrawn = false;
+  bool _hudCardNavMode = false;
+
 public:
   void init() {
 #if defined(DISPLAY_OLED_SSD1306)
@@ -106,6 +153,11 @@ public:
     #endif
     tft.init();
     tft.setRotation(1); // Landscape 320x240
+    #if defined(TOUCH_CS) && (TOUCH_CS >= 0)
+    uint16_t calData[5] = { 275, 3494, 361, 3528, 7 };
+    tft.setTouch(calData);
+    Serial.println("[Touch] XPT2046 touch driver initialized.");
+    #endif
     tft.invertDisplay(false);
     tft.fillScreen(TFT_BLACK);
     u8f.begin(tft);
@@ -118,6 +170,12 @@ public:
     u8f_marquee.setFontMode(0);
     u8f_marquee.setFontDirection(0);
     u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
+
+    notifMarqueeSpr.createSprite(248, 20);
+    u8f_notif.begin(notifMarqueeSpr);
+    u8f_notif.setFontMode(0);
+    u8f_notif.setFontDirection(0);
+    u8f_notif.setFont(u8g2_font_unifont_t_vietnamese1);
 
     _drawPairingScreenTft();
 #endif
@@ -203,6 +261,10 @@ public:
     if (changed) {
       _songScrollOffset = 0;
       _songScrollPauseUntil = millis() + 1500;
+      if (_currentState == STATE_PAIRING_WAIT && _pairingCustomBg) {
+        _pairingBgDrawn = false;
+      }
+      _needFullRedraw = true;
     }
   }
 
@@ -252,8 +314,6 @@ public:
     if (strcmp(_navData.currentTime, timeStr) != 0) {
       strncpy(_navData.currentTime, timeStr, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-      _lastDockClock[0] = '\0';
-      _needFullRedraw = true;
     }
   }
 
@@ -298,8 +358,6 @@ public:
 
     if (_navData.batteryLevel != finalBat) {
       _navData.batteryLevel = finalBat;
-      _lastDockBat = 255;
-      _needFullRedraw = true;
     }
   }
 
@@ -308,30 +366,142 @@ public:
     m = _clockMin;
   }
 
-  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
+  bool isPopupActive() const {
+    return (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS);
+  }
+
+  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr, AppSourceType app = APP_SOURCE_SIM) {
     strncpy(_popupData.title, callerName, sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     if (phoneOrMsg != nullptr && phoneOrMsg[0] != '\0') {
       strncpy(_popupData.message, phoneOrMsg, sizeof(_popupData.message) - 1);
+      _popupData.message[sizeof(_popupData.message) - 1] = '\0';
     } else {
       _popupData.message[0] = '\0';
     }
-    _popupData.expireMillis = millis() + 10000;
+    _popupData.appSource = app;
+    // Keep call alert active while ringing (60s timeout fallback) - dismissed immediately when phone stops ringing
+    _popupData.expireMillis = millis() + 60000;
     _currentState = STATE_POPUP_CALL;
-    _needFullRedraw = true;
+    _isNotifCenterOpen = false;
+
+    // Save to Notification Center history
+    addNotificationHistory(callerName, phoneOrMsg, app, true);
   }
 
-  void showSmsAlert(const char* sender, const char* msg) {
+  void showSmsAlert(const char* sender, const char* msg, AppSourceType app = APP_SOURCE_SMS) {
     strncpy(_popupData.title, sender, sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
-    _popupData.expireMillis = millis() + 6000;
+    _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+    _popupData.appSource = app;
+    // Exactly 10 seconds for message notification as requested
+    _popupData.expireMillis = millis() + 10000;
+    _notifScrollOffset = 0;
+    _notifScrollPauseUntil = millis() + 1200;
+    _lastNotifScrollTime = millis();
     _currentState = STATE_POPUP_SMS;
-    _needFullRedraw = true;
+
+    // Save to Notification Center history
+    addNotificationHistory(sender, msg, app, false);
+  }
+
+  void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
+    if (title != nullptr && title[0] != '\0') {
+      strncpy(_popupData.title, title, sizeof(_popupData.title) - 1);
+      _popupData.title[sizeof(_popupData.title) - 1] = '\0';
+    }
+    if (msg != nullptr && msg[0] != '\0') {
+      if (strcmp(_popupData.message, msg) != 0) {
+        strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
+        _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+        _notifScrollOffset = 0;
+        _notifScrollPauseUntil = millis() + 1200;
+        _lastNotifScrollTime = millis();
+      }
+    }
+    _popupData.appSource = app;
+
+    // Update newest item in history
+    updateLatestNotificationHistory(title, msg, app);
+  }
+
+  void addNotificationHistory(const char* title, const char* msg, AppSourceType app, bool isCall) {
+    if (title == nullptr || title[0] == '\0') return;
+    if (_historyNotifCount > 0 &&
+        strcmp(_historyNotifs[0].title, title) == 0 &&
+        strcmp(_historyNotifs[0].message, msg ? msg : "") == 0) {
+      return;
+    }
+    int maxItems = 10;
+    int limit = (_historyNotifCount < maxItems) ? _historyNotifCount : (maxItems - 1);
+    for (int i = limit; i > 0; i--) {
+      _historyNotifs[i] = _historyNotifs[i - 1];
+    }
+    strncpy(_historyNotifs[0].title, title, sizeof(_historyNotifs[0].title) - 1);
+    _historyNotifs[0].title[sizeof(_historyNotifs[0].title) - 1] = '\0';
+    if (msg != nullptr && msg[0] != '\0') {
+      strncpy(_historyNotifs[0].message, msg, sizeof(_historyNotifs[0].message) - 1);
+      _historyNotifs[0].message[sizeof(_historyNotifs[0].message) - 1] = '\0';
+    } else {
+      _historyNotifs[0].message[0] = '\0';
+    }
+    if (_navData.currentTime[0] != '\0') {
+      strncpy(_historyNotifs[0].timeStr, _navData.currentTime, sizeof(_historyNotifs[0].timeStr) - 1);
+      _historyNotifs[0].timeStr[sizeof(_historyNotifs[0].timeStr) - 1] = '\0';
+    } else {
+      snprintf(_historyNotifs[0].timeStr, sizeof(_historyNotifs[0].timeStr), "--:--");
+    }
+    _historyNotifs[0].appSource = app;
+    _historyNotifs[0].isCall = isCall;
+    if (_historyNotifCount < maxItems) _historyNotifCount++;
+    if (_isNotifCenterOpen) _needNotifCenterRedraw = true;
+  }
+
+  void updateLatestNotificationHistory(const char* title, const char* msg, AppSourceType app) {
+    if (_historyNotifCount > 0) {
+      if (title != nullptr && title[0] != '\0') {
+        strncpy(_historyNotifs[0].title, title, sizeof(_historyNotifs[0].title) - 1);
+        _historyNotifs[0].title[sizeof(_historyNotifs[0].title) - 1] = '\0';
+      }
+      if (msg != nullptr && msg[0] != '\0') {
+        strncpy(_historyNotifs[0].message, msg, sizeof(_historyNotifs[0].message) - 1);
+        _historyNotifs[0].message[sizeof(_historyNotifs[0].message) - 1] = '\0';
+      }
+      _historyNotifs[0].appSource = app;
+      if (_isNotifCenterOpen) _needNotifCenterRedraw = true;
+    }
+  }
+
+  void openNotificationCenter() {
+    if (!_isNotifCenterOpen) {
+      _isNotifCenterOpen = true;
+      _needNotifCenterRedraw = true;
+      Serial.println("[Touch] Notification Center OPENED via pull-down gesture.");
+    }
+  }
+
+  void closeNotificationCenter() {
+    if (_isNotifCenterOpen) {
+      _isNotifCenterOpen = false;
+      _needFullRedraw = true;
+      _pairingBgDrawn = false;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
+      Serial.println("[Touch] Notification Center CLOSED.");
+    }
+  }
+
+  bool isNotificationCenterOpen() const {
+    return _isNotifCenterOpen;
   }
 
   void dismissAlert() {
     if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
       _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       if (!_isAppConnected) _pairingBgDrawn = false;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
       _needFullRedraw = true;
     }
   }
@@ -346,6 +516,8 @@ public:
 
   void forceRedraw() {
     _pairingBgDrawn = false;
+    _mapVectorDrawn = false;
+    _hudCardDrawn = false;
     _needFullRedraw = true;
   }
 
@@ -369,8 +541,6 @@ public:
           if (strcmp(_navData.currentTime, newTime) != 0) {
             strncpy(_navData.currentTime, newTime, sizeof(_navData.currentTime) - 1);
             _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-            _lastDockClock[0] = '\0';
-            _needFullRedraw = true;
           }
         }
       }
@@ -379,21 +549,34 @@ public:
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       if (!_isAppConnected) _pairingBgDrawn = false;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
       _needFullRedraw = true;
     }
 
 #if defined(DISPLAY_OLED_SSD1306)
     _renderOled();
 #elif defined(DISPLAY_TFT_ST7789)
+    _handleTouch();
+
+    if (_isNotifCenterOpen) {
+      if (_needNotifCenterRedraw) {
+        _needNotifCenterRedraw = false;
+        _renderNotificationCenter();
+      }
+      return;
+    }
+
     if (_currentState == STATE_PAIRING_WAIT) {
       if (!_pairingBgDrawn) {
         _drawPairingScreenTft();
         _lastRenderTime = millis();
         _needFullRedraw = false;
       } else {
-        // Smoothly refresh dockbar (clock & battery) every 250ms or when requested
+        // Smoothly refresh dockbar and screen content every 250ms or when requested
         if (_needFullRedraw || millis() - _lastRenderTime > 250) {
           _drawUnifiedDockbar(false);
+          _renderPairingScreenContent(false);
           _lastRenderTime = millis();
           _needFullRedraw = false;
         }
@@ -411,6 +594,21 @@ public:
       if (millis() - _lastSongScrollTime >= 35) {
         uint16_t cDockBg = tft.color565(8, 12, 18);
         _renderDockbarSongMarquee(cDockBg);
+      }
+    }
+
+    // High-fps smooth scrolling for long notification message (marquee)
+    if (isPopupActive() && _currentState == STATE_POPUP_SMS) {
+      if (millis() - _lastNotifScrollTime >= 30) {
+        uint16_t cCardBg;
+        if (_popupData.appSource == APP_SOURCE_ZALO) {
+          cCardBg = tft.color565(8, 22, 42);
+        } else if (_popupData.appSource == APP_SOURCE_MESSENGER) {
+          cCardBg = tft.color565(26, 12, 38);
+        } else {
+          cCardBg = tft.color565(8, 28, 16);
+        }
+        _renderNotifMarquee(cCardBg);
       }
     }
 #endif
@@ -434,6 +632,296 @@ private:
     if (y >= 24 && x >= 140 && x < 168) x = 168;
     u8f.setCursor(x, y + 13);
     u8f.print(str);
+  }
+
+  // ---------------------------------------------------------------------------
+  // APP NOTIFICATION & CALL ICONS
+  // ---------------------------------------------------------------------------
+  void _drawZaloIcon(int x, int y) {
+    uint16_t cZaloBlue = tft.color565(0, 104, 255);
+    tft.fillRoundRect(x, y, 36, 36, 8, cZaloBlue);
+    tft.drawRoundRect(x, y, 36, 36, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cZaloBlue);
+    tft.drawString("Zalo", x + 4, y + 10, 2);
+  }
+
+  void _drawPhoneCallIcon(int x, int y) {
+    uint16_t cCallGreen = tft.color565(34, 197, 94);
+    tft.fillCircle(x + 18, y + 18, 18, cCallGreen);
+    tft.drawCircle(x + 18, y + 18, 18, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cCallGreen);
+    tft.drawString("SIM", x + 5, y + 10, 2);
+  }
+
+  void _drawSmsIcon(int x, int y) {
+    uint16_t cSmsGreen = tft.color565(52, 199, 89);
+    tft.fillRoundRect(x, y, 36, 30, 8, cSmsGreen);
+    tft.fillTriangle(x + 8, y + 29, x + 16, y + 29, x + 6, y + 35, cSmsGreen);
+    tft.drawRoundRect(x, y, 36, 30, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cSmsGreen);
+    tft.drawString("SMS", x + 5, y + 8, 2);
+  }
+
+  void _drawMessengerIcon(int x, int y) {
+    uint16_t cMsgPurple = tft.color565(168, 85, 247);
+    tft.fillRoundRect(x, y, 36, 30, 8, cMsgPurple);
+    tft.fillTriangle(x + 20, y + 29, x + 28, y + 29, x + 24, y + 35, cMsgPurple);
+    tft.drawRoundRect(x, y, 36, 30, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cMsgPurple);
+    tft.drawString("MSG", x + 4, y + 8, 2);
+  }
+
+  void _drawOtherNotifIcon(int x, int y) {
+    uint16_t cOtherCyan = tft.color565(0, 180, 216);
+    tft.fillRoundRect(x, y, 36, 36, 8, cOtherCyan);
+    tft.drawRoundRect(x, y, 36, 36, 8, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE, cOtherCyan);
+    tft.drawString("APP", x + 4, y + 10, 2);
+  }
+
+  void _drawAppIcon(AppSourceType app, int x, int y) {
+    switch (app) {
+      case APP_SOURCE_ZALO:
+        _drawZaloIcon(x, y);
+        break;
+      case APP_SOURCE_SIM:
+        _drawPhoneCallIcon(x, y);
+        break;
+      case APP_SOURCE_MESSENGER:
+        _drawMessengerIcon(x, y);
+        break;
+      case APP_SOURCE_SMS:
+        _drawSmsIcon(x, y);
+        break;
+      case APP_SOURCE_OTHER:
+      default:
+        _drawOtherNotifIcon(x, y);
+        break;
+    }
+  }
+
+  void _drawBannerUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, int maxWidth = 240, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(font);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+
+    char buf[128];
+    strncpy(buf, str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    if (u8f.getUTF8Width(buf) > maxWidth) {
+      size_t len = strlen(buf);
+      while (len > 3 && u8f.getUTF8Width(buf) > maxWidth) {
+        len--;
+        while (len > 0 && (buf[len] & 0xC0) == 0x80) len--;
+        buf[len] = '\0';
+        strncat(buf, "...", sizeof(buf) - strlen(buf) - 1);
+      }
+    }
+
+    u8f.setCursor(x, y + 13);
+    u8f.print(buf);
+  }
+
+  void _drawTopNotificationBanner() {
+    bool isCall = (_currentState == STATE_POPUP_CALL);
+    bool isZalo = (_popupData.appSource == APP_SOURCE_ZALO);
+    bool isMessenger = (_popupData.appSource == APP_SOURCE_MESSENGER);
+
+    uint16_t cCardBg;
+    uint16_t cBorder;
+    const char* badgeText;
+    uint16_t cBadgeBg;
+
+    if (isCall) {
+      if (isZalo) {
+        cCardBg = tft.color565(8, 22, 42);     // Deep Zalo Navy
+        cBorder = tft.color565(0, 104, 255);    // Zalo Blue (#0068FF)
+        badgeText = "ZALO";
+        cBadgeBg = tft.color565(0, 55, 120);
+      } else {
+        cCardBg = tft.color565(6, 28, 16);     // Deep SIM Forest Green
+        cBorder = tft.color565(34, 197, 94);    // Green (#22C55E)
+        badgeText = "SIM";
+        cBadgeBg = tft.color565(12, 54, 28);
+      }
+    } else { // SMS / Message
+      if (isZalo) {
+        cCardBg = tft.color565(8, 22, 42);
+        cBorder = tft.color565(0, 104, 255);
+        badgeText = "ZALO";
+        cBadgeBg = tft.color565(0, 55, 120);
+      } else if (isMessenger) {
+        cCardBg = tft.color565(26, 12, 38);
+        cBorder = tft.color565(168, 85, 247);   // Messenger Purple (#A855F7)
+        badgeText = "MSG";
+        cBadgeBg = tft.color565(60, 20, 95);
+      } else {
+        cCardBg = tft.color565(8, 28, 16);
+        cBorder = tft.color565(52, 199, 89);    // SMS Green
+        badgeText = "SMS";
+        cBadgeBg = tft.color565(14, 52, 28);
+      }
+    }
+
+    // Top Horizontal Banner Bar (308x52 pixels, right below waybar y=24)
+    const int bx = 6, by = 26, bw = 308, bh = 52;
+    tft.fillRoundRect(bx, by, bw, bh, 10, cCardBg);
+    tft.drawRoundRect(bx, by, bw, bh, 10, cBorder);
+    tft.drawRoundRect(bx + 1, by + 1, bw - 2, bh - 2, 9, cBorder);
+
+    // Left: App Icon (36x36 at x = 12, y = 34)
+    _drawAppIcon(_popupData.appSource, 12, 34);
+
+    // Top-Right Badge Pill
+    int badgeW = (badgeText != nullptr) ? (strlen(badgeText) * 8 + 14) : 0;
+    if (badgeW > 0) {
+      tft.fillRoundRect(bx + bw - badgeW - 8, by + 5, badgeW, 18, 5, cBadgeBg);
+      tft.drawRoundRect(bx + bw - badgeW - 8, by + 5, badgeW, 18, 5, cBorder);
+      tft.setTextColor(TFT_WHITE, cBadgeBg);
+      tft.drawString(badgeText, bx + bw - badgeW - 1, by + 7, 2);
+    }
+
+    int maxTextW = bw - 54 - badgeW - 14;
+
+    if (isCall) {
+      // Row 1: Caller Name ("tên người gọi" hoặc "tên đã lưu / SĐT")
+      const char* name = _popupData.title[0] != '\0' ? _popupData.title : "Cuộc gọi đến";
+      _drawBannerUtf8String(name, 54, 28, TFT_WHITE, cCardBg, maxTextW);
+
+      // Row 2: Status "đang gọi đến..."
+      char statusBuf[64];
+      if (_popupData.message[0] != '\0' &&
+          strcmp(_popupData.message, "Dang do chuong...") != 0 &&
+          strcmp(_popupData.message, "đang gọi đến...") != 0 &&
+          strcmp(_popupData.message, name) != 0) {
+        snprintf(statusBuf, sizeof(statusBuf), "%s • đang gọi đến...", _popupData.message);
+      } else {
+        snprintf(statusBuf, sizeof(statusBuf), "đang gọi đến...");
+      }
+      _drawBannerUtf8String(statusBuf, 54, 48, TFT_GREEN, cCardBg, bw - 60);
+
+    } else {
+      // Row 1: Sender Name
+      const char* sender = _popupData.title[0] != '\0' ? _popupData.title : "Tin nhắn mới";
+      _drawBannerUtf8String(sender, 54, 28, tft.color565(250, 204, 21), cCardBg, maxTextW);
+
+      // Row 2: Message Content (rendered via smooth sprite marquee)
+      _renderNotifMarquee(cCardBg);
+    }
+  }
+
+  void _renderNotifMarquee(uint16_t cCardBg) {
+    if (_currentState != STATE_POPUP_SMS) return;
+
+    const int clipW = 248;
+    const int clipH = 20;
+
+    const char* textToScroll = _popupData.message[0] != '\0' ? _popupData.message : "Thông báo mới";
+    uint16_t textColor = TFT_WHITE;
+
+    notifMarqueeSpr.fillSprite(cCardBg);
+
+    u8f_notif.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f_notif.setForegroundColor(textColor);
+    u8f_notif.setBackgroundColor(cCardBg);
+
+    int textW = u8f_notif.getUTF8Width(textToScroll);
+    if (textW <= clipW) {
+      u8f_notif.setCursor(0, 14);
+      u8f_notif.print(textToScroll);
+      _notifScrollOffset = 0;
+      _notifScrollPauseUntil = millis() + 1500;
+    } else {
+      String sep = "    •    ";
+      int sepW = u8f_notif.getUTF8Width(sep.c_str());
+      int totalLoopW = textW + sepW;
+
+      if (millis() < _notifScrollPauseUntil) {
+        // Paused at start of message so user can read beginning
+      } else if (millis() - _lastNotifScrollTime >= 30) {
+        _lastNotifScrollTime = millis();
+        _notifScrollOffset++;
+        if (_notifScrollOffset >= totalLoopW) {
+          _notifScrollOffset = 0;
+          _notifScrollPauseUntil = millis() + 1200;
+        }
+      }
+
+      int drawX = -_notifScrollOffset;
+      u8f_notif.setCursor(drawX, 14);
+      u8f_notif.print(textToScroll);
+
+      if (drawX + textW < clipW) {
+        u8f_notif.setCursor(drawX + textW, 14);
+        u8f_notif.print((sep + String(textToScroll)).c_str());
+      }
+    }
+
+    notifMarqueeSpr.pushSprite(54, 48);
+  }
+
+  void _drawWrappedUtf8String(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, uint16_t bgColor, int lineHeight = 22) {
+    if (text == nullptr || text[0] == '\0') return;
+
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+
+    char currentLine[128];
+    currentLine[0] = '\0';
+    int lineCount = 0;
+    int curY = startY;
+
+    const char* ptr = text;
+    while (*ptr != '\0' && lineCount < maxLines) {
+      while (*ptr == ' ') ptr++;
+      if (*ptr == '\0') break;
+
+      char word[64];
+      int wordLen = 0;
+      while (*ptr != '\0' && *ptr != ' ' && wordLen < (int)sizeof(word) - 1) {
+        word[wordLen++] = *ptr++;
+      }
+      word[wordLen] = '\0';
+
+      char candidate[128];
+      if (currentLine[0] == '\0') {
+        strncpy(candidate, word, sizeof(candidate) - 1);
+      } else {
+        snprintf(candidate, sizeof(candidate), "%s %s", currentLine, word);
+      }
+      candidate[sizeof(candidate) - 1] = '\0';
+
+      int w = u8f.getUTF8Width(candidate);
+      if (w <= maxWidth) {
+        strncpy(currentLine, candidate, sizeof(currentLine) - 1);
+        currentLine[sizeof(currentLine) - 1] = '\0';
+      } else {
+        if (currentLine[0] != '\0') {
+          u8f.setCursor(startX, curY + 13);
+          u8f.print(currentLine);
+          lineCount++;
+          curY += lineHeight;
+        }
+        if (lineCount < maxLines) {
+          strncpy(currentLine, word, sizeof(currentLine) - 1);
+          currentLine[sizeof(currentLine) - 1] = '\0';
+        } else {
+          currentLine[0] = '\0';
+          break;
+        }
+      }
+    }
+
+    if (currentLine[0] != '\0' && lineCount < maxLines) {
+      if (*ptr != '\0') {
+        strncat(currentLine, "...", sizeof(currentLine) - strlen(currentLine) - 1);
+      }
+      u8f.setCursor(startX, curY + 13);
+      u8f.print(currentLine);
+    }
   }
 
   void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
@@ -532,6 +1020,15 @@ private:
       tft.setTextColor(TFT_CYAN, cDockBg);
       tft.drawString("#ysiduc", 8, 4, 2);
 
+      // Notification indicator badge if unread notifications exist
+      if (_historyNotifCount > 0) {
+        char nStr[8];
+        snprintf(nStr, sizeof(nStr), "%d", _historyNotifCount);
+        tft.fillRoundRect(56, 4, 16, 16, 4, tft.color565(220, 38, 38));
+        tft.setTextColor(TFT_WHITE, tft.color565(220, 38, 38));
+        tft.drawCentreString(nStr, 64, 5, 1);
+      }
+
       _lastDockClock[0] = '\0';
       _lastDockBat = 255;
     }
@@ -576,6 +1073,103 @@ private:
     }
   }
 
+  void _drawPairingCentreUtf8(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, int maxW = 260) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+    int w = u8f.getUTF8Width(str);
+    if (w <= maxW) {
+      int startX = cx - (w / 2);
+      if (startX < 24) startX = 24;
+      u8f.setCursor(startX, y + 13);
+      u8f.print(str);
+    } else {
+      char buf[64];
+      strncpy(buf, str, sizeof(buf) - 1);
+      buf[sizeof(buf) - 1] = '\0';
+      while (strlen(buf) > 3 && u8f.getUTF8Width((String(buf) + "...").c_str()) > maxW) {
+        buf[strlen(buf) - 1] = '\0';
+      }
+      String finalStr = String(buf) + "...";
+      int finalW = u8f.getUTF8Width(finalStr.c_str());
+      int startX = cx - (finalW / 2);
+      if (startX < 24) startX = 24;
+      u8f.setCursor(startX, y + 13);
+      u8f.print(finalStr.c_str());
+    }
+  }
+
+  void _renderPairingScreenContent(bool fullRedraw = false) {
+    uint16_t cBg = tft.color565(8, 12, 18);
+    uint16_t cCardBg = tft.color565(15, 23, 42);
+    uint16_t cBorder = tft.color565(30, 41, 59);
+    uint16_t cSubText = tft.color565(148, 163, 184);
+    uint16_t cDimGrey = tft.color565(100, 116, 139);
+
+    bool bleConn = _navData.isConnected;
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+
+    if (!_pairingCustomBg) {
+      // -----------------------------------------------------------------------
+      // STANDARD STANDBY PAIRING UI (No custom wallpaper)
+      // -----------------------------------------------------------------------
+      // A. BLE Connection Status Pill (y: 30 to 52)
+      if (fullRedraw || _lastPairingBleConn != bleConn) {
+        _lastPairingBleConn = bleConn;
+        int pw = 210, px = (320 - pw) / 2, py = 30, ph = 24;
+        if (bleConn) {
+          tft.fillRoundRect(px, py, pw, ph, 6, tft.color565(12, 44, 24));
+          tft.drawRoundRect(px, py, pw, ph, 6, tft.color565(34, 197, 94));
+          tft.setTextColor(TFT_GREEN, tft.color565(12, 44, 24));
+          tft.drawCentreString("* DA KET NOI IPHONE", 160, py + 5, 2);
+        } else {
+          tft.fillRoundRect(px, py, pw, ph, 6, tft.color565(12, 28, 48));
+          tft.drawRoundRect(px, py, pw, ph, 6, tft.color565(0, 180, 255));
+          tft.setTextColor(TFT_CYAN, tft.color565(12, 28, 48));
+          tft.drawCentreString("o CHO KET NOI IPHONE", 160, py + 5, 2);
+        }
+      }
+
+      // B. Digital Clock (y: 62 to 115)
+      const char* curClock = (_navData.currentTime[0] != '\0') ? _navData.currentTime : "12:00";
+      if (fullRedraw || strcmp(_lastPairingClock, curClock) != 0) {
+        strncpy(_lastPairingClock, curClock, sizeof(_lastPairingClock) - 1);
+        tft.setTextColor(TFT_WHITE, cBg);
+        tft.setTextPadding(180);
+        tft.drawCentreString(curClock, 160, 64, 7);
+        tft.setTextPadding(0);
+      }
+
+      // C. Connection & System Info Card (y: 126 to 200)
+      if (fullRedraw || _lastPairingBleConn != bleConn) {
+        tft.fillRoundRect(20, 126, 280, 74, 8, cCardBg);
+        tft.drawRoundRect(20, 126, 280, 74, 8, bleConn ? tft.color565(34, 197, 94) : cBorder);
+
+        if (bleConn) {
+          _drawPairingCentreUtf8("DA KET NOI BLUETOOTH", 160, 134, TFT_GREEN, cCardBg);
+          _drawPairingCentreUtf8("Mo App tren iPhone de bat dau", 160, 156, TFT_WHITE, cCardBg, 260);
+          _drawPairingCentreUtf8("He thong dan duong san sang", 160, 176, cSubText, cCardBg, 260);
+        } else {
+          _drawPairingCentreUtf8("BLUETOOTH: ysiducw", 160, 134, TFT_CYAN, cCardBg);
+          _drawPairingCentreUtf8("Vao Cai dat > Bluetooth tren iPhone", 160, 156, TFT_WHITE, cCardBg, 260);
+          _drawPairingCentreUtf8("Chon \"ysiducw\" de ghep noi", 160, 176, cSubText, cCardBg, 260);
+        }
+      }
+
+      // D. Bottom Guidance Hint (y: 212)
+      if (fullRedraw) {
+        tft.setTextColor(cDimGrey, cBg);
+        tft.drawCentreString("Apple Media & Notifications Active", 160, 214, 2);
+      }
+
+    } else {
+      // -----------------------------------------------------------------------
+      // CUSTOM WALLPAPER MODE: Clean wallpaper display (no music card)
+      // -----------------------------------------------------------------------
+    }
+  }
+
   void _drawPairingScreenTft() {
     // 1. Draw Background Image (Decoded once to prevent flickering)
     if (!_pairingBgDrawn) {
@@ -600,13 +1194,21 @@ private:
       }
 
       if (!bgLoaded) {
-        tft.fillScreen(TFT_BLACK);
+        tft.fillScreen(tft.color565(8, 12, 18));
       }
+      _pairingCustomBg = bgLoaded;
       _pairingBgDrawn = true;
+      _lastPairingSong[0] = '\0';
+      _lastPairingArtist[0] = '\0';
+      _lastPairingClock[0] = '\0';
+      _lastPairingBleConn = !_navData.isConnected;
     }
 
     // 2. Top Dockbar (Identical across all screens!)
     _drawUnifiedDockbar(true);
+
+    // 3. Pairing screen content & music card
+    _renderPairingScreenContent(true);
   }
 
   /// Draw Anti-Aliased Clean Vector Maneuver Arrow
@@ -689,8 +1291,9 @@ private:
   }
 
   /// Draw High-Definition Real Vector Navigation Map (True Route Geometry & Corridor)
-  void _renderStandbyVectorMap() {
-    if (!_navData.isNavigating && SPIFFS.exists("/bg_map.jpg")) {
+  /// Draw Static Standby Map (/bg_map.jpg if exists, or clean neutral standby container) - Sections 1, 40, 42
+  void _drawStaticStandbyMap() {
+    if (SPIFFS.exists("/bg_map.jpg")) {
       File f = SPIFFS.open("/bg_map.jpg", "r");
       if (f) {
         size_t fSize = f.size();
@@ -714,278 +1317,191 @@ private:
       }
     }
 
-    // -------------------------------------------------------------------------
-    // TRUE-TO-LIFE VECTOR NAVIGATION MAP (Garmin / Apple Maps HUD Style)
-    // -------------------------------------------------------------------------
-    uint16_t cMapBg       = tft.color565(11, 17, 26);    // Deep Dark Slate Navy (#0B111A)
-    uint16_t cCardBorder  = tft.color565(32, 45, 61);    // Card edge outline (#202D3D)
-    uint16_t cRadarRing   = tft.color565(20, 32, 48);    // Distance Range Rings (#142030)
-    uint16_t cRadarText   = tft.color565(60, 80, 105);   // Scale labels (#3C5069)
-    uint16_t cAsphaltBed  = tft.color565(28, 38, 54);    // Real Road Asphalt Bed (#1C2636)
-    uint16_t cRoadBorder  = tft.color565(55, 75, 100);   // Crisp Road Casing Border (#374B64)
-    uint16_t cRouteGlow   = tft.color565(0, 120, 180);   // Route Outer Glow (#0078B4)
-    uint16_t cRouteActive = TFT_CYAN;                    // Brilliant Neon Cyan Route (#00F0FF)
-
-    // 1. Clear & Fill Entire Left Rectangular Container Card (x: 4..152, y: 24..236)
+    // Clean neutral standby card (NO synthetic vector map! - Section 42)
+    uint16_t cMapBg      = tft.color565(11, 17, 26);
+    uint16_t cCardBorder = tft.color565(32, 45, 61);
     tft.drawRoundRect(4, 24, 148, 212, 12, cCardBorder);
     tft.fillRoundRect(6, 26, 144, 208, 10, cMapBg);
+    tft.setTextColor(tft.color565(80, 105, 135), cMapBg);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("STANDBY", 78, 130, 2);
+    tft.setTextDatum(TL_DATUM);
+    tft.drawRoundRect(4, 24, 148, 212, 12, cCardBorder);
+  }
 
-    // Coordinate Anchors
-    const int minX = 7, maxX = 149;
-    const int minY = 27, maxY = 233;
-    const int cx = 78;
+  void _handleTouch() {
+#if defined(DISPLAY_TFT_ST7789) && defined(TOUCH_CS) && (TOUCH_CS >= 0)
+    uint16_t tx = 0, ty = 0;
+    bool pressed = tft.getTouch(&tx, &ty, 400);
 
-    if (_navData.isNavigating) {
-      // -----------------------------------------------------------------------
-      // ACTIVE NAVIGATION MODE: Real Route Geometry, Actual Turn & Road Corridor
-      // -----------------------------------------------------------------------
-      const int cy = 175; // Vehicle anchor position at lower 1/3
-
-      // 2. Concentric Distance Range Rings (50m, 100m, 150m perspective)
-      tft.drawCircle(cx, cy, 38, cRadarRing);
-      tft.drawCircle(cx, cy, 74, cRadarRing);
-      tft.drawCircle(cx, cy, 110, cRadarRing);
-      tft.drawFastHLine(cx - 65, cy, 130, cRadarRing);
-      tft.drawFastVLine(cx, minY + 6, maxY - minY - 12, cRadarRing);
-
-      tft.setTextColor(cRadarText, cMapBg);
-      tft.drawString("50m", cx + 41, cy - 8, 1);
-      tft.drawString("100m", cx + 77, cy - 8, 1);
-
-      // 3. Render Real Navigation Route & Cross Streets
-      if (_navData.routePointCount >= 2) {
-        // Collect valid forward-advancing GPS waypoints
-        int px[32], py[32];
-        px[0] = cx;
-        py[0] = cy;
-        uint8_t count = 1;
-
-        for (uint8_t i = 1; i < _navData.routePointCount; i++) {
-          if (_navData.routePoints[i].dy < -5) continue; // Skip backwards points
-          px[count] = constrain(cx + _navData.routePoints[i].dx, minX + 6, maxX - 6);
-          py[count] = constrain(cy - _navData.routePoints[i].dy, minY + 8, maxY - 4);
-          count++;
-        }
-
-        if (count >= 2) {
-          // Road behind vehicle extending to bottom of card
-          _drawThickLine(cx, cy, cx, maxY - 4, cRoadBorder, 16);
-          _drawThickLine(cx, cy, cx, maxY - 4, cAsphaltBed, 12);
-
-          // Pass 1: Road Border Casings along actual route
-          for (uint8_t i = 1; i < count; i++) {
-            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRoadBorder, 16);
-            tft.fillCircle(px[i], py[i], 8, cRoadBorder);
-          }
-          tft.fillCircle(px[0], py[0], 8, cRoadBorder);
-
-          // Pass 2: Asphalt Road Bed along actual route
-          for (uint8_t i = 1; i < count; i++) {
-            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cAsphaltBed, 12);
-            tft.fillCircle(px[i], py[i], 6, cAsphaltBed);
-          }
-          tft.fillCircle(px[0], py[0], 6, cAsphaltBed);
-
-          // Pass 3: Detect upcoming turn intersection & draw Cross Street
-          int turnIdx = 1;
-          int32_t maxDeflection = 0;
-          for (uint8_t i = 1; i < count - 1; i++) {
-            if (cy - py[i] < 16) continue; // Must be ahead of vehicle, not on top of location puck
-            int32_t v1x = px[i] - px[i - 1];
-            int32_t v1y = py[i] - py[i - 1];
-            int32_t v2x = px[i + 1] - px[i];
-            int32_t v2y = py[i + 1] - py[i];
-            int32_t cross = abs(v1x * v2y - v1y * v2x);
-            if (cross > 80) {
-              turnIdx = i;
-              break;
-            }
-            if (cross > maxDeflection) {
-              maxDeflection = cross;
-              turnIdx = i;
-            }
-          }
-          if (cy - py[turnIdx] < 16 && count > 2) {
-            turnIdx = count / 2;
-          }
-          int tx = px[turnIdx];
-          int ty = py[turnIdx];
-
-          // Draw cross street crossing through the intersection
-          _drawThickLine(constrain(tx - 36, minX + 4, maxX - 4), ty, constrain(tx + 36, minX + 4, maxX - 4), ty, cRoadBorder, 14);
-          _drawThickLine(constrain(tx - 36, minX + 4, maxX - 4), ty, constrain(tx + 36, minX + 4, maxX - 4), ty, cAsphaltBed, 10);
-
-          // Pass 4: Glowing Neon Navigation Route Core
-          for (uint8_t i = 1; i < count; i++) {
-            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteGlow, 6);
-          }
-          for (uint8_t i = 1; i < count; i++) {
-            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], cRouteActive, 4);
-            _drawThickLine(px[i - 1], py[i - 1], px[i], py[i], TFT_WHITE, 1);
-            tft.fillCircle(px[i], py[i], 2, cRouteActive);
-          }
-
-          // Pass 5: Direction Chevrons along route segments
-          for (uint8_t i = 1; i < count; i++) {
-            int mx = (px[i - 1] + px[i]) / 2;
-            int my = (py[i - 1] + py[i]) / 2;
-            int dx = px[i] - px[i - 1];
-            int dy = py[i] - py[i - 1];
-            if (abs(dy) > abs(dx)) {
-              if (dy < -6) { // Going UP
-                tft.fillTriangle(mx, my - 5, mx - 3, my + 1, mx + 3, my + 1, TFT_WHITE);
-              }
-            } else {
-              if (dx < -6) { // Going LEFT
-                tft.fillTriangle(mx - 5, my, mx + 1, my - 3, mx + 1, my + 3, TFT_WHITE);
-              } else if (dx > 6) { // Going RIGHT
-                tft.fillTriangle(mx + 5, my, mx - 1, my - 3, mx - 1, my + 3, TFT_WHITE);
-              }
-            }
-          }
-
-          // Pass 6: Maneuver Waypoint Node at the upcoming turn
-          tft.drawCircle(tx, ty, 7, cRouteActive);
-          tft.drawCircle(tx, ty, 6, cRouteActive);
-          tft.fillCircle(tx, ty, 2, TFT_WHITE);
-        }
+    if (pressed) {
+      if (!_touchActive) {
+        _touchActive = true;
+        _touchStartX = tx;
+        _touchStartY = ty;
+        _touchLastX = tx;
+        _touchLastY = ty;
+        _touchStartTime = millis();
+        Serial.printf("[Touch] Down at x=%d, y=%d\n", tx, ty);
       } else {
-        // Fallback: Dynamic Real Intersection Corridor from turnCode and distMeters
-        int turnY = constrain(cy - map(_navData.distMeters, 0, 400, 38, 115), minY + 20, cy - 35);
+        _touchLastX = tx;
+        _touchLastY = ty;
 
-        // A. Main Approach Road Bed
-        _drawThickLine(cx, maxY - 4, cx, turnY, cRoadBorder, 16);
-        _drawThickLine(cx, maxY - 4, cx, turnY, cAsphaltBed, 12);
-
-        // B. Cross Street at Intersection
-        _drawThickLine(minX + 6, turnY, maxX - 6, turnY, cRoadBorder, 14);
-        _drawThickLine(minX + 6, turnY, maxX - 6, turnY, cAsphaltBed, 10);
-
-        // C. Straight continuation road past intersection
-        _drawThickLine(cx, turnY, cx, minY + 8, cRoadBorder, 12);
-        _drawThickLine(cx, turnY, cx, minY + 8, cAsphaltBed, 8);
-
-        // D. Active Navigation Route
-        _drawThickLine(cx, cy, cx, turnY, cRouteGlow, 6);
-        _drawThickLine(cx, cy, cx, turnY, cRouteActive, 4);
-        _drawThickLine(cx, cy, cx, turnY, TFT_WHITE, 1);
-
-        // Direction arrow along approach
-        int midY = (cy + turnY) / 2;
-        tft.fillTriangle(cx, midY - 6, cx - 4, midY + 1, cx + 4, midY + 1, TFT_WHITE);
-
-        // Turn branch based on turnCode
-        if (_navData.turnCode == 5 || _navData.turnCode == 6 || _navData.turnCode == 7) {
-          // TURN LEFT (90 deg turn onto cross street)
-          _drawThickLine(cx, turnY, minX + 14, turnY, cRouteGlow, 6);
-          _drawThickLine(cx, turnY, minX + 14, turnY, cRouteActive, 4);
-          _drawThickLine(cx, turnY, minX + 14, turnY, TFT_WHITE, 1);
-          tft.fillTriangle(minX + 18, turnY, minX + 26, turnY - 5, minX + 26, turnY + 5, TFT_WHITE);
-
-        } else if (_navData.turnCode == 1 || _navData.turnCode == 2 || _navData.turnCode == 3) {
-          // TURN RIGHT (90 deg turn onto cross street)
-          _drawThickLine(cx, turnY, maxX - 14, turnY, cRouteGlow, 6);
-          _drawThickLine(cx, turnY, maxX - 14, turnY, cRouteActive, 4);
-          _drawThickLine(cx, turnY, maxX - 14, turnY, TFT_WHITE, 1);
-          tft.fillTriangle(maxX - 18, turnY, maxX - 26, turnY - 5, maxX - 26, turnY + 5, TFT_WHITE);
-
-        } else if (_navData.turnCode == 4) {
-          // U-TURN
-          _drawThickLine(cx, turnY, cx - 22, turnY, cRouteActive, 4);
-          _drawThickLine(cx - 22, turnY, cx - 22, cy - 10, cRouteActive, 4);
-          tft.fillTriangle(cx - 22, cy - 4, cx - 27, cy - 12, cx - 17, cy - 12, TFT_WHITE);
-
-        } else if (_navData.turnCode == 8) {
-          // ROUNDABOUT
-          tft.drawCircle(cx, turnY, 14, cRouteActive);
-          tft.drawCircle(cx, turnY, 13, cRouteActive);
-          tft.fillCircle(cx, turnY, 6, cMapBg);
-
+        // Gesture: Pull down from top dockbar (y < 70)
+        if (!_isNotifCenterOpen) {
+          if (_touchStartY < 70 && (_touchLastY - _touchStartY >= 30)) {
+            openNotificationCenter();
+            _touchActive = false; // consume gesture
+          }
         } else {
-          // STRAIGHT / KEEP AHEAD
-          _drawThickLine(cx, turnY, cx, minY + 10, cRouteGlow, 6);
-          _drawThickLine(cx, turnY, cx, minY + 10, cRouteActive, 4);
-          _drawThickLine(cx, turnY, cx, minY + 10, TFT_WHITE, 1);
-          tft.fillTriangle(cx, minY + 12, cx - 4, minY + 19, cx + 4, minY + 19, TFT_WHITE);
+          // Gesture: Swipe up inside Notification Center to close
+          if (_touchStartY - _touchLastY >= 30) {
+            closeNotificationCenter();
+            _touchActive = false; // consume gesture
+          }
+        }
+      }
+    } else {
+      if (_touchActive) {
+        unsigned long dur = millis() - _touchStartTime;
+        Serial.printf("[Touch] Up at x=%d, y=%d (duration=%lu ms)\n", _touchLastX, _touchLastY, dur);
+
+        // Tap gesture detection (< 450ms, minimal movement)
+        if (dur < 450 && abs((int)_touchLastX - (int)_touchStartX) < 25 && abs((int)_touchLastY - (int)_touchStartY) < 25) {
+          if (!_isNotifCenterOpen) {
+            // Tap on top dockbar (Waybar y <= 32) opens Notification Center!
+            if (_touchStartY <= 32) {
+              openNotificationCenter();
+            }
+          } else {
+            // In Notification Center:
+            // Tap on [X] Close button (x >= 235, y <= 35)
+            if (_touchLastX >= 235 && _touchLastY <= 35) {
+              closeNotificationCenter();
+            }
+            // Or tap bottom handle area (y >= 210)
+            else if (_touchLastY >= 210) {
+              closeNotificationCenter();
+            }
+          }
+        }
+        _touchActive = false;
+      }
+    }
+#endif
+  }
+
+  void _renderNotificationCenter() {
+    uint16_t cBg = tft.color565(10, 15, 24);
+    uint16_t cHeaderBg = tft.color565(16, 24, 38);
+    uint16_t cHeaderLine = tft.color565(32, 45, 61);
+    uint16_t cSubText = tft.color565(148, 163, 184);
+    uint16_t cDimGrey = tft.color565(100, 116, 139);
+
+    // 1. Full Screen Dark Slate Canvas
+    tft.fillRect(0, 0, 320, 240, cBg);
+
+    // 2. Header Bar (y: 0 to 28)
+    tft.fillRect(0, 0, 320, 28, cHeaderBg);
+    tft.drawFastHLine(0, 28, 320, cHeaderLine);
+
+    // Title Left: THONG BAO DA NHAN
+    tft.setTextColor(TFT_CYAN, cHeaderBg);
+    tft.drawString("THONG BAO DA NHAN", 10, 6, 2);
+
+    // Badge showing count
+    char cntStr[8];
+    snprintf(cntStr, sizeof(cntStr), "%d", _historyNotifCount);
+    tft.fillRoundRect(178, 5, 24, 18, 5, tft.color565(30, 48, 75));
+    tft.drawRoundRect(178, 5, 24, 18, 5, TFT_CYAN);
+    tft.setTextColor(TFT_WHITE, tft.color565(30, 48, 75));
+    tft.drawCentreString(cntStr, 190, 6, 2);
+
+    // Close button [X] DONG on right (x: 248 to 314, y: 3 to 25)
+    tft.fillRoundRect(248, 3, 66, 22, 5, tft.color565(60, 20, 30));
+    tft.drawRoundRect(248, 3, 66, 22, 5, tft.color565(239, 68, 68));
+    tft.setTextColor(TFT_WHITE, tft.color565(60, 20, 30));
+    tft.drawCentreString("[X] DONG", 281, 6, 2);
+
+    // 3. Notification List Area (y: 34 to 214)
+    if (_historyNotifCount == 0) {
+      // Empty state
+      tft.fillRoundRect(20, 75, 280, 90, 10, cHeaderBg);
+      tft.drawRoundRect(20, 75, 280, 90, 10, cHeaderLine);
+      _drawPairingCentreUtf8("Chua co thong bao nao", 160, 96, cSubText, cHeaderBg);
+      _drawPairingCentreUtf8("Cuoc goi & tin nhan se luu o day", 160, 122, cDimGrey, cHeaderBg);
+    } else {
+      // Show up to 3 most recent notifications
+      int showCount = _historyNotifCount < 3 ? _historyNotifCount : 3;
+      for (int i = 0; i < showCount; i++) {
+        HistoryNotification &item = _historyNotifs[i];
+        int cy = 34 + (i * 58);
+        int cw = 304, ch = 54, cx = 8;
+
+        uint16_t cCardBg, cBorder;
+        if (item.appSource == APP_SOURCE_ZALO) {
+          cCardBg = tft.color565(8, 22, 42);
+          cBorder = tft.color565(0, 104, 255);
+        } else if (item.appSource == APP_SOURCE_MESSENGER) {
+          cCardBg = tft.color565(26, 12, 38);
+          cBorder = tft.color565(168, 85, 247);
+        } else if (item.appSource == APP_SOURCE_SMS) {
+          cCardBg = tft.color565(8, 28, 16);
+          cBorder = tft.color565(52, 199, 89);
+        } else {
+          cCardBg = tft.color565(12, 44, 24);
+          cBorder = tft.color565(34, 197, 94);
         }
 
-        // Maneuver Waypoint Node at Intersection
-        tft.drawCircle(cx, turnY, 7, cRouteActive);
-        tft.drawCircle(cx, turnY, 6, cRouteActive);
-        tft.fillCircle(cx, turnY, 2, TFT_WHITE);
+        tft.fillRoundRect(cx, cy, cw, ch, 8, cCardBg);
+        tft.drawRoundRect(cx, cy, cw, ch, 8, cBorder);
+
+        // App Icon at x = cx + 6, y = cy + 9 (36x36)
+        _drawAppIcon(item.appSource, cx + 6, cy + 9);
+
+        // Row 1: Title & Timestamp
+        const char* title = (item.title[0] != '\0') ? item.title : (item.isCall ? "Cuộc gọi" : "Tin nhắn");
+        uint16_t cTitle = item.isCall ? TFT_GREEN : (item.appSource == APP_SOURCE_SMS ? tft.color565(250, 204, 21) : TFT_WHITE);
+        _drawBannerUtf8String(title, cx + 46, cy + 5, cTitle, cCardBg, 180);
+
+        tft.setTextColor(cDimGrey, cCardBg);
+        tft.drawString(item.timeStr, cx + cw - 44, cy + 6, 2);
+
+        // Row 2: Message preview
+        const char* msg = (item.message[0] != '\0') ? item.message : (item.isCall ? "đang gọi đến..." : "Nội dung...");
+        _drawBannerUtf8String(msg, cx + 46, cy + 28, TFT_WHITE, cCardBg, cw - 56);
       }
-
-      // 4. Vehicle Navigation Location Puck (at cx, cy = 175 pointing UP)
-      tft.drawCircle(cx, cy, 14, tft.color565(0, 50, 80));
-      tft.fillCircle(cx, cy, 8, cRouteActive);
-      tft.drawCircle(cx, cy, 8, TFT_WHITE);
-      tft.drawCircle(cx, cy, 7, TFT_WHITE);
-      tft.fillCircle(cx, cy, 3, TFT_CYAN);
-      // Aerodynamic forward arrow tip pointing UP
-      tft.fillTriangle(cx, cy - 10, cx - 4, cy - 3, cx + 4, cy - 3, TFT_WHITE);
-
-      // 5. Bottom-Left Turn Distance Badge (e.g. "205m" in yellow)
-      char distBadge[16];
-      if (_navData.distMeters >= 1000) {
-        snprintf(distBadge, sizeof(distBadge), "%.1fkm", _navData.distMeters / 1000.0);
-      } else {
-        snprintf(distBadge, sizeof(distBadge), "%dm", _navData.distMeters);
-      }
-      tft.setTextColor(tft.color565(250, 204, 21), cMapBg);
-      tft.drawString(distBadge, 12, maxY - 16, 2);
-
-    } else {
-      // -----------------------------------------------------------------------
-      // STANDBY / IDLE MODE: Clean Crossroad Intersection & Center Location Puck
-      // -----------------------------------------------------------------------
-      const int cy = 130;
-
-      // Range rings
-      tft.drawCircle(cx, cy, 45, cRadarRing);
-      tft.drawCircle(cx, cy, 85, cRadarRing);
-
-      // North-South Central Road
-      _drawThickLine(cx, maxY - 4, cx, minY + 4, cRoadBorder, 16);
-      _drawThickLine(cx, maxY - 4, cx, minY + 4, cAsphaltBed, 12);
-
-      // East-West Crossroad
-      _drawThickLine(minX + 4, cy, maxX - 4, cy, cRoadBorder, 16);
-      _drawThickLine(minX + 4, cy, maxX - 4, cy, cAsphaltBed, 12);
-
-      // Standby Location Puck
-      tft.drawCircle(cx, cy, 12, tft.color565(0, 50, 80));
-      tft.fillCircle(cx, cy, 7, cRouteActive);
-      tft.drawCircle(cx, cy, 7, TFT_WHITE);
-      tft.fillTriangle(cx, cy - 9, cx - 4, cy - 2, cx + 4, cy - 2, TFT_WHITE);
-
-      tft.setTextColor(cRadarText, cMapBg);
-      tft.drawCentreString("CHẾ ĐỘ CHỜ", cx, maxY - 20, 2);
     }
 
-    // -------------------------------------------------------------------------
-    // MINIMALIST OVERLAYS (No bulky pills, keeping entire map unobstructed)
-    // -------------------------------------------------------------------------
-    // Top-Left: Minimalist Compass North Indicator
-    tft.setTextColor(TFT_CYAN, cMapBg);
-    tft.drawString("N", 10, 30, 2);
-    tft.fillTriangle(24, 31, 21, 39, 27, 39, TFT_CYAN);
-
-    // Top-Right: Live GPS Status Dot
-    tft.fillCircle(142, 34, 3, _navData.isNavigating ? TFT_GREEN : TFT_CYAN);
-
-    // Bottom-Right: Subtle Map Scale Bar
-    tft.setTextColor(cRadarText, cMapBg);
-    tft.drawString("50m", 102, 222, 1);
-    tft.drawFastHLine(124, 226, 20, cRadarText);
-    tft.drawFastVLine(124, 223, 7,  cRadarText);
-    tft.drawFastVLine(144, 223, 7,  cRadarText);
+    // 4. Footer & Drag Handle (y: 216 to 240)
+    tft.fillRect(0, 216, 320, 24, cBg);
+    tft.fillRoundRect(135, 218, 50, 4, 2, tft.color565(60, 80, 105));
+    tft.setTextColor(cDimGrey, cBg);
+    tft.drawCentreString("Vuot len hoac cham [X] de dong", 160, 226, 1);
   }
 
   void _renderTft(bool isStreamingActive) {
+    // If not connected to mobile app and not navigating/streaming, stay strictly on Pairing Wait screen
+    if (!_isAppConnected && !_navData.isNavigating && !isStreamingActive) {
+      if (!_pairingBgDrawn || _needFullRedraw) {
+        _drawPairingScreenTft();
+        _needFullRedraw = false;
+      } else {
+        _drawUnifiedDockbar(false);
+        _renderPairingScreenContent(false);
+      }
+      if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+        _drawTopNotificationBanner();
+      }
+      return;
+    }
+
     if (_currentState == STATE_PAIRING_WAIT) {
       if ((isStreamingActive && _isAppConnected) || _navData.isNavigating || _isAppConnected) {
         _currentState = STATE_NAVIGATION;
         _pairingBgDrawn = false;
+        _mapVectorDrawn = false;
+        _hudCardDrawn = false;
         _needFullRedraw = true;
       } else {
         _drawPairingScreenTft();
@@ -993,27 +1509,9 @@ private:
       }
     }
 
-    if (_currentState == STATE_POPUP_CALL) {
-      uint16_t cCallBg = tft.color565(2, 44, 34);
-      tft.fillRoundRect(15, 20, 290, 200, 16, cCallBg);
-      tft.drawRoundRect(15, 20, 290, 200, 16, TFT_GREEN);
-      _drawCentreUtf8String("CUỘC GỌI ĐẾN", 160, 32, TFT_GREEN, cCallBg);
-      _drawCentreUtf8String(_popupData.title, 160, 80, TFT_WHITE, cCallBg);
-      if (_popupData.message[0] != '\0') {
-        _drawCentreUtf8String(_popupData.message, 160, 125, TFT_YELLOW, cCallBg);
-      }
-      _drawCentreUtf8String("Apple ANCS Thông báo", 160, 175, TFT_CYAN, cCallBg);
-      return;
-    }
-
-    if (_currentState == STATE_POPUP_SMS) {
-      uint16_t cSmsBg = tft.color565(11, 25, 44);
-      tft.fillRoundRect(15, 20, 290, 200, 16, cSmsBg);
-      tft.drawRoundRect(15, 20, 290, 200, 16, TFT_CYAN);
-      _drawCentreUtf8String("TIN NHẮN MỚI", 160, 35, TFT_CYAN, cSmsBg);
-      _drawCentreUtf8String(_popupData.title, 160, 85, TFT_YELLOW, cSmsBg);
-      _drawCentreUtf8String(_popupData.message, 160, 135, TFT_WHITE, cSmsBg);
-      return;
+    // Auto-expire popup if timeout reached
+    if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() >= _popupData.expireMillis) {
+      dismissAlert();
     }
 
     // =========================================================================
@@ -1025,13 +1523,14 @@ private:
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // Detect Navigation Mode Transitions
+    // Detect Navigation Mode Transitions (Standby vs Active Nav)
     if (_lastIsNavigating != _navData.isNavigating) {
       _lastIsNavigating = _navData.isNavigating;
       _needFullRedraw = true;
     }
 
     if (_needFullRedraw) {
+      _needFullRedraw = false;
       tft.fillScreen(TFT_BLACK);
 
       // Top Dockbar (Identical to Standby Screen!)
@@ -1040,11 +1539,40 @@ private:
       // Map border container
       tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
 
-      // Right Card Box Framework
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
+    } else {
+      // Partial updates: refresh dockbar clock & battery with zero full-screen wipe
+      _drawUnifiedDockbar(false);
+    }
+
+    // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
+    if (isStreamingActive) {
+      _mapVectorDrawn = false;
+    } else {
+      if (!_navData.isNavigating) {
+        // Mode A: Standby + No WiFi -> Draw static /bg_map.jpg (Sections 1 & 42)
+        if (!_mapVectorDrawn) {
+          _drawStaticStandbyMap();
+          _mapVectorDrawn = true;
+        }
+      } else {
+        // Navigation Mode: KEEP LAST JPEG ON SCREEN! (Sections 42 & 43)
+        // Never clear the left panel, never draw synthetic vector map.
+      }
+    }
+
+    // 3. RIGHT 50%: HUD CARD (Drawn once per mode change, values updated with setTextPadding)
+    bool hudModeChanged = (!_hudCardDrawn || _hudCardNavMode != _navData.isNavigating);
+    if (hudModeChanged) {
+      _hudCardDrawn = true;
+      _hudCardNavMode = _navData.isNavigating;
+
+      // Draw Right Card Box Framework ONCE
       tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
       tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
 
-      // Invalidate all cached drawing state
+      // Invalidate all cached drawing state so sub-elements will be rendered into the new card
       _lastDrawnTurn = 255;
       _lastDrawnDist = 65535;
       _lastDrawnSpeed = 255;
@@ -1055,14 +1583,21 @@ private:
       _lastDrawnSong[0] = '\0';
       _lastDrawnArtist[0] = '\0';
       _lastDrawnBigClock[0] = '\0';
-    } else {
-      // Partial updates: refresh dockbar clock & battery
-      _drawUnifiedDockbar(false);
-    }
 
-    // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
-    if (!isStreamingActive) {
-      _renderStandbyVectorMap();
+      if (!_navData.isNavigating) {
+        // Driver tag
+        tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
+        tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
+        tft.setTextColor(TFT_CYAN, cPillBg);
+        tft.drawCentreString("* ysiduc", 237, 68, 2);
+
+        // Status text
+        _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
+      } else {
+        // Section C Label
+        tft.fillRect(164, 136, 146, 78, cCardBg);
+        _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
+      }
     }
 
     if (!_navData.isNavigating) {
@@ -1070,7 +1605,7 @@ private:
       // STANDBY / IDLE DASHBOARD MODE: Clock, ysiduc, Current Song & Artist
       // =======================================================================
       // A. Large Elegant Digital Clock (y: 32 to 58)
-      if (_needFullRedraw || strcmp(_lastDrawnBigClock, _navData.currentTime) != 0) {
+      if (strcmp(_lastDrawnBigClock, _navData.currentTime) != 0) {
         strncpy(_lastDrawnBigClock, _navData.currentTime, sizeof(_lastDrawnBigClock) - 1);
         tft.setTextColor(TFT_WHITE, cCardBg);
         tft.setTextPadding(140);
@@ -1078,17 +1613,9 @@ private:
         tft.setTextPadding(0);
       }
 
-      // B. ysiduc Driver / Status Tag (y: 64 to 86)
-      if (_needFullRedraw) {
-        tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
-        tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
-        tft.setTextColor(TFT_CYAN, cPillBg);
-        tft.drawCentreString("* ysiduc", 237, 68, 2);
-      }
-
       // C. Media / Music Player Card (y: 94 to 174)
       bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
-      if (_needFullRedraw || strcmp(_lastDrawnSong, _navData.songTitle) != 0 || strcmp(_lastDrawnArtist, _navData.songArtist) != 0) {
+      if (strcmp(_lastDrawnSong, _navData.songTitle) != 0 || strcmp(_lastDrawnArtist, _navData.songArtist) != 0) {
         strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
         strncpy(_lastDrawnArtist, _navData.songArtist, sizeof(_lastDrawnArtist) - 1);
 
@@ -1122,23 +1649,18 @@ private:
         }
       }
 
-      // D. Bottom Status: "Sẵn sàng di chuyển" (y: 186)
-      if (_needFullRedraw) {
-        _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
-      }
-
     } else {
       // =======================================================================
       // ACTIVE NAVIGATION MODE: Maneuver Icon + Distance + Speed + Street + ETA
       // =======================================================================
       // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
-      if (_needFullRedraw || _lastDrawnTurn != _navData.turnCode) {
+      if (_lastDrawnTurn != _navData.turnCode) {
         _lastDrawnTurn = _navData.turnCode;
         _drawManeuverArrow(164, 30, _navData.turnCode);
       }
 
       // Distance
-      if (_needFullRedraw || _lastDrawnDist != _navData.distMeters) {
+      if (_lastDrawnDist != _navData.distMeters) {
         _lastDrawnDist = _navData.distMeters;
         tft.setTextColor(TFT_WHITE, cCardBg);
         tft.setTextPadding(92);
@@ -1153,7 +1675,7 @@ private:
       }
 
       // Speed
-      if (_needFullRedraw || _lastDrawnSpeed != _navData.speedKmh) {
+      if (_lastDrawnSpeed != _navData.speedKmh) {
         _lastDrawnSpeed = _navData.speedKmh;
         tft.setTextColor(TFT_CYAN, cCardBg);
         tft.setTextPadding(92);
@@ -1164,7 +1686,7 @@ private:
       }
 
       // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
-      if (_needFullRedraw || strcmp(_lastDrawnStreet, _navData.streetName) != 0) {
+      if (strcmp(_lastDrawnStreet, _navData.streetName) != 0) {
         strncpy(_lastDrawnStreet, _navData.streetName, sizeof(_lastDrawnStreet) - 1);
         tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
         tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
@@ -1172,13 +1694,8 @@ private:
       }
 
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
-      if (_needFullRedraw) {
-        tft.fillRect(164, 136, 146, 78, cCardBg);
-        _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
-      }
-
       // Total Distance
-      if (_needFullRedraw || _lastDrawnTotalDist != _navData.totalDistMeters) {
+      if (_lastDrawnTotalDist != _navData.totalDistMeters) {
         _lastDrawnTotalDist = _navData.totalDistMeters;
         tft.setTextColor(cSubText, cCardBg);
         tft.setTextPadding(70);
@@ -1193,7 +1710,7 @@ private:
       }
 
       // Arrival Time
-      if (_needFullRedraw || strcmp(_lastDrawnArrival, _navData.arrivalTime) != 0) {
+      if (strcmp(_lastDrawnArrival, _navData.arrivalTime) != 0) {
         strncpy(_lastDrawnArrival, _navData.arrivalTime, sizeof(_lastDrawnArrival) - 1);
         tft.setTextColor(TFT_CYAN, cCardBg);
         tft.setTextPadding(68);
@@ -1202,7 +1719,7 @@ private:
       }
 
       // ETA Minutes
-      if (_needFullRedraw || _lastDrawnEta != _navData.etaMinutes) {
+      if (_lastDrawnEta != _navData.etaMinutes) {
         _lastDrawnEta = _navData.etaMinutes;
         tft.setTextColor(TFT_GREEN, cCardBg);
         tft.setTextPadding(68);
@@ -1217,6 +1734,13 @@ private:
         tft.drawRightString(etaStr, 304, 166, _navData.etaMinutes >= 100 ? 2 : 4);
         tft.setTextPadding(0);
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // TOP NOTIFICATION BANNER OVERLAY (Rendered right beneath waybar)
+    // -------------------------------------------------------------------------
+    if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
+      _drawTopNotificationBanner();
     }
   }
 #endif

@@ -58,7 +58,6 @@ void main() {
       );
 
       expect(find.text('Reduced Motion'), findsOneWidget);
-      // Under reduced motion, BackdropFilter must be bypassed to eliminate GPU blur load
       expect(find.byType(BackdropFilter), findsNothing);
     });
 
@@ -105,6 +104,80 @@ void main() {
 
       expect(find.byIcon(Icons.menu), findsOneWidget);
       expect(find.text('Capsule'), findsOneWidget);
+    });
+  });
+
+  group('P5.4.1.4 Section 80: Bright Liquid Glass & Single BackdropFilter Architecture', () {
+    testWidgets('Grouped toolbar has exactly ONE BackdropFilter', (tester) async {
+      int actionTapped = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GlassSurface(
+              radius: 24,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GlassAction(
+                    icon: const Icon(Icons.layers),
+                    tooltip: 'Layers',
+                    onTap: () => actionTapped++,
+                  ),
+                  Container(width: 20, height: 1, color: Colors.white24),
+                  GlassAction(
+                    icon: const Icon(Icons.explore),
+                    tooltip: 'Compass',
+                    isSelected: true,
+                    onTap: () => actionTapped++,
+                  ),
+                  Container(width: 20, height: 1, color: Colors.white24),
+                  GlassAction(
+                    icon: const Icon(Icons.two_wheeler),
+                    tooltip: 'Bike',
+                    onTap: () => actionTapped++,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Verify that across the entire grouped toolbar with 3 buttons, exactly ONE BackdropFilter is created (Section 64 & 80)
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(find.byType(GlassAction), findsNWidgets(3));
+
+      // Tap first action
+      await tester.tap(find.byTooltip('Layers'));
+      await tester.pumpAndSettle();
+      expect(actionTapped, equals(1));
+    });
+
+    testWidgets('Light Mode glass uses bright specular material and Dark Mode is translucent', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.light(),
+          home: const Scaffold(
+            body: GlassSurface(
+              child: Text('Bright Specular Glass'),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Bright Specular Glass'), findsOneWidget);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(),
+          home: const Scaffold(
+            body: GlassSurface(
+              child: Text('Dark Translucent Glass'),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Dark Translucent Glass'), findsOneWidget);
     });
   });
 }

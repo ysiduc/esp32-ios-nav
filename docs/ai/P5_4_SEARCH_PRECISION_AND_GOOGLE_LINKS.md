@@ -477,3 +477,55 @@ The resolution pipeline now strictly adheres to the following hierarchy:
   - Native Release Build: **SUCCESS**
   - Native IPA Package & Upload: **SUCCESS** (`esp32_nav_native_ios_ipa`)
 - **Final Acceptance**: P5.4.1.3 smooth ESP JPEG streaming restoration across all transports, removal of custom vector map renderer in favor of the unified raster snapshot pipeline, centralized background keep-alive coordination, and modern Liquid Glass UI redesign verified.
+
+## P5.4.1.4 ESP Streaming Restoration
+
+### 1. Physical Regression Symptoms & Root Cause
+- **White Screen on Physical ESP32**: P5.4.1.3 introduced `RenderRepaintBoundary.toImage()` around the Flutter MapLibre map. On iOS, MapLibre is rendered inside a native `UiKitView` platform view, which is not reliably captured by Flutter's software `RepaintBoundary`, resulting in blank/white frames being encoded and transmitted to the ESP32 TFT.
+- **Synthetic Vector Map Glitch**: In ESP firmware (`display_ui.h`), whenever streaming became temporarily inactive or dropped a frame, the firmware fell back to calling `_renderStandbyVectorMap()`, displaying synthetic radar rings, fake roads, and artificial geometry.
+- **Standby BLE Congestion**: Generating continuous JPEG frames over BLE during standby caused RF congestion and battery drain while the user was stationary.
+- **Dark Liquid Glass**: P5.4.1.3 dark mode glass used dark black tints (`0.32` / `0.18` opacity) and nested `BackdropFilter` widgets, causing dark smoked plastic appearance and GPU overhead.
+
+### 2. Authoritative Four-State Display Matrix (`EspDisplayMode`)
+The pure state policy is implemented in `EspStreamService` (`mobile_app/lib/services/esp_stream_service.dart`):
+1. **Mode A — `standbyStatic` (`!navigation && !wifi`)**:
+   - Continuous JPEG generation over BLE is strictly **OFF** (0 FPS).
+   - ESP left screen displays uploaded static standby background `/bg_map.jpg` (or clean neutral standby container).
+   - BLE is reserved for control, telemetry, music, clock, and notifications.
+2. **Mode B — `standbyWifiMap` (`!navigation && wifi`)**:
+   - Streams live JPEG map of current iPhone location over Wi-Fi at **8–15 FPS**.
+   - Operates identically in foreground, background, and when iPhone screen is locked.
+   - Vehicle puck is centered at `(72, 104)` with north-up orientation.
+3. **Mode C — `navigationBleMap` (`navigation && !wifi && ble`)**:
+   - Streams live JPEG navigation map over BLE at **5–12 FPS** adaptive based on measured BLE throughput (`frameTransferMs`).
+   - Dynamic JPEG quality (35–55) ensures 4–6 KB payload for high frame rates without RF stalling.
+   - Operates in foreground, background, and locked screen.
+4. **Mode D — `navigationWifiMap` (`navigation && wifi`)**:
+   - Live JPEG navigation map over Wi-Fi at **12–25 FPS** (nominal target 20 FPS).
+   - Driven by real ESP ACK `'K'` feedback (zero-queue flow control).
+   - Operates smoothly across foreground, background, and screen locked.
+
+### 3. Stable Raster Tile Pipeline Restoration (`EspRasterMapRenderer`)
+- Restored the proven pre-thermal baseline (`439a080d89fa0469f713ff836cc286f1089ad42f`) in `mobile_app/lib/services/esp_raster_map_renderer.dart`:
+  - **Tile Cache**: In-memory bounded cache (`Map<String, img.Image>`, max 100 tiles) with deduplicated requests (`_pendingTileFetches`).
+  - **Patch Composition**: Composites 3x3 surrounding MapTiler / OSM raster tiles into a 320x320 RAM canvas.
+  - **Route & Puck Overlay**: Renders navigation route polyline (casing thickness 8, vibrant core thickness 5) and vehicle puck arrow pointing straight UP.
+  - **Rotation & Crop**: Rotates patch by `-headingDeg` around user GPS coordinate and crops to 144x208 with vehicle anchored at lower-third `(72, 140)`.
+  - **Sanity Validation**: Detects and rejects near-uniform white (>90% pixels >= 245) or black (>90% pixels <= 15) frames, safely reusing `lastGoodJpeg`.
+
+### 4. Firmware Vector Fallback Removal
+- Completely deleted `_renderStandbyVectorMap()` in ESP firmware `src/display_ui.h`.
+- Replaced with `_drawStaticStandbyMap()`:
+  - When in standby and streaming is inactive: draws `/bg_map.jpg` from SPIFFS, or clean neutral standby container.
+  - When navigating: **KEEPS LAST VALID JPEG ON SCREEN** during transient network delays or handoffs. Never clears the screen to white/black, and never draws synthetic vector maps.
+- Synchronized authoritative `firmware_esp32/src/` with secondary `mobile_app/firmware_esp32/src/`.
+
+### 5. Bright Liquid Glass UI Overhaul
+- Redesigned `mobile_app/lib/widgets/liquid_glass.dart`:
+  - **`GlassSurface`**: Single `BackdropFilter` (blur 20) with bright specular highlight gradient (white 0.48/0.24/0.12 in light mode, translucent cool white 0.18 + slate in dark mode), crisp specular border (white 0.60 light / 0.28 dark), and soft shadow (black 0.08 light / 0.14 dark).
+  - **`GlassAction`**: Zero `BackdropFilter` widgets inside button children to prevent nested blur stacking and GPU load. Includes tactile spring scaling (0.94) and soft glowing blue accent on selection.
+  - Controls on `MapScreen` updated: grouped top-left capsule, right-side control stack, and bottom search capsule.
+
+### 6. Automated PlatformIO Firmware Compilation in CI
+- Added `build-firmware` job to `.github/workflows/build_ios.yml` running `pio run` on `ubuntu-latest`.
+- Firmware compiles cleanly with PlatformIO (Flash: 35.9%, RAM: 41.3%).
