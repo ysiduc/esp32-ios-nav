@@ -310,3 +310,90 @@ The resolution pipeline now strictly adheres to the following hierarchy:
 - **Zero Goong references** across entire codebase.
 - **Zero paid Google Places API keys required**.
 - **Exact Shortlink Fidelity**: Verified canonical and og:url extraction priority over camera `@` coordinates or unverified independent search candidates.
+
+---
+
+# PART IX — P5.4.1.2: GOOGLE SHORTLINK PAYLOAD FIDELITY & IPHONE THERMAL REDUCTION
+
+## 30. Google Maps Shortlink Payload Fidelity (`GoogleMapsTargetMetadataParser`)
+- **Real-Device Finding**: Shortlinks such as `maps.app.goo.gl/22CQo4AbHWY1MQcJA` embed target place coordinates within embedded application state / structured JSON-like script payloads rather than in URL query parameters, canonical tags, or og:url.
+- **Identity-Bound Extraction Principle**:
+  - Coordinate extraction from HTML is strictly bound to place identity (never guess the first coordinate in HTML).
+  - Target place identity is discovered using strict priority:
+    1. `ChIJ...` (Google Place ID)
+    2. `CID` (Customer ID e.g. `cid=...`, `data-cid=...`)
+    3. `0x...:0x...` (Hex place ID pair)
+    4. Canonical target URL identity / slug
+  - The parser isolates the enclosing structured data block (JSON object, array, script, or element tag) containing the identity token and extracts coordinates closest to that token.
+  - If no identity can be bound, the parser returns `null`, falling back safely to camera approximate or unresolved with explicit confirmation required.
+- **Updated Resolution Authority Hierarchy**:
+  1. `original_url`: Explicit target coordinate in original URL
+  2. `redirected_url`: Explicit target coordinate in redirected URL
+  3. `canonical_url`: Explicit target coordinate in canonical URL tag
+  4. `og_url`: Explicit target coordinate in og:url meta tag
+  5. `identity_bound_payload`: Identity-bound structured target metadata from HTML
+  6. `verified_place_identity`: Verified place-identity match
+  7. `independent_search`: Independent search candidate (requires user confirmation)
+  8. `camera_approximate`: Viewport camera center (approximate, requires confirmation)
+  9. `unresolved`: Link cannot be verified
+- **Sanitized Diagnostics**:
+  - In `kDebugMode`, sanitized diagnostic telemetry captures:
+    `host`, `hops`, `finalExact`, `canonical`, `canonicalExact`, `og`, `ogExact`, `chijPresent`, `cidPresent`, `hexPresent`, `identityBoundFound`, `resolutionSource`, `confidence`, `requiresConfirmation`.
+  - Full private URLs are never logged in Release builds.
+
+## 31. iPhone Thermal & Battery Reduction Architecture
+- **Demand-Based Map Streaming (`hasEspDisplayConsumer`)**:
+  - `hasEspDisplayConsumer` is `true` only when a WebSocket client is connected to port 8080 or a TCP socket is active.
+  - When `!hasEspDisplayConsumer`, the headless JPEG rendering loop is completely halted: **effective stream FPS is strictly 0.0**, rendering 0 frames.
+  - Unconditional `startStreaming()` in `MapScreen.initState()` removed; streaming lifecycle is demand-driven.
+- **Stream State Machine (`EspMapStreamState`)**:
+  - `idle`: Streaming inactive.
+  - `waitingForConsumer`: Stream requested but no display connected (0 FPS, 0 CPU).
+  - `streamingForeground`: ESP connected while app foreground (10 FPS default, adapted to thermal state).
+  - `streamingBackground`: ESP connected while screen locked / app background (1-2 FPS rate).
+- **Reduced Foreground & Background Stream Rates**:
+  - Foreground stream rate reduced from 14 FPS to **10 FPS** max.
+  - Background map imagery reduced to **1–2 FPS** while preserving real-time navigation telemetry packets.
+- **Map Frame Dirty Check**:
+  - Skips re-drawing Canvas, skips `toImage`, skips raw RGBA decoding, and skips JPEG quality 65 encoding if:
+    - Vehicle movement < 2.5 meters AND
+    - Heading delta < 2.5° AND
+    - Route polyline, theme, and zoom remain identical.
+  - Reuses the previous JPEG frame directly without CPU/GPU thrashing.
+- **Route Polyline Redraw Elimination on GPS Ticks**:
+  - `MapScreen.navManager.onLocationChanged` no longer clears or rebuilds route polylines on MapLibre.
+  - `_updateRouteOnMap()` caches `_lastRenderedRouteKey` and exits immediately if route geometry has not changed. Polyline rebuilds occur only when a new route is loaded or rerouting commits.
+- **Throttled Camera Animations**:
+  - Camera animations bound to an **8–10 Hz display cadence** (min 110ms interval).
+  - Rapid GPS updates during active animations are coalesced; the latest coordinate wins on animation completion.
+- **Demand-Driven Background Keep-Alive**:
+  - Silent audio loop keep-alive is disabled in foreground.
+  - Enabled only when the app enters background with an active required stream consumer or active navigation, and disabled immediately upon returning to foreground.
+- **Thermal & Low-Power Adaptation**:
+  - Native iOS `ProcessInfo.processInfo.thermalState` and `isLowPowerModeEnabled` exposed via `com.ysiduc.esp32_nav/location` MethodChannel.
+  - Streaming adapts dynamically:
+    - `nominal`: 10 FPS
+    - `fair`: 7 FPS
+    - `serious`: 3–5 FPS (capped at 4 FPS)
+    - `critical`: 0 FPS (pauses visual map streaming; core navigation telemetry continues)
+    - Low Power Mode: clamped to 5 FPS max.
+- **Bounded Tile Prefetching**:
+  - Tile prefetching bounded to at most 6 concurrent pending requests.
+
+## 32. Deterministic Testing & CI Hygiene
+- **Removed Live Network Test from CI**:
+  - `mobile_app/test/live_search_test.dart` (which disabled TLS certificate validation and made external HTTP calls) moved to `mobile_app/tool/manual_live_search_test.dart`.
+- **New Shortlink Variant Unit Tests (`test/google_link_resolution_test.dart`)**:
+  - URL Style A: Canonical/og contains `!3d/!4d` -> resolves exact.
+  - URL Style B: Redirect has `@camera` only, HTML has identity-bound target lat/lon -> resolves exact via `identity_bound_payload`, NOT camera.
+  - Decoy Test: HTML contains camera A, target B, decoys C/D/E -> extracts B, never A/C/D/E.
+  - No-Identity Test: HTML contains multiple coordinates but no target identity binding -> rejects random selection, returns approximate/unresolved requiring confirmation.
+  - Diagnostics Test: Validates sanitized debug fields without leaking URLs.
+- **New Thermal & Battery Tests (`test/stream_thermal_test.dart`)**:
+  - Section 47: No consumer -> 0 FPS, render count == 0.
+  - Section 48: Navigating without map consumer -> telemetry continues, 0 JPEG renders.
+  - Section 49: Connected ESP foreground stream capped at 10 FPS, background 1-2 FPS.
+  - Section 50: Serious thermal state drops FPS to 3-5, critical pauses visual stream while telemetry continues.
+  - Section 51 & 52: 20 GPS samples cause 0 route rebuilds, reroute causes exactly 1 rebuild.
+  - Section 53: 30 GPS callbacks in 1 second bounded <= 10 camera updates.
+- **Flutter Test Suite**: **64 / 64 PASS** (0 failures).

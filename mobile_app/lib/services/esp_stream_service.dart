@@ -15,7 +15,69 @@ import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'navigation_manager.dart';
 
+
+enum EspMapStreamState {
+  idle,
+  waitingForConsumer,
+  streamingForeground,
+  streamingBackground,
+}
+
 class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
+
+  EspMapStreamState _streamState = EspMapStreamState.idle;
+  EspMapStreamState get streamState => _streamState;
+
+  bool get hasEspDisplayConsumer =>
+      _wsClients.isNotEmpty ||
+      (_persistentWifiSocket != null);
+
+  String _thermalState = 'nominal';
+  String get thermalState => _thermalState;
+  void setThermalStateForTesting(String state) {
+    _thermalState = state;
+    _updateStreamDemand();
+  }
+
+  bool _isLowPowerMode = false;
+  bool get isLowPowerMode => _isLowPowerMode;
+  void setLowPowerModeForTesting(bool enabled) {
+    _isLowPowerMode = enabled;
+    _updateStreamDemand();
+  }
+
+  int get effectiveTargetFps {
+    if (_thermalState == 'critical') return 0;
+    int fps = _targetFps;
+    if (_thermalState == 'serious') {
+      fps = math.min(fps, 4); // 3-5 FPS cap for serious thermal (Section 40)
+    } else if (_thermalState == 'fair') {
+      fps = math.min(fps, 7);
+    }
+    if (_isLowPowerMode) {
+      fps = math.min(fps, 5); // Clamped for Low Power Mode (Section 41)
+    }
+    return fps;
+  }
+
+  LatLng? _lastRenderedPos;
+  double? _lastRenderedHeading;
+  String? _lastRenderedRouteId;
+  String? _lastRenderedTheme;
+  int? _lastRenderedZoom;
+
+  int _mapJpegRendersCount = 0;
+  int get mapJpegRendersCount => _mapJpegRendersCount;
+
+  int _framesCoalescedCount = 0;
+  int get framesCoalescedCount => _framesCoalescedCount;
+
+  void resetCountersForTesting() {
+    _mapJpegRendersCount = 0;
+    _framesCoalescedCount = 0;
+    _frameCount = 0;
+    _actualFps = 0.0;
+  }
   BleService bleService;
   NavigationManager? navManager;
 
@@ -27,7 +89,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 14; // Real-time 14 FPS match for ESP32 hardware (zero queue lag, 3 FPS in background)
+  int _targetFps = 10; // P5.4.1.2: Default 10 FPS foreground (down from 14) // Real-time 14 FPS match for ESP32 hardware (zero queue lag, 3 FPS in background)
   double _actualFps = 10.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
@@ -108,6 +170,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             final socket = await WebSocketTransformer.upgrade(request);
             _wsClients.add(socket);
             bleService.setHotspotConnected('172.20.10.1', 8080);
+            _updateStreamDemand();
             if (_latestJpegBytes != null) {
               try {
                 socket.add(_latestJpegBytes!);
@@ -130,14 +193,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
                 if (_wsClients.isEmpty) {
                   bleService.setHotspotDisconnected();
                 }
-                notifyListeners();
+                _updateStreamDemand();
               },
               onError: (_) {
                 _wsClients.remove(socket);
                 if (_wsClients.isEmpty) {
                   bleService.setHotspotDisconnected();
                 }
-                notifyListeners();
+                _updateStreamDemand();
               },
             );
           } catch (e) {
@@ -181,20 +244,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _isForeground = true;
-      if (_isStreaming) {
-        _startTimer();
-      }
+      _updateStreamDemand();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
-      // When app is in background or screen is locked:
-      // Keep streaming continuously without dropping
-      if (_isStreaming) {
-        _enableBackgroundKeepAlive();
-        _startTimer();
-      } else {
-        _streamTimer?.cancel();
-        _streamTimer = null;
-      }
+      _updateStreamDemand();
     }
   }
 
@@ -248,22 +301,65 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _isStreaming = true;
     _frameCount = 0;
     _framesInCurrentSec = 0;
-    _actualFps = _targetFps.toDouble();
+    _actualFps = 0.0;
     _lastFpsUpdate = DateTime.now();
 
-    _enableBackgroundKeepAlive();
-    if (_isForeground || bleService.isConnected || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false)) {
-      _startTimer();
+    _updateStreamDemand();
+  }
+
+
+  /// Manage stream state machine & demand-driven rendering (Sections 19, 20, 21, 38)
+  void _updateStreamDemand() {
+    if (!_isStreaming) {
+      _streamState = EspMapStreamState.idle;
+      _streamTimer?.cancel();
+      _streamTimer = null;
+      _actualFps = 0.0;
+      _disableBackgroundKeepAlive();
+      notifyListeners();
+      return;
     }
 
+    if (!hasEspDisplayConsumer) {
+      // Idle app or navigating without consumer -> effective stream FPS = 0 (Section 21 & 22)
+      _streamState = EspMapStreamState.waitingForConsumer;
+      _streamTimer?.cancel();
+      _streamTimer = null;
+      _actualFps = 0.0;
+      _disableBackgroundKeepAlive();
+      notifyListeners();
+      return;
+    }
+
+    if (_isForeground) {
+      _streamState = EspMapStreamState.streamingForeground;
+      _disableBackgroundKeepAlive(); // No audio keep-alive in foreground (Section 36)
+      _startTimer();
+    } else {
+      _streamState = EspMapStreamState.streamingBackground;
+      _enableBackgroundKeepAlive(); // Enabled only when background + required stream (Section 36)
+      _startTimer();
+    }
     notifyListeners();
   }
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: smooth target FPS (14-20). In background (screen locked): steady 5 FPS (200ms) to ensure ESP32 watchdog never expires
-    final effectiveFps = _isForeground ? _targetFps : 5;
-    final intervalMs = (1000 / effectiveFps).round();
+    if (!hasEspDisplayConsumer) {
+      _streamTimer = null;
+      _actualFps = 0.0;
+      return;
+    }
+
+    // P5.4.1.2 Section 23 & 24: 10 FPS foreground cap, 1-2 FPS in background
+    final fps = _isForeground ? effectiveTargetFps : 1;
+    if (fps <= 0) {
+      _streamTimer = null;
+      _actualFps = 0.0;
+      return;
+    }
+
+    final intervalMs = (1000 / fps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
     });
@@ -289,6 +385,40 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final activeRoute = navManager?.activeRoute;
       final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
+
+      // P5.4.1.2 Section 26 & 27: Map Frame Dirty Check
+      final currentRouteId = activeRoute == null ? null : "${activeRoute.polylinePoints.length}_${activeRoute.totalDistanceMeters}";
+      bool isDirty = false;
+      if (_latestJpegBytes == null || _lastRenderedPos == null) {
+        isDirty = true;
+      } else {
+        const distCalc = Distance();
+        final dist = distCalc.as(LengthUnit.Meter, _lastRenderedPos!, userPos);
+        final headingDelta = (_lastRenderedHeading! - heading).abs();
+        final normalizedHeadingDelta = headingDelta > 180 ? 360 - headingDelta : headingDelta;
+
+        if (dist >= 2.5 ||
+            normalizedHeadingDelta >= 2.5 ||
+            currentRouteId != _lastRenderedRouteId ||
+            _streamMapStyle != _lastRenderedTheme ||
+            _minimapZoom != _lastRenderedZoom) {
+          isDirty = true;
+        }
+      }
+
+      if (!isDirty && _latestJpegBytes != null) {
+        _framesCoalescedCount++;
+        _dispatchTransmission(_latestJpegBytes!);
+        _isCapturing = false;
+        return;
+      }
+
+      _lastRenderedPos = userPos;
+      _lastRenderedHeading = heading;
+      _lastRenderedRouteId = currentRouteId;
+      _lastRenderedTheme = _streamMapStyle;
+      _lastRenderedZoom = _minimapZoom;
+      _mapJpegRendersCount++;
 
       // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
       _prefetchSurroundingTiles(userPos, _minimapZoom);
@@ -656,6 +786,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _lastPrefetchPos = pos;
 
+    if (_pendingTileFetches.length >= 6) return; // P5.4.1.2 Section 42: Bounded pending fetches
     for (int dx = -1; dx <= 1; dx++) {
       for (int dy = -1; dy <= 1; dy++) {
         final tx = cx + dx;
@@ -962,6 +1093,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void stopStreaming() {
     _isStreaming = false;
     _isCapturing = false;
+    _streamState = EspMapStreamState.idle;
     _disableBackgroundKeepAlive();
     _streamTimer?.cancel();
     _streamTimer = null;

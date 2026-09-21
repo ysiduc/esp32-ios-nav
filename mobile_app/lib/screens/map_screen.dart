@@ -98,6 +98,76 @@ class _MapScreenState extends State<MapScreen> {
   bool _isAutoCentering = true;
   Timer? _recenterTimer;
 
+  // P5.4.1.2 Section 29-32: Route redraw caching & throttled camera animation
+  String? _lastRenderedRouteKey;
+  int _routeGeometryUpdatesCount = 0;
+  int get routeGeometryUpdatesCount => _routeGeometryUpdatesCount;
+
+  DateTime _lastCameraAnimateTime = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _isCameraAnimating = false;
+  LatLng? _coalescedCameraPos;
+  double? _coalescedCameraHeading;
+  Timer? _cameraCadenceTimer;
+  int _cameraUpdatesCount = 0;
+  int get cameraUpdatesCount => _cameraUpdatesCount;
+
+  void _throttledAnimateCamera(LatLng pos, double heading) {
+    final now = DateTime.now();
+    final elapsedMs = now.difference(_lastCameraAnimateTime).inMilliseconds;
+
+    // 8-10 Hz cadence = min 110ms between animation starts (Section 32)
+    if (_isCameraAnimating || elapsedMs < 110) {
+      _coalescedCameraPos = pos;
+      _coalescedCameraHeading = heading;
+      if (_cameraCadenceTimer == null || !_cameraCadenceTimer!.isActive) {
+        final delayMs = 110 - elapsedMs > 0 ? 110 - elapsedMs : 0;
+        _cameraCadenceTimer = Timer(Duration(milliseconds: delayMs), () {
+          if (mounted && _coalescedCameraPos != null) {
+            final p = _coalescedCameraPos!;
+            final h = _coalescedCameraHeading ?? heading;
+            _coalescedCameraPos = null;
+            _coalescedCameraHeading = null;
+            _executeCameraAnimation(p, h);
+          }
+        });
+      }
+      return;
+    }
+
+    _executeCameraAnimation(pos, heading);
+  }
+
+  void _executeCameraAnimation(LatLng pos, double heading) {
+    final ctrl = _mapController;
+    if (ctrl == null || !mounted) return;
+
+    _lastCameraAnimateTime = DateTime.now();
+    _isCameraAnimating = true;
+    _cameraUpdatesCount++;
+
+    ctrl.animateCamera(
+      ml.CameraUpdate.newCameraPosition(
+        ml.CameraPosition(
+          target: ml.LatLng(pos.latitude, pos.longitude),
+          zoom: _isDrivingZoomOverview ? 14.5 : 17.5,
+          tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
+          bearing: _isDrivingZoomOverview ? 0.0 : heading,
+        ),
+      ),
+    ).then((_) {
+      _isCameraAnimating = false;
+      if (_coalescedCameraPos != null && mounted) {
+        final p = _coalescedCameraPos!;
+        final h = _coalescedCameraHeading ?? 0.0;
+        _coalescedCameraPos = null;
+        _coalescedCameraHeading = null;
+        _throttledAnimateCamera(p, h);
+      }
+    }).catchError((_) {
+      _isCameraAnimating = false;
+    });
+  }
+
   // View state:
   // 0: Browse Map / Search
   // 1: Place Selected Inspector Sheet
@@ -136,17 +206,8 @@ class _MapScreenState extends State<MapScreen> {
       // Hook navigation position update callback to continuously center vehicle with 3D perspective
       navManager.onLocationChanged = (loc, heading) {
         if (mounted && navManager.isNavigating && _isAutoCentering) {
-          _mapController?.animateCamera(
-            ml.CameraUpdate.newCameraPosition(
-              ml.CameraPosition(
-                target: ml.LatLng(loc.latitude, loc.longitude),
-                zoom: _isDrivingZoomOverview ? 14.5 : 17.5,
-                tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
-                bearing: _isDrivingZoomOverview ? 0.0 : heading,
-              ),
-            ),
-          );
-          _updateRouteOnMap();
+          // P5.4.1.2 Section 30 & 32: Throttled camera animation, no line rebuilding on GPS ticks
+          _throttledAnimateCamera(loc, heading);
         }
       };
 
@@ -159,9 +220,8 @@ class _MapScreenState extends State<MapScreen> {
       } else {
         streamService.streamMapStyle = 'streets-v2';
       }
-      if (!streamService.isStreaming) {
-        streamService.startStreaming();
-      }
+      // P5.4.1.2 Section 19 & 20: Do not auto-start high-FPS streaming without consumer.
+      // EspStreamService handles demand-based streaming on ESP display connection.
 
       _checkClipboardForGoogleMaps();
     });
@@ -201,6 +261,16 @@ class _MapScreenState extends State<MapScreen> {
     } else if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
       points = _routes[_selectedRouteIndex].polylinePoints;
     }
+
+    // P5.4.1.2 Section 28-31: Guard against redundant clearLines() & addLine() when geometry unchanged
+    final currentKey = points.isEmpty
+        ? 'empty'
+        : '${points.length}_${points.first.latitude}_${points.first.longitude}_${points.last.latitude}_${points.last.longitude}_${_routes.length}_$_selectedRouteIndex';
+    if (currentKey == _lastRenderedRouteKey) {
+      return;
+    }
+    _lastRenderedRouteKey = currentKey;
+    _routeGeometryUpdatesCount++;
 
     try {
       await ctrl.clearLines();
@@ -497,6 +567,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    _cameraCadenceTimer?.cancel();
     _debounceTimer?.cancel();
     _recenterTimer?.cancel();
     _searchController.dispose();

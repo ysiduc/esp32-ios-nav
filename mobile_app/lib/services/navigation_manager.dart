@@ -14,6 +14,7 @@ import 'phone_media_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
+  bool _disposed = false;
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   PhoneMediaService? _mediaService;
 
@@ -153,14 +154,14 @@ class NavigationManager extends ChangeNotifier {
         final lastPos = await Geolocator.getLastKnownPosition();
         if (lastPos != null) {
           _currentLocation = LatLng(lastPos.latitude, lastPos.longitude);
-          notifyListeners();
+          if (!_disposed) notifyListeners();
         }
 
-        // Immediately start continuous high-accuracy location updates for map & search
+        // P5.4.1.2 Section 34: Lower-power location profile when browsing/searching
         _positionStream?.cancel();
         final settings = _buildLocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 2,
+          accuracy: LocationAccuracy.medium,
+          distanceFilter: 10,
         );
         _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
           _currentLocation = LatLng(pos.latitude, pos.longitude);
@@ -176,7 +177,7 @@ class NavigationManager extends ChangeNotifier {
     } catch (_) {
       // Default fallback (Hanoi)
       _currentLocation ??= const LatLng(21.0285, 105.8542);
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -598,6 +599,20 @@ class NavigationManager extends ChangeNotifier {
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();
 
+    // P5.4.1.2 Section 34: Resume lower-power browsing GPS stream when navigation stops
+    try {
+      final settings = _buildLocationSettings(
+        accuracy: LocationAccuracy.medium,
+        distanceFilter: 10,
+      );
+      _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
+        _currentLocation = LatLng(pos.latitude, pos.longitude);
+        _currentSpeedKmh = pos.speed * 3.6;
+        _currentHeading = pos.heading;
+        notifyListeners();
+      });
+    } catch (_) {}
+
     // Send standby idle dashboard packet to ESP32
     sendPreviewPayloadToEsp32();
 
@@ -606,6 +621,7 @@ class NavigationManager extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _idleHeartbeatTimer?.cancel();
     stopNavigation();
     super.dispose();

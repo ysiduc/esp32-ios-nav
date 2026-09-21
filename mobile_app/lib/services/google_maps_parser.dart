@@ -97,6 +97,255 @@ class HttpGoogleMapsRedirectResolver implements GoogleMapsRedirectResolver {
   }
 }
 
+
+class GoogleTargetMetadata {
+  final LatLng? targetCoordinate;
+  final String? placeIdentity;
+  final String? title;
+  final String source;
+  final double confidence;
+
+  const GoogleTargetMetadata({
+    this.targetCoordinate,
+    this.placeIdentity,
+    this.title,
+    this.source = 'identity_bound_payload',
+    this.confidence = 1.0,
+  });
+}
+
+class GoogleMapsTargetMetadataParser {
+  /// Extract identity-bound Google Maps target metadata from HTML body.
+  /// A coordinate is accepted ONLY if bound to the target place identity.
+  static GoogleTargetMetadata? extract({
+    required String finalUrl,
+    required String htmlBody,
+    String? knownPlaceIdentity,
+    String? pageTitle,
+  }) {
+    if (htmlBody.isEmpty) return null;
+
+    final candidates = <String>[];
+    if (knownPlaceIdentity != null && knownPlaceIdentity.isNotEmpty) {
+      candidates.add(knownPlaceIdentity);
+    }
+
+    // 1. ChIJ place ID priority (Section 8)
+    final chijRegex = RegExp(r'\b(ChIJ[a-zA-Z0-9_\-]{20,})\b');
+    for (final match in chijRegex.allMatches(finalUrl)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+    }
+    for (final match in chijRegex.allMatches(htmlBody)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+    }
+
+    // 2. CID priority (decimal)
+    final cidUrlRegex = RegExp(r'[?&]cid=(\d+)');
+    for (final match in cidUrlRegex.allMatches(finalUrl)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+      if (!candidates.contains('cid:$id')) candidates.add('cid:$id');
+    }
+    final cidHtmlRegex = RegExp(r'(?:data-cid=["\x27]|"cid"\s*:\s*["\x27]?)(\d+)');
+    for (final match in cidHtmlRegex.allMatches(htmlBody)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+      if (!candidates.contains('cid:$id')) candidates.add('cid:$id');
+    }
+
+    // 3. Hex place ID pair: 0x...:0x...
+    final hexRegex = RegExp(r'(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)');
+    for (final match in hexRegex.allMatches(finalUrl)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+    }
+    for (final match in hexRegex.allMatches(htmlBody)) {
+      final id = match.group(1)!;
+      if (!candidates.contains(id)) candidates.add(id);
+    }
+
+    // 4. Canonical target URL identity / place name slug
+    final placeNameRegex = RegExp(r'/place/([^/@?]+)');
+    final pMatch = placeNameRegex.firstMatch(finalUrl);
+    if (pMatch != null) {
+      final raw = pMatch.group(1)!;
+      if (!RegExp(r'^\-?\d{1,2}\.\d+').hasMatch(raw)) {
+        final slug = raw.trim();
+        if (slug.isNotEmpty && !candidates.contains(slug)) candidates.add(slug);
+      }
+    }
+
+    if (candidates.isEmpty) {
+      return null;
+    }
+
+    // For each candidate identity in priority order, search for an identity-bound coordinate
+    for (final identity in candidates) {
+      final searchToken = identity.startsWith('cid:') ? identity.substring(4) : identity;
+      int startIndex = 0;
+      while (startIndex < htmlBody.length) {
+        final idx = htmlBody.indexOf(searchToken, startIndex);
+        if (idx == -1) break;
+        startIndex = idx + searchToken.length;
+
+        // Isolate enclosing structured block (JSON object, array, script, or tag) (Section 7)
+        final blockInfo = _isolateStructuredBlock(htmlBody, idx, searchToken.length);
+        if (blockInfo != null) {
+          final coord = _findClosestCoordinateInBlock(blockInfo.block, blockInfo.tokenOffset);
+          if (coord != null) {
+            return GoogleTargetMetadata(
+              targetCoordinate: coord,
+              placeIdentity: identity,
+              title: pageTitle,
+              source: 'identity_bound_payload',
+              confidence: 1.0,
+            );
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static ({String block, int tokenOffset})? _isolateStructuredBlock(String html, int idx, int tokenLen) {
+    // 1. Check enclosing JSON object { ... }
+    final braceOpen = html.lastIndexOf('{', idx);
+    final braceClose = html.indexOf('}', idx + tokenLen);
+    if (braceOpen != -1 && braceClose != -1 && (idx - braceOpen) < 400 && (braceClose - idx) < 400) {
+      return (
+        block: html.substring(braceOpen, braceClose + 1),
+        tokenOffset: idx - braceOpen,
+      );
+    }
+
+    // 2. Check enclosing JSON array [ ... ]
+    final bracketOpen = html.lastIndexOf('[', idx);
+    final bracketClose = html.indexOf(']', idx + tokenLen);
+    if (bracketOpen != -1 && bracketClose != -1 && (idx - bracketOpen) < 400 && (bracketClose - idx) < 400) {
+      return (
+        block: html.substring(bracketOpen, bracketClose + 1),
+        tokenOffset: idx - bracketOpen,
+      );
+    }
+
+    // 3. Check enclosing <script> ... </script>
+    final scriptOpen = html.lastIndexOf(RegExp(r'<script\b[^>]*>', caseSensitive: false), idx);
+    final scriptClose = html.indexOf(RegExp(r'</script>', caseSensitive: false), idx + tokenLen);
+    if (scriptOpen != -1 && scriptClose != -1 && scriptOpen < idx && scriptClose > idx) {
+      final sStart = scriptOpen;
+      final sEnd = scriptClose + 9;
+      if (sEnd - sStart < 3000) {
+        return (
+          block: html.substring(sStart, sEnd),
+          tokenOffset: idx - sStart,
+        );
+      }
+    }
+
+    // 4. Check enclosing HTML tag <tag ... >
+    final tagOpen = html.lastIndexOf('<', idx);
+    final tagClose = html.indexOf('>', idx + tokenLen);
+    if (tagOpen != -1 && tagClose != -1 && tagOpen < idx && tagClose > idx && (tagClose - tagOpen) < 400) {
+      final tagStr = html.substring(tagOpen, tagClose + 1);
+      // Ensure it is an actual element tag and not a comment
+      if (!tagStr.startsWith('<!--')) {
+        return (
+          block: tagStr,
+          tokenOffset: idx - tagOpen,
+        );
+      }
+    }
+
+    return null;
+  }
+
+  static LatLng? _findClosestCoordinateInBlock(String block, int tokenOffset) {
+    LatLng? bestCoord;
+    int minDistance = 999999;
+
+    // Pattern 1: Google array format [null, null, lat, lon] or [lat, lon]
+    final protoArrayRegex = RegExp(r'\[\s*(?:null\s*,\s*null\s*,\s*)?(\-\d{1,2}\.\d{4,}|\d{1,2}\.\d{4,})\s*,\s*(\-\d{1,3}\.\d{4,}|\d{1,3}\.\d{4,})\s*\]');
+    for (final m in protoArrayRegex.allMatches(block)) {
+      final lat = double.tryParse(m.group(1)!);
+      final lon = double.tryParse(m.group(2)!);
+      if (lat != null && lon != null && _isValidCoord(lat, lon)) {
+        final dist = (m.start - tokenOffset).abs();
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCoord = LatLng(lat, lon);
+        }
+      }
+    }
+
+    // Pattern 2: JSON key-value: "lat": 21.xxx, "lng": 105.xxx
+    final jsonKvRegex = RegExp(r'"?(?:latitude|lat)"?\s*:\s*"?(\-\d{1,2}\.\d{4,}|\d{1,2}\.\d{4,})"?\s*,\s*"?(?:longitude|lng|lon|long)"?\s*:\s*"?(\-\d{1,3}\.\d{4,}|\d{1,3}\.\d{4,})"?', caseSensitive: false);
+    for (final m in jsonKvRegex.allMatches(block)) {
+      final lat = double.tryParse(m.group(1)!);
+      final lon = double.tryParse(m.group(2)!);
+      if (lat != null && lon != null && _isValidCoord(lat, lon)) {
+        final dist = (m.start - tokenOffset).abs();
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCoord = LatLng(lat, lon);
+        }
+      }
+    }
+
+    // Pattern 3: Inverted JSON key-value: "lng": 105.xxx, "lat": 21.xxx
+    final invJsonKvRegex = RegExp(r'"?(?:longitude|lng|lon|long)"?\s*:\s*"?(\-\d{1,3}\.\d{4,}|\d{1,3}\.\d{4,})"?\s*,\s*"?(?:latitude|lat)"?\s*:\s*"?(\-\d{1,2}\.\d{4,}|\d{1,2}\.\d{4,})"?', caseSensitive: false);
+    for (final m in invJsonKvRegex.allMatches(block)) {
+      final lon = double.tryParse(m.group(1)!);
+      final lat = double.tryParse(m.group(2)!);
+      if (lat != null && lon != null && _isValidCoord(lat, lon)) {
+        final dist = (m.start - tokenOffset).abs();
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCoord = LatLng(lat, lon);
+        }
+      }
+    }
+
+    // Pattern 4: Protobuf !3dlat!4dlon embedded in data string
+    final protoTokenRegex = RegExp(r'!3d(\-\d{1,2}\.\d{4,}|\d{1,2}\.\d{4,})[^!]*!4d(\-\d{1,3}\.\d{4,}|\d{1,3}\.\d{4,})');
+    for (final m in protoTokenRegex.allMatches(block)) {
+      final lat = double.tryParse(m.group(1)!);
+      final lon = double.tryParse(m.group(2)!);
+      if (lat != null && lon != null && _isValidCoord(lat, lon)) {
+        final dist = (m.start - tokenOffset).abs();
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCoord = LatLng(lat, lon);
+        }
+      }
+    }
+
+    // Pattern 5: HTML data attributes data-lat="21.xxx" data-lng="105.xxx"
+    final dataAttrRegex = RegExp(r'data-(?:lat|latitude)=["\x27](\-\d{1,2}\.\d{4,}|\d{1,2}\.\d{4,})["\x27]\s+data-(?:lng|lon|longitude)=["\x27](\-\d{1,3}\.\d{4,}|\d{1,3}\.\d{4,})["\x27]', caseSensitive: false);
+    for (final m in dataAttrRegex.allMatches(block)) {
+      final lat = double.tryParse(m.group(1)!);
+      final lon = double.tryParse(m.group(2)!);
+      if (lat != null && lon != null && _isValidCoord(lat, lon)) {
+        final dist = (m.start - tokenOffset).abs();
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCoord = LatLng(lat, lon);
+        }
+      }
+    }
+
+    return bestCoord;
+  }
+
+  static bool _isValidCoord(double lat, double lon) {
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
+    if (lat.abs() < 0.0001 && lon.abs() < 0.0001) return false;
+    return true;
+  }
+}
+
 class GoogleMapsParser {
   final SearchService _searchService;
   final GoogleMapsRedirectResolver _redirectResolver;
@@ -158,27 +407,38 @@ class GoogleMapsParser {
     return null;
   }
 
-  /// Extract Google Place Identity info (CID, Hex Place ID, ChIJ) (P5.4.1.1 Section 9)
+  /// Extract Google Place Identity info (ChIJ, CID, Hex Place ID, Slug) with P5.4.1.2 Section 8 Priority
   static String? extractGooglePlaceIdentity(String url, String html) {
-    // 1. Data token containing hex place ID pair: 0x...:0x...
-    final hexIdRegex = RegExp(r'(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)');
-    final hexMatch = hexIdRegex.firstMatch(url) ?? hexIdRegex.firstMatch(html);
-    if (hexMatch != null) {
-      return hexMatch.group(1);
-    }
-
-    // 2. ChIJ place ID
+    // 1. ChIJ place ID (Priority 1)
     final chijRegex = RegExp(r'\b(ChIJ[a-zA-Z0-9_\-]{20,})\b');
     final chijMatch = chijRegex.firstMatch(url) ?? chijRegex.firstMatch(html);
     if (chijMatch != null) {
       return chijMatch.group(1);
     }
 
-    // 3. cid query parameter
+    // 2. cid query parameter or data-cid (Priority 2)
     final cidRegex = RegExp(r'[?&]cid=(\d+)');
-    final cidMatch = cidRegex.firstMatch(url) ?? cidRegex.firstMatch(html);
+    final cidHtmlRegex = RegExp(r'(?:data-cid=["\x27]|"cid"\s*:\s*["\x27]?)(\d+)');
+    final cidMatch = cidRegex.firstMatch(url) ?? cidRegex.firstMatch(html) ?? cidHtmlRegex.firstMatch(html);
     if (cidMatch != null) {
       return 'cid:${cidMatch.group(1)}';
+    }
+
+    // 3. Data token containing hex place ID pair: 0x...:0x... (Priority 3)
+    final hexIdRegex = RegExp(r'(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)');
+    final hexMatch = hexIdRegex.firstMatch(url) ?? hexIdRegex.firstMatch(html);
+    if (hexMatch != null) {
+      return hexMatch.group(1);
+    }
+
+    // 4. Canonical target URL identity / place name (Priority 4)
+    final placeNameRegex = RegExp(r'/place/([^/@?]+)');
+    final pMatch = placeNameRegex.firstMatch(url);
+    if (pMatch != null) {
+      final raw = pMatch.group(1)!;
+      if (!RegExp(r'^\-?\d{1,2}\.\d+').hasMatch(raw)) {
+        return raw.replaceAll('+', ' ').trim();
+      }
     }
 
     return null;
@@ -506,8 +766,9 @@ class GoogleMapsParser {
     bool canonicalHasExact = false;
     bool ogUrlFound = false;
     bool ogUrlHasExact = false;
-    bool placeIdFound = false;
-    bool cameraFound = false;
+    bool chijPresent = false;
+    bool cidPresent = false;
+    bool hexPresent = false;
 
     // AUTHORITY 1: Exact coordinate already present in original full URL
     final semanticsOriginal = _parseUrlSemantics(originalUrl);
@@ -550,9 +811,15 @@ class GoogleMapsParser {
       resolvedHtml = resolved.htmlBody;
     } catch (_) {}
 
+    chijPresent = RegExp(r'\b(ChIJ[a-zA-Z0-9_\-]{20,})\b').hasMatch(finalUrl) ||
+        RegExp(r'\b(ChIJ[a-zA-Z0-9_\-]{20,})\b').hasMatch(resolvedHtml);
+    cidPresent = RegExp(r'[?&]cid=\d+').hasMatch(finalUrl) ||
+        RegExp(r'(?:data-cid=["\x27]|"cid"\s*:\s*["\x27]?)\d+').hasMatch(resolvedHtml);
+    hexPresent = RegExp(r'(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)').hasMatch(finalUrl) ||
+        RegExp(r'(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)').hasMatch(resolvedHtml);
+
     // AUTHORITY 2: Exact coordinate present in redirected final URL
     final semanticsFinal = _parseUrlSemantics(finalUrl);
-    if (semanticsFinal.cameraCoord != null) cameraFound = true;
 
     if (semanticsFinal.exactCoord != null) {
       final isDir = finalUrl.contains('/dir/');
@@ -598,10 +865,13 @@ class GoogleMapsParser {
             canonicalExact: true,
             og: false,
             ogExact: false,
-            placeId: true,
-            camera: cameraFound,
+            chijPresent: chijPresent,
+            cidPresent: cidPresent,
+            hexPresent: hexPresent,
+            identityBoundFound: false,
             source: 'canonical_url',
             confidence: 'exactPin',
+            requiresConfirmation: false,
           ),
         );
       }
@@ -633,23 +903,64 @@ class GoogleMapsParser {
             canonicalExact: false,
             og: true,
             ogExact: true,
-            placeId: true,
-            camera: cameraFound,
+            chijPresent: chijPresent,
+            cidPresent: cidPresent,
+            hexPresent: hexPresent,
+            identityBoundFound: false,
             source: 'og_url',
             confidence: 'exactPin',
+            requiresConfirmation: false,
           ),
         );
       }
     }
 
-    // AUTHORITY 5: Explicit Google destination/pin metadata in HTML
+    // AUTHORITY 5: Identity-bound structured target metadata in HTML (P5.4.1.2 Section 5-9)
     final placeIdentity = extractGooglePlaceIdentity(finalUrl, resolvedHtml);
-    if (placeIdentity != null) placeIdFound = true;
 
     final placeTitle = (userPrefix.isNotEmpty ? userPrefix : null) ??
         semanticsFinal.placeName ??
         semanticsFinal.destQuery ??
         _extractTitleFromHtml(resolvedHtml);
+
+    final targetMetadata = GoogleMapsTargetMetadataParser.extract(
+      finalUrl: finalUrl,
+      htmlBody: resolvedHtml,
+      knownPlaceIdentity: placeIdentity,
+      pageTitle: placeTitle,
+    );
+
+    if (targetMetadata?.targetCoordinate != null) {
+        return GoogleMapsResolvedLink(
+        finalUri: Uri.tryParse(finalUrl),
+        placeName: (userPrefix.isNotEmpty ? userPrefix : null) ?? targetMetadata!.title ?? placeTitle ?? 'Vị trí Google Maps',
+        exactCoordinate: targetMetadata!.targetCoordinate,
+        exactDestinationCoordinate: targetMetadata.targetCoordinate,
+        cameraCoordinate: semanticsFinal.cameraCoord,
+        confidence: GoogleMapsResolutionConfidence.exactPin,
+        precision: PlacePrecision.poi,
+        resolutionSource: 'identity_bound_payload',
+        googlePlaceIdentity: targetMetadata.placeIdentity ?? placeIdentity,
+        requiresConfirmation: false,
+        rawQuery: trimmed,
+        debugDiagnostics: _formatDiagnostics(
+          host: origUri?.host ?? 'maps.app.goo.gl',
+          hops: hopCount,
+          finalExact: false,
+          canonical: canonicalFound,
+          canonicalExact: canonicalHasExact,
+          og: ogUrlFound,
+          ogExact: ogUrlHasExact,
+          chijPresent: chijPresent,
+          cidPresent: cidPresent,
+          hexPresent: hexPresent,
+          identityBoundFound: true,
+          source: 'identity_bound_payload',
+          confidence: 'exactPin',
+          requiresConfirmation: false,
+        ),
+      );
+    }
 
     // AUTHORITY 6: Named-place resolution with identity validation (P5.4.1.1 Section 12 & 13)
     // IMPORTANT: Named fallback MUST be approximate by default! NOT exactCoordinate!
@@ -692,10 +1003,13 @@ class GoogleMapsParser {
             canonicalExact: false,
             og: ogUrlFound,
             ogExact: false,
-            placeId: placeIdFound,
-            camera: cameraFound,
+            chijPresent: chijPresent,
+            cidPresent: cidPresent,
+            hexPresent: hexPresent,
+            identityBoundFound: false,
             source: 'independent_search',
             confidence: 'resolvedByIndependentSearch',
+            requiresConfirmation: true,
           ),
         );
       }
@@ -723,10 +1037,13 @@ class GoogleMapsParser {
           canonicalExact: false,
           og: ogUrlFound,
           ogExact: false,
-          placeId: placeIdFound,
-          camera: true,
+          chijPresent: chijPresent,
+          cidPresent: cidPresent,
+          hexPresent: hexPresent,
+          identityBoundFound: false,
           source: 'camera_approximate',
           confidence: 'approximate',
+          requiresConfirmation: true,
         ),
       );
     }
@@ -748,10 +1065,13 @@ class GoogleMapsParser {
         canonicalExact: false,
         og: ogUrlFound,
         ogExact: false,
-        placeId: placeIdFound,
-        camera: false,
+        chijPresent: chijPresent,
+        cidPresent: cidPresent,
+        hexPresent: hexPresent,
+        identityBoundFound: false,
         source: 'unresolved',
         confidence: 'unresolved',
+        requiresConfirmation: true,
       ),
     );
   }
@@ -806,7 +1126,7 @@ class GoogleMapsParser {
     return buildMapPlaceFromResolved(resolved);
   }
 
-  static String _formatDiagnostics({
+  static String? _formatDiagnostics({
     required String host,
     required int hops,
     required bool finalExact,
@@ -814,12 +1134,16 @@ class GoogleMapsParser {
     required bool canonicalExact,
     required bool og,
     required bool ogExact,
-    required bool placeId,
-    required bool camera,
+    required bool chijPresent,
+    required bool cidPresent,
+    required bool hexPresent,
+    required bool identityBoundFound,
     required String source,
     required String confidence,
+    required bool requiresConfirmation,
   }) {
-    return 'GoogleLink:\n'
+    if (!kDebugMode) return null;
+    return 'GoogleLinkDiagnostics:\n'
         'host=$host\n'
         'hops=$hops\n'
         'finalExact=$finalExact\n'
@@ -827,9 +1151,12 @@ class GoogleMapsParser {
         'canonicalExact=$canonicalExact\n'
         'ogUrl=$og\n'
         'ogExact=$ogExact\n'
-        'placeIdentity=${placeId ? "yes" : "no"}\n'
-        'camera=${camera ? "yes" : "no"}\n'
-        'source=$source\n'
-        'confidence=$confidence';
+        'chijPresent=$chijPresent\n'
+        'cidPresent=$cidPresent\n'
+        'hexPresent=$hexPresent\n'
+        'identityBoundFound=$identityBoundFound\n'
+        'resolutionSource=$source\n'
+        'confidence=$confidence\n'
+        'requiresConfirmation=$requiresConfirmation';
   }
 }

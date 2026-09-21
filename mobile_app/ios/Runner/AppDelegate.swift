@@ -143,6 +143,18 @@ import AVFoundation
         } catch {
           result(FlutterError(code: "WRITE_ERROR", message: error.localizedDescription, details: nil))
         }
+      case "getThermalState":
+        let state: String
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: state = "nominal"
+        case .fair: state = "fair"
+        case .serious: state = "serious"
+        case .critical: state = "critical"
+        @unknown default: state = "nominal"
+        }
+        result(state)
+      case "isLowPowerModeEnabled":
+        result(ProcessInfo.processInfo.isLowPowerModeEnabled)
       case "renderMapSnapshot":
         guard let args = call.arguments as? [String: Any],
               let lat = args["lat"] as? Double,

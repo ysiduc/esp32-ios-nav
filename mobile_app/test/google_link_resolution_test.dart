@@ -358,5 +358,157 @@ void main() {
       await cancelFuture;
       expect(ctrlCancel.state.isLoading, isFalse);
     });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // P5.4.1.2: Google Maps Shortlink Payload Fidelity Tests (Requirements 13-16)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    test('Section 13: URL Style A - shortlink -> canonical/og URL contains !3d/!4d resolves exactly', () async {
+      final parser = GoogleMapsParser(
+        redirectResolver: CountingMockRedirectResolver(
+          resolverFullFn: (_) async => (
+            finalUrl: 'https://www.google.com/maps/place/Cafe+A/@21.0300,105.8500,17z',
+            htmlBody: '<link rel="canonical" href="https://www.google.com/maps/place/Cafe+A/data=!4m2!3m1!1s0x0:0x0!3d21.031234!4d105.854321">'
+          ),
+        ),
+      );
+
+      final resolved = await parser.parseResolvedLink('https://maps.app.goo.gl/style_a');
+
+      expect(resolved.confidence, equals(GoogleMapsResolutionConfidence.exactPin));
+      expect(resolved.resolutionSource, equals('canonical_url'));
+      expect(resolved.isExact, isTrue);
+      expect(resolved.exactDestinationCoordinate, isNotNull);
+      expect(resolved.exactDestinationCoordinate!.latitude, closeTo(21.031234, 0.00001));
+      expect(resolved.exactDestinationCoordinate!.longitude, closeTo(105.854321, 0.00001));
+      expect(resolved.requiresConfirmation, isFalse);
+    });
+
+    test('Section 14: URL Style B - redirect @camera only, HTML identity-bound target lat/lon resolves exact NOT camera', () async {
+      final parser = GoogleMapsParser(
+        redirectResolver: CountingMockRedirectResolver(
+          resolverFullFn: (_) async => (
+            finalUrl: 'https://www.google.com/maps/place/Shop+B/@21.0500,105.8000,17z', // Camera center
+            htmlBody: '''
+              <html>
+                <head>
+                  <title>Shop B - Google Maps</title>
+                  <meta property="og:url" content="https://www.google.com/maps/place/Shop+B">
+                </head>
+                <body>
+                  <script>
+                    window.APP_INITIALIZATION_STATE=[[[1,2,["ChIJmockplaceidentity12345", null, null, [null, null, 21.038888, 105.849999]]]]];
+                  </script>
+                </body>
+              </html>
+            '''
+          ),
+        ),
+      );
+
+      final resolved = await parser.parseResolvedLink('https://maps.app.goo.gl/style_b');
+
+      expect(resolved.confidence, equals(GoogleMapsResolutionConfidence.exactPin));
+      expect(resolved.resolutionSource, equals('identity_bound_payload'));
+      expect(resolved.isExact, isTrue);
+      expect(resolved.exactDestinationCoordinate, isNotNull);
+      // Target MUST be 21.038888, 105.849999, NEVER camera 21.0500, 105.8000
+      expect(resolved.exactDestinationCoordinate!.latitude, closeTo(21.038888, 0.00001));
+      expect(resolved.exactDestinationCoordinate!.longitude, closeTo(105.849999, 0.00001));
+      expect(resolved.cameraCoordinate!.latitude, closeTo(21.0500, 0.001));
+      expect(resolved.requiresConfirmation, isFalse);
+    });
+
+    test('Section 15: Decoy Test - HTML has camera A, target B, decoys C/D/E -> extracts B, never A/C/D/E', () async {
+      final parser = GoogleMapsParser(
+        redirectResolver: CountingMockRedirectResolver(
+          resolverFullFn: (_) async => (
+            finalUrl: 'https://www.google.com/maps/place/Target+Store/@21.0100,105.8100,16z', // Camera A
+            htmlBody: '''
+              <html>
+                <body>
+                  <!-- Decoy POI C -->
+                  <div data-cid="999001" data-lat="21.0991" data-lng="105.8991">Decoy C</div>
+                  <!-- Decoy POI D -->
+                  <div data-cid="999002" data-lat="21.0992" data-lng="105.8992">Decoy D</div>
+                  <!-- Target Store B tied to ChIJTarget123456789012345 -->
+                  <script>
+                    window._pageData = '{"placeId": "ChIJTarget123456789012345", "lat": 21.025555, "lng": 105.836666}';
+                  </script>
+                  <!-- Decoy POI E -->
+                  <div data-cid="999003" data-lat="21.0993" data-lng="105.8993">Decoy E</div>
+                </body>
+              </html>
+            '''
+          ),
+        ),
+      );
+
+      final resolved = await parser.parseResolvedLink('https://maps.app.goo.gl/decoy_test');
+
+      expect(resolved.resolutionSource, equals('identity_bound_payload'));
+      expect(resolved.exactDestinationCoordinate, isNotNull);
+      // Strictly B: 21.025555, 105.836666
+      expect(resolved.exactDestinationCoordinate!.latitude, closeTo(21.025555, 0.00001));
+      expect(resolved.exactDestinationCoordinate!.longitude, closeTo(105.836666, 0.00001));
+      expect(resolved.exactDestinationCoordinate!.latitude, isNot(closeTo(21.0100, 0.001))); // Not Camera A
+      expect(resolved.exactDestinationCoordinate!.latitude, isNot(closeTo(21.0991, 0.001))); // Not Decoy C
+      expect(resolved.exactDestinationCoordinate!.latitude, isNot(closeTo(21.0992, 0.001))); // Not Decoy D
+      expect(resolved.exactDestinationCoordinate!.latitude, isNot(closeTo(21.0993, 0.001))); // Not Decoy E
+    });
+
+    test('Section 16: No-Identity Test - HTML with many coordinates but no identity binding -> does NOT pick one', () async {
+      final parser = GoogleMapsParser(
+        redirectResolver: CountingMockRedirectResolver(
+          resolverFullFn: (_) async => (
+            finalUrl: 'https://www.google.com/maps/@21.0200,105.8200,16z', // Camera only
+            htmlBody: '''
+              <html>
+                <body>
+                  <script>
+                    // Many coordinates without target place identity binding
+                    var tiles = [[21.0888, 105.8777], [21.0777, 105.8666], [21.0666, 105.8555]];
+                  </script>
+                </body>
+              </html>
+            '''
+          ),
+        ),
+      );
+
+      final resolved = await parser.parseResolvedLink('https://maps.app.goo.gl/no_identity');
+
+      // Must NOT pick 21.0888 as exact destination!
+      expect(resolved.isExact, isFalse);
+      expect(resolved.exactDestinationCoordinate, isNull);
+      expect(resolved.resolutionSource, isNot(equals('identity_bound_payload')));
+      expect(resolved.resolutionSource, equals('camera_approximate'));
+      expect(resolved.requiresConfirmation, isTrue);
+    });
+
+    test('Section 12: Sanitized diagnostics capture facts without leaking full private URL', () async {
+      final parser = GoogleMapsParser(
+        redirectResolver: CountingMockRedirectResolver(
+          resolverFullFn: (_) async => (
+            finalUrl: 'https://www.google.com/maps/place/Spot/@21.0100,105.8100,17z?cid=888777666',
+            htmlBody: '''
+              <script>
+                window.data = '{"cid": 888777666, "lat": 21.04321, "lng": 105.85678}';
+              </script>
+            '''
+          ),
+        ),
+      );
+
+      final resolved = await parser.parseResolvedLink('https://maps.app.goo.gl/diag_test');
+      expect(resolved.resolutionSource, equals('identity_bound_payload'));
+      expect(resolved.debugDiagnostics, isNotNull);
+      final diag = resolved.debugDiagnostics!;
+      expect(diag.contains('cidPresent=true'), isTrue);
+      expect(diag.contains('identityBoundFound=true'), isTrue);
+      expect(diag.contains('resolutionSource=identity_bound_payload'), isTrue);
+      expect(diag.contains('confidence=exactPin'), isTrue);
+      expect(diag.contains('requiresConfirmation=false'), isTrue);
+    });
   });
 }
