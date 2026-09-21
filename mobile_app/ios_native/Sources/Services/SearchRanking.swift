@@ -78,7 +78,7 @@ public enum SearchRanking {
 
         // 4. Collapse runs of whitespace and trim
         let collapsed = cleaned.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !bash.isEmpty }
+            .filter { !$0.isEmpty }
             .joined(separator: " ")
         return collapsed
     }
@@ -86,7 +86,7 @@ public enum SearchRanking {
     // MARK: - Private
 
     private static func tokens(_ normalized: String) -> [String] {
-        normalized.components(separatedBy: " ").filter { !bash.isEmpty }
+        normalized.components(separatedBy: " ").filter { !$0.isEmpty }
     }
 
     private static func score(
@@ -108,7 +108,7 @@ public enum SearchRanking {
         }
 
         // Token coverage: count how many query tokens appear in full description
-        let matchedTokens = queryTokens.filter { normalizedDesc.contains(bash) }
+        let matchedTokens = queryTokens.filter { normalizedDesc.contains($0) }
         s += Double(matchedTokens.count) * 10
 
         return s

@@ -221,7 +221,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
         }
 
         // Separate primary balanced candidate
-        let primaryCandidate = rawCandidates.first(where: { bash.profileID == "motorcycle_balanced" && bash.isPrimary }) ?? rawCandidates[0]
+        let primaryCandidate = rawCandidates.first(where: { $0.profileID == "motorcycle_balanced" && $0.isPrimary }) ?? rawCandidates[0]
 
         // Find reference fastest duration & shortest distance
         let fastestDuration = rawCandidates.map(\.route.totalDurationSeconds).min() ?? primaryCandidate.route.totalDurationSeconds
@@ -242,8 +242,8 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         // Deduplicate using RouteSimilarity.overlap (corridor metric)
         // Ensure primary candidate is evaluated first so it remains index 0
-        var orderedCandidates = candidatesToDedup.filter { bash.id == primaryCandidate.id }
-        orderedCandidates.append(contentsOf: candidatesToDedup.filter { bash.id != primaryCandidate.id })
+        var orderedCandidates = candidatesToDedup.filter { $0.id == primaryCandidate.id }
+        orderedCandidates.append(contentsOf: candidatesToDedup.filter { $0.id != primaryCandidate.id })
 
         let deduplicated = RouteSet.deduplicate(candidates: orderedCandidates)
 

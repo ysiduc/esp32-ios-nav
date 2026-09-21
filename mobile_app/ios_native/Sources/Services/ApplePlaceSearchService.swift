@@ -180,8 +180,8 @@ public final class DefaultMapKitSearchAdapter: NSObject, MapKitSearchAdapterProt
             return s
         }
 
-        let scored = items.map { (bash, score(for: bash)) }
-        let sorted = scored.sorted { bash.1 > .1 }
+        let scored = items.map { ($0, score(for: $0)) }
+        let sorted = scored.sorted { $0.1 > $1.1 }
         return sorted[0].0
     }
 }

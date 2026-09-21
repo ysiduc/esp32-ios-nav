@@ -273,7 +273,7 @@ public struct MapViewContainer: UIViewRepresentable {
 
                 if let mainRouteLayer = style.layer(withIdentifier: routeLayerID) {
                     style.insertLayer(lineLayer, below: mainRouteLayer)
-                } else if let labelLayer = style.layers.first(where: { bash.identifier.contains("label") }) {
+                } else if let labelLayer = style.layers.first(where: { $0.identifier.contains("label") }) {
                     style.insertLayer(lineLayer, below: labelLayer)
                 } else {
                     style.addLayer(lineLayer)

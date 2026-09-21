@@ -36,7 +36,7 @@ public struct MainMapView: View {
             }()
 
             let altRoutes = viewModel.routeCandidates
-                .filter { bash.id != viewModel.selectedRouteCandidateID }
+                .filter { $0.id != viewModel.selectedRouteCandidateID }
                 .map(\.route)
 
             MapViewContainer(
