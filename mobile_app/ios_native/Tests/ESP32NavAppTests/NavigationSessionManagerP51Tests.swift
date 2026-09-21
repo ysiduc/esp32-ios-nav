@@ -418,7 +418,7 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
             case .navigating: return .navigating
             case .routePreview: return .preview
             case .arrived: return .arrived
-            case .idle: return .none
+            case .idle, .searching: return .none
             }
         }()
         XCTAssertEqual(presentation, .arrived)

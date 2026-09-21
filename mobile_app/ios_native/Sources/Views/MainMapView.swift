@@ -31,7 +31,7 @@ public struct MainMapView: View {
                 case .navigating: return .navigating
                 case .routePreview: return .preview
                 case .arrived: return .arrived
-                case .idle: return .none
+                case .idle, .searching: return .none
                 }
             }()
 
