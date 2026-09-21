@@ -29,6 +29,8 @@ public final class RerouteManager: ObservableObject {
     @Published public private(set) var nextEligibleRerouteAt: Date?
     @Published public private(set) var lastCommittedAt: Date?
     @Published public private(set) var currentReason: RerouteReason?
+    @Published public private(set) var rerouteStartedAt: Date?
+    @Published public private(set) var rerouteCommittedAt: Date?
 
     // MARK: - Internal Lifecycle & Concurrency State
 
@@ -155,9 +157,12 @@ public final class RerouteManager: ObservableObject {
         let capturedSessionGen = session.sessionGeneration
         let capturedRouteGen = session.activeRouteGeneration
 
+        let startTime = self.now()
         isRerouting = true
         currentReason = reason
+        rerouteStartedAt = startTime
         session.setRerouting(true)
+        session.diagnostics.rerouteStartedAt = startTime
 
         print("[RerouteManager] 🔄 Starting reroute (\(reason.rawValue)) session=\(capturedSessionGen), routeRev=\(capturedRouteGen), reqGen=\(capturedRerouteGen)")
 
@@ -209,6 +214,8 @@ public final class RerouteManager: ObservableObject {
                 self.failureCount = 0
                 self.nextEligibleRerouteAt = nil
                 self.lastCommittedAt = commitTime
+                self.rerouteCommittedAt = commitTime
+                s.diagnostics.rerouteCommittedAt = commitTime
                 self.isRerouting = false
                 self.currentReason = nil
                 self.activeTask = nil
@@ -252,6 +259,8 @@ public final class RerouteManager: ObservableObject {
         failureCount = 0
         nextEligibleRerouteAt = nil
         lastCommittedAt = nil
+        rerouteStartedAt = nil
+        rerouteCommittedAt = nil
     }
 
     private func invalidateActiveRequest() {

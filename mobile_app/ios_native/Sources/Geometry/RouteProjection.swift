@@ -46,3 +46,45 @@ public struct RouteProjection: Equatable, Sendable {
                abs(lhs.distanceAlongRouteMeters - rhs.distanceAlongRouteMeters) < 1e-2
     }
 }
+
+
+// MARK: - Match Confidence & Result (P5.2)
+
+public enum RouteMatchConfidence: String, Sendable, Equatable {
+    case high
+    case medium
+    case low
+}
+
+/// Rich match result exposing projection details, candidate distances, heading agreement,
+/// along-route progress delta, and match confidence.
+public struct RouteMatchResult: Sendable, Equatable {
+    public let projection: RouteProjection
+    public let localCandidateDistance: Double
+    public let globalCandidateDistance: Double?
+    public let alongRouteDelta: Double
+    public let physicalTravelSincePrevious: Double
+    public let headingDifferenceDegrees: Double?
+    public let usedGlobalRecovery: Bool
+    public let confidence: RouteMatchConfidence
+
+    public init(
+        projection: RouteProjection,
+        localCandidateDistance: Double,
+        globalCandidateDistance: Double? = nil,
+        alongRouteDelta: Double = 0.0,
+        physicalTravelSincePrevious: Double = 0.0,
+        headingDifferenceDegrees: Double? = nil,
+        usedGlobalRecovery: Bool = false,
+        confidence: RouteMatchConfidence = .high
+    ) {
+        self.projection = projection
+        self.localCandidateDistance = localCandidateDistance
+        self.globalCandidateDistance = globalCandidateDistance
+        self.alongRouteDelta = alongRouteDelta
+        self.physicalTravelSincePrevious = physicalTravelSincePrevious
+        self.headingDifferenceDegrees = headingDifferenceDegrees
+        self.usedGlobalRecovery = usedGlobalRecovery
+        self.confidence = confidence
+    }
+}

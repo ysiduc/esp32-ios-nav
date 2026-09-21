@@ -97,6 +97,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     /// Raw, unfiltered GPS location directly from CoreLocation (diagnostics/debug).
     @Published public var rawLocation: CLLocation?
 
+    /// Raw GPS sample that passed horizontal accuracy validation, before Kalman smoothing (P5.2).
+    /// Used for physical displacement, raw route distance, off-route evidence, and reroute origin.
+    @Published public private(set) var acceptedPhysicalLocation: CLLocation?
+
     /// Kalman-filtered, accuracy-checked GPS location.
     @Published public var filteredLocation: CLLocation?
 
@@ -136,15 +140,27 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     /// Flag indicating background reroute computation is underway.
     @Published public private(set) var isRerouting: Bool = false
 
-    // MARK: - Independent Route Indices
+    // MARK: - Independent Route Indices & Authoritative Progress (P5.2)
     @Published public private(set) var currentManeuverStepIndex: Int = 0
     @Published public private(set) var currentPolylineSegmentIndex: Int = 0
+
+    /// Monotonic along-route distance for UI presentation and continuous polyline trimming (P5.2).
+    @Published public private(set) var displayProgressDistanceAlongRoute: Double = 0.0
+
+    /// Authoritative upcoming maneuver step index representing the next upcoming action (P5.2 Requirement 31).
+    public var upcomingManeuverIndex: Int {
+        currentManeuverStepIndex
+    }
+
+    /// Matcher stuck status from rolling continuity tracking (P5.2 Requirement 12).
+    @Published public private(set) var isMatcherStuck: Bool = false
+    public private(set) var lastMatchConfidence: RouteMatchConfidence = .high
 
     // MARK: - Off-Route Detection (P2)
     @Published public private(set) var offRouteDecision: OffRouteDecision?
     @Published public private(set) var offRouteState: OffRouteState = .onRoute
     @Published public private(set) var isOffRoute: Bool = false
-    private let offRouteDetector = OffRouteDetector()
+    let offRouteDetector = OffRouteDetector()
 
     // MARK: - Diagnostics (P5)
     public var diagnostics = NavigationDiagnostics()
@@ -155,12 +171,48 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     public var onRerouteNeeded: (() -> Void)?
     public var onArrived: (() -> Void)?
 
-    // MARK: Thresholds
+    // MARK: Thresholds (P5.2)
+    public let backwardToleranceMeters: Double     = 2.0
+    public let maneuverPassToleranceMeters: Double = 2.0
     private let stepAdvanceThresholdMeters: Double = 15.0
     /// Conservative arrival: physical distance from destination must be ≤15m (P1 accepted value).
     private let arrivalThresholdMeters: Double     = 15.0
     /// Maximum accepted GPS horizontal accuracy; samples above this are rejected.
     private let maxAccuracyMeters: Double          = 20.0
+
+    // Rolling stuck-matcher continuity tracker (P5.2 Requirements 12 & 13)
+    private var rollingSamples: [(timestamp: Date, coord: CLLocationCoordinate2D, matchedDist: Double)] = []
+
+    private func updateStuckMatcherStatus(
+        timestamp: Date,
+        coordinate: CLLocationCoordinate2D,
+        matchedProgress: Double
+    ) -> Bool {
+        rollingSamples.append((timestamp: timestamp, coord: coordinate, matchedDist: matchedProgress))
+        // Window of 3.5 seconds
+        rollingSamples.removeAll { timestamp.timeIntervalSince($0.timestamp) > 3.5 }
+
+        guard rollingSamples.count >= 3, let first = rollingSamples.first else {
+            isMatcherStuck = false
+            return false
+        }
+
+        var physicalTravel = 0.0
+        for i in 0..<(rollingSamples.count - 1) {
+            physicalTravel += RouteGeometry.distanceBetween(rollingSamples[i].coord, rollingSamples[i+1].coord)
+        }
+
+        let alongRouteAdvance = matchedProgress - first.matchedDist
+
+        // If physically moved >= 25m but along-route progress is stuck (<= 6m)
+        if physicalTravel >= 25.0 && alongRouteAdvance <= 6.0 {
+            isMatcherStuck = true
+            return true
+        } else {
+            isMatcherStuck = false
+            return false
+        }
+    }
 
     // MARK: Private State
     private let locationManager = CLLocationManager()
@@ -319,12 +371,16 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         activeProgress              = NavigationProgress()
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
+        displayProgressDistanceAlongRoute = 0.0
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
         remainingPolyline           = []
+        acceptedPhysicalLocation    = nil
+        rollingSamples.removeAll()
+        isMatcherStuck              = false
         offRouteDetector.reset()
         offRouteDecision            = nil
         offRouteState               = .onRoute
@@ -342,11 +398,14 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         activeRoute                 = route
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
+        displayProgressDistanceAlongRoute = 0.0
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
         isRerouting                 = false
         remainingPolyline           = route.coordinates
+        rollingSamples.removeAll()
+        isMatcherStuck              = false
         offRouteDetector.reset()
         offRouteDecision            = nil
         offRouteState               = .onRoute
@@ -367,12 +426,15 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         activeProgress              = NavigationProgress()
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
+        displayProgressDistanceAlongRoute = 0.0
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
         remainingPolyline           = []
+        rollingSamples.removeAll()
+        isMatcherStuck              = false
         offRouteDetector.reset()
         offRouteDecision            = nil
         offRouteState               = .onRoute
@@ -393,6 +455,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         activeRoute                 = route
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
+        displayProgressDistanceAlongRoute = 0.0
         // Clear all stale Route A match state — nothing from the old route survives
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
@@ -400,6 +463,8 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         matchedLocation             = nil
         snappedLocation             = nil
         remainingPolyline           = route.coordinates
+        rollingSamples.removeAll()
+        isMatcherStuck              = false
         offRouteDetector.reset()
         offRouteDecision            = nil
         offRouteState               = .onRoute
@@ -417,9 +482,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
             let result = computeProgress(
                 currentLocation: loc,
+                acceptedPhysicalLocation: acceptedPhysicalLocation ?? loc,
                 route: route,
                 lastProjection: nil,
                 lastMatchedTimestamp: nil,
+                stuckRecoveryTriggered: false,
+                displayProgressDistance: &displayProgressDistanceAlongRoute,
                 maneuverStepIndex: &stepIdx,
                 polylineSegmentIndex: &segIdx
             )
@@ -460,18 +528,23 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
         guard loc.horizontalAccuracy > 0, loc.horizontalAccuracy <= maxAccuracyMeters else {
             diagnostics.locationsRejectedForAccuracy += 1
+            #if DEBUG
             print("[NavSession] GPS discarded acc=\(Int(loc.horizontalAccuracy))m")
+            #endif
             return
         }
 
         diagnostics.locationsAccepted += 1
+        acceptedPhysicalLocation = loc
 
-        // Kalman smooth
+        // Adaptive Kalman smooth (Requirement 41 & 42)
         let sm = kalmanSmooth(
             rawLat: loc.coordinate.latitude,
             rawLon: loc.coordinate.longitude,
             accuracy: loc.horizontalAccuracy,
-            timestamp: loc.timestamp
+            timestamp: loc.timestamp,
+            course: loc.course,
+            speed: loc.speed
         )
         let smLoc = CLLocation(
             coordinate: sm,
@@ -498,22 +571,42 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         let prevProj = lastMatchedProjection
         let prevTime = lastMatchedTimestamp
 
+        // 1. Pure nearest projection from accepted physical location (Requirement 10 & 11)
+        let rawNearestProj = route.geometry.nearestProjection(to: loc.coordinate)
+        let rawNearestDist = rawNearestProj?.lateralDistanceMeters ?? 0.0
+
+        // 2. Rolling stuck matcher tracker (Requirement 12)
+        let currentProgress = displayProgressDistanceAlongRoute
+        let stuckDetected = updateStuckMatcherStatus(
+            timestamp: loc.timestamp,
+            coordinate: loc.coordinate,
+            matchedProgress: currentProgress
+        )
+
+        // 3. Compute progress with confidence matching & stuck recovery
         let result = computeProgress(
             currentLocation: smLoc,
+            acceptedPhysicalLocation: loc,
             route: route,
             lastProjection: prevProj,
             lastMatchedTimestamp: prevTime,
+            stuckRecoveryTriggered: stuckDetected,
+            displayProgressDistance: &displayProgressDistanceAlongRoute,
             maneuverStepIndex: &stepIdx,
             polylineSegmentIndex: &segIdx
         )
 
         guard self.state == .navigating else { return }
         guard self.sessionGeneration == capturedSessionGeneration else {
+            #if DEBUG
             print("[NavSession] Discarding stale GPS progress (session \(capturedSessionGeneration) != current \(self.sessionGeneration))")
+            #endif
             return
         }
         guard self.activeRouteGeneration == capturedRouteGeneration else {
+            #if DEBUG
             print("[NavSession] Discarding stale GPS progress (route rev \(capturedRouteGeneration) != current \(self.activeRouteGeneration))")
+            #endif
             return
         }
 
@@ -522,11 +615,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         self.lastMatchedProjection       = result.projection
         self.lastMatchedTimestamp        = smLoc.timestamp
         self.currentProjection           = result.projection
+        self.lastMatchConfidence         = result.matchConfidence
         self.matchedLocation             = result.projection.coordinate
         self.snappedLocation             = result.projection.coordinate
         if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
 
-        // P2 Quality-Aware Off-Route Detection
+        // 4. Multi-Signal Quality-Aware Off-Route Detection (Requirements 21, 22, 23)
         let currentSegIdx = result.projection.segmentIndex
         var routeBearing: Double? = nil
         if currentSegIdx + 1 < route.coordinates.count {
@@ -534,13 +628,15 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         }
 
         let obs = OffRouteObservation(
-            timestamp: smLoc.timestamp,
+            timestamp: loc.timestamp,
             lateralDistanceMeters: result.projection.lateralDistanceMeters,
-            horizontalAccuracyMeters: smLoc.horizontalAccuracy,
-            speedMetersPerSecond: max(0.0, smLoc.speed),
-            courseDegrees: smLoc.course >= 0.0 ? smLoc.course : nil,
+            horizontalAccuracyMeters: loc.horizontalAccuracy,
+            speedMetersPerSecond: max(0.0, loc.speed),
+            courseDegrees: loc.course >= 0.0 ? loc.course : nil,
             routeBearingDegrees: routeBearing,
-            distanceAlongRouteMeters: result.projection.distanceAlongRouteMeters
+            distanceAlongRouteMeters: self.displayProgressDistanceAlongRoute,
+            rawNearestRouteDistanceMeters: rawNearestDist,
+            isMatcherStuck: stuckDetected
         )
         self.diagnostics.offRouteObservations += 1
 
@@ -549,12 +645,44 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         self.offRouteState = decision.state
         self.isOffRoute = (decision.state == .confirmed)
 
-        if decision.becameConfirmed {
-            self.diagnostics.offRouteConfirmations += 1
-            print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
+        // Latency metric timestamps (Requirement 50)
+        if decision.state == .suspected && self.diagnostics.offRouteSuspectedAt == nil {
+            self.diagnostics.offRouteSuspectedAt = loc.timestamp
+        } else if decision.recovered {
+            self.diagnostics.offRouteSuspectedAt = nil
+            self.diagnostics.offRouteConfirmedAt = nil
         }
 
-        self.onOffRouteDecision?(decision, smLoc)
+        if decision.becameConfirmed {
+            self.diagnostics.offRouteConfirmations += 1
+            self.diagnostics.offRouteConfirmedAt = loc.timestamp
+            #if DEBUG
+            print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
+            #endif
+        }
+
+        // Trace snapshot logging (Requirement 37)
+        self.diagnostics.latestFieldTrace = FieldNavigationTraceSnapshot(
+            timestamp: loc.timestamp,
+            horizontalAccuracy: loc.horizontalAccuracy,
+            speed: loc.speed,
+            course: loc.course,
+            rawNearestRouteDistance: rawNearestDist,
+            matchedSegmentIndex: result.projection.segmentIndex,
+            matchedAlongRouteMeters: result.projection.distanceAlongRouteMeters,
+            previousMatchedMeters: prevProj?.distanceAlongRouteMeters ?? 0.0,
+            physicalDisplacement: prevProj != nil ? RouteGeometry.distanceBetween(prevProj!.coordinate, loc.coordinate) : 0.0,
+            alongRouteAdvancement: prevProj != nil ? (result.projection.distanceAlongRouteMeters - prevProj!.distanceAlongRouteMeters) : 0.0,
+            matchConfidence: result.matchConfidence.rawValue,
+            currentUpcomingManeuverIndex: stepIdx,
+            distanceToUpcomingManeuver: Double(result.progress.distanceToTurnMeters),
+            offRouteState: decision.state.rawValue,
+            offRouteReason: decision.reason.rawValue,
+            rerouteState: self.isRerouting ? "REROUTING" : "IDLE"
+        )
+
+        // Pass acceptedPhysicalLocation as reroute origin (Requirement 26)
+        self.onOffRouteDecision?(decision, loc)
 
         if result.progress.maneuver == .arrive && self.state == .navigating {
             self.state = .arrived
@@ -567,13 +695,15 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         self.onProgressUpdate?(result.progress)
     }
 
-    // MARK: - Kalman Smoothing
+    // MARK: - Kalman Smoothing (Adaptive Turn Responsiveness P5.2)
 
     private func kalmanSmooth(
         rawLat: Double,
         rawLon: Double,
         accuracy: Double,
-        timestamp: Date
+        timestamp: Date,
+        course: Double = -1.0,
+        speed: Double = 0.0
     ) -> CLLocationCoordinate2D {
         guard let last = kalmanTimestamp else {
             kalmanLat = rawLat; kalmanLon = rawLon
@@ -583,7 +713,26 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         let dt = max(timestamp.timeIntervalSince(last), 0.0)
         kalmanTimestamp = timestamp
 
-        let variance = kalmanAccuracy * kalmanAccuracy + dt * kalmanQ * kalmanQ
+        // Adaptive process noise (Requirements 41 & 42):
+        // If moving at meaningful speed and physical displacement is large (> 15m),
+        // or accuracy is high (<= 10m), increase responsiveness to prevent turn lag.
+        let rawCoord = CLLocationCoordinate2D(latitude: rawLat, longitude: rawLon)
+        let lastSmCoord = CLLocationCoordinate2D(latitude: kalmanLat, longitude: kalmanLon)
+        let displacement = RouteGeometry.distanceBetween(lastSmCoord, rawCoord)
+
+        var effectiveQ = kalmanQ
+        if speed >= 2.5 && displacement > 15.0 {
+            effectiveQ = 12.0
+            if displacement > 25.0 && accuracy <= 10.0 {
+                // Reseed directly on major sharp turn with high accuracy to eliminate positional lag
+                kalmanLat = rawLat
+                kalmanLon = rawLon
+                kalmanAccuracy = accuracy
+                return rawCoord
+            }
+        }
+
+        let variance = kalmanAccuracy * kalmanAccuracy + dt * effectiveQ * effectiveQ
         let r = accuracy * accuracy
         let k = variance / (variance + r)
 
@@ -594,18 +743,22 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         return CLLocationCoordinate2D(latitude: kalmanLat, longitude: kalmanLon)
     }
 
-    // MARK: - Progress Computation
+    // MARK: - Progress Computation (P5.2)
 
     nonisolated private func computeProgress(
         currentLocation: CLLocation,
+        acceptedPhysicalLocation: CLLocation,
         route: NavRoute,
         lastProjection: RouteProjection?,
         lastMatchedTimestamp: Date?,
+        stuckRecoveryTriggered: Bool,
+        displayProgressDistance: inout Double,
         maneuverStepIndex: inout Int,
         polylineSegmentIndex: inout Int
     ) -> (progress: NavigationProgress,
           projection: RouteProjection,
-          remaining: [CLLocationCoordinate2D]) {
+          remaining: [CLLocationCoordinate2D],
+          matchConfidence: RouteMatchConfidence) {
 
         guard !route.steps.isEmpty, !route.coordinates.isEmpty else {
             let fallbackProj = RouteProjection(
@@ -616,17 +769,26 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
                 distanceAlongRouteMeters: 0
             )
             return (NavigationProgress(maneuver: .arrive, nextStreetName: "Đã đến đích"),
-                    fallbackProj, [])
+                    fallbackProj, [], .high)
         }
 
         let coords = route.coordinates
 
-        // Authoritative Route Projection with continuity gating
-        guard let projection = route.geometry.project(
+        // Authoritative Route Matching with confidence scoring & stuck recovery
+        let matchResult = route.geometry.matchLocation(
             location: currentLocation,
             lastProjection: lastProjection,
-            lastMatchedTimestamp: lastMatchedTimestamp
-        ) else {
+            lastMatchedTimestamp: lastMatchedTimestamp,
+            stuckRecoveryTriggered: stuckRecoveryTriggered
+        )
+
+        let projection: RouteProjection
+        let confidence: RouteMatchConfidence
+
+        if let mr = matchResult {
+            projection = mr.projection
+            confidence = mr.confidence
+        } else {
             let fallbackCoord = route.coordinates.first ?? currentLocation.coordinate
             let fallbackProj = RouteProjection(
                 coordinate: fallbackCoord,
@@ -635,23 +797,28 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
                 lateralDistanceMeters: 0,
                 distanceAlongRouteMeters: 0
             )
-            return (NavigationProgress(maneuver: .none), fallbackProj, coords)
+            return (NavigationProgress(maneuver: .none), fallbackProj, coords, .low)
         }
 
         // Maintain polylineSegmentIndex strictly from geometry projection
         polylineSegmentIndex = projection.segmentIndex
+
+        // Monotonic forward display progress (Requirement 15 & 16)
+        let rawMatchedProgress = projection.distanceAlongRouteMeters
+        displayProgressDistance = max(displayProgressDistance - 2.0, rawMatchedProgress)
 
         // Conservative arrival check:
         // Requires physical proximity (<= arrivalThresholdMeters 15m) AND remaining along-route distance (<= 30m),
         // or very close physical proximity (<= 7.5m) in case polyline end has slight coordinate offset.
         let destCoord = coords.last!
         let destLocation = CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude)
-        let physicalDistToDest = currentLocation.distance(from: destLocation)
-        let remDist = route.geometry.remainingDistance(from: projection.distanceAlongRouteMeters)
+        let physicalDistToDest = acceptedPhysicalLocation.distance(from: destLocation)
+        let remDist = route.geometry.remainingDistance(from: displayProgressDistance)
 
         let isPhysicallyNear = physicalDistToDest <= arrivalThresholdMeters
         let isRouteProgressNear = remDist <= 30.0
         if (isPhysicallyNear && isRouteProgressNear) || physicalDistToDest <= 7.5 {
+            displayProgressDistance = route.geometry.totalDistanceMeters
             let arrivalProj = RouteProjection(
                 coordinate: destCoord,
                 segmentIndex: max(0, coords.count - 2),
@@ -666,17 +833,27 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
                                        currentSpeedKmh: 0,
                                        speedLimitKmh: 0,
                                        nextStreetName: "Đã đến đích"),
-                    arrivalProj, [])
+                    arrivalProj, [], .high)
         }
 
-        // Maneuver step advancement based on along-route progress
-        let stepDistances = route.geometry.maneuverDistancesAlongRoute
+        // Handle initial depart maneuver (Requirement 32)
+        if maneuverStepIndex == 0 && route.steps.count > 1 {
+            let step0Begin = route.geometry.maneuverBeginDistancesAlongRoute[0]
+            if displayProgressDistance >= (step0Begin + 2.0) || displayProgressDistance >= 10.0 {
+                maneuverStepIndex = 1
+            }
+        }
+
+        // Maneuver step advancement based on along-route progress (Requirements 33, 34, 47)
+        let beginDistances = route.geometry.maneuverBeginDistancesAlongRoute
         while maneuverStepIndex + 1 < route.steps.count {
-            let stepTriggerDist = stepDistances[maneuverStepIndex]
-            if projection.distanceAlongRouteMeters >= (stepTriggerDist - stepAdvanceThresholdMeters) {
+            let upcomingTriggerDist = beginDistances[maneuverStepIndex]
+            if displayProgressDistance >= (upcomingTriggerDist + 2.0) {
                 maneuverStepIndex += 1
+                #if DEBUG
                 let nextStep = route.steps[maneuverStepIndex]
-                print("[NavSession] -> Step \(maneuverStepIndex): \(nextStep.maneuverType.localizedInstruction)")
+                print("[NavSession] -> Passed step, advanced to Step \(maneuverStepIndex): \(nextStep.maneuverType.localizedInstruction)")
+                #endif
             } else {
                 break
             }
@@ -684,20 +861,22 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
         let curStep = route.steps[min(maneuverStepIndex, route.steps.count - 1)]
 
-        // Distance to turn along route
-        let distToTurn = route.geometry.distanceToManeuver(
-            stepIndex: maneuverStepIndex,
-            from: projection.distanceAlongRouteMeters
-        )
-
-        // Remaining polyline: starts at projection point followed by coordinates strictly after projection.segmentIndex
-        var remaining = [projection.coordinate]
-        let segIdx = projection.segmentIndex
-        if segIdx + 1 < coords.count {
-            remaining.append(contentsOf: coords[(segIdx + 1)...])
-        } else if let last = coords.last {
-            remaining.append(last)
+        // Distance to turn along route (Requirement 31: upcomingManeuver.beginDistance - displayProgress)
+        let distToTurn: Double
+        if curStep.maneuverType == .arrive || maneuverStepIndex >= route.steps.count - 1 {
+            distToTurn = remDist
+        } else {
+            distToTurn = route.geometry.distanceToManeuverBegin(
+                stepIndex: maneuverStepIndex,
+                from: displayProgressDistance
+            )
         }
+
+        // Authoritative continuous polyline trimming (Requirements 17 & 18)
+        let remaining = route.geometry.trimmedPolyline(
+            from: displayProgressDistance,
+            snappedCoordinate: projection.coordinate
+        )
 
         // Stable proportional ETA
         let totalGeomDist = route.geometry.totalDistanceMeters
@@ -716,7 +895,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
             nextStreetName: curStep.streetName
         )
 
-        return (progress, projection, remaining)
+        return (progress, projection, remaining, confidence)
     }
 }
 

@@ -21,8 +21,16 @@ public struct RouteGeometry: Sendable {
     /// Total path distance along the polyline in meters.
     public let totalDistanceMeters: Double
 
-    /// Cumulative along-route distance in meters for each maneuver step.
-    public let maneuverDistancesAlongRoute: [Double]
+    /// Cumulative along-route distance in meters for the BEGINNING of each maneuver step.
+    public let maneuverBeginDistancesAlongRoute: [Double]
+
+    /// Cumulative along-route distance in meters for the END of each maneuver step.
+    public let maneuverEndDistancesAlongRoute: [Double]
+
+    /// Cumulative along-route distance in meters for each maneuver step (defaults to end distances for backward compatibility).
+    public var maneuverDistancesAlongRoute: [Double] {
+        maneuverEndDistancesAlongRoute
+    }
 
     /// Number of distinct linear segments in the polyline.
     public var segmentCount: Int {
@@ -55,21 +63,30 @@ public struct RouteGeometry: Sendable {
         self.cumulativeDistances = cumDist
         self.totalDistanceMeters = total
 
-        // Precompute maneuver distances along the route
-        var stepDists: [Double] = []
-        stepDists.reserveCapacity(steps.count)
+        // Precompute maneuver begin and end distances along the route
+        var beginDists: [Double] = []
+        var endDists: [Double] = []
+        beginDists.reserveCapacity(steps.count)
+        endDists.reserveCapacity(steps.count)
 
-        var lastStepDist: Double = 0.0
+        var lastBeginDist: Double = 0.0
+        var lastEndDist: Double = 0.0
+
         for (idx, step) in steps.enumerated() {
-            var stepDist: Double
-            if let endShape = step.endShapeIndex, endShape >= 0, endShape < cumDist.count {
-                stepDist = cumDist[endShape]
-            } else if idx == steps.count - 1 && !cumDist.isEmpty {
-                stepDist = total
+            var beginDist: Double
+            var endDist: Double
+
+            // 1. Begin distance computation & validation
+            if let beginShape = step.beginShapeIndex,
+               beginShape >= 0,
+               beginShape < cumDist.count {
+                beginDist = cumDist[beginShape]
+            } else if idx == 0 {
+                beginDist = 0.0
             } else {
                 // Fallback: approximate closest coordinate cumulative distance
                 var bestDist = Double.infinity
-                var bestAlong = lastStepDist
+                var bestAlong = lastBeginDist
                 for cIdx in 0..<coordinates.count {
                     let d = RouteGeometry.distanceBetween(step.coordinate, coordinates[cIdx])
                     if d < bestDist {
@@ -77,18 +94,56 @@ public struct RouteGeometry: Sendable {
                         bestAlong = cumDist[cIdx]
                     }
                 }
-                stepDist = bestAlong
+                beginDist = bestAlong
             }
 
-            // Guarantee monotonic progression of step distances
-            stepDist = max(lastStepDist, stepDist)
-            if idx == steps.count - 1 && !cumDist.isEmpty {
-                stepDist = total
+            // 2. End distance computation & validation
+            if let endShape = step.endShapeIndex,
+               endShape >= 0,
+               endShape < cumDist.count {
+                endDist = cumDist[endShape]
+            } else if idx == steps.count - 1 && !cumDist.isEmpty {
+                endDist = total
+            } else {
+                // Fallback: approximate closest coordinate cumulative distance
+                var bestDist = Double.infinity
+                var bestAlong = max(beginDist, lastEndDist)
+                for cIdx in 0..<coordinates.count {
+                    let d = RouteGeometry.distanceBetween(step.coordinate, coordinates[cIdx])
+                    if d < bestDist {
+                        bestDist = d
+                        bestAlong = cumDist[cIdx]
+                    }
+                }
+                endDist = bestAlong
             }
-            stepDists.append(stepDist)
-            lastStepDist = stepDist
+
+            // Monotonic step ordering validation (Requirement 36)
+            if let bShape = step.beginShapeIndex, let eShape = step.endShapeIndex {
+                if bShape > eShape || bShape < 0 || eShape >= coordinates.count {
+                    #if DEBUG
+                    print("[RouteGeometry] Invalid step indices for step \(idx): begin=\(bShape), end=\(eShape), coords=\(coordinates.count)")
+                    #endif
+                }
+            }
+
+            // Guarantee monotonic progression of begin and end distances
+            beginDist = max(lastBeginDist, beginDist)
+            endDist   = max(beginDist, max(lastEndDist, endDist))
+
+            if idx == steps.count - 1 && !cumDist.isEmpty {
+                endDist = max(endDist, total)
+            }
+
+            beginDists.append(beginDist)
+            endDists.append(endDist)
+
+            lastBeginDist = beginDist
+            lastEndDist = endDist
         }
-        self.maneuverDistancesAlongRoute = stepDists
+
+        self.maneuverBeginDistancesAlongRoute = beginDists
+        self.maneuverEndDistancesAlongRoute   = endDists
     }
 
     // MARK: - Segment Math
@@ -161,18 +216,13 @@ public struct RouteGeometry: Sendable {
         return (projCoord, t, lateralDist, distAlong)
     }
 
-    // MARK: - Robust Projection with Continuity Gating
+    // MARK: - Pure Nearest-Distance Query (P5.2)
 
-    /// Projects a GPS location onto this route geometry using a two-tier search:
-    /// 1. Fast local window search around previous matched segment (O(1)).
-    /// 2. Global search fallback with continuity penalties (O(N)).
-    ///
-    /// Applies backward tolerance (20m) and forward jump penalties to prevent snap jumping
-    /// on parallel roads, hairpins, and self-intersecting loops.
-    public func project(
-        location: CLLocation,
-        lastProjection: RouteProjection? = nil,
-        lastMatchedTimestamp: Date? = nil
+    /// Pure Euclidean nearest projection to the entire route geometry.
+    /// Does NOT apply any previous-projection continuity bias or penalties.
+    /// Used for physical off-route evidence and physical distance computation.
+    public func nearestProjection(
+        to coordinate: CLLocationCoordinate2D
     ) -> RouteProjection? {
         guard segmentCount > 0 else {
             if let first = coordinates.first {
@@ -180,8 +230,55 @@ public struct RouteGeometry: Sendable {
                     coordinate: first,
                     segmentIndex: 0,
                     segmentFraction: 0.0,
+                    lateralDistanceMeters: RouteGeometry.distanceBetween(coordinate, first),
+                    distanceAlongRouteMeters: 0.0
+                )
+            }
+            return nil
+        }
+
+        var bestProj: RouteProjection?
+        var bestDist = Double.infinity
+
+        for segIdx in 0..<segmentCount {
+            let res = projectOnSegment(point: coordinate, segmentIndex: segIdx)
+            if res.lateralDistanceMeters < bestDist {
+                bestDist = res.lateralDistanceMeters
+                bestProj = RouteProjection(
+                    coordinate: res.coordinate,
+                    segmentIndex: segIdx,
+                    segmentFraction: res.fraction,
+                    lateralDistanceMeters: res.lateralDistanceMeters,
+                    distanceAlongRouteMeters: res.distanceAlongRouteMeters
+                )
+            }
+        }
+
+        return bestProj
+    }
+
+    // MARK: - Confidence-Based Route Matching & Recovery (P5.2)
+
+    /// Matches a GPS location onto this route geometry using confidence-based search and stuck recovery.
+    public func matchLocation(
+        location: CLLocation,
+        lastProjection: RouteProjection? = nil,
+        lastMatchedTimestamp: Date? = nil,
+        stuckRecoveryTriggered: Bool = false
+    ) -> RouteMatchResult? {
+        guard segmentCount > 0 else {
+            if let first = coordinates.first {
+                let proj = RouteProjection(
+                    coordinate: first,
+                    segmentIndex: 0,
+                    segmentFraction: 0.0,
                     lateralDistanceMeters: RouteGeometry.distanceBetween(location.coordinate, first),
                     distanceAlongRouteMeters: 0.0
+                )
+                return RouteMatchResult(
+                    projection: proj,
+                    localCandidateDistance: proj.lateralDistanceMeters,
+                    confidence: .high
                 )
             }
             return nil
@@ -198,10 +295,26 @@ public struct RouteGeometry: Sendable {
             dt = 1.0
         }
 
+        let physicalTravel: Double
+        if let prev = lastProjection {
+            physicalTravel = RouteGeometry.distanceBetween(prev.coordinate, point)
+        } else {
+            physicalTravel = 0.0
+        }
+
+        let speedMps = max(0.0, location.speed)
+        let accuracyAllowance = max(5.0, location.horizontalAccuracy * 1.5)
+        let minimumNoiseAllowance = 25.0
+        let maxPlausibleForward = max(
+            minimumNoiseAllowance + accuracyAllowance,
+            speedMps * dt * 1.8 + accuracyAllowance
+        )
+
         // Helper to evaluate a segment with continuity penalties
         func scoreCandidate(
-            segmentIdx: Int
-        ) -> (projection: RouteProjection, score: Double) {
+            segmentIdx: Int,
+            allowRecoveryForwardJump: Bool = false
+        ) -> (projection: RouteProjection, score: Double, headingDiff: Double?) {
             let res = projectOnSegment(point: point, segmentIndex: segmentIdx)
             let proj = RouteProjection(
                 coordinate: res.coordinate,
@@ -212,6 +325,8 @@ public struct RouteGeometry: Sendable {
             )
 
             var penalty: Double = 0.0
+            var headingDiff: Double? = nil
+
             if let prev = lastProjection {
                 let delta = res.distanceAlongRouteMeters - prev.distanceAlongRouteMeters
 
@@ -220,73 +335,185 @@ public struct RouteGeometry: Sendable {
                     penalty += abs(delta + 20.0) * 5.0
                 }
 
-                // 2. Temporal forward jump penalty: bound plausible movement using elapsed time, speed, and accuracy
-                let speedMps = max(0.0, location.speed)
-                let accuracyAllowance = max(5.0, location.horizontalAccuracy * 1.5)
-                let minimumNoiseAllowance = 25.0
-                let maxPlausibleForward = max(
-                    minimumNoiseAllowance + accuracyAllowance,
-                    speedMps * dt * 1.8 + accuracyAllowance
-                )
+                // 2. Temporal forward jump penalty
                 if delta > maxPlausibleForward {
-                    penalty += (delta - maxPlausibleForward) * 2.5
+                    if allowRecoveryForwardJump && stuckRecoveryTriggered && delta > 0 {
+                        // In stuck recovery mode, waive forward penalty if candidate has good lateral proximity
+                        if res.lateralDistanceMeters <= 15.0 {
+                            penalty += 0.0
+                        } else {
+                            penalty += (delta - maxPlausibleForward) * 1.0
+                        }
+                    } else {
+                        penalty += (delta - maxPlausibleForward) * 2.5
+                    }
                 }
             } else {
-                // Initial match: slight bias towards earlier segments of the route
                 penalty += Double(segmentIdx) * 0.05
             }
 
-            // 3. Heading tie-breaker: if moving fast enough, penalize segments running opposite to vehicle course
+            // 3. Heading tie-breaker: evaluate vehicle course against segment bearing
             if location.speed > 1.5 && location.course >= 0 {
                 let a = coordinates[segmentIdx]
                 let b = coordinates[segmentIdx + 1]
                 let segBearing = RouteGeometry.bearing(from: a, to: b)
                 let diff = abs(segBearing - location.course)
                 let minAngle = min(diff, 360.0 - diff)
+                headingDiff = minAngle
+
                 if minAngle > 95.0 {
                     penalty += 35.0
+                } else if minAngle > 60.0 {
+                    penalty += 15.0
                 }
             }
 
             let totalScore = res.lateralDistanceMeters + penalty
-            return (proj, totalScore)
+            return (proj, totalScore, headingDiff)
         }
 
         // Tier 1: Local Window Search
+        var bestLocal: RouteProjection?
+        var bestLocalScore = Double.infinity
+        var bestLocalHeadingDiff: Double?
+        var localConfidence: RouteMatchConfidence = .low
+
         if let prev = lastProjection {
             let winStart = max(0, prev.segmentIndex - 2)
             let winEnd = min(segmentCount - 1, prev.segmentIndex + 25)
-
-            var bestLocal: RouteProjection?
-            var bestLocalScore = Double.infinity
 
             for segIdx in winStart...winEnd {
                 let candidate = scoreCandidate(segmentIdx: segIdx)
                 if candidate.score < bestLocalScore {
                     bestLocalScore = candidate.score
                     bestLocal = candidate.projection
+                    bestLocalHeadingDiff = candidate.headingDiff
                 }
             }
 
-            // If local search found a candidate within reasonable lateral distance, accept immediately
-            if let localMatch = bestLocal, localMatch.lateralDistanceMeters <= 25.0 {
-                return localMatch
+            if let local = bestLocal {
+                let delta = local.distanceAlongRouteMeters - prev.distanceAlongRouteMeters
+                let tightLateralLimit = max(12.0, location.horizontalAccuracy * 1.0)
+                let headingOk = (bestLocalHeadingDiff == nil || bestLocalHeadingDiff! <= 45.0)
+                let forwardOk = (delta >= -5.0 && delta <= maxPlausibleForward)
+
+                if !stuckRecoveryTriggered && local.lateralDistanceMeters <= tightLateralLimit && headingOk && forwardOk {
+                    localConfidence = .high
+                } else if local.lateralDistanceMeters <= 25.0 && (bestLocalHeadingDiff == nil || bestLocalHeadingDiff! <= 75.0) {
+                    localConfidence = .medium
+                } else {
+                    localConfidence = .low
+                }
             }
         }
 
-        // Tier 2: Global Search Fallback
+        // Fast acceptance if local match has high confidence and no stuck recovery is active
+        if localConfidence == .high, let local = bestLocal, !stuckRecoveryTriggered {
+            let delta = local.distanceAlongRouteMeters - (lastProjection?.distanceAlongRouteMeters ?? 0.0)
+            return RouteMatchResult(
+                projection: local,
+                localCandidateDistance: local.lateralDistanceMeters,
+                globalCandidateDistance: nil,
+                alongRouteDelta: delta,
+                physicalTravelSincePrevious: physicalTravel,
+                headingDifferenceDegrees: bestLocalHeadingDiff,
+                usedGlobalRecovery: false,
+                confidence: .high
+            )
+        }
+
+        // Tier 2: Global Search Fallback (Evaluated when local confidence is medium/low or stuck recovery triggered)
         var bestGlobal: RouteProjection?
         var bestGlobalScore = Double.infinity
+        var bestGlobalHeadingDiff: Double?
 
         for segIdx in 0..<segmentCount {
-            let candidate = scoreCandidate(segmentIdx: segIdx)
+            let candidate = scoreCandidate(segmentIdx: segIdx, allowRecoveryForwardJump: stuckRecoveryTriggered)
             if candidate.score < bestGlobalScore {
                 bestGlobalScore = candidate.score
                 bestGlobal = candidate.projection
+                bestGlobalHeadingDiff = candidate.headingDiff
             }
         }
 
-        return bestGlobal
+        // Determine winner between local candidate and global candidate
+        if stuckRecoveryTriggered,
+           let global = bestGlobal,
+           let prev = lastProjection,
+           global.segmentIndex > prev.segmentIndex,
+           global.lateralDistanceMeters <= 20.0 {
+            // Controlled global jump forward to escape projection lock
+            let delta = global.distanceAlongRouteMeters - prev.distanceAlongRouteMeters
+            return RouteMatchResult(
+                projection: global,
+                localCandidateDistance: bestLocal?.lateralDistanceMeters ?? 0.0,
+                globalCandidateDistance: global.lateralDistanceMeters,
+                alongRouteDelta: delta,
+                physicalTravelSincePrevious: physicalTravel,
+                headingDifferenceDegrees: bestGlobalHeadingDiff,
+                usedGlobalRecovery: true,
+                confidence: .high
+            )
+        }
+
+        if let global = bestGlobal,
+           (bestLocal == nil || bestGlobalScore < (bestLocalScore - 5.0) || localConfidence == .low) {
+            let delta = global.distanceAlongRouteMeters - (lastProjection?.distanceAlongRouteMeters ?? 0.0)
+            let conf: RouteMatchConfidence = global.lateralDistanceMeters <= 15.0 ? .high : .medium
+            return RouteMatchResult(
+                projection: global,
+                localCandidateDistance: bestLocal?.lateralDistanceMeters ?? 0.0,
+                globalCandidateDistance: global.lateralDistanceMeters,
+                alongRouteDelta: delta,
+                physicalTravelSincePrevious: physicalTravel,
+                headingDifferenceDegrees: bestGlobalHeadingDiff,
+                usedGlobalRecovery: stuckRecoveryTriggered,
+                confidence: conf
+            )
+        }
+
+        if let local = bestLocal {
+            let delta = local.distanceAlongRouteMeters - (lastProjection?.distanceAlongRouteMeters ?? 0.0)
+            return RouteMatchResult(
+                projection: local,
+                localCandidateDistance: local.lateralDistanceMeters,
+                globalCandidateDistance: bestGlobal?.lateralDistanceMeters,
+                alongRouteDelta: delta,
+                physicalTravelSincePrevious: physicalTravel,
+                headingDifferenceDegrees: bestLocalHeadingDiff,
+                usedGlobalRecovery: false,
+                confidence: localConfidence
+            )
+        }
+
+        if let global = bestGlobal {
+            let delta = global.distanceAlongRouteMeters - (lastProjection?.distanceAlongRouteMeters ?? 0.0)
+            return RouteMatchResult(
+                projection: global,
+                localCandidateDistance: 0.0,
+                globalCandidateDistance: global.lateralDistanceMeters,
+                alongRouteDelta: delta,
+                physicalTravelSincePrevious: physicalTravel,
+                headingDifferenceDegrees: bestGlobalHeadingDiff,
+                usedGlobalRecovery: false,
+                confidence: .medium
+            )
+        }
+
+        return nil
+    }
+
+    /// Projects a GPS location onto this route geometry (delegates to matchLocation).
+    public func project(
+        location: CLLocation,
+        lastProjection: RouteProjection? = nil,
+        lastMatchedTimestamp: Date? = nil
+    ) -> RouteProjection? {
+        return matchLocation(
+            location: location,
+            lastProjection: lastProjection,
+            lastMatchedTimestamp: lastMatchedTimestamp
+        )?.projection
     }
 
     // MARK: - Progress Helpers
@@ -296,17 +523,69 @@ public struct RouteGeometry: Sendable {
         return max(0.0, totalDistanceMeters - distanceAlongRouteMeters)
     }
 
-    /// Distance in meters to a given maneuver step index from current distanceAlongRoute.
+    /// Distance in meters to a given maneuver step index from current distanceAlongRoute (legacy end-distance semantics).
     public func distanceToManeuver(
         stepIndex: Int,
         from distanceAlongRouteMeters: Double
     ) -> Double {
-        guard stepIndex >= 0 && stepIndex < maneuverDistancesAlongRoute.count else {
+        guard stepIndex >= 0 && stepIndex < maneuverEndDistancesAlongRoute.count else {
             return 0.0
         }
-        let stepDist = maneuverDistancesAlongRoute[stepIndex]
+        let stepDist = maneuverEndDistancesAlongRoute[stepIndex]
         return max(0.0, stepDist - distanceAlongRouteMeters)
     }
+
+    /// Distance in meters to a given maneuver step's begin/action point from current distanceAlongRoute.
+    public func distanceToManeuverBegin(
+        stepIndex: Int,
+        from distanceAlongRouteMeters: Double
+    ) -> Double {
+        guard stepIndex >= 0 && stepIndex < maneuverBeginDistancesAlongRoute.count else {
+            return 0.0
+        }
+        let stepDist = maneuverBeginDistancesAlongRoute[stepIndex]
+        return max(0.0, stepDist - distanceAlongRouteMeters)
+    }
+
+    /// Returns the remaining polyline coordinates starting from the specified along-route distance (P5.2 Requirements 17 & 18).
+    /// Continuous polyline trimming ensures passed geometry is promptly removed without requiring reroute.
+    public func trimmedPolyline(
+        from distanceAlongRouteMeters: Double,
+        snappedCoordinate: CLLocationCoordinate2D? = nil
+    ) -> [CLLocationCoordinate2D] {
+        guard coordinates.count >= 2 else { return coordinates }
+        let targetDist = max(0.0, min(totalDistanceMeters, distanceAlongRouteMeters))
+
+        // Find the active segment index where cumulativeDistances[segIdx] <= targetDist <= cumulativeDistances[segIdx+1]
+        var segIdx = 0
+        while segIdx + 1 < cumulativeDistances.count && cumulativeDistances[segIdx + 1] < targetDist {
+            segIdx += 1
+        }
+        segIdx = min(segIdx, segmentCount - 1)
+
+        // Interpolate coordinate at targetDist
+        let a = coordinates[segIdx]
+        let b = coordinates[segIdx + 1]
+        let segStartDist = cumulativeDistances[segIdx]
+        let segLen = cumulativeDistances[segIdx + 1] - segStartDist
+        let fraction = segLen > 1e-6 ? max(0.0, min(1.0, (targetDist - segStartDist) / segLen)) : 0.0
+
+        let startCoord: CLLocationCoordinate2D
+        if let snapped = snappedCoordinate {
+            startCoord = snapped
+        } else {
+            let lat = a.latitude + fraction * (b.latitude - a.latitude)
+            let lon = a.longitude + fraction * (b.longitude - a.longitude)
+            startCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+
+        var remaining: [CLLocationCoordinate2D] = [startCoord]
+        if segIdx + 1 < coordinates.count {
+            remaining.append(contentsOf: coordinates[(segIdx + 1)...])
+        }
+        return remaining
+    }
+
     // MARK: - MapKit Step Mapping Helper
 
     /// Pure helper to map sub-polylines (such as MKRouteStep polylines) monotonically into full route coordinates.

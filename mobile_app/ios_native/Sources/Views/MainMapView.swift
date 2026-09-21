@@ -57,10 +57,19 @@ public struct MainMapView: View {
                 NavigationHUDView(
                     progress: viewModel.progress,
                     bleState: viewModel.bleManager.connectionState,
+                    isRerouting: viewModel.isRerouting,
                     onOpenBLE: { viewModel.showBLEScanner = true },
                     onStopNavigation: { viewModel.stopNavigation() }
                 )
                 .transition(.opacity)
+
+                #if DEBUG
+                if let trace = viewModel.navSession.diagnostics.latestFieldTrace {
+                    debugOverlay(trace: trace)
+                        .padding(.top, 100)
+                        .padding(.leading, 14)
+                }
+                #endif
             }
 
             // ── Layer 5: Arrived Overlay ──────────────────────────────────
@@ -599,4 +608,25 @@ public struct MainMapView: View {
         if desc.contains("siêu thị") || desc.contains("market")    { return "cart.fill" }
         return "mappin.and.ellipse"
     }
+
+    #if DEBUG
+    @ViewBuilder
+    private func debugOverlay(trace: FieldNavigationTraceSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("GPS acc: \(Int(trace.horizontalAccuracy))m | Spd: \(Int(trace.speed * 3.6))km/h")
+            Text("Raw dist: \(Int(trace.rawNearestRouteDistance))m | Matched: \(Int(trace.matchedAlongRouteMeters))m")
+            Text("Progress: \(Int(viewModel.navSession.displayProgressDistanceAlongRoute))m | Match: \(trace.matchConfidence)")
+            Text("Phys Δ: \(Int(trace.physicalDisplacement))m | Match Δ: \(Int(trace.alongRouteAdvancement))m")
+            Text("OffRoute: \(trace.offRouteState) (\(trace.offRouteReason))")
+            Text("Maneuver: \(trace.currentUpcomingManeuverIndex) → \(Int(trace.distanceToUpcomingManeuver))m")
+            Text("Reroute: \(trace.rerouteState)")
+        }
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundColor(.white)
+        .padding(8)
+        .background(Color.black.opacity(0.80))
+        .cornerRadius(8)
+        .allowsHitTesting(false)
+    }
+    #endif
 }

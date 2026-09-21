@@ -19,17 +19,20 @@ public struct NavigationHUDView: View {
 
     public let progress: NavigationProgress
     public let bleState: BLEConnectionState
+    public let isRerouting: Bool
     public let onOpenBLE: () -> Void
     public let onStopNavigation: () -> Void
 
     public init(
         progress: NavigationProgress,
         bleState: BLEConnectionState,
+        isRerouting: Bool = false,
         onOpenBLE: @escaping () -> Void,
         onStopNavigation: @escaping () -> Void
     ) {
         self.progress          = progress
         self.bleState          = bleState
+        self.isRerouting       = isRerouting
         self.onOpenBLE         = onOpenBLE
         self.onStopNavigation  = onStopNavigation
     }
@@ -61,23 +64,42 @@ public struct NavigationHUDView: View {
                     .fill(Color.white.opacity(0.18))
                     .frame(width: 58, height: 58)
 
-                Image(systemName: progress.maneuver.sfSymbolName)
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(.white)
+                if isRerouting {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                } else {
+                    Image(systemName: progress.maneuver.sfSymbolName)
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundColor(.white)
+                }
             }
 
             // Distance + street name
             VStack(alignment: .leading, spacing: 3) {
-                Text(progress.formattedDistanceToTurn)
-                    .font(.system(size: 34, weight: .black, design: .rounded))
-                    .foregroundColor(.white)
-                    .minimumScaleFactor(0.7)
-                    .lineLimit(1)
+                if isRerouting {
+                    Text("Đang tính lại...")
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                        .foregroundColor(.yellow)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
 
-                Text(streetDisplayName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.92))
-                    .lineLimit(2)
+                    Text("Đang tìm lộ trình mới")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.92))
+                        .lineLimit(1)
+                } else {
+                    Text(progress.formattedDistanceToTurn)
+                        .font(.system(size: 34, weight: .black, design: .rounded))
+                        .foregroundColor(.white)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+
+                    Text(streetDisplayName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.92))
+                        .lineLimit(2)
+                }
             }
 
             Spacer()

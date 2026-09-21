@@ -43,6 +43,11 @@ public final class NavigationViewModel: ObservableObject {
     @Published public private(set) var isDegradedRoute: Bool = false
     @Published public private(set) var degradedReason: String? = nil
 
+    /// Whether a route recalculation is actively in progress (P5.2).
+    public var isRerouting: Bool {
+        navSession.isRerouting || rerouteManager.isRerouting
+    }
+
     /// Authoritative source-of-truth for the text shown in the search bar.
     /// Views must bind to this; never derive from predictions or selectedPrediction.
     @Published public var searchQuery: String = ""
