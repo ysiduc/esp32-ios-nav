@@ -34,15 +34,15 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
     // MARK: - Test 2: Sharp 90-Degree Turn (Requirement 19 & 44)
 
     func testSharp90DegreeTurn_TransitionsPromptlyWithoutLag() {
-        let turnCoord = CLLocationCoordinate2D(latitude: 21.003, longitude: 105.800)
-        let endCoord = CLLocationCoordinate2D(latitude: 21.003, longitude: 105.804)
         let startCoord = CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800)
+        let turnCoord  = CLLocationCoordinate2D(latitude: 21.0006, longitude: 105.800) // ~67m north
+        let endCoord   = CLLocationCoordinate2D(latitude: 21.0006, longitude: 105.8008) // ~83m east
 
         let coords = [startCoord, turnCoord, endCoord]
         let step0 = NavStep(
             coordinate: turnCoord,
-            distanceMeters: 333.0,
-            durationSeconds: 30.0,
+            distanceMeters: 67.0,
+            durationSeconds: 7.0,
             streetName: "Phố Huế",
             maneuverType: .right,
             instruction: "Rẽ phải vào Đại Cồ Việt",
@@ -51,8 +51,8 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         )
         let step1 = NavStep(
             coordinate: endCoord,
-            distanceMeters: 416.0,
-            durationSeconds: 40.0,
+            distanceMeters: 83.0,
+            durationSeconds: 8.0,
             streetName: "Đại Cồ Việt",
             maneuverType: .arrive,
             instruction: "Đến đích",
@@ -60,18 +60,19 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             endShapeIndex: 2
         )
 
-        let route = NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 749.0, totalDurationSeconds: 70.0)
+        let route = NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 150.0, totalDurationSeconds: 15.0)
         let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: endCoord, name: "Đích"))
 
         var currentTime = baseDate
+        // 1. Five samples heading North towards the turn (~10m per frame at 10 m/s)
         for i in 1...5 {
-            let lat = 21.000 + Double(i) * 0.0005
+            let lat = 21.000 + Double(i) * 0.00009
             let loc = CLLocation(
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: 105.800),
                 altitude: 10.0,
-                horizontalAccuracy: 5.0,
-                verticalAccuracy: 5.0,
+                horizontalAccuracy: 4.0,
+                verticalAccuracy: 4.0,
                 course: 0.0,
                 speed: 10.0,
                 timestamp: currentTime
@@ -83,13 +84,14 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             XCTAssertEqual(session.currentManeuverStepIndex, 0, "Upcoming maneuver must be step 0 (turn right)")
         }
 
+        // 2. Immediate sharp turn onto eastbound street (5 samples heading East)
         for j in 1...5 {
-            let lon = 105.800 + Double(j) * 0.0006
+            let lon = 105.800 + Double(j) * 0.00009
             let loc = CLLocation(
-                coordinate: CLLocationCoordinate2D(latitude: 21.003, longitude: lon),
+                coordinate: CLLocationCoordinate2D(latitude: 21.0006, longitude: lon),
                 altitude: 10.0,
-                horizontalAccuracy: 6.0,
-                verticalAccuracy: 5.0,
+                horizontalAccuracy: 4.0,
+                verticalAccuracy: 4.0,
                 course: 90.0,
                 speed: 9.0,
                 timestamp: currentTime
@@ -241,20 +243,21 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
 
     func testContinuousPolylineTrimming_TrimsPromptlyWithoutReroute() {
         var coords: [CLLocationCoordinate2D] = []
+        // Spaced ~11 meters apart (~0.0001 deg latitude), perfectly matching 1-second GPS updates at 10 m/s
         for i in 0..<10 {
-            coords.append(CLLocationCoordinate2D(latitude: 21.000 + Double(i) * 0.001, longitude: 105.800))
+            coords.append(CLLocationCoordinate2D(latitude: 21.000 + Double(i) * 0.0001, longitude: 105.800))
         }
         let step = NavStep(
             coordinate: coords.last!,
-            distanceMeters: 1000.0,
-            durationSeconds: 100.0,
+            distanceMeters: 100.0,
+            durationSeconds: 10.0,
             streetName: "Đường thẳng",
             maneuverType: .arrive,
             instruction: "Đến đích",
             beginShapeIndex: 0,
             endShapeIndex: 9
         )
-        let route = NavRoute(coordinates: coords, steps: [step], totalDistanceMeters: 1000.0, totalDurationSeconds: 100.0)
+        let route = NavRoute(coordinates: coords, steps: [step], totalDistanceMeters: 100.0, totalDurationSeconds: 10.0)
 
         let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
@@ -269,8 +272,8 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             let loc = CLLocation(
                 coordinate: coords[ptIdx],
                 altitude: 10.0,
-                horizontalAccuracy: 5.0,
-                verticalAccuracy: 5.0,
+                horizontalAccuracy: 4.0,
+                verticalAccuracy: 4.0,
                 course: 0.0,
                 speed: 10.0,
                 timestamp: time

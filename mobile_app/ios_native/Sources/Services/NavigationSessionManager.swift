@@ -838,9 +838,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
         // Handle initial depart maneuver (Requirement 32)
         if maneuverStepIndex == 0 && route.steps.count > 1 {
-            let step0Begin = route.geometry.maneuverBeginDistancesAlongRoute[0]
-            if displayProgressDistance >= (step0Begin + 2.0) || displayProgressDistance >= 10.0 {
-                maneuverStepIndex = 1
+            let step0 = route.steps[0]
+            if step0.maneuverType == .straight || step0.maneuverType == .none {
+                let step1Begin = route.geometry.maneuverBeginDistancesAlongRoute[1]
+                if displayProgressDistance >= 15.0 || displayProgressDistance >= (step1Begin - 20.0) {
+                    maneuverStepIndex = 1
+                }
             }
         }
 

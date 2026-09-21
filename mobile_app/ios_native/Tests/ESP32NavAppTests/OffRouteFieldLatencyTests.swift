@@ -276,7 +276,8 @@ final class OffRouteFieldLatencyTests: XCTestCase {
                 timestamp: time
             )
             session.ingestLocation(loc)
-            time = time.addingTimeInterval(1.0)
+            // ~111m between waypoints at 8 m/s = ~14 seconds
+            time = time.addingTimeInterval(14.0)
 
             XCTAssertFalse(session.isOffRoute)
             XCTAssertEqual(session.diagnostics.rerouteRequests, 0)
@@ -347,6 +348,11 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         XCTAssertEqual(session.offRouteState, .confirmed)
         XCTAssertTrue(rerouteManager.isRerouting)
         XCTAssertEqual(session.diagnostics.rerouteRequests, 1)
+
+        for _ in 0..<30 {
+            if recordingService.lastOrigin != nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
 
         XCTAssertNotNil(recordingService.lastOrigin)
         XCTAssertEqual(recordingService.lastOrigin?.latitude ?? 0, 21.0028, accuracy: 1e-4)

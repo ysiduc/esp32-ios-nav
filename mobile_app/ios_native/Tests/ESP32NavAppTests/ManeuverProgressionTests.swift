@@ -70,43 +70,54 @@ final class ManeuverProgressionTests: XCTestCase {
         XCTAssertGreaterThan(begin2, begin1)
 
         // At progress ~8m (< begin1): upcoming maneuver is step 1 (Rẽ phải)
-        let locAt8 = CLLocation(
-            coordinate: coords[8],
-            altitude: 10.0,
-            horizontalAccuracy: 3.0,
-            verticalAccuracy: 3.0,
-            course: 90.0,
-            speed: 5.0,
-            timestamp: baseDate
-        )
-        session.ingestLocation(locAt8)
-        XCTAssertEqual(session.currentManeuverStepIndex, 1, "At progress 8m, upcoming step must be step 1")
+        var simTime = baseDate
+        // Progress toward step 1 action point at 10m
+        for i in [2, 5, 8] {
+            let loc = CLLocation(
+                coordinate: coords[i],
+                altitude: 10.0,
+                horizontalAccuracy: 3.0,
+                verticalAccuracy: 3.0,
+                course: 90.0,
+                speed: 3.0,
+                timestamp: simTime
+            )
+            session.ingestLocation(loc)
+            simTime = simTime.addingTimeInterval(1.0)
+        }
+        XCTAssertEqual(session.currentManeuverStepIndex, 1, "At progress ~8m, upcoming step must be step 1")
         XCTAssertEqual(session.activeProgress.maneuver, .right)
 
-        // At progress ~12m (> begin1 + tolerance): step 1 action passed, upcoming step is step 2 (arrive)
-        let locAt12 = CLLocation(
-            coordinate: coords[12],
-            altitude: 10.0,
-            horizontalAccuracy: 3.0,
-            verticalAccuracy: 3.0,
-            course: 90.0,
-            speed: 5.0,
-            timestamp: baseDate.addingTimeInterval(1.0)
-        )
-        session.ingestLocation(locAt12)
-        XCTAssertEqual(session.currentManeuverStepIndex, 2, "At progress 12m, step 1 action is passed, upcoming step must be step 2")
+        // Cross step 1 action point (> 10m + tolerance)
+        for i in [11, 13, 14] {
+            let loc = CLLocation(
+                coordinate: coords[i],
+                altitude: 10.0,
+                horizontalAccuracy: 3.0,
+                verticalAccuracy: 3.0,
+                course: 90.0,
+                speed: 3.0,
+                timestamp: simTime
+            )
+            session.ingestLocation(loc)
+            simTime = simTime.addingTimeInterval(1.0)
+        }
+        XCTAssertEqual(session.currentManeuverStepIndex, 2, "Once step 1 action is passed, upcoming step must advance to step 2")
 
-        // At progress ~22m (> begin2 + tolerance): step 2 reached
-        let locAt22 = CLLocation(
-            coordinate: coords[22],
-            altitude: 10.0,
-            horizontalAccuracy: 3.0,
-            verticalAccuracy: 3.0,
-            course: 90.0,
-            speed: 5.0,
-            timestamp: baseDate.addingTimeInterval(2.0)
-        )
-        session.ingestLocation(locAt22)
+        // Cross step 2
+        for i in [21, 23] {
+            let loc = CLLocation(
+                coordinate: coords[i],
+                altitude: 10.0,
+                horizontalAccuracy: 3.0,
+                verticalAccuracy: 3.0,
+                course: 90.0,
+                speed: 3.0,
+                timestamp: simTime
+            )
+            session.ingestLocation(loc)
+            simTime = simTime.addingTimeInterval(1.0)
+        }
         XCTAssertEqual(session.currentManeuverStepIndex, 2, "At progress 22m, step 2 is active without stale step 1")
     }
 
@@ -172,7 +183,7 @@ final class ManeuverProgressionTests: XCTestCase {
 
         var time = baseDate
 
-        // 1. Approach tunnel (coord 3) -> upcoming is Step 1 (Tunnel)
+        // 1. Approach tunnel (coord 3, ~300m) -> upcoming is Step 1 (Tunnel at 500m)
         let approachLoc = CLLocation(
             coordinate: coords[3],
             altitude: 10.0,
@@ -186,8 +197,9 @@ final class ManeuverProgressionTests: XCTestCase {
         XCTAssertEqual(session.currentManeuverStepIndex, 1, "Before tunnel, upcoming maneuver must be the tunnel")
         XCTAssertEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng")
 
-        // 2. Past tunnel entrance inside tunnel (coord 6) -> tunnel entrance passed, upcoming advances to post-tunnel step
-        time = time.addingTimeInterval(3.0)
+        // 2. Past tunnel entrance inside tunnel (coord 6, ~600m) -> tunnel entrance (500m) passed, upcoming advances to post-tunnel step
+        // 300m physical travel at 10 m/s = 30 seconds
+        time = time.addingTimeInterval(30.0)
         let insideLoc = CLLocation(
             coordinate: coords[6],
             altitude: 0.0,
@@ -201,8 +213,9 @@ final class ManeuverProgressionTests: XCTestCase {
         XCTAssertEqual(session.currentManeuverStepIndex, 2, "Once tunnel entrance is passed, upcoming maneuver must advance to post-tunnel road")
         XCTAssertEqual(session.activeProgress.nextStreetName, "Đường Giải Phóng")
 
-        // 3. Past tunnel exit (coord 11) -> completely past tunnel
-        time = time.addingTimeInterval(5.0)
+        // 3. Past tunnel exit (coord 11, ~1100m) -> completely past tunnel exit (1000m)
+        // 500m physical travel at 10 m/s = 50 seconds
+        time = time.addingTimeInterval(50.0)
         let pastExitLoc = CLLocation(
             coordinate: coords[11],
             altitude: 10.0,
