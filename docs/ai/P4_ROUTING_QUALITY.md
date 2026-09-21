@@ -6,7 +6,7 @@ Phase P4 upgrades the ESP32 iOS Navigation routing engine from a single-route, u
 
 Key achievements in P4:
 - Replaced loose, scattered transport mode strings with a strongly typed enum `NavigationTransportMode` (`.motorcycle`, `.auto`, `.bicycle`, `.pedestrian`).
-- Introduced a pure `RoutingProfile` model with explicit, verified Valhalla `costing_options` specifically configured for Vietnamese road conditions.
+- Introduced a pure `RoutingProfile` model with explicit, verified Valhalla `costing_options` representing a conservative motorcycle routing profile intended for normal road navigation (with real-world Vietnam road testing planned for P5/final verification).
 - Replaced dangerous manual JSON string interpolation (`stringWithFormat:@"{...}"`) with structured `JSONSerialization` in `ValhallaRequestBuilder` and `ValhallaEngine`.
 - Expanded the Valhalla C++ / Objective-C bridge (`ValhallaEngine`) to request bounded alternatives (`alternates: 2`, up to 3 total candidates) and return `ValhallaRouteResult`.
 - Updated the Valhalla response parser to decode the primary `trip` and each alternate in `alternates` independently, ensuring independent maneuver shape indices and polyline decodings.
@@ -149,6 +149,9 @@ Configured in `RoutingProfile.profile(for: .motorcycle)`:
 
 No unsupported legal speed assumptions or arbitrary vehicle class bans are hard-coded into the client; graph access restrictions in OSM/Valhalla tiles remain authoritative.
 
+> [!NOTE]
+> This is a conservative motorcycle routing profile intended for normal road navigation, avoiding unpaved trails or tracks without imposing unsupported legal exclusions. Real-world route validation on Vietnamese roadways remains necessary during P5 on-device field testing. No claim of parity with Google Maps or Waze real-time traffic intelligence is made.
+
 ---
 
 ## 9. Other Mode Profiles
@@ -219,7 +222,26 @@ Verified directly against `valhalla/proto/options.pb.h` in `valhalla-wrapper.xcf
 
 ---
 
-## 13. Valhalla Response Parsing
+## 13. Valhalla 3.6.3 Verification & Response Parsing
+
+### Embedded Valhalla Version
+Verified from embedded header `valhalla/valhalla.h`:
+- `VALHALLA_VERSION_MAJOR`: `3`
+- `VALHALLA_VERSION_MINOR`: `6`
+- `VALHALLA_VERSION_PATCH`: `3`
+
+Verified costing options supported in this embedded build (`options.pb.h`):
+- `alternates`
+- `use_highways`
+- `use_tolls`
+- `use_trails`
+- `use_tracks`
+- `use_living_streets`
+- `use_lit`
+
+### Serialized Response Contract
+- Primary route: `root[@"trip"]`
+- Alternatives: `root[@"alternates"]`, an array of objects structured as `{ "trip": { ... } }`
 
 `ValhallaEngine.mm` decodes both primary and alternate routes:
 1. `root[@"trip"]` is parsed as the primary route (`primaryRoute`).
@@ -249,8 +271,8 @@ public struct RouteCandidate: Sendable, Identifiable, Equatable {
 
 ### Deterministic Deduplication:
 `RouteSet.deduplicate(candidates:)`:
-1. Filters out routes with identical coordinate sequences.
-2. Filters out near-duplicate routes (distance within 20m, duration within 5s, identical origin and destination).
+1. Filters out routes with identical coordinate sequences (microdegree precision ~1.1m).
+2. Distinct alternative routes taking different road corridors (e.g. east vs. west arterials) are preserved even if they share identical endpoints, distance, or duration.
 3. Assigns deterministic labels: `"Đề xuất"`, `"Tuyến 2"`, `"Tuyến 3"`.
 4. Calculates duration and distance deltas relative to primary.
 
@@ -311,19 +333,19 @@ Preserves total route duration exactly as returned by Apple MapKit.
 Total test suites: 10
 Total tests: 129 (103 pre-P4 + 26 new P4)
 
-| Test Suite | Pre-P4 | P4 New | Total | Status |
-| :--- | :---: | :---: | :---: | :---: |
-| `RouteGeometryTests` | 12 | 0 | 12 | PASS |
-| `OffRouteDetectorTests` | 10 | 0 | 10 | PASS |
-| `RerouteManagerTests` | 15 | 0 | 15 | PASS |
-| `GoongSearchServiceTests` | 22 | 0 | 22 | PASS |
-| `SearchRankingTests` | 31 | 0 | 31 | PASS |
-| `DestinationSelectionTests` | 13 | 0 | 13 | PASS |
-| `RoutingProfileTests` | 0 | 8 | 8 | PASS |
-| `ValhallaRouteSetParserTests` | 0 | 5 | 5 | PASS |
-| `RoutingFallbackTests` | 0 | 7 | 7 | PASS |
-| `RouteCandidateSelectionTests` | 0 | 6 | 6 | PASS |
-| **Total** | **103** | **26** | **129** | **ALL PASS** |
+| Test Suite | Baseline | P4 New | P4.1 New | Total | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `RouteGeometryTests` | 12 | 0 | 0 | 12 | PASS |
+| `OffRouteDetectorTests` | 10 | 0 | 0 | 10 | PASS |
+| `RerouteManagerTests` | 15 | 0 | 0 | 15 | PASS |
+| `GoongSearchServiceTests` | 22 | 0 | 0 | 22 | PASS |
+| `SearchRankingTests` | 31 | 0 | 0 | 31 | PASS |
+| `DestinationSelectionTests` | 13 | 0 | 0 | 13 | PASS |
+| `RoutingProfileTests` | 0 | 8 | 1 | 9 | PASS |
+| `ValhallaRouteSetParserTests` | 0 | 5 | 1 | 6 | PASS |
+| `RoutingFallbackTests` | 0 | 7 | 0 | 7 | PASS |
+| `RouteCandidateSelectionTests` | 0 | 6 | 10 | 16 | PASS |
+| **Total** | **103** | **26** | **12** | **141** | **ALL PASS** |
 
 ---
 
@@ -381,3 +403,50 @@ Flutter IPA Artifact Upload: SUCCESS (esp32_nav_flutter_ios_ipa)
 
 - P4 routing quality, motorcycle profile, bounded alternatives, and fallback semantics are fully implemented and tested.
 - P5 (simulation, battery, performance optimizations) can commence upon external reviewer approval.
+
+
+---
+
+## 23. P4.1 Reviewer Corrections
+
+Phase P4.1 and P4.1.1 address critical lifecycle, mode-switch safety, loading state ownership, alternative clamping, deduplication, encapsulation, and candidate selection invariants identified during external audit:
+
+1. **Immediate Preview Invalidation on Mode Switch**:
+   - Resolved the critical defect where switching transport modes (e.g. Motorcycle -> Auto) left the old preview route active while the new calculation was in flight, and allowed an old route to persist if the new request failed.
+   - Introduced `invalidateRoutePreviewState(clearActivePreview:resetLoading:)` and `resetRouteCandidateState()`.
+   - Switching transport mode in preview mode immediately clears previous route candidates, selected candidate ID, provider metadata, and calls `navSession.clearRoute()`.
+   - If recalculation fails, no stale route is resurrected; `routeCandidates == []`, `selectedRouteCandidateID == nil`, `navSession.activeRoute == nil`, and `startNavigation()` is strictly rejected.
+
+2. **Route Calculation Loading State Ownership**:
+   - Fixed stuck spinner defect where cancelling an in-flight route calculation (e.g., via `clearSearch()` or text edit) failed to reset `isCalculatingRoute` to `false`.
+   - Implemented request-generation-based loading ownership: cancelled tasks cannot reset `isCalculatingRoute` if a newer request generation owns loading state.
+   - Explicit user cancellations (`clearSearch()`, `updateSearchQuery` fresh search) immediately set `isCalculatingRoute = false`.
+
+3. **New Destination / Place Detail Invariant**:
+   - `selectPrediction` and new search queries immediately invalidate prior candidate sets and route previews before Place Detail or routing begins.
+   - Place Detail failure cleanly resets `isCalculatingRoute` to `false` and ensures no orphaned preview candidates remain.
+
+4. **Authoritative Candidate Invariant in `startNavigation`**:
+   - Removed the weak fallback `?? navSession.activeRoute`.
+   - Enforced that `selectedRouteCandidateID` must resolve to an existing candidate in `routeCandidates`.
+   - Enforced that `selectedCandidate.requestedMode == currentTransportMode`. If a mode mismatch occurs, `startNavigation()` is rejected with a controlled error message and navigation does not start.
+
+5. **Navigation State Guard on `selectRouteCandidate(id:)`**:
+   - Protected against programmatic or late UI events calling candidate selection during active navigation: rejects selection immediately when `navSession.state == .navigating`.
+   - Tapping preview candidates cannot alter active navigation or switch back to preview.
+
+6. **Alternative Count Clamping**:
+   - Enforced clamping at the pure model boundary: `RoutingRequest.init` clamps `requestedAlternatives = max(0, min(requestedAlternatives, profile.maxAlternatives))`.
+   - `ValhallaRequestBuilder.buildRequestJSON` independently clamps `alternates` to `profile.maxAlternatives`.
+   - `NavigationViewModel` requests `profile.maxAlternatives` instead of hardcoding 2.
+
+7. **Geometric Deduplication False-Positive Fix**:
+   - Removed the length (<20m) and duration (<5s) heuristic that erroneously removed distinct alternative routes taking different corridors (e.g. east vs. west arterials) with identical endpoints and similar metrics.
+   - Deduplication now strictly requires actual coordinate sequence equivalence (microdegree precision ~1.1m).
+
+8. **Restored Production State Encapsulation (P4.1.1)**:
+   - Restored `public private(set)` on all route candidate, provider, and mode properties in `NavigationViewModel`.
+   - Unit tests drive state exclusively through public methods (`transportMode`, `calculateRoute`, `selectPrediction`, `startNavigation`) and injected mock services, rather than direct property mutations.
+
+9. **Navigation Mode-Switch Commit Proof (P4.1.1)**:
+   - Added end-to-end integration proof verifying that switching transport mode while navigating preserves the active route and frozen destination until the new-mode route resolves and commits atomically through `RerouteManager`, without involving preview selection UI.

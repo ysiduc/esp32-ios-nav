@@ -15,17 +15,30 @@ final class MockMultiRouteService: RoutingServiceProtocol {
     var routeSetToReturn: RouteSet?
     var calculateRoutesCallCount = 0
     var lastRequest: RoutingRequest?
+    var lastCosting: String?
 
-    // Controllable continuation for race testing
-    var pendingContinuation: CheckedContinuation<RouteSet, Error>?
+    // Controllable continuation support
+    var useContinuation = false
+    struct Pending {
+        let destination: CLLocationCoordinate2D
+        let continuation: CheckedContinuation<RouteSet, Error>
+    }
+    private(set) var pendings: [Pending] = []
+    var pendingCount: Int { pendings.count }
+
+    func resume(at index: Int = 0, with routeSet: RouteSet) {
+        guard index < pendings.count else { return }
+        let p = pendings.remove(at: index)
+        p.continuation.resume(returning: routeSet)
+    }
 
     func calculateRoutes(request: RoutingRequest) async throws -> RouteSet {
         calculateRoutesCallCount += 1
         lastRequest = request
 
-        if let cont = pendingContinuation {
-            return try await withCheckedThrowingContinuation { c in
-                self.pendingContinuation = c
+        if useContinuation {
+            return try await withCheckedThrowingContinuation { cont in
+                pendings.append(Pending(destination: request.destination, continuation: cont))
             }
         }
 
@@ -41,6 +54,7 @@ final class MockMultiRouteService: RoutingServiceProtocol {
         to destination: CLLocationCoordinate2D,
         costing: String
     ) async throws -> NavRoute {
+        lastCosting = costing
         let set = try await calculateRoutes(
             request: RoutingRequest(
                 origin: origin,
@@ -331,8 +345,24 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 9. Start Navigation Wrong Mode Rejected
 
     func testStartNavigation_WrongModeRejected() async {
-        // Motorcycle routes in preview
+        // User selects auto mode
+        viewModel.transportMode = "auto"
+
+        // Mock routing service returns candidate with requestedMode == .motorcycle
+        let r0 = NavRoute(coordinates: [coordA, coordB], steps: [], totalDistanceMeters: 1000, totalDurationSeconds: 120)
+        let mismatchCandidate = RouteCandidate(
+            id: "mismatch_c0",
+            route: r0,
+            provider: .valhalla,
+            requestedMode: .motorcycle,
+            profileID: "moto_p",
+            isPrimary: true,
+            label: "Đề xuất"
+        )
+        mockRouting.routeSetToReturn = RouteSet(candidates: [mismatchCandidate])
+
         await viewModel.calculateRoute(to: coordB)
+
         let testDest = GoongPlace(
             placeID: "dest_1",
             name: "Hồ Gươm",
@@ -342,8 +372,8 @@ final class RouteCandidateSelectionTests: XCTestCase {
         )
         viewModel.selectedDestination = testDest
 
-        // Artificially change current transport mode to auto while motorcycle candidate is selected
-        viewModel.currentTransportMode = .auto
+        XCTAssertEqual(viewModel.currentTransportMode, .auto)
+        XCTAssertEqual(viewModel.routeCandidates.first?.requestedMode, .motorcycle)
 
         viewModel.startNavigation()
 
@@ -424,10 +454,6 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 12. Select Prediction Clears Old RouteSet Immediately
 
     func testSelectPrediction_ClearsOldRouteSetImmediately() async {
-        await viewModel.calculateRoute(to: coordB)
-        XCTAssertEqual(viewModel.routeCandidates.count, 3)
-        XCTAssertNotNil(navSession.activeRoute)
-
         let mockClient = MockGoongPlacesClient()
         mockClient.useContinuationForDetail = true
         let searchSvc = GoongSearchService(client: mockClient, debounceDelay: 0)
@@ -438,10 +464,13 @@ final class RouteCandidateSelectionTests: XCTestCase {
             bleManager: nil
         )
 
-        // Give vm some initial candidate state
-        vm.routeCandidates = [candidate0, candidate1]
-        vm.selectedRouteCandidateID = "c0"
-        navSession.setRoutePreview(candidate0.route)
+        // Mock routing service returns RouteSet naturally through calculateRoute
+        mockRouting.routeSetToReturn = RouteSet(candidates: [candidate0, candidate1])
+        await vm.calculateRoute(to: coordB)
+
+        XCTAssertEqual(vm.routeCandidates.count, 2)
+        XCTAssertEqual(vm.selectedRouteCandidateID, "c0")
+        XCTAssertNotNil(navSession.activeRoute)
 
         let rawPred = mockClient.makePrediction(placeID: "p2", mainText: "New Destination")
         let pred = GoongPrediction(
@@ -580,9 +609,12 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, originalDist, "selectRouteCandidate must not alter active navigation route")
     }
 
-    // MARK: - 16. Transport Mode Switch While Navigating Preserves Active Route
+    // MARK: - 16. Transport Mode Switch While Navigating Commits New Route
 
-    func testTransportModeSwitch_WhileNavigating_PreservesActiveRouteAndTriggersReroute() async {
+    func testTransportModeSwitch_WhileNavigating_CommitsNewRoute() async throws {
+        // 1. Initial preview route A (motorcycle)
+        await viewModel.calculateRoute(to: coordB)
+
         let testDest = GoongPlace(
             placeID: "dest_1",
             name: "Hồ Gươm",
@@ -592,18 +624,70 @@ final class RouteCandidateSelectionTests: XCTestCase {
         )
         viewModel.selectedDestination = testDest
 
-        await viewModel.calculateRoute(to: coordB)
+        // 2. Start navigation on Route A
         viewModel.startNavigation()
         XCTAssertEqual(navSession.state, .navigating)
-        let activeDist = navSession.activeRoute?.totalDistanceMeters
+        let initialSessionGen = navSession.sessionGeneration
+        let initialDist = navSession.activeRoute?.totalDistanceMeters
+        let initialDestName = navSession.navigationDestination?.name
+        XCTAssertEqual(initialDestName, "Hồ Gươm")
 
-        // User changes transport mode while actively navigating
+        // 3. Configure next routing request (reroute) to remain pending
+        mockRouting.useContinuation = true
+
+        // 4. User selects Auto and triggers transport mode recalculation
         viewModel.transportMode = "auto"
         viewModel.recalculateForTransportMode()
 
-        // Active route MUST NOT be cleared immediately; remains active until reroute replaces it
+        // Wait for reroute task to dispatch and suspend in routing service
+        var wait = 0
+        while mockRouting.pendingCount < 1 && wait < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            wait += 1
+        }
+        XCTAssertEqual(mockRouting.pendingCount, 1)
+
+        // 5. Immediately verify:
+        //    - state == .navigating
+        //    - activeRoute == Motorcycle A (NOT cleared!)
+        //    - navigationDestination unchanged
+        //    - costing == "auto" and requestedAlternatives == 0
         XCTAssertEqual(navSession.state, .navigating)
-        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, activeDist, "Active navigation route must remain while transport mode reroute is in flight")
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, initialDist, "Motorcycle Route A remains active while Auto reroute is in flight")
+        XCTAssertEqual(navSession.navigationDestination?.name, initialDestName)
+        XCTAssertEqual(mockRouting.lastCosting, "auto")
+        XCTAssertEqual(mockRouting.lastRequest?.requestedAlternatives, 0, "Reroute must request 0 alternatives")
+
+        // 6. Explicitly resolve the pending request with Auto Route B
+        let autoRouteB = NavRoute(
+            coordinates: [coordA, CLLocationCoordinate2D(latitude: 21.035, longitude: 105.845), coordB],
+            steps: [],
+            totalDistanceMeters: 2500,
+            totalDurationSeconds: 400
+        )
+        let autoCandidateB = RouteCandidate(
+            id: "auto_b",
+            route: autoRouteB,
+            provider: .valhalla,
+            requestedMode: .auto,
+            profileID: "auto_standard",
+            isPrimary: true
+        )
+        mockRouting.resume(at: 0, with: RouteSet(candidates: [autoCandidateB]))
+
+        // 7. Wait deterministically for reroute to commit
+        for _ in 0..<50 {
+            if navSession.activeRoute?.totalDistanceMeters == 2500 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        // 8. Final assertions:
+        XCTAssertEqual(navSession.state, .navigating)
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, 2500, "Active route must atomically become Auto Route B")
+        XCTAssertEqual(navSession.navigationDestination?.name, initialDestName, "Navigation destination must remain unchanged")
+        XCTAssertEqual(navSession.sessionGeneration, initialSessionGen, "Session generation must remain unchanged")
+        XCTAssertEqual(viewModel.currentTransportMode, .auto)
+        XCTAssertEqual(viewModel.routeCandidates.count, 3, "Preview route candidates must not be modified or replaced by reroute")
     }
 
 }
