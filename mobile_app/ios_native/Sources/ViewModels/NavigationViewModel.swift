@@ -35,12 +35,12 @@ public final class NavigationViewModel: ObservableObject {
     @Published public var transportMode: String = "motorcycle" // "motorcycle" | "auto" | "bicycle" | "pedestrian"
 
     // MARK: - Route Candidates & Alternatives (P4)
-    @Published public private(set) var currentTransportMode: NavigationTransportMode = .motorcycle
-    @Published public private(set) var routeCandidates: [RouteCandidate] = []
-    @Published public private(set) var selectedRouteCandidateID: String? = nil
-    @Published public private(set) var currentRoutingProvider: RoutingProvider? = nil
-    @Published public private(set) var isDegradedRoute: Bool = false
-    @Published public private(set) var degradedReason: String? = nil
+    @Published public var currentTransportMode: NavigationTransportMode = .motorcycle
+    @Published public var routeCandidates: [RouteCandidate] = []
+    @Published public var selectedRouteCandidateID: String? = nil
+    @Published public var currentRoutingProvider: RoutingProvider? = nil
+    @Published public var isDegradedRoute: Bool = false
+    @Published public var degradedReason: String? = nil
 
     /// Authoritative source-of-truth for the text shown in the search bar.
     /// Views must bind to this; never derive from predictions or selectedPrediction.
