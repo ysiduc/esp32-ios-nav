@@ -157,4 +157,60 @@ final class BLESendSchedulerRaceTests: XCTestCase {
         let delay = scheduler.nextEligibleFlushDelay(now: baseDate.addingTimeInterval(0.20))
         XCTAssertNil(delay, "Past the window, flush is immediately eligible — no timer needed")
     }
+}    // MARK: - Fix 21 & 22: Shared Policy Early-Ready / Early-ACK Helper Tests
+
+    func testHandleTransportBecameReady_EarlyReady_ArmsTimerWithRemainingDelay() {
+        // 1. Send first packet at baseDate
+        let p1 = makeProgress(dist: 100)
+        _ = scheduler.schedule(progress: p1, writeType: .withoutResponse, canSendWithoutResponse: true, now: baseDate)
+
+        // 2. Queue second packet at t=50ms (rate-limited)
+        let p2 = makeProgress(dist: 90)
+        _ = scheduler.schedule(progress: p2, writeType: .withoutResponse, canSendWithoutResponse: true, now: baseDate.addingTimeInterval(0.05))
+
+        // 3. Transport ready at t=100ms: early ready -> must arm timer with exactly 100ms remaining delay
+        let t100ms = baseDate.addingTimeInterval(0.10)
+        let action = scheduler.handleTransportBecameReady(now: t100ms)
+        switch action {
+        case .armTimer(let delay):
+            XCTAssertGreaterThan(delay, 0.0)
+            XCTAssertEqual(delay, 0.10, accuracy: 0.001, "Timer must be armed with actual remaining delay")
+        default:
+            XCTFail("Expected .armTimer but got \(action)")
+        }
+
+        // 4. At t=200ms, transport ready -> flushes immediately
+        let t200ms = baseDate.addingTimeInterval(0.20)
+        let actionAfterWindow = scheduler.handleTransportBecameReady(now: t200ms)
+        switch actionAfterWindow {
+        case .flush(let data, let writeType):
+            XCTAssertEqual(data, BLEPacket.serialize(progress: p2))
+            XCTAssertEqual(writeType, .withoutResponse)
+        default:
+            XCTFail("Expected .flush but got \(actionAfterWindow)")
+        }
+    }
+
+    func testHandleWithResponseWriteCompleted_EarlyACK_ArmsTimerWithRemainingDelay() {
+        scheduler.isTransportReady = true
+        scheduler.inFlightWithResponseWrite = false
+
+        // 1. Send first withResponse packet
+        let p1 = makeProgress(dist: 200)
+        _ = scheduler.schedule(progress: p1, writeType: .withResponse, canSendWithoutResponse: false, now: baseDate)
+
+        // 2. Queue second packet at t=50ms
+        let p2 = makeProgress(dist: 190)
+        _ = scheduler.schedule(progress: p2, writeType: .withResponse, canSendWithoutResponse: false, now: baseDate.addingTimeInterval(0.05))
+
+        // 3. Early ACK at t=80ms -> must arm timer with 120ms remaining delay
+        let t80ms = baseDate.addingTimeInterval(0.08)
+        let action = scheduler.handleWithResponseWriteCompleted(now: t80ms)
+        switch action {
+        case .armTimer(let delay):
+            XCTAssertEqual(delay, 0.12, accuracy: 0.001, "Timer must be armed with remaining delay after early ACK")
+        default:
+            XCTFail("Expected .armTimer but got \(action)")
+        }
+    }
 }

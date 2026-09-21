@@ -3,10 +3,8 @@
 //  P5.1 integration tests: true end-to-end navigation replay with real RerouteManager.
 //
 //  These tests verify the complete pipeline:
-//  GPS sample → OffRouteDetector → RerouteManager → NavRoute → replaceActiveRoute
+//  GPS sample → OffRouteDetector → RerouteManager → ControlledRoutingService → replaceActiveRoute
 //  Without any manual replaceActiveRoute() calls in the test body.
-//
-//  The MockRoutingService from RerouteManagerTests is reused here via @testable import.
 //
 
 import XCTest
@@ -47,20 +45,100 @@ private func offRouteEastCoord(_ i: Int) -> CLLocationCoordinate2D {
     CLLocationCoordinate2D(latitude: 21.0340, longitude: 105.8550 + Double(i) * 0.0002)
 }
 
-private func makeSample(coord: CLLocationCoordinate2D,
-                         accuracy: Double = 5.0,
-                         speed: Double = 8.0,
-                         course: Double = 90.0,
-                         ts: Date = Date()) -> CLLocation {
-    CLLocation(
-        coordinate: coord,
-        altitude: 10,
-        horizontalAccuracy: accuracy,
-        verticalAccuracy: 5,
-        course: course,
-        speed: speed,
-        timestamp: ts
-    )
+// MARK: - Controlled Async Fake for Deterministic Rerouting
+
+final class ControlledRoutingService: RoutingServiceProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _callCount: Int = 0
+    private var _lastOrigin: CLLocationCoordinate2D?
+    private var _lastDestination: CLLocationCoordinate2D?
+    private var _lastCosting: String?
+
+    var onRequestStarted: (@Sendable () -> Void)?
+    private var pendingContinuation: CheckedContinuation<NavRoute, Error>?
+    var autoResult: Result<NavRoute, Error>?
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _callCount
+    }
+
+    var lastOrigin: CLLocationCoordinate2D? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastOrigin
+    }
+
+    var lastDestination: CLLocationCoordinate2D? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastDestination
+    }
+
+    var lastCosting: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastCosting
+    }
+
+    func calculateRoute(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        costing: String
+    ) async throws -> NavRoute {
+        lock.lock()
+        _callCount += 1
+        _lastOrigin = origin
+        _lastDestination = destination
+        _lastCosting = costing
+        let onStarted = onRequestStarted
+        let auto = autoResult
+        lock.unlock()
+
+        onStarted?()
+
+        if let auto = auto {
+            switch auto {
+            case .success(let route): return route
+            case .failure(let err): throw err
+            }
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            self.pendingContinuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func resolve(with result: Result<NavRoute, Error>) {
+        lock.lock()
+        let continuation = pendingContinuation
+        pendingContinuation = nil
+        lock.unlock()
+
+        switch result {
+        case .success(let route):
+            continuation?.resume(returning: route)
+        case .failure(let err):
+            continuation?.resume(throwing: err)
+        }
+    }
+}
+
+@MainActor
+private func waitUntil(
+    timeout: TimeInterval = 2.0,
+    intervalMs: UInt64 = 10,
+    condition: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        try? await Task.sleep(nanoseconds: intervalMs * 1_000_000)
+    }
+    return condition()
 }
 
 // MARK: - Integration Test Suite
@@ -69,7 +147,7 @@ private func makeSample(coord: CLLocationCoordinate2D,
 final class NavigationIntegrationReplayTests: XCTestCase {
 
     var session: NavigationSessionManager!
-    var mockRouting: MockRoutingService!
+    var mockRouting: ControlledRoutingService!
     var rerouteManager: RerouteManager!
     var runner: NavigationReplayRunner!
 
@@ -78,7 +156,7 @@ final class NavigationIntegrationReplayTests: XCTestCase {
 
     override func setUp() async throws {
         session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
-        mockRouting = MockRoutingService()
+        mockRouting = ControlledRoutingService()
         rerouteManager = RerouteManager(routingService: mockRouting, navSession: session)
         runner = NavigationReplayRunner(sessionManager: session)
 
@@ -103,10 +181,12 @@ final class NavigationIntegrationReplayTests: XCTestCase {
     // MARK: - Test 1: Wrong turn triggers exactly one real reroute request
 
     func testIntegration_WrongTurn_TriggersRealRerouteRequest() async {
-        // Arrange: route A and a reroute that will be returned (but not immediately resolved)
         let rerouteRoute = makeRerouteRoute(from: offRouteEastCoord(2))
-        mockRouting.resultToReturn = .success(rerouteRoute)
-        mockRouting.delayNanoseconds = 50_000_000 // 50ms simulated network
+
+        let requestStartedExpectation = expectation(description: "Routing request started")
+        mockRouting.onRequestStarted = {
+            requestStartedExpectation.fulfill()
+        }
 
         session.startNavigation(route: makeStraightRoute(), destination: dest)
 
@@ -122,31 +202,36 @@ final class NavigationIntegrationReplayTests: XCTestCase {
             runner.replay(samples: [
                 NavigationReplaySample(timestamp: ts,
                                        coordinate: offRouteEastCoord(i),
-                                       accuracy: 5.0, speed: 8.0, course: 90.0)
+                                       horizontalAccuracy: 5.0, speed: 8.0, course: 90.0)
             ])
         }
 
         XCTAssertTrue(session.isOffRoute, "Must be confirmed off-route after 5 east samples")
 
-        // Allow async reroute task to start
-        await Task.yield()
+        // Await until routing request starts deterministically
+        await fulfillment(of: [requestStartedExpectation], timeout: 2.0)
 
-        // Assert: exactly one routing request was triggered
+        // Assert: exactly one routing request was triggered and is in-flight
         XCTAssertEqual(mockRouting.callCount, 1,
                        "Exactly one reroute request must be issued for a single confirmed off-route event")
         XCTAssertTrue(rerouteManager.isRerouting,
                       "RerouteManager must be in isRerouting state while request is in-flight")
         XCTAssertTrue(session.isRerouting,
                       "NavSession.isRerouting must also be true while reroute is in-flight")
+
+        // Cleanup: resolve in-flight request so Task completes cleanly
+        mockRouting.resolve(with: .success(rerouteRoute))
     }
 
     // MARK: - Test 2: Reroute commit is atomic — no manual replaceActiveRoute in test
 
     func testIntegration_RerouteCommit_AtomicStateTransition() async throws {
-        // Arrange: a fast-resolving mock routing service
         let rerouteRoute = makeRerouteRoute(from: offRouteEastCoord(2))
-        mockRouting.resultToReturn = .success(rerouteRoute)
-        mockRouting.delayNanoseconds = 0 // resolve immediately
+
+        let requestStartedExp = expectation(description: "Routing request started")
+        mockRouting.onRequestStarted = {
+            requestStartedExp.fulfill()
+        }
 
         session.startNavigation(route: makeStraightRoute(), destination: dest)
 
@@ -161,36 +246,32 @@ final class NavigationIntegrationReplayTests: XCTestCase {
             runner.replay(samples: [
                 NavigationReplaySample(timestamp: ts,
                                        coordinate: offRouteEastCoord(i),
-                                       accuracy: 5.0, speed: 8.0, course: 90.0)
+                                       horizontalAccuracy: 5.0, speed: 8.0, course: 90.0)
             ])
         }
 
         XCTAssertTrue(session.isOffRoute)
 
-        // Allow the Task in startReroute to resolve and commit
-        await Task.yield()
-        await Task.yield() // Two yields: one for the routing Task, one for the commit Task
+        // Await request start deterministically
+        await fulfillment(of: [requestStartedExp], timeout: 2.0)
 
-        // Assert: Route B is active with NO manual replaceActiveRoute call in this test
-        XCTAssertEqual(session.activeRoute?.totalDistanceMeters,
-                       rerouteRoute.totalDistanceMeters,
-                       "Route B must be committed by RerouteManager without manual call")
-        XCTAssertFalse(session.isRerouting,
-                       "isRerouting must be cleared after successful commit")
-        XCTAssertFalse(rerouteManager.isRerouting,
-                       "RerouteManager.isRerouting must also be cleared")
-        XCTAssertEqual(session.state, .navigating,
-                       "Session must remain in .navigating after reroute commit")
+        // Explicitly resolve continuation with Route B
+        mockRouting.resolve(with: .success(rerouteRoute))
+
+        // Deterministically wait until commit condition is true
+        let committed = await waitUntil { [weak self] in
+            self?.session.activeRoute?.totalDistanceMeters == rerouteRoute.totalDistanceMeters
+        }
+        XCTAssertTrue(committed, "Route B must be committed by RerouteManager without manual replaceActiveRoute call")
+
+        XCTAssertFalse(session.isRerouting, "isRerouting must be cleared after successful commit")
+        XCTAssertFalse(rerouteManager.isRerouting, "RerouteManager.isRerouting must also be cleared")
+        XCTAssertEqual(session.state, .navigating, "Session must remain in .navigating after reroute commit")
     }
 
     // MARK: - Test 3: Backoff with real RerouteManager and failing service
 
     func testIntegration_RerouteBackoff_RealManager() async {
-        // Arrange: routing always fails
-        mockRouting.resultToReturn = .failure(NSError(domain: "routing", code: -1,
-                                                       userInfo: [NSLocalizedDescriptionKey: "Network error"]))
-        mockRouting.delayNanoseconds = 0
-
         let clock = TestClock(date: baseDate)
         let timedRerouteManager = RerouteManager(
             routingService: mockRouting,
@@ -201,6 +282,12 @@ final class NavigationIntegrationReplayTests: XCTestCase {
             timedRerouteManager?.handleObservation(location: location, decision: decision)
         }
 
+        var req1Exp: XCTestExpectation? = expectation(description: "First request started")
+        mockRouting.onRequestStarted = {
+            req1Exp?.fulfill()
+            req1Exp = nil
+        }
+
         session.startNavigation(route: makeStraightRoute(), destination: dest)
 
         // Trigger off-route
@@ -209,79 +296,113 @@ final class NavigationIntegrationReplayTests: XCTestCase {
             runner.replay(samples: [
                 NavigationReplaySample(timestamp: ts,
                                        coordinate: offRouteEastCoord(i),
-                                       accuracy: 5.0, speed: 8.0, course: 90.0)
+                                       horizontalAccuracy: 5.0, speed: 8.0, course: 90.0)
             ])
         }
 
-        // Wait for first failing attempt
-        await Task.yield()
-        await Task.yield()
+        // Wait for first request to start
+        await fulfillment(of: [req1Exp!], timeout: 2.0)
 
+        // Resolve request 1 with failure
+        mockRouting.resolve(with: .failure(NSError(domain: "routing", code: -1,
+                                                   userInfo: [NSLocalizedDescriptionKey: "Network error"])))
+
+        // Wait until isRerouting becomes false after failure
+        let failed = await waitUntil { !timedRerouteManager.isRerouting }
+        XCTAssertTrue(failed, "RerouteManager must clear isRerouting after failure")
         XCTAssertEqual(mockRouting.callCount, 1, "First off-route event triggers one request")
-        XCTAssertFalse(timedRerouteManager.isRerouting, "After failure, isRerouting must be false")
         XCTAssertEqual(timedRerouteManager.failureCount, 1, "Failure count must increment")
-        XCTAssertNotNil(timedRerouteManager.nextEligibleRerouteAt,
-                        "Backoff delay must be set after first failure")
+        XCTAssertNotNil(timedRerouteManager.nextEligibleRerouteAt, "Backoff delay must be set after first failure")
 
         // Advance clock past backoff delay (first delay is 2.0s)
         guard let nextAt = timedRerouteManager.nextEligibleRerouteAt else { return }
         clock.currentDate = nextAt.addingTimeInterval(0.1)
 
-        // Replay another off-route observation — this time backoff has expired
+        var req2Exp: XCTestExpectation? = expectation(description: "Second request started")
+        mockRouting.onRequestStarted = {
+            req2Exp?.fulfill()
+            req2Exp = nil
+        }
+
+        // Replay another off-route observation — backoff has now expired
         let laterTS = baseDate.addingTimeInterval(10)
         runner.replay(samples: [
             NavigationReplaySample(timestamp: laterTS,
                                    coordinate: offRouteEastCoord(3),
-                                   accuracy: 5.0, speed: 8.0, course: 90.0)
+                                   horizontalAccuracy: 5.0, speed: 8.0, course: 90.0)
         ])
 
-        await Task.yield()
-        await Task.yield()
+        await fulfillment(of: [req2Exp!], timeout: 2.0)
 
         XCTAssertEqual(mockRouting.callCount, 2,
                        "After backoff expires, second off-route observation triggers second request")
-        XCTAssertEqual(timedRerouteManager.failureCount, 2,
-                       "Failure count must continue incrementing")
+        mockRouting.resolve(with: .failure(NSError(domain: "routing", code: -1)))
+        let secondFailed = await waitUntil { !timedRerouteManager.isRerouting }
+        XCTAssertTrue(secondFailed)
+        XCTAssertEqual(timedRerouteManager.failureCount, 2, "Failure count must continue incrementing")
     }
 
-    // MARK: - Test 4: Full end-to-end — wrong turn, reroute, arrival; no manual commit
+    // MARK: - Test 4: Full end-to-end — wrong turn, reroute, arrival; proving frozen session invariants
 
     func testIntegration_FullEndToEnd_NoManualRouteCommit() async throws {
-        // Arrange
         let rerouteRoute = makeRerouteRoute(from: offRouteEastCoord(2))
-        mockRouting.resultToReturn = .success(rerouteRoute)
-        mockRouting.delayNanoseconds = 0
 
         var arrivedFired = false
         session.onArrived = { arrivedFired = true }
+
+        var rerouteExp: XCTestExpectation? = expectation(description: "Reroute request started")
+        mockRouting.onRequestStarted = {
+            rerouteExp?.fulfill()
+            rerouteExp = nil
+        }
 
         session.startNavigation(route: makeStraightRoute(), destination: dest)
 
         // Phase 1: On-route progress
         runner.replay(samples: [
-            NavigationReplaySample(timestamp: baseDate, coordinate: coordA),
-            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(5), coordinate: coordB)
+            NavigationReplaySample(timestamp: baseDate, coordinate: coordA, speed: 8.0, course: 0.0),
+            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(5), coordinate: coordB, speed: 8.0, course: 0.0)
         ])
         XCTAssertFalse(session.isOffRoute)
+
+        // Record frozen session invariants before wrong turn capture
+        let preSessionGen = session.sessionGeneration
+        let preDestCoord  = session.navigationDestination?.coordinate
+        let preDestName   = session.navigationDestination?.name
+        let preRouteGen   = session.activeRouteGeneration
 
         // Phase 2: Wrong turn — diverge east
         for i in 0..<5 {
             runner.replay(samples: [
                 NavigationReplaySample(timestamp: baseDate.addingTimeInterval(10 + Double(i)),
                                        coordinate: offRouteEastCoord(i),
-                                       accuracy: 5.0, speed: 8.0, course: 90.0)
+                                       horizontalAccuracy: 5.0, speed: 8.0, course: 90.0)
             ])
         }
         XCTAssertTrue(session.isOffRoute, "Must confirm off-route after eastward divergence")
 
-        // Phase 3: RerouteManager commits Route B (no manual replaceActiveRoute)
-        await Task.yield()
-        await Task.yield()
+        // Wait for reroute request to start
+        await fulfillment(of: [rerouteExp!], timeout: 2.0)
 
-        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, rerouteRoute.totalDistanceMeters,
-                       "Route B must be committed by real RerouteManager")
-        XCTAssertFalse(session.isRerouting, "isRerouting must be false after commit")
-        XCTAssertEqual(session.state, .navigating)
+        // Phase 3: RerouteManager commits Route B (no manual replaceActiveRoute)
+        mockRouting.resolve(with: .success(rerouteRoute))
+
+        let committed = await waitUntil { [weak self] in
+            self?.session.activeRoute?.totalDistanceMeters == rerouteRoute.totalDistanceMeters
+        }
+        XCTAssertTrue(committed, "Route B must be committed by real RerouteManager")
+
+        // Assert frozen session invariants required by P5.1
+        XCTAssertEqual(session.sessionGeneration, preSessionGen, "sessionGeneration must remain unchanged after reroute")
+        XCTAssertEqual(session.navigationDestination?.coordinate.latitude, preDestCoord?.latitude, "destination lat unchanged")
+        XCTAssertEqual(session.navigationDestination?.coordinate.longitude, preDestCoord?.longitude, "destination lon unchanged")
+        XCTAssertEqual(session.navigationDestination?.name, preDestName, "destination name unchanged")
+        XCTAssertEqual(session.activeRouteGeneration, preRouteGen + 1, "activeRouteGeneration must bump by exactly 1")
+        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, rerouteRoute.totalDistanceMeters, "Route B active")
+        XCTAssertFalse(session.isRerouting, "session.isRerouting must be false after commit")
+        XCTAssertFalse(rerouteManager.isRerouting, "rerouteManager.isRerouting must be false after commit")
+        XCTAssertEqual(session.state, .navigating, "Session must remain navigating")
+        XCTAssertNotNil(session.currentProjection, "currentProjection must be recomputed against Route B")
 
         // Phase 4: Progress on Route B toward coordC
         let startB = offRouteEastCoord(2)
@@ -293,17 +414,17 @@ final class NavigationIntegrationReplayTests: XCTestCase {
             samplesB.append(NavigationReplaySample(
                 timestamp: baseDate.addingTimeInterval(25 + Double(i) * 10),
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
-                accuracy: 5.0, speed: 8.0, course: 0.0
+                horizontalAccuracy: 5.0, speed: 8.0, course: 0.0
             ))
         }
         // Phase 5: Settle at destination (Kalman convergence → arrival)
         samplesB.append(NavigationReplaySample(
             timestamp: baseDate.addingTimeInterval(70),
-            coordinate: coordC, accuracy: 5.0, speed: 0.0
+            coordinate: coordC, horizontalAccuracy: 5.0, speed: 0.0
         ))
         samplesB.append(NavigationReplaySample(
             timestamp: baseDate.addingTimeInterval(72),
-            coordinate: coordC, accuracy: 5.0, speed: 0.0
+            coordinate: coordC, horizontalAccuracy: 5.0, speed: 0.0
         ))
         runner.replay(samples: samplesB)
 
@@ -312,6 +433,6 @@ final class NavigationIntegrationReplayTests: XCTestCase {
         XCTAssertEqual(session.state, .arrived, "Session must be .arrived")
         XCTAssertNotEqual(session.trackingProfile, .activeNavigation,
                           "Tracking profile must be downgraded from activeNavigation on arrival")
-        _ = arrivedFired  // arrival callback also fired — checked via runner.arrivalCount
+        XCTAssertTrue(arrivedFired, "onArrived callback must have fired")
     }
 }

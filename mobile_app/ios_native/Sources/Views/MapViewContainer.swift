@@ -30,6 +30,8 @@ private enum MapStyle {
 public struct MapViewContainer: UIViewRepresentable {
 
     public let route: NavRoute?
+    /// Authoritative preview render identity (e.g. selectedRouteCandidateID).
+    public let routeRenderID: String?
     /// Trimmed ahead-only polyline — replaces route.coordinates during navigation.
     public let remainingPolyline: [CLLocationCoordinate2D]
     public let destinationCoord: CLLocationCoordinate2D?
@@ -39,6 +41,7 @@ public struct MapViewContainer: UIViewRepresentable {
 
     public init(
         route: NavRoute? = nil,
+        routeRenderID: String? = nil,
         remainingPolyline: [CLLocationCoordinate2D] = [],
         destinationCoord: CLLocationCoordinate2D? = nil,
         snappedLocation: CLLocationCoordinate2D? = nil,
@@ -46,6 +49,7 @@ public struct MapViewContainer: UIViewRepresentable {
         isNavigating: Bool = false
     ) {
         self.route             = route
+        self.routeRenderID     = routeRenderID
         self.remainingPolyline = remainingPolyline
         self.destinationCoord  = destinationCoord
         self.snappedLocation   = snappedLocation
@@ -96,7 +100,13 @@ public struct MapViewContainer: UIViewRepresentable {
 
         // Zoom to fit on route preview (cached to avoid animating every SwiftUI frame)
         if !isNavigating, let route = route, route.coordinates.count >= 2 {
-            if c.renderPolicy.shouldZoomToFit(routeCoordinates: route.coordinates) {
+            let shouldZoom: Bool
+            if let renderID = routeRenderID, !renderID.isEmpty {
+                shouldZoom = c.renderPolicy.shouldZoomToFit(routeIdentifier: renderID)
+            } else {
+                shouldZoom = c.renderPolicy.shouldZoomToFit(routeCoordinates: route.coordinates)
+            }
+            if shouldZoom {
                 c.renderPolicy.recordPreviewZoom()
                 c.zoomToFitRoute(route, on: mapView)
             }

@@ -14,6 +14,12 @@ public enum BLESendAction: Equatable, Sendable {
     case queuedBackpressure
 }
 
+public enum BLETransportEventAction: Equatable, Sendable {
+    case flush(Data, CBCharacteristicWriteType)
+    case armTimer(delay: TimeInterval)
+    case idle
+}
+
 /// Pure BLE send scheduling policy engine.
 @MainActor
 public final class BLESendScheduler {
@@ -99,10 +105,30 @@ public final class BLESendScheduler {
         return flushPendingIfEligible(now: now)
     }
 
+    /// Evaluates the action when transport signals ready for write-without-response.
+    public func handleTransportBecameReady(now: Date = Date()) -> BLETransportEventAction {
+        if let (data, writeType) = transportBecameReady(now: now) {
+            return .flush(data, writeType)
+        } else if let delay = nextEligibleFlushDelay(now: now) {
+            return .armTimer(delay: delay)
+        }
+        return .idle
+    }
+
     /// Peripheral acknowledged previous .withResponse write.
     public func withResponseWriteCompleted(now: Date = Date()) -> (Data, CBCharacteristicWriteType)? {
         inFlightWithResponseWrite = false
         return flushPendingIfEligible(now: now)
+    }
+
+    /// Evaluates the action when peripheral acknowledges a write-with-response.
+    public func handleWithResponseWriteCompleted(now: Date = Date()) -> BLETransportEventAction {
+        if let (data, writeType) = withResponseWriteCompleted(now: now) {
+            return .flush(data, writeType)
+        } else if let delay = nextEligibleFlushDelay(now: now) {
+            return .armTimer(delay: delay)
+        }
+        return .idle
     }
 
     /// Timer tick or flush when rate-limit interval expires.

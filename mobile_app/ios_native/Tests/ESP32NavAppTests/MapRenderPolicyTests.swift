@@ -158,4 +158,40 @@ final class MapRenderPolicyTests: XCTestCase {
         XCTAssertTrue(policy.shouldZoomToFit(routeIdentifier: "route-A"),
                       "After cache invalidation, same identifier must re-trigger")
     }
+}    // MARK: - Fix 5 & 7: Authoritative Candidate Identity Test
+
+    func testAuthoritativeCandidateIdentity_DifferentiatesAlternativeRoutes_WithoutRelyingOnCoordinates() {
+        let policy = MapRenderPolicy()
+
+        // Two candidate routes that intentionally share identical origin, destination, and coordinate count
+        let origin = CLLocationCoordinate2D(latitude: 21.0285, longitude: 105.8542)
+        let dest   = CLLocationCoordinate2D(latitude: 21.0385, longitude: 105.8542)
+        let sharedCoords = [
+            origin,
+            CLLocationCoordinate2D(latitude: 21.0335, longitude: 105.8542),
+            dest
+        ]
+
+        let candidateID_A = "route-candidate-A"
+        let candidateID_B = "route-candidate-B"
+
+        // First render of candidate A: must zoom
+        XCTAssertTrue(policy.shouldZoomToFit(routeIdentifier: candidateID_A),
+                      "Candidate A must zoom on initial presentation")
+        policy.recordPreviewZoom()
+
+        // Unrelated SwiftUI body rerender with same candidate A: must NOT re-zoom
+        for _ in 1...3 {
+            XCTAssertFalse(policy.shouldZoomToFit(routeIdentifier: candidateID_A),
+                           "SwiftUI rerender with candidate A must not trigger zoom")
+        }
+        XCTAssertEqual(policy.previewZooms, 1)
+
+        // User switches to Candidate B (which shares exact same coordinates count/endpoints)
+        _ = sharedCoords
+        XCTAssertTrue(policy.shouldZoomToFit(routeIdentifier: candidateID_B),
+                      "Switching to Candidate B must trigger zoom based on authoritative ID, not geometry")
+        policy.recordPreviewZoom()
+        XCTAssertEqual(policy.previewZooms, 2)
+    }
 }

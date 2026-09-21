@@ -125,40 +125,28 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
     }
 
     func testClearRoute_FromArrived_ReturnsToIdle() {
-        // Simulate arriving by starting navigation then calling stopNavigation
-        // (arrived state is set internally by computeProgress — simulate it via stopNavigation path)
-        // We manually set state to .arrived via a stopped navigation, then use clearRoute.
-        session.startNavigation(route: route, destination: dest)
-        session.stopNavigation()
-        // After stopNavigation, state is .idle — we need arrived state.
-        // Force arrived via the startNavigation path then direct state sim:
-        // The only way to reach .arrived is through ingestLocation; simulate by injecting
-        // a location at the destination coordinate with Kalman convergence.
-        session.startNavigation(route: route, destination: dest)
-        let destLoc = makeLocation(lat: destCoord.latitude, lon: destCoord.longitude, accuracy: 5.0)
-        // Inject twice to converge Kalman
-        session.ingestLocation(destLoc)
-        session.ingestLocation(makeLocation(lat: destCoord.latitude, lon: destCoord.longitude,
-                                             accuracy: 5.0,
-                                             ts: destLoc.timestamp.addingTimeInterval(2)))
+        // Deterministically reach .arrived using fresh session and destination sample
+        let freshSession = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
+        freshSession.startNavigation(route: route, destination: dest)
 
-        guard session.state == .arrived else {
-            // If Kalman hasn't converged enough, manually assert the guard path anyway
-            // by using stopNavigation (state = .idle) then checking clearRoute is a no-op from .idle
-            session.stopNavigation()
-            // Rebuild test: clearRoute from .routePreview -> .idle is tested separately
-            return
-        }
-        let genBefore = session.activeRouteGeneration
-        session.clearRoute()
-        XCTAssertEqual(session.state, .idle, "clearRoute from .arrived must transition to .idle")
-        XCTAssertGreaterThan(session.activeRouteGeneration, genBefore)
+        let destLoc = makeLocation(lat: destCoord.latitude, lon: destCoord.longitude, accuracy: 5.0)
+        freshSession.ingestLocation(destLoc)
+
+        // Non-vacuous assertion: verify state reached .arrived without early returns or guards
+        XCTAssertEqual(freshSession.state, .arrived, "Session must deterministically arrive at destination")
+
+        let genBefore = freshSession.activeRouteGeneration
+        freshSession.clearRoute()
+
+        XCTAssertEqual(freshSession.state, .idle, "clearRoute from .arrived must transition to .idle")
+        XCTAssertNil(freshSession.activeRoute, "activeRoute must be nil after clearRoute")
+        XCTAssertEqual(freshSession.activeRouteGeneration, genBefore + 1, "Route generation must increment by 1")
     }
 
     func testClearRoute_WhileNavigating_IsNoOp() {
         session.startNavigation(route: route, destination: dest)
-        let stateBefore   = session.state
-        let routeBefore   = session.activeRoute?.totalDistanceMeters
+        let stateBefore      = session.state
+        let routeBefore      = session.activeRoute?.totalDistanceMeters
         let sessionGenBefore = session.sessionGeneration
         let routeGenBefore   = session.activeRouteGeneration
 
@@ -172,7 +160,7 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
     }
 
     // ─────────────────────────────────────────────
-    // Fix 3: replaceActiveRoute — clears isRerouting, clears snapped location
+    // Fix 3: replaceActiveRoute — clears isRerouting, clears snapped location & reprojects
     // ─────────────────────────────────────────────
 
     func testRerouteCommit_ClearsNavSessionIsRerouting() {
@@ -187,84 +175,116 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
                        "replaceActiveRoute must clear isRerouting atomically with the route commit")
     }
 
-    func testRerouteCommit_ClearsStaleMatchedLocation() {
-        session.startNavigation(route: route, destination: dest)
-
-        // Prime a snappedLocation via ingestLocation
-        let midLoc = makeLocation(lat: 21.035, lon: 105.854, accuracy: 5.0)
-        session.ingestLocation(midLoc)
-
-        let hadSnapped = session.snappedLocation
-        let hadMatched = session.matchedLocation
-        _ = hadSnapped // suppress unused warning
-        _ = hadMatched
-
-        // Replace route — old match state must be cleared before reprojection
-        let routeB = makeRoute(from: startCoord, to: destCoord, distance: 700, name: "Route B")
-        // matchedLocation will be cleared and then potentially recomputed by immediate reprojection.
-        // After replace, matchedLocation comes from Route B (or is nil if no location is available).
-        session.replaceActiveRoute(routeB)
-
-        // The route was replaced; snappedLocation should now be nil OR recomputed from Route B
-        // (because filteredLocation is available from the previous ingestLocation).
-        // Either way, the old Route A projection is gone.
-        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, 700)
-    }
-
-    func testRerouteCommit_ImmediatelyRecomputesProjectionOnRouteB() {
-        // Build a Route B along which midLoc projects cleanly
-        let midCoord = CLLocationCoordinate2D(latitude: 21.035, longitude: 105.854)
-        let routeB = NavRoute(
-            coordinates: [startCoord, midCoord, destCoord],
+    func testRerouteCommit_ClearsStaleMatchedLocation_AndReprojectsImmediately() {
+        // Construct Route A (North-South along lon 105.8540)
+        let routeACoordStart = CLLocationCoordinate2D(latitude: 21.0300, longitude: 105.8540)
+        let routeACoordEnd   = CLLocationCoordinate2D(latitude: 21.0400, longitude: 105.8540)
+        let routeA = NavRoute(
+            coordinates: [routeACoordStart, routeACoordEnd],
             steps: [
-                NavStep(coordinate: destCoord, distanceMeters: 1100, durationSeconds: 110,
-                        streetName: "B", maneuverType: .straight, instruction: "Go")
+                NavStep(coordinate: routeACoordEnd, distanceMeters: 1110, durationSeconds: 110,
+                        streetName: "Route A Street", maneuverType: .straight, instruction: "Drive North")
             ],
-            totalDistanceMeters: 1100, totalDurationSeconds: 110
+            totalDistanceMeters: 1110, totalDurationSeconds: 110
         )
-        session.startNavigation(route: route, destination: dest)
-        // Prime filteredLocation at midpoint
-        let midLoc = makeLocation(lat: midCoord.latitude, lon: midCoord.longitude, accuracy: 5.0)
-        session.ingestLocation(midLoc)
 
-        var progressFired = false
-        session.onProgressUpdate = { _ in progressFired = true }
+        session.startNavigation(route: routeA, destination: dest)
 
+        // Vehicle moves to physical location P off Route A at (21.0350, 105.8600) (~600m east)
+        let locP = makeLocation(lat: 21.0350, lon: 105.8600, accuracy: 5.0)
+        session.ingestLocation(locP)
+
+        let oldProjection = session.currentProjection
+        XCTAssertNotNil(oldProjection)
+        XCTAssertEqual(oldProjection?.coordinate.longitude, 105.8540, accuracy: 0.001,
+                       "Route A projection must lock to Route A longitude")
+
+        // Construct Route B (West-East along lat 21.0350, passing through locP)
+        let routeBCoordStart = CLLocationCoordinate2D(latitude: 21.0350, longitude: 105.8500)
+        let routeBCoordMid   = CLLocationCoordinate2D(latitude: 21.0350, longitude: 105.8600)
+        let routeBCoordEnd   = CLLocationCoordinate2D(latitude: 21.0350, longitude: 105.8700)
+        let routeB = NavRoute(
+            coordinates: [routeBCoordStart, routeBCoordMid, routeBCoordEnd],
+            steps: [
+                NavStep(coordinate: routeBCoordEnd, distanceMeters: 2000, durationSeconds: 200,
+                        streetName: "Route B Eastway", maneuverType: .arrive, instruction: "Arrive on Route B")
+            ],
+            totalDistanceMeters: 2000, totalDurationSeconds: 200
+        )
+
+        var progressUpdated = false
+        session.onProgressUpdate = { _ in progressUpdated = true }
+
+        // Act: replace active route with Route B
         session.replaceActiveRoute(routeB)
 
-        // Immediate reprojection should have fired onProgressUpdate and updated currentProjection
-        XCTAssertTrue(progressFired, "replaceActiveRoute must immediately emit onProgressUpdate")
-        XCTAssertNotNil(session.currentProjection,
-                        "replaceActiveRoute must produce a Route B projection immediately")
+        // Assert: invariants required by P5.1
+        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, 2000, "Active route must be Route B")
+        XCTAssertNotNil(session.currentProjection, "currentProjection must exist immediately after replaceActiveRoute")
+        XCTAssertNotNil(session.matchedLocation, "matchedLocation must exist immediately after replaceActiveRoute")
+        XCTAssertNotNil(session.snappedLocation, "snappedLocation must exist immediately after replaceActiveRoute")
+        XCTAssertTrue(progressUpdated, "onProgressUpdate must fire immediately upon route replacement")
+
+        // Current projection must belong to Route B geometry (near locP longitude 105.8600, NOT Route A 105.8540)
+        let newProjCoord = session.currentProjection!.coordinate
+        XCTAssertEqual(newProjCoord.latitude, 21.0350, accuracy: 0.001,
+                       "Projection must lie on Route B latitude")
+        XCTAssertEqual(newProjCoord.longitude, 105.8600, accuracy: 0.001,
+                       "Projection must match physical location along Route B geometry")
+        XCTAssertNotEqual(newProjCoord.longitude, oldProjection!.coordinate.longitude,
+                          "Old Route A projection must not be retained")
+        XCTAssertEqual(session.activeProgress.nextStreetName, "Route B Eastway",
+                       "Active progress must correspond to Route B")
     }
 
     // ─────────────────────────────────────────────
-    // Fix 5: Arrival tracking profile downgrade
+    // Fix 5: Arrival tracking profile downgrade (Deterministic & Non-Vacuous)
     // ─────────────────────────────────────────────
 
     func testForegroundArrival_LowersTrackingProfile() {
-        // trackingProfile starts at .foregroundPassive in idle.
-        // After startNavigation it becomes .activeNavigation.
-        // After arrival it must drop back to .foregroundPassive (isForeground = true default).
-        session.startNavigation(route: route, destination: dest)
-        XCTAssertEqual(session.trackingProfile, .activeNavigation,
+        let freshSession = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
+        freshSession.startNavigation(route: route, destination: dest)
+        XCTAssertEqual(freshSession.trackingProfile, .activeNavigation,
                        "Active navigation must use activeNavigation profile")
 
-        // Inject two samples at destination with good accuracy to trigger arrival
-        let base = Date()
-        session.ingestLocation(makeLocation(lat: destCoord.latitude, lon: destCoord.longitude,
-                                             accuracy: 5.0, ts: base))
-        session.ingestLocation(makeLocation(lat: destCoord.latitude, lon: destCoord.longitude,
-                                             accuracy: 5.0, ts: base.addingTimeInterval(2)))
+        // First accepted sample at destination triggers immediate arrival
+        let destLoc = makeLocation(lat: destCoord.latitude, lon: destCoord.longitude, accuracy: 5.0)
+        freshSession.ingestLocation(destLoc)
 
-        if session.state == .arrived {
-            XCTAssertNotEqual(session.trackingProfile, .activeNavigation,
-                              "Must not retain activeNavigation profile after arrival")
-            XCTAssertEqual(session.trackingProfile, .foregroundPassive,
-                           "Foreground arrival must downgrade to foregroundPassive")
-        }
-        // If Kalman hasn't converged to <15m in this unit test, we skip the assertion
-        // (tested more rigorously in NavigationReplayTests with settling samples).
+        // Strict non-vacuous assertions: no conditional checks or early exits
+        XCTAssertEqual(freshSession.state, .arrived, "Must reach .arrived state deterministically")
+        XCTAssertEqual(freshSession.trackingProfile, .foregroundPassive,
+                       "Foreground arrival must downgrade immediately to foregroundPassive")
+        XCTAssertFalse(freshSession.currentTrackingConfig.allowsBackgroundLocationUpdates,
+                       "Foreground arrival must disable background location updates")
+        XCTAssertFalse(freshSession.currentTrackingConfig.headingEnabled,
+                       "Foreground arrival must disable heading")
+    }
+
+    func testBackgroundArrival_LowersTrackingProfile_ToSuspended() {
+        let freshSession = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
+        freshSession.startNavigation(route: route, destination: dest)
+        XCTAssertEqual(freshSession.trackingProfile, .activeNavigation)
+
+        // App transitions to background while navigating
+        freshSession.handleScenePhaseChange(isForeground: false)
+        XCTAssertEqual(freshSession.trackingProfile, .activeNavigation,
+                       "Navigation must remain activeNavigation while app is backgrounded")
+        XCTAssertTrue(freshSession.currentTrackingConfig.allowsBackgroundLocationUpdates,
+                      "Background navigation must keep allowsBackgroundLocationUpdates true")
+
+        // Vehicle reaches destination while backgrounded
+        let destLoc = makeLocation(lat: destCoord.latitude, lon: destCoord.longitude, accuracy: 5.0)
+        freshSession.ingestLocation(destLoc)
+
+        // Strict non-vacuous assertions
+        XCTAssertEqual(freshSession.state, .arrived, "Must reach .arrived state in background")
+        XCTAssertEqual(freshSession.trackingProfile, .suspended,
+                       "Background arrival must immediately downgrade to suspended")
+        XCTAssertFalse(freshSession.currentTrackingConfig.allowsBackgroundLocationUpdates,
+                       "Background arrival must disable background location updates")
+        XCTAssertFalse(freshSession.currentTrackingConfig.headingEnabled,
+                       "Background arrival must disable heading")
     }
 
     // ─────────────────────────────────────────────
@@ -302,9 +322,8 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
     // ─────────────────────────────────────────────
 
     func testArrival_GreaterThan15m_NotTriggered() {
-        // Build a short 2-point route where the start is ~30m from dest
-        // (if destination is within 15m Kalman would not trigger it)
-        let closeStart = CLLocationCoordinate2D(latitude: 21.039700, longitude: 105.854) // ~33m from destCoord
+        // Build a short 2-point route where the start is ~33m from dest
+        let closeStart = CLLocationCoordinate2D(latitude: 21.039700, longitude: 105.854)
         let shortRoute = makeRoute(from: closeStart, to: destCoord, distance: 33)
         session.startNavigation(route: shortRoute, destination: dest)
 

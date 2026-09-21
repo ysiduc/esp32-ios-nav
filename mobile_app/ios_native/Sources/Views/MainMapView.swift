@@ -28,6 +28,7 @@ public struct MainMapView: View {
             // ── Layer 1: Full-screen Map ──────────────────────────────────
             MapViewContainer(
                 route: viewModel.activeRoute,
+                routeRenderID: viewModel.selectedRouteCandidateID,
                 remainingPolyline: viewModel.navSession.remainingPolyline,
                 destinationCoord: viewModel.selectedDestination?.location.coordinate,
                 snappedLocation: viewModel.snappedLocation,

@@ -22,9 +22,9 @@ public final class BLEManager: NSObject, ObservableObject {
     private var scanTimer: Timer?
     private var flushTimer: Timer?
     private var targetPeripheralUUID: UUID?
-    /// Monotonically incremented on each startScanning call; captured by closures to prevent
-    /// stale fallback scans from mutating a newer scan session.
-    private var scanGeneration: UInt = 0
+    /// Guard to prevent stale fallback scans from mutating a newer scan session.
+    public private(set) var scanGuard = BLEScanGenerationGuard()
+    public var scanGeneration: UInt { scanGuard.generation }
 
     public override init() {
         super.init()
@@ -52,14 +52,13 @@ public final class BLEManager: NSObject, ObservableObject {
         )
 
         // Short broader fallback after 5s to catch unadvertised peripherals.
-        // Capture scanGeneration so a later startScanning() call (which bumps the counter)
-        // prevents this stale closure from modifying the newer scan session.
-        scanGeneration &+= 1
-        let capturedScanGen = scanGeneration
+        // Capture scanGeneration guard token so a later startScanning() or stopScanning() call
+        // prevents this stale closure from modifying newer or stopped scan sessions.
+        let capturedScanGen = scanGuard.begin()
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
             guard let self = self,
                   self.connectionState == .scanning,
-                  self.scanGeneration == capturedScanGen else { return }
+                  self.scanGuard.isCurrent(capturedScanGen) else { return }
             self.centralManager.scanForPeripherals(
                 withServices: nil,
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
@@ -78,6 +77,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Stop scanning
     public func stopScanning() {
+        scanGuard.invalidate()
         scanTimer?.invalidate()
         scanTimer = nil
         centralManager?.stopScan()
@@ -100,6 +100,8 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Disconnect current peripheral
     public func disconnect() {
+        flushTimer?.invalidate()
+        flushTimer = nil
         reconnectTimer?.invalidate()
         reconnectTimer = nil
         reconnectAttempts = 0
@@ -138,7 +140,8 @@ public final class BLEManager: NSObject, ObservableObject {
         case .suppressedDuplicate:
             break
         case .queuedRateLimited:
-            scheduleRateLimitFlush()
+            let delay = scheduler.nextEligibleFlushDelay(now: Date())
+            scheduleRateLimitFlush(delay: delay)
         case .queuedBackpressure:
             break
         }
@@ -154,9 +157,10 @@ public final class BLEManager: NSObject, ObservableObject {
         lastSentPacketTime = Date()
     }
 
-    private func scheduleRateLimitFlush() {
+    private func scheduleRateLimitFlush(delay: TimeInterval? = nil) {
+        let actualDelay = max(0.0, delay ?? scheduler.minSendInterval)
         guard flushTimer == nil else { return }
-        flushTimer = Timer.scheduledTimer(withTimeInterval: scheduler.minSendInterval, repeats: false) { [weak self] _ in
+        flushTimer = Timer.scheduledTimer(withTimeInterval: actualDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
                 self.flushTimer = nil
@@ -276,6 +280,8 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         print("[BLEManager] Disconnected from peripheral: \(error?.localizedDescription ?? "clean disconnect")")
+        flushTimer?.invalidate()
+        flushTimer = nil
         connectedPeripheral = nil
         navigationCharacteristic = nil
         statusCharacteristic = nil
@@ -326,12 +332,13 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
 
     public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         guard let char = navigationCharacteristic else { return }
-        let now = Date()
-        if let (data, writeType) = scheduler.transportBecameReady(now: now) {
+        switch scheduler.handleTransportBecameReady(now: Date()) {
+        case .flush(let data, let writeType):
             executeWrite(data: data, writeType: writeType, on: peripheral, for: char)
-        } else if scheduler.nextEligibleFlushDelay(now: now) != nil {
-            // Packet is pending but only rate-limited — arm the timer so it is not stranded.
-            scheduleRateLimitFlush()
+        case .armTimer(let delay):
+            scheduleRateLimitFlush(delay: delay)
+        case .idle:
+            break
         }
     }
 
@@ -340,12 +347,13 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             print("[BLEManager] didWriteValue error: \(error.localizedDescription)")
         }
         guard characteristic.uuid == BLEProtocolConstants.navigationDataCharUUID else { return }
-        let now = Date()
-        if let (data, writeType) = scheduler.withResponseWriteCompleted(now: now) {
+        switch scheduler.handleWithResponseWriteCompleted(now: Date()) {
+        case .flush(let data, let writeType):
             executeWrite(data: data, writeType: writeType, on: peripheral, for: characteristic)
-        } else if scheduler.nextEligibleFlushDelay(now: now) != nil {
-            // Packet is pending but only rate-limited — arm the timer so it is not stranded.
-            scheduleRateLimitFlush()
+        case .armTimer(let delay):
+            scheduleRateLimitFlush(delay: delay)
+        case .idle:
+            break
         }
     }
 }

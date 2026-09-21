@@ -482,7 +482,7 @@ In accordance with strict P5 engineering honesty:
 1. **No Live Traffic (Google Maps / Waze Parity)**: The routing engine relies on OpenStreetMap data processed through Valhalla. It does not possess crowd-sourced real-time traffic congestion data.
 2. **OSM / Valhalla Data Dependency**: Routing quality and turn instructions depend on the accuracy and freshness of OpenStreetMap road network attributes in Vietnam.
 3. **MapKit Motorcycle Fallback Is Degraded**: Apple MapKit Directions API does not support native motorcycle routing. Fallback routes generated via MapKit use automobile mode and are explicitly flagged `isDegradedFallback = true`.
-4. **GPS Accuracy Environment Dependence**: Tall buildings, metal roofs, and extreme weather can degrade GPS accuracy beyond the 50-meter threshold, causing temporary pauses in progress computation.
+4. **GPS Accuracy Environment Dependence**: Tall buildings, metal roofs, and extreme weather can degrade GPS accuracy beyond the 20-meter threshold, causing temporary pauses in progress computation.
 5. **CI Replay vs. Outdoor Field Tests**: Deterministic simulation replays prove algorithmic and integration correctness, but cannot replace real-world physical vibration, multi-path reflections, and thermal dynamics.
 6. **Battery Drain Measurements**: While CPU and GPU churn have been demonstrably minimized via profiling policies, true battery consumption can only be measured on physical hardware over extended field trials.
 7. **BLE Wireless Radio Reliability**: Bluetooth 4.2 / 5.0 2.4GHz transmission is subject to 2.4GHz RF interference in dense urban environments.
@@ -542,7 +542,7 @@ Phase P5 completes all implementation, performance optimization, power policy en
 - **High Determinism**: Core navigation, off-route, and arrival edge cases are tested via synchronous replay. Full end-to-end integration uses real RerouteManager with async task concurrency (P5.1).
 - **Battery-Conscious**: Location and heading hardware are powered only when strictly needed; BLE writes and map rendering churn are throttled and coalesced.
 - **Robust Under Failure**: Network dropouts, GPS jitter, and BLE disconnects are handled gracefully without application crashes or state corruption.
-- **Production-Ready**: Passing 182 native unit tests and verified via full Native iOS and Flutter iOS release builds.
+- **Implementation-Complete & CI-Validated**: Implementation-complete and CI-validated for the covered scenarios. Ready for physical-device field validation before production deployment.
 
 ---
 
@@ -569,8 +569,8 @@ Phase P5 completes all implementation, performance optimization, power policy en
 
 **New Tests**: 18 new tests in 4 new files (`NavigationSessionManagerP51Tests`, `BLESendSchedulerRaceTests`, `BLEScanGenerationTests`, `NavigationIntegrationReplayTests`) + 5 additional tests in `MapRenderPolicyTests`
 
-**Expected total after P5.1**: ≥205 tests
+**Baseline before P5.1**: 182 native unit tests (all passing)
 
-**CI Target**: All ≥205/205 PASS, Native Release SUCCESS, Native IPA SUCCESS, Flutter SUCCESS
+**CI Target**: All native unit tests PASS (0 failures), Native Release SUCCESS, Native IPA SUCCESS, Flutter SUCCESS. Exact final test count will be recorded directly from CI logs upon run completion.
 
 > **NOTE**: Field tests remain MANUAL — PENDING. Navigation thresholds restored to P1-accepted values (15m arrival / 20m GPS).
