@@ -40,27 +40,37 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
 
         let coords = [startCoord, turnCoord, endCoord]
         let step0 = NavStep(
-            coordinate: turnCoord,
+            coordinate: startCoord,
             distanceMeters: 67.0,
             durationSeconds: 7.0,
             streetName: "Phố Huế",
-            maneuverType: .right,
-            instruction: "Rẽ phải vào Đại Cồ Việt",
+            maneuverType: .straight,
+            instruction: "Đi thẳng trên Phố Huế",
             beginShapeIndex: 0,
             endShapeIndex: 1
         )
         let step1 = NavStep(
-            coordinate: endCoord,
+            coordinate: turnCoord,
             distanceMeters: 83.0,
             durationSeconds: 8.0,
             streetName: "Đại Cồ Việt",
-            maneuverType: .arrive,
-            instruction: "Đến đích",
+            maneuverType: .right,
+            instruction: "Rẽ phải vào Đại Cồ Việt",
             beginShapeIndex: 1,
             endShapeIndex: 2
         )
+        let step2 = NavStep(
+            coordinate: endCoord,
+            distanceMeters: 0.0,
+            durationSeconds: 0.0,
+            streetName: "Đại Cồ Việt",
+            maneuverType: .arrive,
+            instruction: "Đến đích",
+            beginShapeIndex: 2,
+            endShapeIndex: 2
+        )
 
-        let route = NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 150.0, totalDurationSeconds: 15.0)
+        let route = NavRoute(coordinates: coords, steps: [step0, step1, step2], totalDistanceMeters: 150.0, totalDurationSeconds: 15.0)
         let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: endCoord, name: "Đích"))
 
@@ -81,7 +91,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             currentTime = currentTime.addingTimeInterval(1.0)
 
             XCTAssertEqual(session.currentPolylineSegmentIndex, 0, "Must be on northbound segment")
-            XCTAssertEqual(session.currentManeuverStepIndex, 0, "Upcoming maneuver must be step 0 (turn right)")
+            XCTAssertEqual(session.currentManeuverStepIndex, 1, "Upcoming maneuver must be step 1 (turn right)")
         }
 
         // 2. Immediate sharp turn onto eastbound street (5 samples heading East)
@@ -101,7 +111,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         }
 
         XCTAssertEqual(session.currentPolylineSegmentIndex, 1, "Matcher must have transitioned to eastbound segment")
-        XCTAssertEqual(session.currentManeuverStepIndex, 1, "Must advance to step 1 after passing turn")
+        XCTAssertEqual(session.currentManeuverStepIndex, 2, "Must advance to step 2 after passing turn")
         XCTAssertTrue(session.remainingPolyline.count <= 2, "Northbound coordinates must be completely trimmed from remainingPolyline")
         XCTAssertFalse(session.isOffRoute, "Vehicle followed the turn onto Route, must NOT be confirmed off-route")
     }

@@ -356,7 +356,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
         XCTAssertNotNil(recordingService.lastOrigin)
         XCTAssertEqual(recordingService.lastOrigin?.latitude ?? 0, 21.0028, accuracy: 1e-4)
-        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, routeA.totalDistanceMeters)
+        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, 100.0, "Route B replaces Route A atomically")
     }
 
     // MARK: - Test 9: Field-Style Full Replay #3 — Tunnel / Underpass (Requirement 58)
