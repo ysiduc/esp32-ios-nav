@@ -929,4 +929,16 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
     public func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("[NavSession] CLLocationManager error: \(error.localizedDescription)")
     }
+    // MARK: - Test Support (Internal)
+
+    internal func applyOffRouteDecisionForTesting(_ decision: OffRouteDecision, location: CLLocation) {
+        self.offRouteDecision = decision
+        self.offRouteState = decision.state
+        self.isOffRoute = (decision.state == .confirmed)
+        if decision.becameConfirmed {
+            self.diagnostics.offRouteConfirmations += 1
+            self.diagnostics.offRouteConfirmedAt = location.timestamp
+        }
+        self.onOffRouteDecision?(decision, location)
+    }
 }

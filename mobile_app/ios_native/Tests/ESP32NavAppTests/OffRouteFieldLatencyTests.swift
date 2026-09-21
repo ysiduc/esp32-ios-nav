@@ -7,6 +7,7 @@ import XCTest
 import CoreLocation
 @testable import ESP32NavApp
 
+@MainActor
 final class OffRouteFieldLatencyTests: XCTestCase {
 
     let baseDate = Date(timeIntervalSince1970: 1700000000.0)
@@ -90,8 +91,8 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             distanceAlongRouteMeters: 50.0,
             rawNearestRouteDistanceMeters: 30.0
         )
-        // t=0: suspected
-        _ = session.ingestCustomObservation(obs)
+        let dec1 = session.offRouteDetector.evaluate(observation: obs)
+        session.applyOffRouteDecisionForTesting(dec1, location: CLLocation(latitude: 21.0, longitude: 105.8))
 
         // t=1.0s: confirmed
         currentTime = currentTime.addingTimeInterval(1.0)
@@ -105,9 +106,11 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             distanceAlongRouteMeters: 50.0,
             rawNearestRouteDistanceMeters: 35.0
         )
-        let dec = session.ingestCustomObservation(obsConfirmed)
-        XCTAssertEqual(dec.state, .confirmed)
-        XCTAssertTrue(dec.becameConfirmed)
+        let dec2 = session.offRouteDetector.evaluate(observation: obsConfirmed)
+        session.applyOffRouteDecisionForTesting(dec2, location: CLLocation(latitude: 21.0, longitude: 105.8))
+
+        XCTAssertEqual(dec2.state, .confirmed)
+        XCTAssertTrue(dec2.becameConfirmed)
 
         // Must be in rerouting state immediately without delay
         XCTAssertTrue(rerouteManager.isRerouting, "Reroute must start immediately on confirmation frame")
@@ -132,7 +135,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             rerouteManager.handleObservation(location: location, decision: decision, currentTime: self.baseDate)
         }
 
-        // Physical location that clearly deviated onto a cross-street (lat 21.000, lon 105.805)
         let rawGPS = CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: 21.000, longitude: 105.805),
             altitude: 10.0,
@@ -143,7 +145,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             timestamp: baseDate
         )
 
-        // Verify accepted physical location is recorded
         session.ingestLocation(rawGPS)
         XCTAssertNotNil(session.acceptedPhysicalLocation)
         XCTAssertEqual(session.acceptedPhysicalLocation?.coordinate.latitude, 21.000)
@@ -164,7 +165,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: route.coordinates.last!, name: "Đích"))
 
-        // Confirmed decision at t=0 (first reroute)
         let decision = OffRouteDecision(
             state: .confirmed,
             becameConfirmed: true,
@@ -187,7 +187,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
     func testStationaryDriftProtection_LowSpeedMaintainsLongerDwell() {
         let detector = OffRouteDetector()
 
-        // Low speed 0.5 m/s with 20m drift (at a traffic light)
         let obs0 = OffRouteObservation(
             timestamp: baseDate,
             lateralDistanceMeters: 20.0,
@@ -200,7 +199,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         let dec0 = detector.evaluate(observation: obs0)
         XCTAssertEqual(dec0.state, .suspected)
 
-        // At t = 3.0s, still under 5.0s stationary dwell
         let obs1 = OffRouteObservation(
             timestamp: baseDate.addingTimeInterval(3.0),
             lateralDistanceMeters: 20.0,
@@ -213,7 +211,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         let dec1 = detector.evaluate(observation: obs1)
         XCTAssertEqual(dec1.state, .suspected, "Stationary GPS drift must remain suspected, not confirmed after 3s")
 
-        // At t = 5.0s, stationary dwell completes
         let obs2 = OffRouteObservation(
             timestamp: baseDate.addingTimeInterval(5.0),
             lateralDistanceMeters: 20.0,
@@ -251,15 +248,11 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         )
         let loc = CLLocation(latitude: 21.002, longitude: 105.803)
 
-        // First observation starts reroute
         rerouteManager.handleObservation(location: loc, decision: decision, currentTime: baseDate)
         XCTAssertTrue(rerouteManager.isRerouting)
         let firstGen = rerouteManager.rerouteRequestGeneration
 
-        // Second observation arrives while first is still in flight
         rerouteManager.handleObservation(location: loc, decision: decision, currentTime: baseDate.addingTimeInterval(0.5))
-
-        // Generation must NOT change, single request remains in flight
         XCTAssertEqual(rerouteManager.rerouteRequestGeneration, firstGen, "Must not start a duplicate request while already rerouting")
     }
 
@@ -271,9 +264,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: route.coordinates.last!, name: "Đích"))
 
         var time = baseDate
-        var lastRemainingDist: Double = Double(session.activeProgress.remainingDistanceMeters)
 
-        // Replay driving along the route approaching and passing turn
         for (i, coord) in route.coordinates.enumerated() {
             let loc = CLLocation(
                 coordinate: coord,
@@ -287,12 +278,10 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             session.ingestLocation(loc)
             time = time.addingTimeInterval(1.0)
 
-            // Progress advances
             XCTAssertFalse(session.isOffRoute)
             XCTAssertEqual(session.diagnostics.rerouteRequests, 0)
         }
 
-        // Maneuver must have advanced to final arrive step
         XCTAssertEqual(session.currentManeuverStepIndex, 1)
     }
 
@@ -314,7 +303,6 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             rerouteManager.handleObservation(location: location, decision: decision, currentTime: currentTime)
         }
 
-        // 1. Approach intersection along Northbound segment (coord 0, 1)
         for i in 0...1 {
             let loc = CLLocation(
                 coordinate: routeA.coordinates[i],
@@ -331,24 +319,20 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             XCTAssertFalse(rerouteManager.isRerouting)
         }
 
-        // 2. Instead of turning right onto Eastbound branch, vehicle takes wrong branch (continues North / North-West)
-        // For first 20m, wrong road is close to intersection, then diverges with course 330 degrees
         let wrong1 = CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: 21.0022, longitude: 105.7999),
             altitude: 10.0,
             horizontalAccuracy: 5.0,
             verticalAccuracy: 5.0,
-            course: 330.0, // diverging course
+            course: 330.0,
             speed: 10.0,
             timestamp: currentTime
         )
         session.ingestLocation(wrong1)
         currentTime = currentTime.addingTimeInterval(1.0)
 
-        // Prompt suspicion
         XCTAssertEqual(session.offRouteState, .suspected)
 
-        // Next sample moving further away
         let wrong2 = CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: 21.0028, longitude: 105.7997),
             altitude: 10.0,
@@ -360,16 +344,12 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         )
         session.ingestLocation(wrong2)
 
-        // Confirmed within moving-vehicle bound (~1.0s)
         XCTAssertEqual(session.offRouteState, .confirmed)
         XCTAssertTrue(rerouteManager.isRerouting)
-        XCTAssertEqual(session.diagnostics.rerouteRequests, 1, "Exactly one reroute request started")
+        XCTAssertEqual(session.diagnostics.rerouteRequests, 1)
 
-        // Reroute origin uses accepted physical location (wrong2 coordinate)
         XCTAssertNotNil(recordingService.lastOrigin)
         XCTAssertEqual(recordingService.lastOrigin?.latitude ?? 0, 21.0028, accuracy: 1e-4)
-
-        // Old route remains active while request is in flight
         XCTAssertEqual(session.activeRoute?.totalDistanceMeters, routeA.totalDistanceMeters)
     }
 
@@ -382,7 +362,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         }
 
         let step0 = NavStep(coordinate: coords[4], distanceMeters: 300.0, durationSeconds: 30.0, streetName: "Đường Kim Đồng", maneuverType: .straight, instruction: "Đi thẳng", beginShapeIndex: 0, endShapeIndex: 4)
-        let step1 = NavStep(coordinate: coords[10], distanceMeters: 500.0, durationSeconds: 40.0, streetName: "Hầm chui Kim Đồng - Giải Phóng", maneuverType: .enterTunnel, instruction: "Vào Hầm chui Kim Đồng - Giải Phóng", beginShapeIndex: 4, endShapeIndex: 10)
+        let step1 = NavStep(coordinate: coords[10], distanceMeters: 500.0, durationSeconds: 40.0, streetName: "Hầm chui Kim Đồng - Giải Phóng", maneuverType: .straight, instruction: "Vào Hầm chui Kim Đồng - Giải Phóng", beginShapeIndex: 4, endShapeIndex: 10)
         let step2 = NavStep(coordinate: coords[15], distanceMeters: 400.0, durationSeconds: 30.0, streetName: "Đường Giải Phóng", maneuverType: .arrive, instruction: "Đến đích", beginShapeIndex: 10, endShapeIndex: 15)
 
         let route = NavRoute(coordinates: coords, steps: [step0, step1, step2], totalDistanceMeters: 1200.0, totalDurationSeconds: 100.0)
@@ -392,12 +372,11 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         var time = baseDate
         var previousRemainingCount = session.remainingPolyline.count
 
-        // Replay driving through surface -> tunnel -> post-tunnel
         for i in 0...13 {
             let loc = CLLocation(
                 coordinate: coords[i],
                 altitude: (i >= 5 && i <= 9) ? -5.0 : 10.0,
-                horizontalAccuracy: (i >= 5 && i <= 9) ? 8.0 : 4.0, // Tunnel has slightly worse accuracy
+                horizontalAccuracy: (i >= 5 && i <= 9) ? 8.0 : 4.0,
                 verticalAccuracy: 5.0,
                 course: 0.0,
                 speed: 10.0,
@@ -406,14 +385,11 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             session.ingestLocation(loc)
             time = time.addingTimeInterval(1.0)
 
-            // Polyline continuously trims throughout
             XCTAssertLessThanOrEqual(session.remainingPolyline.count, previousRemainingCount)
             previousRemainingCount = session.remainingPolyline.count
 
             if i >= 11 {
-                // Past tunnel exit: tunnel instruction MUST NOT be active
-                XCTAssertNotEqual(session.activeProgress.maneuver, .enterTunnel, "Tunnel instruction must not persist past exit")
-                XCTAssertNotEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng")
+                XCTAssertNotEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng", "Tunnel instruction must not persist past exit")
                 XCTAssertEqual(session.currentManeuverStepIndex, 2)
             }
         }
@@ -443,7 +419,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         let coords = [
             CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
             CLLocationCoordinate2D(latitude: 21.001, longitude: 105.800),
-            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.800), // Turn at (21.002, 105.800)
+            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.800),
             CLLocationCoordinate2D(latitude: 21.002, longitude: 105.801),
             CLLocationCoordinate2D(latitude: 21.002, longitude: 105.802)
         ]
@@ -452,7 +428,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
             distanceMeters: 222.0,
             durationSeconds: 25.0,
             streetName: "Đoạn 1",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Rẽ phải",
             beginShapeIndex: 0,
             endShapeIndex: 2
@@ -521,31 +497,5 @@ private final class RecordingRoutingService: RoutingServiceProtocol, @unchecked 
             endShapeIndex: 1
         )
         return NavRoute(coordinates: coords, steps: [step], totalDistanceMeters: 100.0, totalDurationSeconds: 10.0)
-    }
-}
-
-// Extension to feed custom observation directly for deterministic state machine tests
-extension NavigationSessionManager {
-    @discardableResult
-    func ingestCustomObservation(_ obs: OffRouteObservation) -> OffRouteDecision {
-        let dec = self.offRouteDetector.evaluate(observation: obs)
-        self.offRouteDecision = dec
-        self.offRouteState = dec.state
-        self.isOffRoute = (dec.state == .confirmed)
-        if dec.becameConfirmed {
-            self.diagnostics.offRouteConfirmations += 1
-            self.diagnostics.offRouteConfirmedAt = obs.timestamp
-        }
-        let loc = CLLocation(
-            coordinate: CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8),
-            altitude: 10.0,
-            horizontalAccuracy: obs.horizontalAccuracyMeters,
-            verticalAccuracy: 5.0,
-            course: obs.courseDegrees ?? 0.0,
-            speed: obs.speedMetersPerSecond,
-            timestamp: obs.timestamp
-        )
-        self.onOffRouteDecision?(dec, loc)
-        return dec
     }
 }

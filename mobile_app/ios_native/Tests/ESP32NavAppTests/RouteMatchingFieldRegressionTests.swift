@@ -7,6 +7,7 @@ import XCTest
 import CoreLocation
 @testable import ESP32NavApp
 
+@MainActor
 final class RouteMatchingFieldRegressionTests: XCTestCase {
 
     let baseDate = Date(timeIntervalSince1970: 1700000000.0)
@@ -14,7 +15,6 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
     // MARK: - Test 1: Pure Nearest-Distance Query (Requirement 11)
 
     func testPureNearestProjection_HasNoContinuityBias() {
-        // Route running West to East at lat 21.0, lon 105.80 to 105.83 (~3.3km)
         let coords = [
             CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
             CLLocationCoordinate2D(latitude: 21.000, longitude: 105.810),
@@ -23,7 +23,6 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         ]
         let geometry = RouteGeometry(coordinates: coords)
 
-        // Point near segment 2 (around lon 105.820, slightly north by ~11m)
         let queryPoint = CLLocationCoordinate2D(latitude: 21.0001, longitude: 105.820)
         let nearest = geometry.nearestProjection(to: queryPoint)
 
@@ -45,7 +44,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             distanceMeters: 333.0,
             durationSeconds: 30.0,
             streetName: "Phố Huế",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Rẽ phải vào Đại Cồ Việt",
             beginShapeIndex: 0,
             endShapeIndex: 1
@@ -65,16 +64,15 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         let session = NavigationSessionManager()
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: endCoord, name: "Đích"))
 
-        // 1. Five samples heading North towards the turn
         var currentTime = baseDate
         for i in 1...5 {
-            let lat = 21.000 + Double(i) * 0.0005 // up to 21.0025 (~55m before turn)
+            let lat = 21.000 + Double(i) * 0.0005
             let loc = CLLocation(
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: 105.800),
                 altitude: 10.0,
                 horizontalAccuracy: 5.0,
                 verticalAccuracy: 5.0,
-                course: 0.0, // North
+                course: 0.0,
                 speed: 10.0,
                 timestamp: currentTime
             )
@@ -85,15 +83,14 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             XCTAssertEqual(session.currentManeuverStepIndex, 0, "Upcoming maneuver must be step 0 (turn right)")
         }
 
-        // 2. Immediate sharp turn onto eastbound street (5 samples heading East)
         for j in 1...5 {
-            let lon = 105.800 + Double(j) * 0.0006 // moving East along 21.003
+            let lon = 105.800 + Double(j) * 0.0006
             let loc = CLLocation(
                 coordinate: CLLocationCoordinate2D(latitude: 21.003, longitude: lon),
                 altitude: 10.0,
                 horizontalAccuracy: 6.0,
                 verticalAccuracy: 5.0,
-                course: 90.0, // East
+                course: 90.0,
                 speed: 9.0,
                 timestamp: currentTime
             )
@@ -101,14 +98,9 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             currentTime = currentTime.addingTimeInterval(1.0)
         }
 
-        // Within 5 samples past the turn:
-        // Must match segment 1 (eastbound)
         XCTAssertEqual(session.currentPolylineSegmentIndex, 1, "Matcher must have transitioned to eastbound segment")
-        // Passed turn instruction: step 0 passed, step 1 (arrive) active
         XCTAssertEqual(session.currentManeuverStepIndex, 1, "Must advance to step 1 after passing turn")
-        // Northbound geometry trimmed
         XCTAssertTrue(session.remainingPolyline.count <= 2, "Northbound coordinates must be completely trimmed from remainingPolyline")
-        // No spurious off-route confirmation
         XCTAssertFalse(session.isOffRoute, "Vehicle followed the turn onto Route, must NOT be confirmed off-route")
     }
 
@@ -141,7 +133,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             let loc = CLLocation(
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: 105.80012),
                 altitude: 10.0,
-                horizontalAccuracy: 4.0, // High accuracy GPS
+                horizontalAccuracy: 4.0,
                 verticalAccuracy: 4.0,
                 course: 0.0,
                 speed: 8.0,
@@ -163,11 +155,11 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
 
     func testBridgeUnderpassSelfNear_DoesNotJumpPrematurelyOrLock() {
         let coords = [
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8000), // 0: start lower
-            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.8000), // 1: end lower
-            CLLocationCoordinate2D(latitude: 21.003, longitude: 105.8030), // 2: ramp apex
-            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.8001), // 3: start elevated (10m from pt 1)
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8001)  // 4: end elevated
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8000),
+            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.8000),
+            CLLocationCoordinate2D(latitude: 21.003, longitude: 105.8030),
+            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.8001),
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8001)
         ]
         let geometry = RouteGeometry(coordinates: coords)
 
@@ -176,7 +168,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             altitude: 5.0,
             horizontalAccuracy: 5.0,
             verticalAccuracy: 5.0,
-            course: 0.0, // Northbound
+            course: 0.0,
             speed: 10.0,
             timestamp: baseDate
         )
@@ -206,11 +198,11 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
 
     func testStuckMatcherRecovery_TriggersControlledForwardJump() {
         let coords = [
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800), // seg 0
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.810), // seg 1
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.820), // seg 2
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.830), // seg 3
-            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.840)  // seg 4
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.810),
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.820),
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.830),
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.840)
         ]
         let geometry = RouteGeometry(coordinates: coords)
 
@@ -227,7 +219,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
             altitude: 10.0,
             horizontalAccuracy: 5.0,
             verticalAccuracy: 5.0,
-            course: 90.0, // East
+            course: 90.0,
             speed: 12.0,
             timestamp: baseDate.addingTimeInterval(2.0)
         )

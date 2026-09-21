@@ -7,6 +7,7 @@ import XCTest
 import CoreLocation
 @testable import ESP32NavApp
 
+@MainActor
 final class ManeuverProgressionTests: XCTestCase {
 
     let baseDate = Date(timeIntervalSince1970: 1700000000.0)
@@ -14,7 +15,6 @@ final class ManeuverProgressionTests: XCTestCase {
     // MARK: - Test 1: Maneuver Begin/End Semantics (Requirement 47)
 
     func testManeuverBeginEndSemantics_AdvancesAtActionPoint() {
-        // Construct 31 coordinates, 1 meter apart along longitude (approx 1m = 0.000009 degrees)
         var coords: [CLLocationCoordinate2D] = []
         for i in 0...30 {
             coords.append(CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800 + Double(i) * 0.00001))
@@ -35,7 +35,7 @@ final class ManeuverProgressionTests: XCTestCase {
             distanceMeters: 10.0,
             durationSeconds: 5.0,
             streetName: "Đoạn 1",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Rẽ phải",
             beginShapeIndex: 10,
             endShapeIndex: 20
@@ -81,7 +81,7 @@ final class ManeuverProgressionTests: XCTestCase {
         )
         session.ingestLocation(locAt8)
         XCTAssertEqual(session.currentManeuverStepIndex, 1, "At progress 8m, upcoming step must be step 1")
-        XCTAssertEqual(session.activeProgress.maneuver, .turnRight)
+        XCTAssertEqual(session.activeProgress.maneuver, .right)
 
         // At progress ~12m (> begin1 + tolerance): step 1 action passed, upcoming step is step 2 (arrive)
         let locAt12 = CLLocation(
@@ -114,10 +114,6 @@ final class ManeuverProgressionTests: XCTestCase {
 
     func testTunnelGuidance_AdvancesPromptlyPastTunnel() {
         // Modeled on real Hanoi field test: Hầm chui Kim Đồng - Giải Phóng
-        // Step 0: Tiếp cận hầm (coords 0..5, 0m..500m)
-        // Step 1: Hầm chui Kim Đồng - Giải Phóng (coords 5..10, 500m..1000m)
-        // Step 2: Tiếp tục trên Giải Phóng (coords 10..15, 1000m..1500m)
-        // Step 3: Đến đích (coords 15, 1500m)
         var coords: [CLLocationCoordinate2D] = []
         for i in 0...15 {
             coords.append(CLLocationCoordinate2D(latitude: 21.000 + Double(i) * 0.0009, longitude: 105.800))
@@ -138,7 +134,7 @@ final class ManeuverProgressionTests: XCTestCase {
             distanceMeters: 500.0,
             durationSeconds: 40.0,
             streetName: "Hầm chui Kim Đồng - Giải Phóng",
-            maneuverType: .enterTunnel,
+            maneuverType: .straight,
             instruction: "Vào Hầm chui Kim Đồng - Giải Phóng",
             beginShapeIndex: 5,
             endShapeIndex: 10
@@ -188,7 +184,7 @@ final class ManeuverProgressionTests: XCTestCase {
         )
         session.ingestLocation(approachLoc)
         XCTAssertEqual(session.currentManeuverStepIndex, 1, "Before tunnel, upcoming maneuver must be the tunnel")
-        XCTAssertEqual(session.activeProgress.maneuver, .enterTunnel)
+        XCTAssertEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng")
 
         // 2. Past tunnel entrance inside tunnel (coord 6) -> tunnel entrance passed, upcoming advances to post-tunnel step
         time = time.addingTimeInterval(3.0)
@@ -219,8 +215,7 @@ final class ManeuverProgressionTests: XCTestCase {
         session.ingestLocation(pastExitLoc)
 
         // Tunnel instruction must NOT remain active
-        XCTAssertNotEqual(session.activeProgress.maneuver, .enterTunnel, "Tunnel instruction must NOT remain active past tunnel exit")
-        XCTAssertNotEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng")
+        XCTAssertNotEqual(session.activeProgress.nextStreetName, "Hầm chui Kim Đồng - Giải Phóng", "Tunnel instruction must NOT remain active past tunnel exit")
         XCTAssertGreaterThanOrEqual(session.currentManeuverStepIndex, 2)
     }
 
@@ -248,7 +243,7 @@ final class ManeuverProgressionTests: XCTestCase {
             distanceMeters: 400.0,
             durationSeconds: 40.0,
             streetName: "Trần Nhân Tông",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Rẽ phải vào Trần Nhân Tông",
             beginShapeIndex: 1,
             endShapeIndex: 2
@@ -284,7 +279,7 @@ final class ManeuverProgressionTests: XCTestCase {
 
         // Must show upcoming turn step 1, not depart forever
         XCTAssertEqual(session.currentManeuverStepIndex, 1, "Must advance to step 1 upcoming turn once moving")
-        XCTAssertEqual(session.activeProgress.maneuver, .turnRight)
+        XCTAssertEqual(session.activeProgress.maneuver, .right)
     }
 
     // MARK: - Test 4: Maneuver Pass Recovery (Requirement 34)
@@ -297,8 +292,8 @@ final class ManeuverProgressionTests: XCTestCase {
 
         let steps = [
             NavStep(coordinate: coords[5], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đoạn 1", maneuverType: .straight, instruction: "Đi thẳng", beginShapeIndex: 0, endShapeIndex: 5),
-            NavStep(coordinate: coords[10], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đoạn 2", maneuverType: .turnRight, instruction: "Rẽ phải", beginShapeIndex: 5, endShapeIndex: 10),
-            NavStep(coordinate: coords[15], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đoạn 3", maneuverType: .turnLeft, instruction: "Rẽ trái", beginShapeIndex: 10, endShapeIndex: 15),
+            NavStep(coordinate: coords[10], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đoạn 2", maneuverType: .right, instruction: "Rẽ phải", beginShapeIndex: 5, endShapeIndex: 10),
+            NavStep(coordinate: coords[15], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đoạn 3", maneuverType: .left, instruction: "Rẽ trái", beginShapeIndex: 10, endShapeIndex: 15),
             NavStep(coordinate: coords[20], distanceMeters: 100.0, durationSeconds: 10.0, streetName: "Đích", maneuverType: .arrive, instruction: "Đến đích", beginShapeIndex: 15, endShapeIndex: 20)
         ]
 
@@ -306,7 +301,7 @@ final class ManeuverProgressionTests: XCTestCase {
         let session = NavigationSessionManager()
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
-        // GPS skip: vehicle jumps from coord 2 (before step 1) to coord 12 (past step 1 and step 2!)
+        // GPS skip: vehicle jumps from coord 2 (before step 1) to coord 12 (past step 1 and step 2)
         let jumpLoc = CLLocation(
             coordinate: coords[12],
             altitude: 10.0,
@@ -330,7 +325,6 @@ final class ManeuverProgressionTests: XCTestCase {
             CLLocationCoordinate2D(latitude: 21.001, longitude: 105.800)
         ]
 
-        // Deliberately corrupt step indices (begin > end, out of bounds)
         let corruptedStep = NavStep(
             coordinate: coords[1],
             distanceMeters: 100.0,
@@ -342,7 +336,6 @@ final class ManeuverProgressionTests: XCTestCase {
             endShapeIndex: 50     // invalid
         )
 
-        // Must not crash
         let geometry = RouteGeometry(coordinates: coords, steps: [corruptedStep])
         XCTAssertEqual(geometry.maneuverBeginDistancesAlongRoute.count, 1)
         XCTAssertEqual(geometry.maneuverEndDistancesAlongRoute.count, 1)
@@ -372,7 +365,7 @@ final class ManeuverProgressionTests: XCTestCase {
             distanceMeters: 350.0,
             durationSeconds: 30.0,
             streetName: "Bà Triệu",
-            maneuverType: .turnRight,
+            maneuverType: .right,
             instruction: "Rẽ phải vào Bà Triệu",
             beginShapeIndex: 5,
             endShapeIndex: 12
