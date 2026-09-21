@@ -75,7 +75,7 @@ final class NavigationReplayTests: XCTestCase {
         let baseDate = Date()
         var samples: [NavigationReplaySample] = []
 
-        // 5 equidistant samples from A to C
+        // 5 equidistant samples advancing along route from A to C
         for i in 0...4 {
             let frac = Double(i) / 4.0
             let lat = coordA.latitude + frac * (coordC.latitude - coordA.latitude)
@@ -88,6 +88,20 @@ final class NavigationReplayTests: XCTestCase {
             ))
         }
 
+        // Vehicle settles at destination (allowing Kalman filter convergence)
+        samples.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(62.0),
+            coordinate: coordC,
+            speed: 0.0,
+            course: 0.0
+        ))
+        samples.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(64.0),
+            coordinate: coordC,
+            speed: 0.0,
+            course: 0.0
+        ))
+
         runner.replay(samples: samples)
 
         // Progress distance along route should increase monotonically (remaining distance decreases)
@@ -99,8 +113,8 @@ final class NavigationReplayTests: XCTestCase {
 
         XCTAssertEqual(runner.arrivalCount, 1, "Arrival must fire exactly once")
         XCTAssertEqual(sessionManager.state, .arrived)
-        XCTAssertEqual(sessionManager.diagnostics.locationsReceived, 5)
-        XCTAssertEqual(sessionManager.diagnostics.locationsAccepted, 5)
+        XCTAssertEqual(sessionManager.diagnostics.locationsReceived, 7)
+        XCTAssertEqual(sessionManager.diagnostics.locationsAccepted, 7)
     }
 
     // MARK: - 2. GPS Jitter Replay
