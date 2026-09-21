@@ -89,18 +89,18 @@ public struct OffRouteDecision: Sendable, Equatable {
 // MARK: - Configuration
 
 public struct OffRouteDetectorConfig: Sendable {
-    public let baseEnterThresholdMeters: Double
-    public let accuracyMultiplier: Double
-    public let recoveryThresholdMeters: Double
-    public let standardDwellSeconds: Double
-    public let courseDivergenceDwellSeconds: Double
-    public let stationaryDwellSeconds: Double
-    public let strongDeviationDwellSeconds: Double
-    public let strongDeviationThresholdMeters: Double
-    public let strongDeviationMaxAccuracyMeters: Double
-    public let courseMismatchAngleDegrees: Double
-    public let minSpeedForCourseMetersPerSecond: Double
-    public let recoveryDwellSeconds: Double
+    public var baseEnterThresholdMeters: Double
+    public var accuracyMultiplier: Double
+    public var recoveryThresholdMeters: Double
+    public var standardDwellSeconds: Double
+    public var courseDivergenceDwellSeconds: Double
+    public var stationaryDwellSeconds: Double
+    public var strongDeviationDwellSeconds: Double
+    public var strongDeviationThresholdMeters: Double
+    public var strongDeviationMaxAccuracyMeters: Double
+    public var courseMismatchAngleDegrees: Double
+    public var minSpeedForCourseMetersPerSecond: Double
+    public var recoveryDwellSeconds: Double
 
     public init(
         baseEnterThresholdMeters: Double = 15.0,
