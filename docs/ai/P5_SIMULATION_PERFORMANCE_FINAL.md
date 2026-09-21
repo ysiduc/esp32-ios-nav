@@ -392,23 +392,56 @@ Instead of flaky wall-clock assertions (`must finish in 20ms`), performance regr
 
 ## 18. GitHub Actions Evidence
 
-*(To be populated with exact run ID, commit SHA, and verification logs upon GitHub Actions execution)*
+- **Workflow Run ID**: `35573890081`
+- **Commit SHA**: `a2a28f73111f1ae59fc31cbfd077c5d0db2d3ba0`
+- **Workflow Run URL**: [https://github.com/ysiduc/esp32-ios-nav/actions/runs/35573890081](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35573890081)
 
-- **Workflow Run ID**: `TBD`
-- **Commit SHA**: `TBD`
-- **Workflow Run URL**: `TBD`
-
-### CI Results
+### CI Results Summary
 ```text
-Job: Compile Native iOS Swift/SwiftUI
-Status: SUCCESS
-Tests: 182 executed, 0 failures (182/182 PASS)
-Native Release: SUCCESS
-Native IPA: SUCCESS
+Workflow: Build iOS IPA Packages
+Run: 35573890081
+Commit: a2a28f73111f1ae59fc31cbfd077c5d0db2d3ba0
 
-Job: Compile Flutter iOS IPA
+Job: Compile Native iOS Swift/SwiftUI (ID 106251268050)
+Duration: 5m43s
+Runner: macos-15
 Status: SUCCESS
-Flutter IPA: SUCCESS
+Step 1. Checkout: SUCCESS
+Step 2. Install XcodeGen: SUCCESS
+Step 3. Verify Valhalla Framework & Libs: SUCCESS
+Step 4. Generate Xcode Project: SUCCESS
+Step 5. Resolve Swift Packages: SUCCESS
+Step 6. Run Native Unit Tests: SUCCESS (182 executed, 0 failures, 100% PASS)
+Step 7. Build Native iOS App: SUCCESS
+Step 8. Package Native IPA: SUCCESS
+Step 9. Upload Native IPA artifact: SUCCESS (esp32_nav_native_ios_ipa)
+
+Job: Compile Flutter iOS IPA (ID 106251268177)
+Duration: 3m7s
+Runner: macos-15
+Status: SUCCESS
+Artifact: esp32_nav_flutter_ios_ipa
+```
+
+### Verified Test Suite Counts
+```text
+Test Suite 'AppLifecycleNavigationTests' passed (4 executed, 0 failures)
+Test Suite 'BLESendSchedulerTests' passed (7 executed, 0 failures)
+Test Suite 'DestinationSelectionTests' passed (13 executed, 0 failures)
+Test Suite 'GoongSearchServiceTests' passed (22 executed, 0 failures)
+Test Suite 'LocationTrackingPolicyTests' passed (8 executed, 0 failures)
+Test Suite 'MapRenderPolicyTests' passed (6 executed, 0 failures)
+Test Suite 'NavigationReplayTests' passed (15 executed, 0 failures)
+Test Suite 'OffRouteDetectorTests' passed (10 executed, 0 failures)
+Test Suite 'RerouteManagerTests' passed (15 executed, 0 failures)
+Test Suite 'RouteCandidateSelectionTests' passed (17 executed, 0 failures)
+Test Suite 'RouteGeometryTests' passed (12 executed, 0 failures)
+Test Suite 'RoutingFallbackTests' passed (7 executed, 0 failures)
+Test Suite 'RoutingProfileTests' passed (9 executed, 0 failures)
+Test Suite 'SearchRankingTests' passed (31 executed, 0 failures)
+Test Suite 'ValhallaRouteSetParserTests' passed (6 executed, 0 failures)
+
+Test Suite 'ESP32NavAppTests.xctest' passed (182 executed, 0 failures, 0 unexpected)
 ```
 
 ---
