@@ -251,3 +251,45 @@ All tests run deterministically and pass locally:
 - **Zero Goong references** across entire codebase.
 - **Zero paid Google Places API keys required**.
 - **No infinite spinner guarantee**: Generation ownership, try/catch/finally, strict timeouts, and user cancel actions.
+
+---
+
+# P5.4.1.1 — Google Shortlink Exact-Pin Fidelity
+
+## 25. Real-Device Failure & Root Cause
+- **Real-Device Failure**: Pasting `https://maps.app.goo.gl/Ph7FpKY9xDfo7CBF8?g_st=ic` resolved to `Phố Nguyễn Siêu (21.03655, 105.85165)`, which was merely a camera/street coordinate rather than the true destination pin.
+- **Root Cause**: The redirected browser URL contained the place name and camera center (`/@21.03655,105.85165,17z`), but no coordinates in the path or query. The parser immediately defaulted to independent text search (`SearchService.searchPlaces("Phố Nguyễn Siêu")`), returned the street coordinate, and marked it as `exactPin`.
+
+## 26. Resolution Authority Order
+The resolution pipeline now strictly adheres to the following hierarchy:
+1. **Original Full URL Coordinates**: Direct `!3d/!4d`, `?q=`, `/place/lat,lon`, `/dir/.../lat,lon`.
+2. **Redirected Final URL Coordinates**: Same extraction on redirected URL.
+3. **Canonical Link from HTML**: Parses `<link rel="canonical" href="...">` supporting either attribute order (`rel` before `href` or `href` before `rel`) and HTML entity unescaping (`&amp;` -> `&`).
+4. **OG:URL from HTML**: Parses `<meta property="og:url" content="...">` supporting attribute-order variations.
+5. **Identity-Bound Destination Metadata**: Target pin metadata in HTML (not generic or random numbers).
+6. **Named Fallback Candidate**: Proposes candidate via independent search with `requiresConfirmation = true` (NEVER marked as exact).
+7. **Camera Viewport Center**: Marked as `approximate` with `requiresConfirmation = true`.
+8. **Unresolved**: Prompts retry or manual search; never falls back to raw URL search.
+
+## 27. Coordinate Distinction & Confirmation Behavior
+- **Explicit Separation**:
+  - `exactDestinationCoordinate`: Populated ONLY when true Google pin coordinate is identified.
+  - `cameraCoordinate`: Viewport `@lat,lon` (never promoted to exact).
+  - `independentSearchCandidateCoordinate`: Geocoder proposal when only title is available.
+- **`targetCoordinate` Safety**: Returns only `exactDestinationCoordinate`. Unverified search candidates are never automatically committed.
+- **Confirmation Dialog**: When an unverified candidate is returned, the app displays:
+  - Title: *"Có thể là địa điểm này"*
+  - Subtitle: *"Không thể xác nhận chính xác ghim từ liên kết Google Maps. Hãy kiểm tra vị trí trước khi chỉ đường."*
+  - Actions: *"Dùng vị trí này"* (commits only upon tap) and *"Hủy"*.
+- **Debug Diagnostics**: In `kDebugMode`, a sanitized diagnostic string (recording host, hops, canonical presence, ogUrl presence, identity presence, resolution source, confidence) can be copied to the clipboard via *"Sao chép chẩn đoán"*.
+
+## 28. Fidelity Regression Tests
+- **`mobile_app/test/google_link_resolution_test.dart`** (expanded to 12 tests):
+  - Section 21 & 22 Failure Model: Final URL has no pin, camera `@21.03655,105.85165`, HTML canonical has true target pin `!3d21.03698!4d105.85234` -> resolves to `canonical_url` exact pin; `SearchService` call count is 0.
+  - Section 23: `og:url` target pin extraction.
+  - Section 24: Title-only link without exact pin sets `confidence = resolvedByIndependentSearch`, `exactCoordinate = null`, `requiresConfirmation = true`.
+  - Section 25: Independent search candidate disagreeing with camera requires confirmation and leaves `exactDestinationCoordinate = null`.
+  - Section 26: Exact pin completely ignores independent search.
+  - Section 27: Camera viewport `@lat,lon` never becomes exact pin.
+  - HTML entity decoding and attribute-order resilience.
+- **Flutter Test Suite**: **54 / 54 PASS** (0 failures).

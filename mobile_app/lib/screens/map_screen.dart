@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:provider/provider.dart';
@@ -342,37 +343,15 @@ class _MapScreenState extends State<MapScreen> {
     final place = await _googleLinkController.resolve(clean, userLocation: currentPos);
     if (!mounted) return;
 
+    final resolvedLink = _googleLinkController.state.resolvedLink;
+    final isExact = resolvedLink?.isExact ?? (place != null && place.source == 'google_link_exact');
+    final requiresConfirmation = resolvedLink?.requiresConfirmation ?? (!isExact);
+
     if (place != null) {
-      _searchController.text = place.name;
-      _onPlaceClicked(place);
-
-      final isApprox = place.precision == PlacePrecision.approximate ||
-          place.precision == PlacePrecision.neighborhood ||
-          place.precision == PlacePrecision.street ||
-          place.source == 'google_link_approximate';
-
-      if (isApprox) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFFE65100),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: const Row(
-              children: [
-                Icon(Icons.warning_amber_rounded, color: Colors.white, size: 22),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Vị trí này được ước lượng từ liên kết. Kiểm tra ghim trước khi dẫn đường.',
-                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      } else {
+      if (isExact && !requiresConfirmation) {
+        // EXACT PIN (P5.4.1.1 Authority 1-5): Auto-select immediately
+        _searchController.text = place.name;
+        _onPlaceClicked(place);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF0084FF),
@@ -394,10 +373,126 @@ class _MapScreenState extends State<MapScreen> {
             duration: const Duration(seconds: 3),
           ),
         );
+      } else {
+        // UNVERIFIED / APPROXIMATE RESULT (P5.4.1.1 Sections 13 & 30):
+        // DO NOT automatically start routing! Show confirmation dialog.
+        _showUnverifiedGoogleConfirmationDialog(place, resolvedLink);
       }
     } else if (_googleLinkController.state.status != GoogleLinkResolutionStatus.cancelled) {
       _showGoogleMapsResolutionFailure(clean);
     }
+  }
+
+  void _showUnverifiedGoogleConfirmationDialog(MapPlace candidatePlace, GoogleMapsResolvedLink? link) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.help_outline_rounded, color: Color(0xFFFF9500), size: 26),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Có thể là địa điểm này',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Không thể xác nhận chính xác ghim từ liên kết Google Maps. Hãy kiểm tra vị trí trước khi chỉ đường.',
+                style: TextStyle(fontSize: 14, color: Colors.black87),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2F2F7),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      candidatePlace.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      candidatePlace.displayName,
+                      style: const TextStyle(fontSize: 13, color: Colors.black54),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Tọa độ: ${candidatePlace.coordinate.latitude.toStringAsFixed(5)}, ${candidatePlace.coordinate.longitude.toStringAsFixed(5)}',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+                    ),
+                  ],
+                ),
+              ),
+              if (kDebugMode && link?.debugDiagnostics != null) ...[
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: link!.debugDiagnostics!));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Đã sao chép chẩn đoán GoogleLink'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.copy_rounded, size: 14, color: Color(0xFF007AFF)),
+                        SizedBox(width: 6),
+                        Text(
+                          'Sao chép chẩn đoán (Debug)',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF007AFF), fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Hủy', style: TextStyle(color: Colors.black54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF007AFF),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                _searchController.text = candidatePlace.name;
+                _onPlaceClicked(candidatePlace);
+              },
+              child: const Text('Dùng vị trí này', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override

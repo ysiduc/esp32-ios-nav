@@ -16,15 +16,21 @@ class GoogleLinkResolutionState {
   final GoogleLinkResolutionStatus status;
   final String? statusText;
   final MapPlace? resolvedPlace;
+  final GoogleMapsResolvedLink? resolvedLink;
   final String? errorMessage;
   final int generation;
+  final bool requiresConfirmation;
+  final String? debugDiagnostics;
 
   const GoogleLinkResolutionState({
     this.status = GoogleLinkResolutionStatus.idle,
     this.statusText,
     this.resolvedPlace,
+    this.resolvedLink,
     this.errorMessage,
     this.generation = 0,
+    this.requiresConfirmation = false,
+    this.debugDiagnostics,
   });
 
   bool get isLoading => status == GoogleLinkResolutionStatus.resolving;
@@ -65,8 +71,8 @@ class GoogleLinkResolutionController {
     ));
 
     try {
-      final place = await parser
-          .parseInput(clean, userLocation: userLocation)
+      final resolvedLink = await parser
+          .parseResolvedLink(clean, userLocation: userLocation)
           .timeout(timeoutBudget);
 
       if (_state.generation != gen) {
@@ -74,16 +80,22 @@ class GoogleLinkResolutionController {
         return null;
       }
 
+      final place = parser.buildMapPlaceFromResolved(resolvedLink);
+
       if (place != null) {
         _updateState(GoogleLinkResolutionState(
           status: GoogleLinkResolutionStatus.success,
           resolvedPlace: place,
+          resolvedLink: resolvedLink,
+          requiresConfirmation: resolvedLink.requiresConfirmation,
+          debugDiagnostics: resolvedLink.debugDiagnostics,
           generation: gen,
         ));
         return place;
       } else {
         _updateState(GoogleLinkResolutionState(
           status: GoogleLinkResolutionStatus.failed,
+          resolvedLink: resolvedLink,
           errorMessage: 'Không đọc được vị trí từ liên kết Google Maps',
           generation: gen,
         ));

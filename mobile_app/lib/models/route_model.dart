@@ -255,6 +255,7 @@ enum GoogleMapsResolutionConfidence {
   exactPin,
   exactDestination,
   resolvedPlace,
+  resolvedByIndependentSearch,
   approximate,
   unresolved,
 }
@@ -263,30 +264,48 @@ class GoogleMapsResolvedLink {
   final Uri? finalUri;
   final String? placeName;
   final LatLng? exactCoordinate;
+  final LatLng? exactDestinationCoordinate;
   final LatLng? cameraCoordinate;
+  final LatLng? independentSearchCandidateCoordinate;
   final GoogleMapsResolutionConfidence confidence;
   final PlacePrecision precision;
   final String? rawQuery;
   final String? address;
+  final String? resolutionSource;
+  final String? googlePlaceIdentity;
+  final bool requiresConfirmation;
+  final String? debugDiagnostics;
+  final MapPlace? place;
 
   GoogleMapsResolvedLink({
     this.finalUri,
     this.placeName,
-    this.exactCoordinate,
+    LatLng? exactCoordinate,
+    LatLng? exactDestinationCoordinate,
     this.cameraCoordinate,
+    this.independentSearchCandidateCoordinate,
     required this.confidence,
     this.precision = PlacePrecision.approximate,
     this.rawQuery,
     this.address,
-  });
+    this.resolutionSource,
+    this.googlePlaceIdentity,
+    bool? requiresConfirmation,
+    this.debugDiagnostics,
+    this.place,
+  })  : exactCoordinate = exactDestinationCoordinate ?? exactCoordinate,
+        exactDestinationCoordinate = exactDestinationCoordinate ?? exactCoordinate,
+        requiresConfirmation = requiresConfirmation ??
+            (confidence == GoogleMapsResolutionConfidence.approximate ||
+             confidence == GoogleMapsResolutionConfidence.resolvedByIndependentSearch ||
+             confidence == GoogleMapsResolutionConfidence.unresolved);
 
-  LatLng? get targetCoordinate =>
-      exactCoordinate ??
-      (confidence == GoogleMapsResolutionConfidence.approximate ? cameraCoordinate : null);
+  LatLng? get targetCoordinate => exactDestinationCoordinate;
 
   bool get isExact =>
-      confidence == GoogleMapsResolutionConfidence.exactPin ||
-      confidence == GoogleMapsResolutionConfidence.exactDestination;
+      (confidence == GoogleMapsResolutionConfidence.exactPin ||
+       confidence == GoogleMapsResolutionConfidence.exactDestination) &&
+      exactDestinationCoordinate != null;
 }
 
 class MapPlace {
