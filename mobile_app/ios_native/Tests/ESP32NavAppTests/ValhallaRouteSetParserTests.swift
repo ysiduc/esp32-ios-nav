@@ -249,4 +249,44 @@ final class ValhallaRouteSetParserTests: XCTestCase {
         XCTAssertEqual(deduped[1].relativeDurationSeconds, 60, accuracy: 1e-3)
         XCTAssertEqual(deduped[1].relativeDistanceMeters, 400, accuracy: 1e-3)
     }
+    // MARK: - 6. Distinct Geometries Survive Deduplication
+
+    func testDistinctGeometries_SurviveDeduplication_DespiteIdenticalDistanceAndDuration() {
+        let start = CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8)
+        let dest = CLLocationCoordinate2D(latitude: 21.1, longitude: 105.9)
+
+        // Route A: goes east
+        let routeA = NavRoute(
+            coordinates: [
+                start,
+                CLLocationCoordinate2D(latitude: 21.05, longitude: 105.88),
+                dest
+            ],
+            steps: [],
+            totalDistanceMeters: 1000,
+            totalDurationSeconds: 120
+        )
+
+        // Route B: goes west, distinct coordinates but identical distance/duration and endpoints
+        let routeB = NavRoute(
+            coordinates: [
+                start,
+                CLLocationCoordinate2D(latitude: 21.05, longitude: 105.78),
+                dest
+            ],
+            steps: [],
+            totalDistanceMeters: 1000,
+            totalDurationSeconds: 120
+        )
+
+        let candidateA = RouteCandidate(id: "cA", route: routeA, provider: .valhalla, requestedMode: .motorcycle, profileID: "p", isPrimary: true)
+        let candidateB = RouteCandidate(id: "cB", route: routeB, provider: .valhalla, requestedMode: .motorcycle, profileID: "p", isPrimary: false)
+
+        let deduped = RouteSet.deduplicate(candidates: [candidateA, candidateB])
+
+        // Both distinct routes must survive deduplication!
+        XCTAssertEqual(deduped.count, 2, "Distinct route geometries must not be dropped merely because distance/duration match")
+        XCTAssertEqual(deduped[0].id, "cA")
+        XCTAssertEqual(deduped[1].id, "cB")
+    }
 }

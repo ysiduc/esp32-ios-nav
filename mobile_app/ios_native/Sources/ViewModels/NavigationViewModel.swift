@@ -142,11 +142,10 @@ public final class NavigationViewModel: ObservableObject {
         if isNewSearchIntent {
             // User is editing after a selection or while detail/preview was active — start fresh
             _cancelPendingSelectionTask()
-            _cancelPendingRouteCalculation()
+            invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
             selectedDestination = nil
             selectedPrediction  = nil
             routeErrorMessage   = nil
-            navSession.clearRoute()
             searchService.endSearchSession()
         }
         searchQuery = text
@@ -171,10 +170,9 @@ public final class NavigationViewModel: ObservableObject {
     ///   5. On success: set selectedDestination, rotate session token, calculate route.
     ///   6. On failure: show error; preserve selectedPrediction for retry context.
     public func selectPrediction(_ prediction: GoongPrediction) {
-        // Cancel prior selection & routing, clear stale preview and errors
+        // Cancel prior selection & routing, clear stale preview, candidates, and errors
         _cancelPendingSelectionTask()
-        _cancelPendingRouteCalculation()
-        navSession.clearRoute()
+        invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
         selectedDestination = nil
         routeErrorMessage   = nil
 
@@ -211,6 +209,7 @@ public final class NavigationViewModel: ObservableObject {
                 // Superseded by newer selection — silent
             } catch {
                 guard self.destinationSelectionGeneration == mySelGen else { return }
+                self.invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
                 self.routeErrorMessage = "Không thể lấy thông tin địa điểm: \(error.localizedDescription)"
                 print("[ViewModel] Place detail error: \(error)")
                 // Preserve selectedPrediction so the user can retry
@@ -220,6 +219,10 @@ public final class NavigationViewModel: ObservableObject {
 
     /// Select an alternative route candidate in preview mode.
     public func selectRouteCandidate(id: String) {
+        guard navSession.state != .navigating else {
+            print("[ViewModel] selectRouteCandidate rejected: session is navigating")
+            return
+        }
         guard let candidate = routeCandidates.first(where: { $0.id == id }) else { return }
         selectedRouteCandidateID = candidate.id
         currentRoutingProvider = candidate.provider
@@ -233,7 +236,7 @@ public final class NavigationViewModel: ObservableObject {
     /// Called when user taps the × button or explicitly cancels the search.
     public func clearSearch() {
         _cancelPendingSelectionTask()
-        _cancelPendingRouteCalculation()
+        invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
 
         isSearchActive      = false
         searchQuery         = ""
@@ -241,14 +244,7 @@ public final class NavigationViewModel: ObservableObject {
         selectedDestination = nil
         routeErrorMessage   = nil
 
-        routeCandidates          = []
-        selectedRouteCandidateID = nil
-        currentRoutingProvider   = nil
-        isDegradedRoute          = false
-        degradedReason           = nil
-
         searchService.resetAll()
-        navSession.clearRoute()
     }
 
     // MARK: - Route Calculation
@@ -256,11 +252,17 @@ public final class NavigationViewModel: ObservableObject {
     /// Calculate route candidates from current GPS location to destination (Preview mode).
     public func calculateRoute(to destination: CLLocationCoordinate2D) async {
         // Cancel any pending preview route calculation and increment request generation
-        routeCalculationTask?.cancel()
-        routeRequestGeneration &+= 1
+        _cancelPendingRouteCalculation(resetLoading: false)
         let thisRequestGen = routeRequestGeneration
 
+        // Immediately invalidate prior route candidate and preview state
+        resetRouteCandidateState()
+        if navSession.state != .navigating {
+            navSession.clearRoute()
+        }
+
         guard let userCoord = navSession.userLocation?.coordinate else {
+            isCalculatingRoute = false
             routeErrorMessage = "Chưa nhận được tín hiệu định vị GPS"
             return
         }
@@ -274,7 +276,7 @@ public final class NavigationViewModel: ObservableObject {
             origin: userCoord,
             destination: destination,
             profile: profile,
-            requestedAlternatives: 2
+            requestedAlternatives: profile.maxAlternatives
         )
 
         let task = Task<RouteSet, Error> {
@@ -319,11 +321,8 @@ public final class NavigationViewModel: ObservableObject {
             guard self.navSession.state != .navigating else { return }
 
             self.isCalculatingRoute = false
-            self.routeCandidates = []
-            self.selectedRouteCandidateID = nil
-            self.currentRoutingProvider = nil
-            self.isDegradedRoute = false
-            self.degradedReason = nil
+            self.resetRouteCandidateState()
+            self.navSession.clearRoute()
             self.routeErrorMessage = "Không thể tìm đường: \(error.localizedDescription)"
             print("[ViewModel] Routing error: \(error)")
         }
@@ -348,8 +347,19 @@ public final class NavigationViewModel: ObservableObject {
     // MARK: - Navigation Control
 
     public func startNavigation() {
-        let selectedCandidate = routeCandidates.first(where: { $0.id == selectedRouteCandidateID })
-        guard let route = selectedCandidate?.route ?? navSession.activeRoute else { return }
+        guard let candidateID = selectedRouteCandidateID,
+              let selectedCandidate = routeCandidates.first(where: { $0.id == candidateID }) else {
+            routeErrorMessage = "Chưa chọn lộ trình để bắt đầu điều hướng"
+            print("[ViewModel] startNavigation rejected: no active route candidate selected")
+            return
+        }
+
+        guard selectedCandidate.requestedMode == currentTransportMode else {
+            routeErrorMessage = "Lộ trình không phù hợp với phương tiện đã chọn (\(currentTransportMode.displayName))"
+            print("[ViewModel] startNavigation rejected: mode mismatch (\(selectedCandidate.requestedMode) vs \(currentTransportMode))")
+            return
+        }
+
         guard let place = selectedDestination else {
             routeErrorMessage = "Không xác định được điểm đến"
             print("[ViewModel] startNavigation rejected: no selectedDestination available")
@@ -357,9 +367,7 @@ public final class NavigationViewModel: ObservableObject {
         }
 
         // Cancel any pending preview route calculation and invalidate old preview requests
-        routeCalculationTask?.cancel()
-        routeCalculationTask = nil
-        routeRequestGeneration &+= 1
+        _cancelPendingRouteCalculation(resetLoading: false)
         rerouteManager.cancel()
 
         let destination = NavigationDestination(
@@ -368,15 +376,12 @@ public final class NavigationViewModel: ObservableObject {
             placeID: place.placeID
         )
 
-        navSession.startNavigation(route: route, destination: destination)
+        navSession.startNavigation(route: selectedCandidate.route, destination: destination)
     }
 
     public func stopNavigation() {
         // Cancel all pending route and reroute tasks
-        routeCalculationTask?.cancel()
-        routeCalculationTask = nil
-        routeRequestGeneration &+= 1
-
+        _cancelPendingRouteCalculation(resetLoading: true)
         _cancelPendingSelectionTask()
         rerouteManager.cancel()
 
@@ -385,13 +390,8 @@ public final class NavigationViewModel: ObservableObject {
         selectedDestination = nil
         selectedPrediction  = nil
         searchQuery         = ""
-        isCalculatingRoute  = false
 
-        routeCandidates          = []
-        selectedRouteCandidateID = nil
-        currentRoutingProvider   = nil
-        isDegradedRoute          = false
-        degradedReason           = nil
+        resetRouteCandidateState()
 
         let end = NavigationProgress(maneuver: .none, nextStreetName: "Chờ kết nối")
         bleManager.sendNavigationPacket(end)
@@ -401,12 +401,31 @@ public final class NavigationViewModel: ObservableObject {
         currentTransportMode = NavigationTransportMode(costingValue: transportMode)
         if navSession.state == .navigating {
             rerouteManager.requestTransportModeReroute(costing: currentTransportMode.rawValue)
-        } else if let dest = selectedDestination?.location.coordinate {
-            Task { await calculateRoute(to: dest) }
+        } else {
+            invalidateRoutePreviewState(clearActivePreview: true, resetLoading: false)
+            if let dest = selectedDestination?.location.coordinate {
+                Task { await calculateRoute(to: dest) }
+            }
         }
     }
 
     // MARK: - Private Helpers
+
+    private func resetRouteCandidateState() {
+        routeCandidates          = []
+        selectedRouteCandidateID = nil
+        currentRoutingProvider   = nil
+        isDegradedRoute          = false
+        degradedReason           = nil
+    }
+
+    private func invalidateRoutePreviewState(clearActivePreview: Bool, resetLoading: Bool) {
+        _cancelPendingRouteCalculation(resetLoading: resetLoading)
+        resetRouteCandidateState()
+        if clearActivePreview && navSession.state != .navigating {
+            navSession.clearRoute()
+        }
+    }
 
     private func _cancelPendingSelectionTask() {
         placeDetailTask?.cancel()
@@ -414,10 +433,13 @@ public final class NavigationViewModel: ObservableObject {
         destinationSelectionGeneration &+= 1
     }
 
-    private func _cancelPendingRouteCalculation() {
+    private func _cancelPendingRouteCalculation(resetLoading: Bool = true) {
         routeCalculationTask?.cancel()
         routeCalculationTask = nil
         routeRequestGeneration &+= 1
+        if resetLoading {
+            isCalculatingRoute = false
+        }
     }
 
     private func valhallaCosting(for mode: String) -> String {

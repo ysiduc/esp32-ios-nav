@@ -21,7 +21,7 @@ public struct RoutingRequest: Sendable, Equatable {
         self.origin = origin
         self.destination = destination
         self.profile = profile
-        self.requestedAlternatives = requestedAlternatives
+        self.requestedAlternatives = max(0, min(requestedAlternatives, profile.maxAlternatives))
     }
 
     public static func == (lhs: RoutingRequest, rhs: RoutingRequest) -> Bool {
@@ -58,8 +58,9 @@ public enum ValhallaRequestBuilder {
             "format": "json"
         ]
 
-        if alternates > 0 {
-            root["alternates"] = alternates
+        let boundedAlternates = max(0, min(alternates, profile.maxAlternatives))
+        if boundedAlternates > 0 {
+            root["alternates"] = boundedAlternates
         }
 
         if !profile.costingOptions.numericOptions.isEmpty {

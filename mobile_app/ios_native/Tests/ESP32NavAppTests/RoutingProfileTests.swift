@@ -193,4 +193,40 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertEqual(req1, req2)
         XCTAssertNotEqual(req1, req3)
     }
+    // MARK: - 7. Alternatives Clamping
+
+    func testRoutingRequestAlternatives_ClampedToProfileMax() throws {
+        let coord1 = CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8)
+        let coord2 = CLLocationCoordinate2D(latitude: 21.1, longitude: 105.9)
+        let profile = RoutingProfile.profile(for: .motorcycle) // maxAlternatives = 2
+
+        let reqNeg = RoutingRequest(origin: coord1, destination: coord2, profile: profile, requestedAlternatives: -1)
+        XCTAssertEqual(reqNeg.requestedAlternatives, 0)
+
+        let req0 = RoutingRequest(origin: coord1, destination: coord2, profile: profile, requestedAlternatives: 0)
+        XCTAssertEqual(req0.requestedAlternatives, 0)
+
+        let req1 = RoutingRequest(origin: coord1, destination: coord2, profile: profile, requestedAlternatives: 1)
+        XCTAssertEqual(req1.requestedAlternatives, 1)
+
+        let req2 = RoutingRequest(origin: coord1, destination: coord2, profile: profile, requestedAlternatives: 2)
+        XCTAssertEqual(req2.requestedAlternatives, 2)
+
+        let req99 = RoutingRequest(origin: coord1, destination: coord2, profile: profile, requestedAlternatives: 99)
+        XCTAssertEqual(req99.requestedAlternatives, 2)
+
+        // Verify JSON serialization clamping
+        let json99 = try ValhallaRequestBuilder.buildRequestJSON(
+            origin: coord1,
+            destination: coord2,
+            profile: profile,
+            alternates: 99
+        )
+        guard let data = json99.data(using: .utf8),
+              let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            XCTFail("Failed to deserialize JSON")
+            return
+        }
+        XCTAssertEqual(dict["alternates"] as? Int, 2, "alternates key in serialized JSON must be clamped to profile max")
+    }
 }

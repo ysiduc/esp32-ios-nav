@@ -246,6 +246,365 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertTrue(viewModel.routeCandidates.isEmpty)
         XCTAssertNil(viewModel.selectedRouteCandidateID)
     }
+    // MARK: - 7. Mode Switch Preview Success
+
+    func testModeSwitchPreviewSuccess_ImmediatelyInvalidatesOldAndInstallsNewCandidates() async {
+        // Setup initial Motorcycle routes
+        await viewModel.calculateRoute(to: coordB)
+        XCTAssertEqual(viewModel.currentTransportMode, .motorcycle)
+        XCTAssertEqual(viewModel.routeCandidates.count, 3)
+        XCTAssertEqual(viewModel.selectedRouteCandidateID, "c0")
+
+        // Prepare auto route return
+        let rAuto = NavRoute(coordinates: [coordA, coordB], steps: [], totalDistanceMeters: 2000, totalDurationSeconds: 300)
+        let autoCand = RouteCandidate(id: "auto_c0", route: rAuto, provider: .valhalla, requestedMode: .auto, profileID: "auto_standard", isPrimary: true, label: "Đề xuất")
+        mockRouting.routeSetToReturn = RouteSet(candidates: [autoCand])
+
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        // User switches mode to auto
+        viewModel.transportMode = "auto"
+        viewModel.recalculateForTransportMode()
+
+        // Wait briefly for Task in recalculateForTransportMode to complete
+        for _ in 0..<50 {
+            if viewModel.selectedRouteCandidateID == "auto_c0" { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        XCTAssertEqual(viewModel.currentTransportMode, .auto)
+        XCTAssertEqual(viewModel.routeCandidates.count, 1)
+        XCTAssertEqual(viewModel.selectedRouteCandidateID, "auto_c0")
+        XCTAssertEqual(viewModel.routeCandidates.first?.requestedMode, .auto)
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, 2000)
+    }
+
+    // MARK: - 8. Mode Switch Preview Failure
+
+    func testModeSwitchPreviewFailure_LeavesCleanStateAndDoesNotResurrectOldRoute() async {
+        // 1. Initial Motorcycle preview succeeds
+        await viewModel.calculateRoute(to: coordB)
+        XCTAssertEqual(viewModel.routeCandidates.count, 3)
+        XCTAssertNotNil(navSession.activeRoute)
+
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        // 2. Next routing call (for auto) will fail
+        mockRouting.routeSetToReturn = nil
+
+        // 3. User switches to Auto
+        viewModel.transportMode = "auto"
+        viewModel.recalculateForTransportMode()
+
+        for _ in 0..<50 {
+            if viewModel.routeErrorMessage != nil { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        // 4. Assert full cleanup and NO resurrection of old Motorcycle route
+        XCTAssertEqual(viewModel.currentTransportMode, .auto)
+        XCTAssertTrue(viewModel.routeCandidates.isEmpty)
+        XCTAssertNil(viewModel.selectedRouteCandidateID)
+        XCTAssertNil(navSession.activeRoute, "Old motorcycle route preview must not be resurrected")
+        XCTAssertFalse(viewModel.isCalculatingRoute)
+        XCTAssertNotNil(viewModel.routeErrorMessage)
+
+        // 5. User tapping start navigation must NOT start navigation
+        viewModel.startNavigation()
+        XCTAssertEqual(navSession.state, .idle, "startNavigation must be rejected after failed mode switch")
+    }
+
+    // MARK: - 9. Start Navigation Wrong Mode Rejected
+
+    func testStartNavigation_WrongModeRejected() async {
+        // Motorcycle routes in preview
+        await viewModel.calculateRoute(to: coordB)
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        // Artificially change current transport mode to auto while motorcycle candidate is selected
+        viewModel.currentTransportMode = .auto
+
+        viewModel.startNavigation()
+
+        XCTAssertEqual(navSession.state, .idle, "startNavigation must reject mode mismatch")
+        XCTAssertNotNil(viewModel.routeErrorMessage)
+    }
+
+    // MARK: - 10. Clear Search Resets IsCalculatingRoute
+
+    func testClearSearch_ResetsIsCalculatingRoute() async throws {
+        let service = ControlledMockRoutingService()
+        let vm = NavigationViewModel(
+            routingService: service,
+            navSession: navSession,
+            searchService: searchService,
+            bleManager: nil
+        )
+
+        let t = Task { await vm.calculateRoute(to: coordB) }
+        var wait = 0
+        while service.pendingCount < 1 && wait < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(vm.isCalculatingRoute)
+
+        // User clears search while route request is pending
+        vm.clearSearch()
+
+        XCTAssertFalse(vm.isCalculatingRoute, "clearSearch must immediately reset isCalculatingRoute to false")
+        XCTAssertTrue(vm.routeCandidates.isEmpty)
+        XCTAssertNil(vm.selectedRouteCandidateID)
+        XCTAssertNil(navSession.activeRoute)
+
+        // Late response arrives
+        service.resume(destination: coordB, with: RouteSet(candidates: [candidate0]))
+        await t.value
+
+        XCTAssertFalse(vm.isCalculatingRoute)
+        XCTAssertTrue(vm.routeCandidates.isEmpty)
+        XCTAssertNil(navSession.activeRoute)
+    }
+
+    // MARK: - 11. New Search Resets IsCalculatingRoute
+
+    func testNewSearch_ResetsIsCalculatingRoute() async throws {
+        let service = ControlledMockRoutingService()
+        let vm = NavigationViewModel(
+            routingService: service,
+            navSession: navSession,
+            searchService: searchService,
+            bleManager: nil
+        )
+
+        let t = Task { await vm.calculateRoute(to: coordB) }
+        var wait = 0
+        while service.pendingCount < 1 && wait < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(vm.isCalculatingRoute)
+
+        // User types new query
+        vm.updateSearchQuery("New query")
+
+        XCTAssertFalse(vm.isCalculatingRoute, "updateSearchQuery with new intent must reset isCalculatingRoute")
+        XCTAssertTrue(vm.routeCandidates.isEmpty)
+        XCTAssertNil(navSession.activeRoute)
+
+        service.resume(destination: coordB, with: RouteSet(candidates: [candidate0]))
+        await t.value
+
+        XCTAssertFalse(vm.isCalculatingRoute)
+        XCTAssertTrue(vm.routeCandidates.isEmpty)
+    }
+
+    // MARK: - 12. Select Prediction Clears Old RouteSet Immediately
+
+    func testSelectPrediction_ClearsOldRouteSetImmediately() async {
+        await viewModel.calculateRoute(to: coordB)
+        XCTAssertEqual(viewModel.routeCandidates.count, 3)
+        XCTAssertNotNil(navSession.activeRoute)
+
+        let mockClient = MockGoongPlacesClient()
+        mockClient.useContinuationForDetail = true
+        let searchSvc = GoongSearchService(client: mockClient, debounceDelay: 0)
+        let vm = NavigationViewModel(
+            routingService: mockRouting,
+            navSession: navSession,
+            searchService: searchSvc,
+            bleManager: nil
+        )
+
+        // Give vm some initial candidate state
+        vm.routeCandidates = [candidate0, candidate1]
+        vm.selectedRouteCandidateID = "c0"
+        navSession.setRoutePreview(candidate0.route)
+
+        let rawPred = mockClient.makePrediction(placeID: "p2", mainText: "New Destination")
+        let pred = GoongPrediction(
+            id: rawPred.placeID,
+            placeID: rawPred.placeID,
+            mainText: rawPred.mainText,
+            secondaryText: rawPred.secondaryText,
+            description: rawPred.description,
+            structuredFormatting: GoongStructuredFormatting(mainText: rawPred.mainText, secondaryText: rawPred.secondaryText),
+            providerScore: rawPred.providerScore,
+            providerIndex: rawPred.providerIndex,
+            district: nil,
+            commune: nil,
+            province: nil
+        )
+
+        vm.selectPrediction(pred)
+
+        // Candidate state must be cleared IMMEDIATELY, before place detail returns
+        XCTAssertTrue(vm.routeCandidates.isEmpty, "selectPrediction must immediately clear routeCandidates")
+        XCTAssertNil(vm.selectedRouteCandidateID, "selectPrediction must immediately clear selectedRouteCandidateID")
+        XCTAssertNil(navSession.activeRoute, "selectPrediction must immediately clear activeRoute preview")
+    }
+
+    // MARK: - 13. Place Detail Failure Resets IsCalculatingRoute And Cleans Preview
+
+    func testPlaceDetailFailure_ResetsIsCalculatingRouteAndCleansPreview() async throws {
+        let mockClient = MockGoongPlacesClient()
+        mockClient.detailResult = .failure(URLError(.cannotConnectToHost))
+        let searchSvc = GoongSearchService(client: mockClient, debounceDelay: 0)
+        let vm = NavigationViewModel(
+            routingService: mockRouting,
+            navSession: navSession,
+            searchService: searchSvc,
+            bleManager: nil
+        )
+
+        let rawPred = mockClient.makePrediction(placeID: "fail_p", mainText: "Failing Place")
+        let pred = GoongPrediction(
+            id: rawPred.placeID,
+            placeID: rawPred.placeID,
+            mainText: rawPred.mainText,
+            secondaryText: rawPred.secondaryText,
+            description: rawPred.description,
+            structuredFormatting: GoongStructuredFormatting(mainText: rawPred.mainText, secondaryText: rawPred.secondaryText),
+            providerScore: rawPred.providerScore,
+            providerIndex: rawPred.providerIndex,
+            district: nil,
+            commune: nil,
+            province: nil
+        )
+
+        vm.selectPrediction(pred)
+
+        for _ in 0..<50 {
+            if vm.routeErrorMessage != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        XCTAssertFalse(vm.isCalculatingRoute)
+        XCTAssertTrue(vm.routeCandidates.isEmpty)
+        XCTAssertNil(vm.selectedRouteCandidateID)
+        XCTAssertNil(navSession.activeRoute)
+        XCTAssertNotNil(vm.routeErrorMessage)
+    }
+
+    // MARK: - 14. Superseded Route A Cannot Clear Route B Loading State
+
+    func testSupersededRouteA_CannotClearRouteBLoadingState() async throws {
+        let service = ControlledMockRoutingService()
+        let vm = NavigationViewModel(
+            routingService: service,
+            navSession: navSession,
+            searchService: searchService,
+            bleManager: nil
+        )
+
+        let dest1 = CLLocationCoordinate2D(latitude: 21.1, longitude: 105.8)
+        let dest2 = CLLocationCoordinate2D(latitude: 21.2, longitude: 105.9)
+
+        let t1 = Task { await vm.calculateRoute(to: dest1) }
+        var wait = 0
+        while service.pendingCount < 1 && wait < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(vm.isCalculatingRoute)
+
+        // Request 2 starts and supersedes Request 1
+        let t2 = Task { await vm.calculateRoute(to: dest2) }
+        wait = 0
+        while service.pendingCount < 2 && wait < 200 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+            wait += 1
+        }
+        XCTAssertTrue(vm.isCalculatingRoute)
+
+        // Cancel/resume Request 1 late with error or result
+        service.resume(destination: dest1, with: RouteSet(candidates: [candidate0]))
+        await t1.value
+
+        // Request 2 is still in flight: isCalculatingRoute MUST remain true!
+        XCTAssertTrue(vm.isCalculatingRoute, "Cancelled/unwound Request 1 must NOT set isCalculatingRoute to false while Request 2 is active")
+
+        // Finish Request 2
+        service.resume(destination: dest2, with: RouteSet(candidates: [candidate1]))
+        await t2.value
+
+        XCTAssertFalse(vm.isCalculatingRoute)
+        XCTAssertEqual(vm.selectedRouteCandidateID, "c1")
+    }
+
+    // MARK: - 15. Select Route Candidate Ignored During Active Navigation
+
+    func testSelectRouteCandidate_IgnoredDuringActiveNavigation() async {
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        await viewModel.calculateRoute(to: coordB)
+        viewModel.startNavigation()
+        XCTAssertEqual(navSession.state, .navigating)
+        let originalSessionGen = navSession.sessionGeneration
+        let originalDist = navSession.activeRoute?.totalDistanceMeters
+
+        // Tapping an alternative while navigating must be ignored
+        viewModel.selectRouteCandidate(id: "c1")
+
+        XCTAssertEqual(navSession.state, .navigating)
+        XCTAssertEqual(navSession.sessionGeneration, originalSessionGen)
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, originalDist, "selectRouteCandidate must not alter active navigation route")
+    }
+
+    // MARK: - 16. Transport Mode Switch While Navigating Preserves Active Route
+
+    func testTransportModeSwitch_WhileNavigating_PreservesActiveRouteAndTriggersReroute() async {
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        await viewModel.calculateRoute(to: coordB)
+        viewModel.startNavigation()
+        XCTAssertEqual(navSession.state, .navigating)
+        let activeDist = navSession.activeRoute?.totalDistanceMeters
+
+        // User changes transport mode while actively navigating
+        viewModel.transportMode = "auto"
+        viewModel.recalculateForTransportMode()
+
+        // Active route MUST NOT be cleared immediately; remains active until reroute replaces it
+        XCTAssertEqual(navSession.state, .navigating)
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, activeDist, "Active navigation route must remain while transport mode reroute is in flight")
+    }
+
 }
 
 // MARK: - Controlled Mock for Race Testing

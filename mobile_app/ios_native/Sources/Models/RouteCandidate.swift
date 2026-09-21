@@ -78,10 +78,10 @@ public struct RouteSet: Sendable, Equatable {
     }
 
     /// Pure, deterministic candidate deduplication:
-    /// 1. Drops candidate if coordinates are identical to an earlier candidate (within microdegree precision)
-    /// 2. Drops candidate if distance (<20m diff), duration (<5s diff), origin, and destination match an earlier candidate
-    /// 3. Normalizes candidate labels: index 0 -> "Đề xuất", index 1 -> "Tuyến 2", index 2 -> "Tuyến 3"
-    /// 4. Computes relative duration and distance deltas compared to primary (index 0)
+    /// 1. Drops candidate if coordinate sequences are effectively identical to an earlier candidate (within microdegree precision)
+    /// 2. Normalizes candidate labels: index 0 -> "Đề xuất", index 1 -> "Tuyến 2", index 2 -> "Tuyến 3"
+    /// 3. Computes relative duration and distance deltas compared to primary (index 0)
+    /// Note: Does NOT drop distinct routes merely because distance/ETA match.
     public static func deduplicate(candidates: [RouteCandidate]) -> [RouteCandidate] {
         guard !candidates.isEmpty else { return [] }
 
@@ -91,7 +91,7 @@ public struct RouteSet: Sendable, Equatable {
                 let c1 = existing.route.coordinates
                 let c2 = candidate.route.coordinates
 
-                // Check 1: Identical coordinate count and sequence
+                // Geometry Check: Identical coordinate count and sequence (microdegree precision ~1.1m)
                 if c1.count == c2.count && !c1.isEmpty {
                     var allMatch = true
                     for i in 0..<c1.count {
@@ -102,17 +102,6 @@ public struct RouteSet: Sendable, Equatable {
                         }
                     }
                     if allMatch { return true }
-                }
-
-                // Check 2: Near-identical total length, duration, and endpoints
-                if abs(existing.route.totalDistanceMeters - candidate.route.totalDistanceMeters) < 20.0 &&
-                   abs(existing.route.totalDurationSeconds - candidate.route.totalDurationSeconds) < 5.0 {
-                    if let s1 = c1.first, let s2 = c2.first, let e1 = c1.last, let e2 = c2.last {
-                        if abs(s1.latitude - s2.latitude) < 1e-5 && abs(s1.longitude - s2.longitude) < 1e-5 &&
-                           abs(e1.latitude - e2.latitude) < 1e-5 && abs(e1.longitude - e2.longitude) < 1e-5 {
-                            return true
-                        }
-                    }
                 }
 
                 return false
