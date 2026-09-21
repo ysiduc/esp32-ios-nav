@@ -4,7 +4,7 @@ class MapboxConfig {
   // ============================================================
   // MAPTILER API KEY
   // ============================================================
-  static const String maptilerApiKey = 'dtGJ2HGvyxQPKNlHznvY';
+  static const String maptilerApiKey = String.fromEnvironment('MAPTILER_API_KEY', defaultValue: 'dtGJ2HGvyxQPKNlHznvY');
 
   // Fallback / legacy Mapbox token (optional)
   static const String accessToken = '';

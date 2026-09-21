@@ -286,6 +286,7 @@ class _MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
+    final resolvedLink = await _googleMapsParser.parseResolvedLink(clean, userLocation: currentPos);
     final place = await _googleMapsParser.parseInput(clean, userLocation: currentPos);
 
     if (mounted) {
@@ -293,27 +294,52 @@ class _MapScreenState extends State<MapScreen> {
       if (place != null) {
         _searchController.text = place.name;
         _onPlaceClicked(place);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF0084FF),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Đã nhận điểm đến từ Google Maps: ${place.name}',
-                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-                    overflow: TextOverflow.ellipsis,
+
+        if (resolvedLink.confidence == GoogleMapsResolutionConfidence.approximate) {
+          // Section 32: Approximate Google Link Must Require Confirmation
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFFE65100),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.white, size: 22),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Vị trí này được ước lượng từ liên kết. Kiểm tra ghim trước khi dẫn đường.',
+                      style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
+              duration: const Duration(seconds: 5),
             ),
-            duration: const Duration(seconds: 3),
-          ),
-        );
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF0084FF),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Đã nhận điểm đến từ Google Maps: ${place.name}',
+                      style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       } else {
         // Fallback to normal search
         _onSearchSubmitted(clean);
@@ -403,7 +429,11 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults = results;
         _isSearching = false;
       });
-      if (results.isNotEmpty) {
+      // Section 18 & 19: Do NOT auto-select index 0 on normal ambiguous submit.
+      // Auto-select ONLY when result is single unambiguous coordinate or exact pin:
+      if (results.length == 1 &&
+          (results.first.precision == PlacePrecision.coordinate ||
+           results.first.source == 'google_link_exact')) {
         _onPlaceClicked(results.first);
       }
     }
@@ -421,10 +451,67 @@ class _MapScreenState extends State<MapScreen> {
         _searchResults = results;
         _isSearching = false;
       });
-      if (results.isNotEmpty) {
+      // Section 18 & 19: Do NOT auto-select index 0 on normal ambiguous submit.
+      // Auto-select ONLY when result is single unambiguous coordinate or exact pin:
+      if (results.length == 1 &&
+          (results.first.precision == PlacePrecision.coordinate ||
+           results.first.source == 'google_link_exact')) {
         _onPlaceClicked(results.first);
       }
     }
+  }
+
+  Widget _buildPrecisionBadge(PlacePrecision precision) {
+    String label;
+    Color bg;
+    Color fg;
+    switch (precision) {
+      case PlacePrecision.exactAddress:
+        label = 'Địa chỉ';
+        bg = const Color(0xFFE3F2FD);
+        fg = const Color(0xFF1976D2);
+        break;
+      case PlacePrecision.poi:
+      case PlacePrecision.building:
+        label = 'Địa điểm';
+        bg = const Color(0xFFE8F5E9);
+        fg = const Color(0xFF388E3C);
+        break;
+      case PlacePrecision.street:
+        label = 'Đường';
+        bg = const Color(0xFFFFF3E0);
+        fg = const Color(0xFFF57C00);
+        break;
+      case PlacePrecision.neighborhood:
+      case PlacePrecision.district:
+      case PlacePrecision.city:
+        label = 'Khu vực';
+        bg = const Color(0xFFF3E5F5);
+        fg = const Color(0xFF7B1FA2);
+        break;
+      case PlacePrecision.approximate:
+        label = 'Ước lượng';
+        bg = const Color(0xFFFFF8E1);
+        fg = const Color(0xFFFFA000);
+        break;
+      case PlacePrecision.coordinate:
+        label = 'Tọa độ';
+        bg = const Color(0xFFECEFF1);
+        fg = const Color(0xFF455A64);
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: fg),
+      ),
+    );
   }
 
   void _onPlaceClicked(MapPlace place) async {
@@ -1314,7 +1401,19 @@ class _MapScreenState extends State<MapScreen> {
                                       backgroundColor: Colors.white,
                                       child: Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
                                     ),
-                                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+                                    title: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            p.name,
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        _buildPrecisionBadge(p.precision),
+                                      ],
+                                    ),
                                     subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black54, fontSize: 13)),
                                     trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.black38),
                                     onTap: () {
@@ -1547,7 +1646,19 @@ class _MapScreenState extends State<MapScreen> {
                                                   ListTile(
                                                     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
                                                     leading: const Icon(Icons.history_rounded, color: Colors.black45, size: 20),
-                                                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+                                                    title: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            p.name,
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        _buildPrecisionBadge(p.precision),
+                                      ],
+                                    ),
                                                     subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black45, fontSize: 13)),
                                                     trailing: IconButton(
                                                       icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 18),

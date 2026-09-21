@@ -11,6 +11,7 @@ import AVFoundation
   private var mediaChannel: FlutterMethodChannel?
   private var callChannel: FlutterMethodChannel?
   private var locationChannel: FlutterMethodChannel?
+  private var searchChannel: FlutterMethodChannel?
   private var isChannelSetup = false
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -167,6 +168,70 @@ import AVFoundation
         }
       default:
         result(FlutterMethodNotImplemented)
+      }
+    }
+
+
+    // ─── 4. MapKit Search Channel ───────────────────────────────────────
+    searchChannel = FlutterMethodChannel(
+      name: "com.ysiduc.esp32_nav/mapkit_search",
+      binaryMessenger: binaryMessenger
+    )
+    searchChannel?.setMethodCallHandler { (call, result) in
+      Task { @MainActor in
+        let args = call.arguments as? [String: Any]
+        switch call.method {
+        case "autocomplete":
+          guard let query = args?["query"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing query", details: nil))
+            return
+          }
+          let userLat = args?["userLat"] as? Double
+          let userLon = args?["userLon"] as? Double
+          do {
+            let completions = try await MapKitSearchBridge.shared.autocomplete(
+              query: query,
+              userLat: userLat,
+              userLon: userLon
+            )
+            result(completions)
+          } catch {
+            result([])
+          }
+
+        case "resolve":
+          guard let completionID = args?["completionID"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing completionID", details: nil))
+            return
+          }
+          do {
+            let place = try await MapKitSearchBridge.shared.resolve(completionID: completionID)
+            result(place)
+          } catch {
+            result(nil)
+          }
+
+        case "search":
+          guard let query = args?["query"] as? String else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing query", details: nil))
+            return
+          }
+          let userLat = args?["userLat"] as? Double
+          let userLon = args?["userLon"] as? Double
+          do {
+            let places = try await MapKitSearchBridge.shared.search(
+              query: query,
+              userLat: userLat,
+              userLon: userLon
+            )
+            result(places)
+          } catch {
+            result([])
+          }
+
+        default:
+          result(FlutterMethodNotImplemented)
+        }
       }
     }
 
@@ -536,3 +601,152 @@ class MapStreamer {
   }
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - MapKitSearchBridge (Flutter Bridge for MKLocalSearch & Completer)
+// ─────────────────────────────────────────────────────────────────────────────
+class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
+  static let shared = MapKitSearchBridge()
+
+  private let completer = MKLocalSearchCompleter()
+  private var pendingContinuation: CheckedContinuation<[[String: Any]], Error>?
+  private var completionsCache: [String: MKLocalSearchCompletion] = [:]
+
+  override init() {
+    super.init()
+    completer.resultTypes = [.address, .pointOfInterest, .query]
+    completer.delegate = self
+  }
+
+  @MainActor
+  func autocomplete(query: String, userLat: Double?, userLon: Double?) async throws -> [[String: Any]] {
+    pendingContinuation?.resume(throwing: CancellationError())
+    pendingContinuation = nil
+
+    if let lat = userLat, let lon = userLon {
+      completer.region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+        span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
+      )
+    } else {
+      completer.region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 16.0, longitude: 106.0),
+        span: MKCoordinateSpan(latitudeDelta: 10.0, longitudeDelta: 6.0)
+      )
+    }
+
+    return try await withCheckedThrowingContinuation { continuation in
+      self.pendingContinuation = continuation
+      self.completer.queryFragment = query
+    }
+  }
+
+  func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+    Task { @MainActor in
+      guard let continuation = self.pendingContinuation else { return }
+      self.pendingContinuation = nil
+
+      self.completionsCache.removeAll()
+      var results: [[String: Any]] = []
+      for item in completer.results {
+        let id = UUID().uuidString
+        self.completionsCache[id] = item
+        results.append([
+          "id": id,
+          "title": item.title,
+          "subtitle": item.subtitle,
+          "precision": "poi"
+        ])
+      }
+      continuation.resume(returning: results)
+    }
+  }
+
+  func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+    Task { @MainActor in
+      guard let continuation = self.pendingContinuation else { return }
+      self.pendingContinuation = nil
+      continuation.resume(throwing: error)
+    }
+  }
+
+  @MainActor
+  func resolve(completionID: String) async throws -> [String: Any]? {
+    guard let completion = completionsCache[completionID] else {
+      return nil
+    }
+
+    let request = MKLocalSearch.Request(completion: completion)
+    let search = MKLocalSearch(request: request)
+    let response = try await search.start()
+    guard let item = response.mapItems.first else { return nil }
+
+    let coord = item.placemark.coordinate
+    let title = item.name ?? completion.title
+    let subtitle = item.placemark.title ?? completion.subtitle
+
+    var precision = "poi"
+    if item.placemark.subThoroughfare != nil {
+      precision = "exactAddress"
+    } else if item.pointOfInterestCategory != nil {
+      precision = "poi"
+    } else if item.placemark.thoroughfare != nil {
+      precision = "street"
+    } else if item.placemark.locality != nil || item.placemark.subAdministrativeArea != nil {
+      precision = "district"
+    }
+
+    return [
+      "id": completionID,
+      "title": title,
+      "subtitle": subtitle,
+      "latitude": coord.latitude,
+      "longitude": coord.longitude,
+      "precision": precision
+    ]
+  }
+
+  @MainActor
+  func search(query: String, userLat: Double?, userLon: Double?) async throws -> [[String: Any]] {
+    let request = MKLocalSearch.Request()
+    request.naturalLanguageQuery = query
+    if let lat = userLat, let lon = userLon {
+      request.region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+        span: MKCoordinateSpan(latitudeDelta: 2.0, longitudeDelta: 2.0)
+      )
+    }
+
+    let search = MKLocalSearch(request: request)
+    let response = try await search.start()
+    var results: [[String: Any]] = []
+
+    for item in response.mapItems {
+      let coord = item.placemark.coordinate
+      let title = item.name ?? query
+      let subtitle = item.placemark.title ?? ""
+
+      var precision = "poi"
+      if item.placemark.subThoroughfare != nil {
+        precision = "exactAddress"
+      } else if item.pointOfInterestCategory != nil {
+        precision = "poi"
+      } else if item.placemark.thoroughfare != nil {
+        precision = "street"
+      } else if item.placemark.locality != nil {
+        precision = "district"
+      }
+
+      results.append([
+        "id": UUID().uuidString,
+        "title": title,
+        "subtitle": subtitle,
+        "latitude": coord.latitude,
+        "longitude": coord.longitude,
+        "precision": precision
+      ])
+    }
+    return results
+  }
+}

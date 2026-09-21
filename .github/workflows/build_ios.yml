@@ -133,6 +133,11 @@ jobs:
           flutter config --no-enable-swift-package-manager
           flutter pub get
 
+      - name: 4b. Run Flutter Unit Tests
+        working-directory: mobile_app
+        run: |
+          flutter test --reporter expanded
+
       - name: 5. Pod install
         working-directory: mobile_app/ios
         run: |

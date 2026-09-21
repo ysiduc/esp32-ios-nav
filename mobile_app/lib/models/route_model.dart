@@ -238,6 +238,57 @@ class NavRoute {
   }
 }
 
+
+enum PlacePrecision {
+  exactAddress,
+  poi,
+  building,
+  street,
+  neighborhood,
+  district,
+  city,
+  coordinate,
+  approximate,
+}
+
+enum GoogleMapsResolutionConfidence {
+  exactPin,
+  exactDestination,
+  resolvedPlace,
+  approximate,
+  unresolved,
+}
+
+class GoogleMapsResolvedLink {
+  final Uri? finalUri;
+  final String? placeName;
+  final LatLng? exactCoordinate;
+  final LatLng? cameraCoordinate;
+  final GoogleMapsResolutionConfidence confidence;
+  final PlacePrecision precision;
+  final String? rawQuery;
+  final String? address;
+
+  GoogleMapsResolvedLink({
+    this.finalUri,
+    this.placeName,
+    this.exactCoordinate,
+    this.cameraCoordinate,
+    required this.confidence,
+    this.precision = PlacePrecision.approximate,
+    this.rawQuery,
+    this.address,
+  });
+
+  LatLng? get targetCoordinate =>
+      exactCoordinate ??
+      (confidence == GoogleMapsResolutionConfidence.approximate ? cameraCoordinate : null);
+
+  bool get isExact =>
+      confidence == GoogleMapsResolutionConfidence.exactPin ||
+      confidence == GoogleMapsResolutionConfidence.exactDestination;
+}
+
 class MapPlace {
   final String displayName;
   final String name;
@@ -248,6 +299,8 @@ class MapPlace {
   final String? placeId;
   final DateTime? savedAt;
   final bool isCustomSaved;
+  final PlacePrecision precision;
+  final String source;
 
   MapPlace({
     required this.displayName,
@@ -259,6 +312,8 @@ class MapPlace {
     this.placeId,
     this.savedAt,
     this.isCustomSaved = false,
+    this.precision = PlacePrecision.approximate,
+    this.source = "unknown",
   });
 
   factory MapPlace.fromJson(Map<String, dynamic> json, {LatLng? userLocation}) {
@@ -281,6 +336,16 @@ class MapPlace {
       savedAt = DateTime.tryParse(json['saved_at'].toString());
     }
 
+    PlacePrecision prec = PlacePrecision.approximate;
+    final precStr = json['precision']?.toString();
+    if (precStr != null) {
+      prec = PlacePrecision.values.firstWhere(
+        (e) => e.name == precStr,
+        orElse: () => PlacePrecision.approximate,
+      );
+    }
+    final src = json['source'] as String? ?? "unknown";
+
     return MapPlace(
       displayName: displayName,
       name: name,
@@ -291,6 +356,8 @@ class MapPlace {
       placeId: json['place_id'] as String? ?? json['placeId'] as String?,
       savedAt: savedAt,
       isCustomSaved: json['is_custom_saved'] as bool? ?? false,
+      precision: prec,
+      source: src,
     );
   }
 
@@ -305,6 +372,8 @@ class MapPlace {
       'place_id': placeId,
       'saved_at': savedAt?.toIso8601String(),
       'is_custom_saved': isCustomSaved,
+      'precision': precision.name,
+      'source': source,
     };
   }
 
@@ -318,6 +387,8 @@ class MapPlace {
     String? placeId,
     DateTime? savedAt,
     bool? isCustomSaved,
+    PlacePrecision? precision,
+    String? source,
   }) {
     return MapPlace(
       displayName: displayName ?? this.displayName,
@@ -329,6 +400,8 @@ class MapPlace {
       placeId: placeId ?? this.placeId,
       savedAt: savedAt ?? this.savedAt,
       isCustomSaved: isCustomSaved ?? this.isCustomSaved,
+      precision: precision ?? this.precision,
+      source: source ?? this.source,
     );
   }
 

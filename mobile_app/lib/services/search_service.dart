@@ -1,3 +1,6 @@
+import '../models/search_query_intent.dart';
+import 'search_ranker.dart';
+import 'mapkit_search_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -6,6 +9,14 @@ import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 
 class SearchService {
+  final MapKitSearchService _mapKitSearchService = MapKitSearchService();
+  int _queryGeneration = 0;
+
+  int get currentQueryGeneration => _queryGeneration;
+
+  void cancelCurrentQuery() {
+    _queryGeneration++;
+  }
   static const String _photonBaseUrl = 'https://photon.komoot.io';
   static const String _nominatimBaseUrl = 'https://nominatim.openstreetmap.org';
 
@@ -71,6 +82,16 @@ class SearchService {
           type: placeType,
           category: (context['category'] as String?) ?? placeType,
           distanceMeters: dist,
+          precision: (placeType == 'address' || props['housenumber'] != null)
+              ? PlacePrecision.exactAddress
+              : (placeType == 'poi'
+                  ? PlacePrecision.poi
+                  : (placeType == 'street' || placeType == 'road'
+                      ? PlacePrecision.street
+                      : (placeType == 'district'
+                          ? PlacePrecision.district
+                          : (placeType == 'city' ? PlacePrecision.city : PlacePrecision.approximate)))),
+          source: 'maptiler',
         );
       }).where((p) => p.coordinate.latitude != 0).toList();
     } catch (_) {
@@ -843,6 +864,7 @@ class SearchService {
   }
 
   /// Ultra-Fast Multi-Engine Search with POI Database, Nominatim & Photon
+  /// High-Precision Multi-Engine Search with MapKit, Photon & MapTiler
   Future<List<MapPlace>> searchPlaces(
     String query, {
     LatLng? nearLocation,
@@ -850,103 +872,49 @@ class SearchService {
     final cleanQuery = query.trim();
     if (cleanQuery.isEmpty) return [];
 
-    // Check if query is a direct coordinate (e.g., "20.976077, 105.835849" or "20.976077 105.835849")
-    final coordMatch = RegExp(r'^(-?\d{1,3}\.\d+)[,\s]+(-?\d{1,3}\.\d+)$').firstMatch(cleanQuery);
-    if (coordMatch != null) {
-      final lat = double.tryParse(coordMatch.group(1)!);
-      final lon = double.tryParse(coordMatch.group(2)!);
-      if (lat != null && lon != null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-        final point = LatLng(lat, lon);
-        final rev = await reverseGeocode(point);
-        return [
-          MapPlace(
-            name: rev.name.isNotEmpty && rev.name != 'Vị trí đã ghim'
-                ? rev.name
-                : 'Tọa độ: ${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)}',
-            displayName: rev.displayName.isNotEmpty
-                ? rev.displayName
-                : 'Tọa độ: ${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)}',
-            coordinate: point,
-            type: 'coordinate',
-            category: 'pin',
-            distanceMeters: nearLocation != null ? const Distance().as(LengthUnit.Meter, nearLocation, point) : null,
-          )
-        ];
-      }
-    }
+    _queryGeneration++;
+    final myGen = _queryGeneration;
 
-    final unaccented = removeDiacritics(cleanQuery).toLowerCase();
-    final strippedCity = stripCitySuffix(cleanQuery);
-    final strippedCityUnaccented = removeDiacritics(strippedCity).toLowerCase();
+    final intent = SearchQueryIntent.parse(cleanQuery);
+
+    // 1. Direct Coordinate Match
+    if (intent.type == SearchQueryIntentType.coordinate && intent.targetCoordinate != null) {
+      final point = intent.targetCoordinate!;
+      final rev = await reverseGeocode(point);
+      if (myGen != _queryGeneration) return [];
+      return [
+        MapPlace(
+          name: rev.name.isNotEmpty && rev.name != 'Vị trí đã ghim'
+              ? rev.name
+              : 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+          displayName: rev.displayName.isNotEmpty
+              ? rev.displayName
+              : 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+          coordinate: point,
+          type: 'coordinate',
+          category: 'pin',
+          precision: PlacePrecision.coordinate,
+          source: 'coordinate',
+          distanceMeters: nearLocation != null ? const Distance().as(LengthUnit.Meter, nearLocation, point) : null,
+        )
+      ];
+    }
 
     final mergedResults = <MapPlace>[];
-    final seenKeys = <String>{};
 
-    void addPlace(MapPlace p) {
-      final key = (p.placeId != null && p.placeId!.isNotEmpty)
-          ? 'place_id_${p.placeId}'
-          : '${p.name}_${p.coordinate.latitude.toStringAsFixed(4)}_${p.coordinate.longitude.toStringAsFixed(4)}'.toLowerCase();
-      if (!seenKeys.contains(key)) {
-        seenKeys.add(key);
-        // Calculate distance only if coordinate is valid (non-zero)
-        if (p.distanceMeters == null &&
-            nearLocation != null &&
-            (p.coordinate.latitude != 0 || p.coordinate.longitude != 0)) {
-          const distanceCalculator = Distance();
-          final dist = distanceCalculator.as(LengthUnit.Meter, nearLocation, p.coordinate);
-          mergedResults.add(MapPlace(
-            name: p.name,
-            displayName: p.displayName,
-            coordinate: p.coordinate,
-            type: p.type,
-            category: p.category,
-            distanceMeters: dist,
-            placeId: p.placeId,
-          ));
-        } else {
-          mergedResults.add(p);
-        }
-      }
-    }
+    // 2. Primary Search Provider: Apple MapKit on iOS
+    try {
+      final mapKitResults = await _mapKitSearchService.search(cleanQuery, userLocation: nearLocation);
+      if (myGen != _queryGeneration) return [];
+      mergedResults.addAll(mapKitResults);
+    } catch (_) {}
 
-
-    // -------------------------------------------------------------
-    // Step 1: Check Built-in Vietnamese Landmark / POI Database first
-    // -------------------------------------------------------------
-    if (cleanQuery.length >= 2) {
-      for (final landmark in _vietnameseLandmarks) {
-        final lName = landmark.name.toLowerCase();
-        final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
-
-        if (lName.contains(cleanQuery.toLowerCase()) ||
-            lNameUnaccented.contains(unaccented) ||
-            lNameUnaccented.contains(strippedCityUnaccented)) {
-          addPlace(landmark);
-        }
-      }
-    }
-
-    // -------------------------------------------------------------
-    // Step 2: Extract house number if user types "157 nguyễn cảnh", "96 định công", "12/4 láng hạ"
-    // -------------------------------------------------------------
-    final houseNumRegex = RegExp(r'^(\d+[a-zA-Z]?(\/\d+[a-zA-Z]?)?)\s+(.+)$');
-    final match = houseNumRegex.firstMatch(strippedCity);
-    String? houseNumber;
-    String? streetNamePart;
-    if (match != null) {
-      houseNumber = match.group(1);
-      streetNamePart = match.group(3)?.trim();
-    }
-
-    final streetKeyword = streetNamePart != null ? cleanStreetKeyword(streetNamePart) : '';
-
-    // -------------------------------------------------------------
-    // Step 3: Concurrently Query Photon (OSM POIs/Streets) & MapTiler
-    // -------------------------------------------------------------
+    // 3. Complementary & Fallback Providers: MapTiler & Photon
     final futures = <Future<List<MapPlace>>>[];
+    final strippedCity = stripCitySuffix(cleanQuery);
+    final streetKeyword = intent.streetName != null ? cleanStreetKeyword(intent.streetName!) : '';
     final cityHint = _detectCityHint(nearLocation);
 
-    // A. Photon Search (Very rich OpenStreetMap coverage for Vietnamese POIs, restaurants, schools, addresses)
     futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
     if (strippedCity != cleanQuery) {
       futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
@@ -958,7 +926,6 @@ class SearchService {
       futures.add(_executePhotonQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
     }
 
-    // B. MapTiler Search (Official administrative areas & major streets)
     if (MapboxConfig.isConfigured) {
       futures.add(_executeMapboxQuery(cleanQuery, nearLocation: nearLocation));
       if (strippedCity != cleanQuery) {
@@ -972,200 +939,47 @@ class SearchService {
       }
     }
 
-    final queryBatches = await Future.wait(futures).timeout(
+    final batches = await Future.wait(futures).timeout(
       const Duration(seconds: 4),
       onTimeout: () => [],
     );
 
-    for (final batch in queryBatches) {
-      for (final p in batch) {
-        addPlace(p);
-      }
+    if (myGen != _queryGeneration) return [];
+
+    for (final batch in batches) {
+      mergedResults.addAll(batch);
     }
 
-    // If query had a house number, check if a real place already matches before synthesizing
-    if (houseNumber != null) {
-      // 1. Check if any place ALREADY returned has this exact house number and street!
-      MapPlace? realHouseMatch;
-      for (final p in mergedResults) {
-        final hasNum = p.name.contains(houseNumber) || p.displayName.contains(houseNumber);
-        final matchesStreet = streetKeyword.isEmpty ||
-            isExactStreetMatch(p.name, streetKeyword) ||
-            isExactStreetMatch(p.displayName, streetKeyword);
-        if (hasNum && matchesStreet) {
-          realHouseMatch = p;
-          break;
-        }
-      }
-
-      if (realHouseMatch != null) {
-        // We ALREADY have the real exact place! Promote it to #1 and DO NOT synthesize fake coordinates!
-        mergedResults.remove(realHouseMatch);
-        mergedResults.insert(0, realHouseMatch);
-      } else {
-        // Only synthesize if NO real place with this house number exists!
-        final matchingStreets = mergedResults.where((p) {
-          final isStreet = p.type == 'street' ||
-              p.type == 'residential' ||
-              p.type == 'secondary' ||
-              p.type == 'primary' ||
-              p.type == 'tertiary' ||
-              p.type == 'trunk' ||
-              p.type == 'address' ||
-              p.type == 'way' ||
-              p.category == 'highway' ||
-              p.name.toLowerCase().contains('phố') ||
-              p.name.toLowerCase().contains('đường') ||
-              p.name.toLowerCase().contains('ngõ') ||
-              p.name.toLowerCase().contains('hẻm') ||
-              p.displayName.toLowerCase().contains('phố') ||
-              p.displayName.toLowerCase().contains('đường');
-
-          if (!isStreet) return false;
-          if (streetKeyword.isNotEmpty) {
-            return isExactStreetMatch(p.name, streetKeyword) || isExactStreetMatch(p.displayName, streetKeyword);
-          }
-          return true;
-        }).toList();
-
-        if (matchingStreets.isNotEmpty) {
-          List<MapPlace> candidateSegments = matchingStreets;
-          if (nearLocation != null) {
-            const distCalc = Distance();
-            final nearby = matchingStreets.where((s) {
-              final d = distCalc.as(LengthUnit.Meter, nearLocation, s.coordinate);
-              return d < 50000; // within 50km
-            }).toList();
-            if (nearby.isNotEmpty) {
-              candidateSegments = nearby;
-            }
-          }
-
-          final bestStreet = _estimateStreetPosition(candidateSegments, houseNumber);
-
-          final baseStreetName = bestStreet.name
-              .replaceAll(RegExp(r'^Số\s+\w+\s+', caseSensitive: false), '')
-              .replaceAll(RegExp(r'^\d+\s+', caseSensitive: false), '')
-              .trim();
-          final customName = '$houseNumber $baseStreetName';
-          final customDisplay = bestStreet.displayName.contains(bestStreet.name)
-              ? bestStreet.displayName.replaceFirst(bestStreet.name, customName)
-              : '$customName, ${bestStreet.displayName}';
-
-          double? dist;
-          if (nearLocation != null) {
-            const distCalc = Distance();
-            dist = distCalc.as(LengthUnit.Meter, nearLocation, bestStreet.coordinate);
-          }
-
-          mergedResults.insert(
-            0,
-            MapPlace(
-              name: customName,
-              displayName: customDisplay,
-              coordinate: bestStreet.coordinate,
-              type: 'house',
-              category: 'building',
-              distanceMeters: dist,
-            ),
-          );
-        }
-      }
-    }
-
-    // Secondary Fallback: Nominatim if still completely empty
+    // 4. Low-Frequency Explicit Fallback: Nominatim only if no results yet
     if (mergedResults.isEmpty) {
-      final nomList = await _executeNominatimQuery(query, nearLocation: nearLocation);
-      for (final p in nomList) {
-        addPlace(p);
-      }
+      try {
+        final nomList = await _executeNominatimQuery(cleanQuery, nearLocation: nearLocation);
+        if (myGen != _queryGeneration) return [];
+        mergedResults.addAll(nomList);
+      } catch (_) {}
     }
 
-    // -------------------------------------------------------------
-    // Step 4: Intelligent Relevance & Proximity Scoring
-    // Exact match & high textual overlap always beat a nearby unrelated street!
-    // -------------------------------------------------------------
-    mergedResults.sort((a, b) {
-      final scoreA = _calculateRelevanceScore(
-        cleanQuery,
-        a.name,
-        a.displayName,
-        a.distanceMeters,
-        houseNumber: houseNumber,
-        streetKeyword: streetKeyword,
+    // 5. Rank all candidates with pure SearchRanker
+    final scored = mergedResults.map((p) {
+      final breakdown = SearchRanker.rank(
+        intent: intent,
+        candidateTitle: p.name,
+        candidateAddress: p.displayName,
+        precision: p.precision,
+        source: p.source,
+        distanceMeters: p.distanceMeters,
       );
-      final scoreB = _calculateRelevanceScore(
-        cleanQuery,
-        b.name,
-        b.displayName,
-        b.distanceMeters,
-        houseNumber: houseNumber,
-        streetKeyword: streetKeyword,
-      );
-      return scoreB.compareTo(scoreA); // Highest score first!
-    });
+      return (place: p, score: breakdown.finalScore);
+    }).toList();
 
-    return mergedResults.take(15).toList();
-  }
+    scored.sort((a, b) => b.score.compareTo(a.score));
 
-  /// Composite scoring algorithm: textual similarity (primary) + distance (secondary)
-  double _calculateRelevanceScore(
-    String query,
-    String name,
-    String displayName,
-    double? distanceMeters, {
-    String? houseNumber,
-    String? streetKeyword,
-  }) {
-    final q = removeDiacritics(query).toLowerCase().trim();
-    final n = removeDiacritics(name).toLowerCase().trim();
-    final d = removeDiacritics(displayName).toLowerCase().trim();
+    // 6. Deduplicate within 30m with higher confidence winning
+    final sortedPlaces = scored.map((s) => s.place).toList();
+    final deduped = SearchRanker.deduplicate(sortedPlaces, maxDistanceMeters: 30.0);
 
-    double score = 0.0;
-
-    // Massive boost if candidate matches house number and street keyword
-    if (houseNumber != null && houseNumber.isNotEmpty) {
-      final hasNum = name.contains(houseNumber) || displayName.contains(houseNumber);
-      if (hasNum) {
-        score += 300.0;
-        if (streetKeyword != null && streetKeyword.isNotEmpty &&
-            (isExactStreetMatch(name, streetKeyword) || isExactStreetMatch(displayName, streetKeyword))) {
-          score += 200.0; // Total +500 for matching both exact house and street
-        }
-      } else if (streetKeyword != null && streetKeyword.isNotEmpty) {
-        if (!isExactStreetMatch(name, streetKeyword) && !isExactStreetMatch(displayName, streetKeyword)) {
-          score -= 100.0;
-        }
-      }
-    }
-
-    if (q == n) {
-      score += 150.0;
-    } else if (n.startsWith(q)) {
-      score += 100.0;
-    } else if (n.contains(q)) {
-      score += 80.0;
-    } else if (d.contains(q)) {
-      score += 50.0;
-    } else {
-      final qWords = q.split(RegExp(r'\s+')).where((w) => w.length >= 2).toSet();
-      final nWords = n.split(RegExp(r'\s+')).where((w) => w.length >= 2).toSet();
-      final overlap = qWords.intersection(nWords).length;
-      score += overlap * 25.0;
-    }
-
-    if (distanceMeters != null) {
-      final distKm = distanceMeters / 1000.0;
-      if (distKm <= 15.0) {
-        // Boost places in the user's immediate vicinity/city (up to +30 points)
-        score += (30.0 - (distKm * 1.8));
-      } else {
-        // Strong penalty for places in far away provinces (e.g. 35km away loses 40+ points)
-        score -= (distKm - 15.0) * 2.0;
-      }
-    }
-
-    return score;
+    // 7. Return 5 to 8 strong results
+    return deduped.take(8).toList();
   }
 
   Future<List<MapPlace>> _executePhotonQuery(
@@ -1307,13 +1121,22 @@ class SearchService {
         dist = distanceCalculator.as(LengthUnit.Meter, nearLocation, coord);
       }
 
+      final osmKey = props['osm_key'] as String?;
+      final osmVal = props['osm_value'] as String?;
+      final isExactAddr = houseNumber.isNotEmpty;
+      final isStreet = osmKey == 'highway' || osmVal == 'street' || osmVal == 'residential';
+
       return MapPlace(
         name: name,
         displayName: fullDisplayName,
         coordinate: coord,
-        type: props['osm_value'] as String? ?? props['type'] as String?,
-        category: props['osm_key'] as String?,
+        type: osmVal ?? props['type'] as String?,
+        category: osmKey,
         distanceMeters: dist,
+        precision: isExactAddr
+            ? PlacePrecision.exactAddress
+            : (isStreet ? PlacePrecision.street : PlacePrecision.poi),
+        source: 'photon',
       );
     }).toList();
   }
@@ -1428,22 +1251,4 @@ class SearchService {
     return null;
   }
 
-  MapPlace _estimateStreetPosition(List<MapPlace> segments, String houseNumStr) {
-    if (segments.length == 1) return segments.first;
-    final num = int.tryParse(RegExp(r'^\d+').firstMatch(houseNumStr)?.group(0) ?? '') ?? 1;
-
-    // Filter outliers (keep only segments within 5km of the first segment)
-    const distCalc = Distance();
-    final firstCoord = segments.first.coordinate;
-    final validSegments = segments.where((s) => distCalc.as(LengthUnit.Meter, firstCoord, s.coordinate) < 5000).toList();
-    if (validSegments.isEmpty) return segments.first;
-
-    // Sort by latitude (North-South in Vietnam)
-    final sorted = List<MapPlace>.from(validSegments)..sort((a, b) => a.coordinate.latitude.compareTo(b.coordinate.latitude));
-
-    // Map house number to percentile index (e.g. 1 -> 0%, 50 -> 15%, 150 -> 45%, 350+ -> 100%)
-    final double ratio = (num / 350.0).clamp(0.0, 1.0);
-    final targetIndex = ((sorted.length - 1) * ratio).round().clamp(0, sorted.length - 1);
-    return sorted[targetIndex];
-  }
 }
