@@ -275,3 +275,43 @@ The test suite was expanded and migrated to provider-neutral tests:
   - `testCompletionOrderIndependence_ProducesDeterministicCandidateOrder`: Verifies candidate ordering is identical across different task completion timings.
 - `RouteSimilarityTests`:
   - `testOverlap_DiscrepancyBetweenSummaryDistanceAndPolylineGeometry_UsesGeometryLengthAccurately`: Verifies geometry length consistency under summary distance mismatch.
+
+### 18.7 Final Verified CI Evidence (P5.3.1)
+- **Implementation SHA**: `ea1030a71032b3b0118c4467fec030490562ea10`
+- **Workflow Run ID**: `35611386746`
+- **Workflow URL**: [GitHub Actions Run #35611386746](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35611386746)
+- **Native Unit Tests**: `PASS` (238 / 238 tests across 24 suites, 0 failures)
+  - AppLifecycleNavigationTests: 4 tests PASS
+  - ApplePlaceSearchServiceTests: 9 tests PASS
+  - BLEScanGenerationTests: 5 tests PASS
+  - BLESendSchedulerRaceTests: 7 tests PASS
+  - BLESendSchedulerTests: 7 tests PASS
+  - DestinationSelectionTests: 12 tests PASS
+  - LocationTrackingPolicyTests: 8 tests PASS
+  - ManeuverProgressionTests: 6 tests PASS
+  - MapRenderPolicyTests: 16 tests PASS (+4 P5.3.1 tests)
+  - MultiStrategyRoutePlannerTests: 9 tests PASS (+3 P5.3.1 tests)
+  - NavigationIntegrationReplayTests: 4 tests PASS
+  - NavigationReplayTests: 15 tests PASS
+  - NavigationSessionManagerP51Tests: 15 tests PASS
+  - OffRouteDetectorTests: 13 tests PASS
+  - OffRouteFieldLatencyTests: 10 tests PASS
+  - RerouteManagerTests: 15 tests PASS
+  - RouteCandidateSelectionTests: 17 tests PASS
+  - RouteGeometryTests: 15 tests PASS
+  - RouteMatchingFieldRegressionTests: 7 tests PASS
+  - RouteSimilarityTests: 7 tests PASS (+1 P5.3.1 test)
+  - RoutingFallbackTests: 7 tests PASS
+  - RoutingProfileTests: 9 tests PASS
+  - SearchRankingTests: 15 tests PASS
+  - ValhallaRouteSetParserTests: 6 tests PASS
+- **Native Job**: `106371106470` (Compile Native iOS Swift/SwiftUI in 4m42s)
+  - Native Release Build: `SUCCESS`
+  - Native IPA Package: `SUCCESS` (`esp32_nav_native_app.ipa`, 6.1 MB)
+- **Flutter Job**: `106371106929` (Compile Flutter iOS IPA in 2m55s)
+  - Flutter iOS Release Build: `SUCCESS`
+  - Flutter IPA Package: `SUCCESS`
+- **Status**:
+  ```text
+  P5.3.1 CORRECTIONS VERIFIED — 238 / 238 TESTS PASS — REAL DEVICE ROAD VALIDATION PENDING
+  ```
