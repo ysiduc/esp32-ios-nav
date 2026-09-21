@@ -55,8 +55,7 @@ final class NavigationReplayTests: XCTestCase {
 
         destA = NavigationDestination(
             coordinate: coordC,
-            name: "Hàng Đào",
-            formattedAddress: "Hà Nội"
+            name: "Hàng Đào"
         )
     }
 
@@ -350,23 +349,27 @@ final class NavigationReplayTests: XCTestCase {
     // MARK: - 10. Reroute Failure and Backoff Replay
 
     func testReplay_RerouteFailureAndBackoff_SuppressesImmediateRetry() {
-        let detector = OffRouteDetector(dwellTimeThresholdSeconds: 1.0)
+        var config = OffRouteDetectorConfig()
+        config.strongDeviationDwellSeconds = 1.0
+        let detector = OffRouteDetector(config: config)
         let baseDate = Date()
 
         // 1. Trigger off-route
         let obs1 = OffRouteObservation(
             timestamp: baseDate,
             lateralDistanceMeters: 40.0,
+            horizontalAccuracyMeters: 5.0,
             speedMetersPerSecond: 5.0
         )
         let obs2 = OffRouteObservation(
             timestamp: baseDate.addingTimeInterval(1.5),
             lateralDistanceMeters: 40.0,
+            horizontalAccuracyMeters: 5.0,
             speedMetersPerSecond: 5.0
         )
         _ = detector.evaluate(observation: obs1)
         let decision = detector.evaluate(observation: obs2)
-        XCTAssertEqual(decision.state, .confirmed)
+        XCTAssertEqual(decision.state, OffRouteState.confirmed)
 
         // Reroute manager backoff logic
         var requestCount = 0
@@ -546,8 +549,8 @@ final class NavigationReplayTests: XCTestCase {
         let route = NavRoute(
             coordinates: [coordA, coordB, coordC],
             steps: [
-                RouteStep(instruction: "Go straight", streetName: "Hang Dao", distanceMeters: 550, durationSeconds: 60, maneuverType: .straight, coordinate: coordA),
-                RouteStep(instruction: "Arrive", streetName: "Hang Dao", distanceMeters: 550, durationSeconds: 60, maneuverType: .arrive, coordinate: coordC)
+                NavStep(coordinate: coordA, distanceMeters: 550, durationSeconds: 60, streetName: "Hang Dao", maneuverType: .straight, instruction: "Go straight"),
+                NavStep(coordinate: coordC, distanceMeters: 550, durationSeconds: 60, streetName: "Hang Dao", maneuverType: .arrive, instruction: "Arrive")
             ],
             totalDistanceMeters: 1100,
             totalDurationSeconds: 120

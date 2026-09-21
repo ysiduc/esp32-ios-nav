@@ -95,25 +95,25 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: - Explicit Location Pipeline
     /// Raw, unfiltered GPS location directly from CoreLocation (diagnostics/debug).
-    @Published public private(set) var rawLocation: CLLocation?
+    @Published public var rawLocation: CLLocation?
 
     /// Kalman-filtered, accuracy-checked GPS location.
-    @Published public private(set) var filteredLocation: CLLocation?
+    @Published public var filteredLocation: CLLocation?
 
     /// Backward-compatible alias for views observing user position.
-    @Published public private(set) var userLocation: CLLocation?
+    @Published public var userLocation: CLLocation?
 
     /// Exact mathematically projected position snapped to route geometry.
-    @Published public private(set) var matchedLocation: CLLocationCoordinate2D?
+    @Published public var matchedLocation: CLLocationCoordinate2D?
 
     /// Exact projection coordinate for MapLibre puck rendering.
-    @Published public private(set) var snappedLocation: CLLocationCoordinate2D?
+    @Published public var snappedLocation: CLLocationCoordinate2D?
 
     /// Full projection metadata (distance along route, lateral distance, segment index).
-    @Published public private(set) var currentProjection: RouteProjection?
+    @Published public var currentProjection: RouteProjection?
 
     /// Device heading in degrees (0-359).
-    @Published public private(set) var heading: CLLocationDirection?
+    @Published public var heading: Double = 0
 
     /// Authorization status for location services.
     @Published public private(set) var locationAuthStatus: CLAuthorizationStatus = .notDetermined
