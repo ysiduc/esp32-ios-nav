@@ -141,7 +141,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(navSession.activeRoute?.totalDurationSeconds, 150)
 
         // Must NOT mutate destination or session identity
-        XCTAssertEqual(viewModel.selectedDestination?.placeID, "dest_1")
+        XCTAssertEqual(viewModel.selectedDestination?.id, "dest_1")
         XCTAssertEqual(navSession.sessionGeneration, initialSessionGen)
     }
 
