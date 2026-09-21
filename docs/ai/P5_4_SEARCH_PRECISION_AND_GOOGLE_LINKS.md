@@ -293,3 +293,20 @@ The resolution pipeline now strictly adheres to the following hierarchy:
   - Section 27: Camera viewport `@lat,lon` never becomes exact pin.
   - HTML entity decoding and attribute-order resilience.
 - **Flutter Test Suite**: **54 / 54 PASS** (0 failures).
+
+## 29. P5.4.1.1 Verified CI Evidence
+- **GitHub Actions Run ID**: `35627551826` (Branch `main`, Commit `439a080`)
+- **Verified Jobs**:
+  1. **Flutter iOS Job** (Job ID `106425528078`): **SUCCESS**
+     - Step `4b. Run Flutter Unit Tests`: **54 / 54 PASS** (`00:38 +54: All tests passed!`)
+     - Step `6. Build iOS Release (No CodeSign)`: **SUCCESS**
+     - Step `7. Package Flutter IPA`: **SUCCESS**
+     - Step `8. Upload Flutter IPA artifact`: **SUCCESS** (`esp32_nav_flutter_ios_ipa`)
+  2. **Native iOS Swift/SwiftUI Job** (Job ID `106425528242`): **SUCCESS**
+     - Step `6. Run Native Unit Tests`: **241 / 241 PASS** (0 failures across all 24 test suites)
+     - Step `7. Build Native iOS App`: **SUCCESS**
+     - Step `8. Package Native IPA`: **SUCCESS**
+     - Step `9. Upload Native IPA artifact`: **SUCCESS** (`esp32_nav_native_ios_ipa`)
+- **Zero Goong references** across entire codebase.
+- **Zero paid Google Places API keys required**.
+- **Exact Shortlink Fidelity**: Verified canonical and og:url extraction priority over camera `@` coordinates or unverified independent search candidates.
