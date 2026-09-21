@@ -268,13 +268,20 @@ final class NavigationReplayTests: XCTestCase {
         runner.replay(samples: [diverged])
         XCTAssertEqual(sessionManager.offRouteState, .suspected)
 
-        // Returns to route
-        let returned = NavigationReplaySample(
+        // Returns to route (feed converged samples on route)
+        let returned1 = NavigationReplaySample(
             timestamp: baseDate.addingTimeInterval(2),
             coordinate: CLLocationCoordinate2D(latitude: 21.0305, longitude: 105.8542),
+            horizontalAccuracy: 3.0,
             speed: 8.0
         )
-        runner.replay(samples: [returned])
+        let returned2 = NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(3),
+            coordinate: CLLocationCoordinate2D(latitude: 21.0310, longitude: 105.8542),
+            horizontalAccuracy: 3.0,
+            speed: 8.0
+        )
+        runner.replay(samples: [returned1, returned2])
 
         XCTAssertEqual(sessionManager.offRouteState, .onRoute)
         XCTAssertFalse(sessionManager.isOffRoute)
@@ -300,14 +307,13 @@ final class NavigationReplayTests: XCTestCase {
         }
         XCTAssertTrue(sessionManager.isOffRoute)
 
-        // Vehicle drives back onto route geometry
-        let recoveredSample = NavigationReplaySample(
-            timestamp: baseDate.addingTimeInterval(8),
-            coordinate: CLLocationCoordinate2D(latitude: 21.0320, longitude: 105.8542),
-            speed: 8.0,
-            course: 0.0
-        )
-        runner.replay(samples: [recoveredSample])
+        // Vehicle drives back onto route geometry and satisfies recovery dwell
+        let recoveredSamples = [
+            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(8), coordinate: CLLocationCoordinate2D(latitude: 21.0320, longitude: 105.8542), horizontalAccuracy: 3.0, speed: 8.0, course: 0.0),
+            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(9), coordinate: CLLocationCoordinate2D(latitude: 21.0325, longitude: 105.8542), horizontalAccuracy: 3.0, speed: 8.0, course: 0.0),
+            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(11), coordinate: CLLocationCoordinate2D(latitude: 21.0330, longitude: 105.8542), horizontalAccuracy: 3.0, speed: 8.0, course: 0.0)
+        ]
+        runner.replay(samples: recoveredSamples)
 
         XCTAssertFalse(sessionManager.isOffRoute)
         XCTAssertEqual(sessionManager.offRouteState, .onRoute)
@@ -439,9 +445,17 @@ final class NavigationReplayTests: XCTestCase {
             ))
         }
 
+        let longStep = NavStep(
+            coordinate: longCoords.last!,
+            distanceMeters: 5550,
+            durationSeconds: 500,
+            streetName: "Highway",
+            maneuverType: .straight,
+            instruction: "Follow highway"
+        )
         let longRoute = NavRoute(
             coordinates: longCoords,
-            steps: [],
+            steps: [longStep],
             totalDistanceMeters: 5550,
             totalDurationSeconds: 500
         )
@@ -500,12 +514,20 @@ final class NavigationReplayTests: XCTestCase {
         XCTAssertTrue(sessionManager.isOffRoute)
 
         // 6. Reroute commit with Route B
+        let stepB = NavStep(
+            coordinate: coordC,
+            distanceMeters: 500,
+            durationSeconds: 50,
+            streetName: "Route B",
+            maneuverType: .straight,
+            instruction: "Proceed to destination"
+        )
         let routeB = NavRoute(
             coordinates: [
                 CLLocationCoordinate2D(latitude: 21.0340, longitude: 105.8550),
                 coordC
             ],
-            steps: [],
+            steps: [stepB],
             totalDistanceMeters: 500,
             totalDurationSeconds: 50
         )
@@ -537,8 +559,10 @@ final class NavigationReplayTests: XCTestCase {
         // Verify BLE starts in disconnected state
         XCTAssertEqual(bleManager.connectionState, .disconnected)
 
-        // Wire BLE progress update exactly as NavigationViewModel does
+        // Wire BLE progress update chaining existing runner callback
+        let prevCallback = sessionManager.onProgressUpdate
         sessionManager.onProgressUpdate = { progress in
+            prevCallback?(progress)
             bleManager.sendNavigationPacket(progress)
         }
 

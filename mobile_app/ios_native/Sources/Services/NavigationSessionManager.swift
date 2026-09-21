@@ -654,8 +654,9 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         let remSec = UInt32(round(route.totalDurationSeconds * remainingRatio))
         let kmh = UInt8(min(255, max(0, currentLocation.speed * 3.6)))
 
+        let activeManeuver = (curStep.maneuverType == .arrive) ? .straight : curStep.maneuverType
         let progress = NavigationProgress(
-            maneuver: curStep.maneuverType,
+            maneuver: activeManeuver,
             distanceToTurnMeters: UInt32(max(0, round(distToTurn))),
             remainingDistanceMeters: UInt32(max(0, round(remDist))),
             remainingEtaSeconds: remSec,
