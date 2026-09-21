@@ -126,7 +126,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 2. Select Alternative Candidate
 
     func testUserSelectsAlternative_SwitchesPreviewWithoutMutatingDestinationOrSession() async {
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -148,7 +148,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 3. Start Navigation with Selected Alternative
 
     func testStartNavigation_UsesSelectedCandidateAlternative() async {
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -232,7 +232,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 6. Stop Navigation Clears Candidates
 
     func testStopNavigation_ClearsCandidateState() async {
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -259,7 +259,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         let autoCand = RouteCandidate(id: "auto_c0", route: rAuto, provider: .valhalla, requestedMode: .auto, profileID: "auto_standard", isPrimary: true, label: "Đề xuất")
         mockRouting.routeSetToReturn = RouteSet(candidates: [autoCand])
 
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // User switches mode to auto
@@ -287,7 +287,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.routeCandidates.count, 3)
         XCTAssertNotNil(navSession.activeRoute)
 
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // 2. Next routing call (for auto) will fail
@@ -336,7 +336,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
         await viewModel.calculateRoute(to: coordB)
 
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         XCTAssertEqual(viewModel.currentTransportMode, .auto)
@@ -525,7 +525,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 15. Select Route Candidate Ignored During Active Navigation
 
     func testSelectRouteCandidate_IgnoredDuringActiveNavigation() async {
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -545,7 +545,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 16. Mode Switch While Navigating Preserves Route and Triggers Reroute
 
     func testTransportModeSwitch_WhileNavigating_PreservesActiveRouteAndTriggersReroute() async {
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -568,7 +568,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         // 1. Initial preview route A (motorcycle)
         await viewModel.calculateRoute(to: coordB)
 
-        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
+        let testDest = ResolvedPlace(id: "dest_1", name: "Hồ Gươm", formattedAddress: "Hà Nội", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // 2. Start navigation on Route A
