@@ -348,7 +348,11 @@ final class NavigationIntegrationReplayTests: XCTestCase {
         let rerouteRoute = makeRerouteRoute(from: offRouteEastCoord(2))
 
         var arrivedFired = false
-        session.onArrived = { arrivedFired = true }
+        let runnerOnArrived = session.onArrived
+        session.onArrived = {
+            arrivedFired = true
+            runnerOnArrived?()
+        }
 
         var rerouteExp: XCTestExpectation? = expectation(description: "Reroute request started")
         mockRouting.onRequestStarted = {
