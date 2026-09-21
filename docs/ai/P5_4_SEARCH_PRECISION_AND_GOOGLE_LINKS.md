@@ -180,3 +180,57 @@ All tests run deterministically and pass locally:
 - Shared links containing explicit pin/destination coordinates (`!3d/!4d`, `/place/lat,lon`, `?q=lat,lon`) are matched exactly.
 - Links exposing only place names require independent MapKit/OSM search and therefore can differ from Google's proprietary POI database.
 - Search quality ultimately depends on available MapKit / OSM / MapTiler data.
+
+---
+
+# P5.4.1 — Search Latency Correction & Non-Stuck Google Maps Resolution
+
+## 17. Search Latency Correction
+- **Debounce Optimization**: Reduced autocomplete debounce timer from 450ms to **220ms**.
+- **Prefix Reuse & Cache**: In-memory query cache (`Map<SearchCacheKey, CachedSearchResults>`) with 3-minute TTL. Prefix matching (`findPrefixMatches`) returns instant candidates (<30ms) while background network requests run.
+- **Non-Blocking Suggestions**: Typing keeps previously visible suggestions on screen rather than blanking the list. A subtle inline progress indicator (`_isAutocompleteRefreshing`) informs the user without replacing content with a blocking modal spinner.
+- **Search Generation**: `_searchGeneration` counter increments on every keystroke. Stale async network responses from earlier keystrokes are automatically discarded (`generation != _searchGeneration`).
+- **Two Search Execution Modes**:
+  - `SearchExecutionMode.autocomplete`: Single normalized query per provider, short bounded timeout (~1.2s), no query fan-out during typing.
+  - `SearchExecutionMode.submitted`: Bounded query variant expansion on explicit submit.
+
+## 18. Progressive Provider Aggregation
+- **Eliminated `Future.wait` All-Or-Nothing Architecture**: Provider tasks now stream updates progressively via `onUpdate(results, isFinal)` instead of holding fast providers hostage until the slowest finishes.
+- **Primary Provider First**: MapKit (on iOS) or MapTiler is queried as primary. When primary returns (<350ms), results are ranked and published to UI immediately.
+- **Secondary Provider Enrichment**: Photon runs in parallel. If/when secondary results arrive, they are merged, deduplicated, and published only if the search generation is still current.
+- **Fast Reverse Geocode Policy**: MapTiler (1.5s) with Photon (1.5s fallback). Public Nominatim is completely removed from the interactive critical path.
+
+## 19. Google Link Timeout & Cancellation
+- **Dedicated Controller**: `GoogleLinkResolutionController` encapsulates link lifecycle, generation ownership, and timeout budgets.
+- **Global 5s Budget**: Link resolution is bounded by a strict 5-second timeout (`.timeout(const Duration(seconds: 5))`).
+- **Explicit Cancellation**: Provides a user-facing "Hủy" (Cancel) button on both the main map banner and search sheet, incrementing generation and discarding in-flight tasks.
+- **No Cascading URL Search**: If link parsing fails or times out, the app shows a non-blocking notification with a "Thử lại" button. It **never** feeds the raw unparsed URL into normal search.
+
+## 20. Loading-State Lifecycle
+- **Strict `finally` Guarantees**: All resolution paths execute within a `try ... catch ... finally` block ensuring `_isResolvingGoogleLink` is unconditionally reset to `false` when finished, cancelled, or timed out.
+- **Distinct State Variables**: Separated `_isAutocompleteRefreshing` (subtle autocomplete progress) from `_isResolvingGoogleLink` (Google Maps link resolution).
+
+## 21. Redirect Resolver Bounds
+- **Bounded Hops**: `HttpGoogleMapsRedirectResolver` strictly limits redirects to a maximum of 5 hops.
+- **Per-Hop Timeout**: Explicit 1.5s timeout on connect and response for every hop.
+- **Redirect Loop Protection**: Visited URL set (`visited.add(url)`) aborts immediately if cycles occur (`A -> B -> A`).
+- **Guaranteed Cleanup**: `HttpClient.close(force: true)` executes in a `finally` block preventing socket leaks.
+- **Fast Abort on Coordinate Headers**: Inspects `location` headers during redirects; if canonical coordinates are present, redirects terminate immediately without downloading the full HTML body.
+
+## 22. Exact Pin Fast Path
+- **Zero-Network Local Parse**: Full Google Maps URLs with `!3d/!4d`, `/place/lat,lon`, `?q=lat,lon`, or `/dir/.../lat,lon` are parsed locally in <1ms without any network requests.
+- **Non-Blocking Exact Return**: Exact coordinates are packaged into a `MapPlace` with `PlacePrecision.coordinate` and returned immediately without blocking on reverse-geocoding.
+
+## 23. Latency Regression Tests
+- **`mobile_app/test/search_latency_test.dart`** (4 tests):
+  - Primary result SLA: verifies primary provider returns fast and publishes before secondary completes.
+  - Slow secondary provider: verifies Photon timeout does not block MapKit/MapTiler suggestions or cause global search failure.
+  - Stale query race: verifies late slow responses from earlier queries are discarded when newer queries complete.
+  - In-memory cache & prefix reuse: verifies instant cache retrieval (<5ms) and prefix candidate filtering (<30ms).
+- **`mobile_app/test/google_link_resolution_test.dart`** (5 tests):
+  - Local fast path: verifies full URL with `!3d/!4d` executes 0 HTTP redirect requests.
+  - Shortlink success: verifies redirect resolves to exact coordinate without reverse geocoding dependency.
+  - Authoritative coordinate detection: verifies pattern matching for exact coordinate markers.
+  - Generation superseding: verifies rapid second paste supersedes slow initial link.
+  - Lifecycle & invariant safety: verifies `isLoading == false` across success, failure, timeout, and cancellation.
+- **Overall Flutter Test Suite**: **47 / 47 PASS** (0 failures).

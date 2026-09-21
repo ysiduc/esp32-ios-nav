@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../models/search_query_intent.dart';
 import 'search_ranker.dart';
 import 'mapkit_search_service.dart';
@@ -8,9 +9,114 @@ import 'package:latlong2/latlong.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 
+
+enum SearchExecutionMode {
+  autocomplete,
+  submitted,
+}
+
+class SearchCacheKey {
+  final String normalizedQuery;
+  final String coarseRegion;
+
+  SearchCacheKey(this.normalizedQuery, this.coarseRegion);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchCacheKey &&
+          runtimeType == other.runtimeType &&
+          other.normalizedQuery == normalizedQuery &&
+          other.coarseRegion == coarseRegion;
+
+  @override
+  int get hashCode => Object.hash(normalizedQuery, coarseRegion);
+}
+
+class CachedSearchResults {
+  final List<MapPlace> results;
+  final DateTime timestamp;
+
+  CachedSearchResults(this.results, this.timestamp);
+
+  bool get isExpired => DateTime.now().difference(timestamp).inSeconds > 180;
+}
+
+
 class SearchService {
+  final Map<SearchCacheKey, CachedSearchResults> _queryCache = {};
+
+  SearchCacheKey _makeCacheKey(String query, LatLng? loc) {
+    final norm = SearchRanker.normalize(query);
+    final coarse = loc != null ? '${loc.latitude.toStringAsFixed(1)},${loc.longitude.toStringAsFixed(1)}' : 'vn';
+    return SearchCacheKey(norm, coarse);
+  }
+
+  List<MapPlace>? getCachedResults(String query, {LatLng? nearLocation}) {
+    final key = _makeCacheKey(query, nearLocation);
+    final entry = _queryCache[key];
+    if (entry != null && !entry.isExpired) {
+      return entry.results;
+    }
+    return null;
+  }
+
+  List<MapPlace> findPrefixMatches(String query, {LatLng? nearLocation}) {
+    final norm = SearchRanker.normalize(query);
+    if (norm.length < 2) return [];
+
+    final candidates = <MapPlace>[];
+    final seen = <String>{};
+
+    for (final entry in _queryCache.values) {
+      if (entry.isExpired) continue;
+      for (final p in entry.results) {
+        final normName = SearchRanker.normalize(p.name);
+        if (normName.contains(norm)) {
+          final k = '${p.name}_${p.coordinate.latitude.toStringAsFixed(3)}';
+          if (seen.add(k)) {
+            candidates.add(p);
+          }
+        }
+      }
+    }
+    return candidates.take(6).toList();
+  }
+
+  List<MapPlace> _rankAndDeduplicate(SearchQueryIntent intent, List<MapPlace> places) {
+    if (places.isEmpty) return [];
+
+    final scored = places.map((p) {
+      final breakdown = SearchRanker.rank(
+        intent: intent,
+        candidateTitle: p.name,
+        candidateAddress: p.displayName,
+        precision: p.precision,
+        source: p.source,
+        distanceMeters: p.distanceMeters,
+      );
+      return (place: p, score: breakdown.finalScore);
+    }).toList();
+
+    scored.sort((a, b) => b.score.compareTo(a.score));
+
+    final sortedPlaces = scored.map((s) => s.place).toList();
+    return SearchRanker.deduplicate(sortedPlaces, maxDistanceMeters: 30.0);
+  }
   final MapKitSearchService _mapKitSearchService = MapKitSearchService();
   int _queryGeneration = 0;
+
+  Future<List<MapPlace>> Function(String query, LatLng? nearLocation)? primaryProviderOverride;
+  Future<List<MapPlace>> Function(String query, LatLng? nearLocation)? secondaryProviderOverride;
+
+  void clearCache() {
+    _queryCache.clear();
+  }
+
+  void primeCache(String query, List<MapPlace> results, {LatLng? nearLocation}) {
+    final key = _makeCacheKey(query, nearLocation);
+    _queryCache[key] = CachedSearchResults(results, DateTime.now());
+  }
 
   int get currentQueryGeneration => _queryGeneration;
 
@@ -27,6 +133,7 @@ class SearchService {
   Future<List<MapPlace>> _executeMapboxQuery(
     String query, {
     LatLng? nearLocation,
+    Duration timeout = const Duration(milliseconds: 1500),
   }) async {
     if (!MapboxConfig.isConfigured) return [];
     try {
@@ -39,7 +146,7 @@ class SearchService {
 
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 5));
+          .timeout(timeout);
 
       if (response.statusCode != 200) return [];
 
@@ -99,7 +206,7 @@ class SearchService {
     }
   }
 
-  Future<MapPlace?> _executeMapboxReverse(LatLng location) async {
+  Future<MapPlace?> _executeMapboxReverse(LatLng location, {Duration timeout = const Duration(milliseconds: 1500)}) async {
     if (!MapboxConfig.isConfigured) return null;
     try {
       final apiKey = MapboxConfig.maptilerApiKey;
@@ -107,7 +214,7 @@ class SearchService {
           'https://api.maptiler.com/geocoding/${location.longitude},${location.latitude}.json?key=$apiKey&language=vi';
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 4));
+          .timeout(timeout);
       if (response.statusCode != 200) return null;
 
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -864,128 +971,217 @@ class SearchService {
   }
 
   /// Ultra-Fast Multi-Engine Search with POI Database, Nominatim & Photon
-  /// High-Precision Multi-Engine Search with MapKit, Photon & MapTiler
-  Future<List<MapPlace>> searchPlaces(
+  /// Progressive multi-stage search with instant cache, prefix reuse, and non-blocking providers
+  Future<void> searchPlacesProgressive(
     String query, {
     LatLng? nearLocation,
+    SearchExecutionMode mode = SearchExecutionMode.autocomplete,
+    required void Function(List<MapPlace> results, bool isFinal) onUpdate,
   }) async {
     final cleanQuery = query.trim();
-    if (cleanQuery.isEmpty) return [];
+    if (cleanQuery.isEmpty) {
+      onUpdate([], true);
+      return;
+    }
 
     _queryGeneration++;
     final myGen = _queryGeneration;
 
     final intent = SearchQueryIntent.parse(cleanQuery);
 
-    // 1. Direct Coordinate Match
+    // 1. Direct coordinate fast-path
     if (intent.type == SearchQueryIntentType.coordinate && intent.targetCoordinate != null) {
       final point = intent.targetCoordinate!;
-      final rev = await reverseGeocode(point);
-      if (myGen != _queryGeneration) return [];
-      return [
-        MapPlace(
-          name: rev.name.isNotEmpty && rev.name != 'Vị trí đã ghim'
-              ? rev.name
-              : 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
-          displayName: rev.displayName.isNotEmpty
-              ? rev.displayName
-              : 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
-          coordinate: point,
-          type: 'coordinate',
-          category: 'pin',
-          precision: PlacePrecision.coordinate,
-          source: 'coordinate',
-          distanceMeters: nearLocation != null ? const Distance().as(LengthUnit.Meter, nearLocation, point) : null,
-        )
-      ];
-    }
+      final immediatePlace = MapPlace(
+        name: 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+        displayName: 'Tọa độ: ${point.latitude.toStringAsFixed(6)}, ${point.longitude.toStringAsFixed(6)}',
+        coordinate: point,
+        type: 'coordinate',
+        category: 'pin',
+        precision: PlacePrecision.coordinate,
+        source: 'coordinate',
+        distanceMeters: nearLocation != null ? const Distance().as(LengthUnit.Meter, nearLocation, point) : null,
+      );
+      onUpdate([immediatePlace], false);
 
-    final mergedResults = <MapPlace>[];
-
-    // 2. Primary Search Provider: Apple MapKit on iOS
-    try {
-      final mapKitResults = await _mapKitSearchService.search(cleanQuery, userLocation: nearLocation);
-      if (myGen != _queryGeneration) return [];
-      mergedResults.addAll(mapKitResults);
-    } catch (_) {}
-
-    // 3. Complementary & Fallback Providers: MapTiler & Photon
-    final futures = <Future<List<MapPlace>>>[];
-    final strippedCity = stripCitySuffix(cleanQuery);
-    final streetKeyword = intent.streetName != null ? cleanStreetKeyword(intent.streetName!) : '';
-    final cityHint = _detectCityHint(nearLocation);
-
-    futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation));
-    if (strippedCity != cleanQuery) {
-      futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation));
-    }
-    if (streetKeyword.isNotEmpty && streetKeyword != cleanQuery) {
-      futures.add(_executePhotonQuery(streetKeyword, nearLocation: nearLocation));
-    }
-    if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
-      futures.add(_executePhotonQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
-    }
-
-    if (MapboxConfig.isConfigured) {
-      futures.add(_executeMapboxQuery(cleanQuery, nearLocation: nearLocation));
-      if (strippedCity != cleanQuery) {
-        futures.add(_executeMapboxQuery(strippedCity, nearLocation: nearLocation));
+      try {
+        final rev = await reverseGeocode(point);
+        if (myGen == _queryGeneration && rev.displayName.isNotEmpty) {
+          onUpdate([
+            MapPlace(
+              name: rev.name.isNotEmpty && rev.name != 'Vị trí đã ghim' ? rev.name : immediatePlace.name,
+              displayName: rev.displayName,
+              coordinate: point,
+              type: 'coordinate',
+              category: 'pin',
+              precision: PlacePrecision.coordinate,
+              source: 'coordinate',
+              distanceMeters: immediatePlace.distanceMeters,
+            )
+          ], true);
+        }
+      } catch (_) {
+        if (myGen == _queryGeneration) onUpdate([immediatePlace], true);
       }
-      if (streetKeyword.isNotEmpty && streetKeyword != cleanQuery) {
-        futures.add(_executeMapboxQuery(streetKeyword, nearLocation: nearLocation));
-      }
-      if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
-        futures.add(_executeMapboxQuery('$cleanQuery, $cityHint', nearLocation: nearLocation));
+      return;
+    }
+
+    // 2. In-Memory Cache Check (< 5ms)
+    final cached = getCachedResults(cleanQuery, nearLocation: nearLocation);
+    if (cached != null && cached.isNotEmpty) {
+      onUpdate(cached, true);
+      return;
+    }
+
+    // 3. Prefix reuse / Instant suggestions while network runs (< 30ms)
+    final prefixCandidates = findPrefixMatches(cleanQuery, nearLocation: nearLocation);
+    if (prefixCandidates.isNotEmpty) {
+      onUpdate(prefixCandidates, false);
+    } else {
+      final instantLocal = searchInstantLocal(cleanQuery, nearLocation: nearLocation);
+      if (instantLocal.isNotEmpty) {
+        onUpdate(instantLocal.take(5).toList(), false);
       }
     }
 
-    final batches = await Future.wait(futures).timeout(
-      const Duration(seconds: 4),
-      onTimeout: () => [],
-    );
+    final accumulated = <MapPlace>[];
+    final isAutocomplete = mode == SearchExecutionMode.autocomplete;
 
-    if (myGen != _queryGeneration) return [];
+    final primaryTimeout = isAutocomplete ? const Duration(milliseconds: 1200) : const Duration(milliseconds: 2000);
+    final secondaryTimeout = isAutocomplete ? const Duration(milliseconds: 1200) : const Duration(milliseconds: 2200);
 
-    for (final batch in batches) {
-      mergedResults.addAll(batch);
+    Future<List<MapPlace>> runPrimary() async {
+      if (primaryProviderOverride != null) {
+        return await primaryProviderOverride!(cleanQuery, nearLocation);
+      }
+      try {
+        final mapKitResults = await _mapKitSearchService
+            .search(cleanQuery, userLocation: nearLocation)
+            .timeout(primaryTimeout, onTimeout: () => []);
+        if (mapKitResults.isNotEmpty) return mapKitResults;
+      } catch (_) {}
+
+      if (MapboxConfig.isConfigured) {
+        try {
+          return await _executeMapboxQuery(cleanQuery, nearLocation: nearLocation, timeout: primaryTimeout);
+        } catch (_) {}
+      }
+      return [];
     }
 
-    // 4. Low-Frequency Explicit Fallback: Nominatim only if no results yet
-    if (mergedResults.isEmpty) {
+    Future<List<MapPlace>> runSecondary() async {
+      if (secondaryProviderOverride != null) {
+        return await secondaryProviderOverride!(cleanQuery, nearLocation);
+      }
+      final futures = <Future<List<MapPlace>>>[];
+      futures.add(_executePhotonQuery(cleanQuery, nearLocation: nearLocation, timeout: secondaryTimeout));
+
+      if (!isAutocomplete) {
+        final strippedCity = stripCitySuffix(cleanQuery);
+        final streetKeyword = intent.streetName != null ? cleanStreetKeyword(intent.streetName!) : '';
+        if (strippedCity != cleanQuery) {
+          futures.add(_executePhotonQuery(strippedCity, nearLocation: nearLocation, timeout: secondaryTimeout));
+          if (MapboxConfig.isConfigured) {
+            futures.add(_executeMapboxQuery(strippedCity, nearLocation: nearLocation, timeout: secondaryTimeout));
+          }
+        }
+        if (streetKeyword.isNotEmpty && streetKeyword != cleanQuery) {
+          futures.add(_executePhotonQuery(streetKeyword, nearLocation: nearLocation, timeout: secondaryTimeout));
+        }
+        final cityHint = _detectCityHint(nearLocation);
+        if (cityHint != null && !cleanQuery.toLowerCase().contains(cityHint.toLowerCase())) {
+          futures.add(_executePhotonQuery('$cleanQuery, $cityHint', nearLocation: nearLocation, timeout: secondaryTimeout));
+        }
+      }
+
+      try {
+        final lists = await Future.wait(futures);
+        return lists.expand((e) => e).toList();
+      } catch (_) {
+        return [];
+      }
+    }
+
+    bool primaryDelivered = false;
+    final primaryFuture = runPrimary();
+    final secondaryFuture = runSecondary();
+
+    primaryFuture.then((primaryResults) {
+      if (myGen != _queryGeneration) return;
+      if (primaryResults.isNotEmpty) {
+        primaryDelivered = true;
+        accumulated.addAll(primaryResults);
+        final ranked = _rankAndDeduplicate(intent, accumulated);
+        onUpdate(ranked.take(8).toList(), false);
+      }
+    }).catchError((_) {});
+
+    final results = await Future.wait([
+      primaryFuture.catchError((_) => <MapPlace>[]),
+      secondaryFuture.catchError((_) => <MapPlace>[]),
+    ]);
+
+    if (myGen != _queryGeneration) return;
+
+    final primaryRes = results[0];
+    final secondaryRes = results[1];
+
+    if (!primaryDelivered && primaryRes.isNotEmpty) {
+      accumulated.addAll(primaryRes);
+    }
+    accumulated.addAll(secondaryRes);
+
+    if (accumulated.isEmpty && !isAutocomplete) {
       try {
         final nomList = await _executeNominatimQuery(cleanQuery, nearLocation: nearLocation);
-        if (myGen != _queryGeneration) return [];
-        mergedResults.addAll(nomList);
+        if (myGen == _queryGeneration) {
+          accumulated.addAll(nomList);
+        }
       } catch (_) {}
     }
 
-    // 5. Rank all candidates with pure SearchRanker
-    final scored = mergedResults.map((p) {
-      final breakdown = SearchRanker.rank(
-        intent: intent,
-        candidateTitle: p.name,
-        candidateAddress: p.displayName,
-        precision: p.precision,
-        source: p.source,
-        distanceMeters: p.distanceMeters,
-      );
-      return (place: p, score: breakdown.finalScore);
-    }).toList();
+    if (myGen != _queryGeneration) return;
 
-    scored.sort((a, b) => b.score.compareTo(a.score));
+    final finalRanked = _rankAndDeduplicate(intent, accumulated).take(8).toList();
 
-    // 6. Deduplicate within 30m with higher confidence winning
-    final sortedPlaces = scored.map((s) => s.place).toList();
-    final deduped = SearchRanker.deduplicate(sortedPlaces, maxDistanceMeters: 30.0);
+    if (finalRanked.isNotEmpty) {
+      final cacheKey = _makeCacheKey(cleanQuery, nearLocation);
+      _queryCache[cacheKey] = CachedSearchResults(finalRanked, DateTime.now());
+      if (_queryCache.length > 60) {
+        _queryCache.remove(_queryCache.keys.first);
+      }
+    }
 
-    // 7. Return 5 to 8 strong results
-    return deduped.take(8).toList();
+    onUpdate(finalRanked, true);
+  }
+
+  /// Backward-compatible searchPlaces delegating to progressive multi-stage search
+  Future<List<MapPlace>> searchPlaces(
+    String query, {
+    LatLng? nearLocation,
+    SearchExecutionMode mode = SearchExecutionMode.submitted,
+  }) async {
+    List<MapPlace> latest = [];
+    final completer = Completer<List<MapPlace>>();
+    await searchPlacesProgressive(
+      query,
+      nearLocation: nearLocation,
+      mode: mode,
+      onUpdate: (results, isFinal) {
+        latest = results;
+        if (isFinal && !completer.isCompleted) {
+          completer.complete(results);
+        }
+      },
+    );
+    return latest;
   }
 
   Future<List<MapPlace>> _executePhotonQuery(
     String query, {
     LatLng? nearLocation,
     bool useBbox = true,
+    Duration timeout = const Duration(milliseconds: 1500),
   }) async {
     try {
       var urlStr = '$_photonBaseUrl/api?q=${Uri.encodeComponent(query)}&limit=15';
@@ -999,7 +1195,7 @@ class SearchService {
       final response = await http.get(
         Uri.parse(urlStr),
         headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0'},
-      ).timeout(const Duration(seconds: 4));
+      ).timeout(timeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -1013,6 +1209,7 @@ class SearchService {
   Future<List<MapPlace>> _executeNominatimQuery(
     String query, {
     LatLng? nearLocation,
+    Duration timeout = const Duration(milliseconds: 2000),
   }) async {
     try {
       final url = Uri.parse(
@@ -1022,7 +1219,7 @@ class SearchService {
       final response = await http.get(
         url,
         headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)'},
-      ).timeout(const Duration(seconds: 4));
+      ).timeout(timeout);
 
       if (response.statusCode == 200) {
         final list = jsonDecode(utf8.decode(response.bodyBytes)) as List? ?? [];
@@ -1142,49 +1339,22 @@ class SearchService {
   }
 
   /// Reverse Geocode Coordinates to Human-Readable Vietnamese Address
+  /// Fast Reverse Geocode Policy (MapTiler 1.5s -> Photon 1.5s fallback)
   Future<MapPlace> reverseGeocode(LatLng location) async {
-
-    // 1. Try MapTiler Reverse first (instant, high accuracy for Vietnam)
-    final maptilerPlace = await _executeMapboxReverse(location);
-    if (maptilerPlace != null) {
-      return maptilerPlace;
-    }
-
-    // 2. Try Nominatim second for rich address components
+    // 1. Primary: MapTiler Reverse (1.5s timeout)
     try {
-      final url = Uri.parse(
-        '$_nominatimBaseUrl/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}&accept-language=vi',
-      );
-      final response = await http.get(
-        url,
-        headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)'},
-      ).timeout(const Duration(seconds: 4));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
-        final displayName = data['display_name'] as String? ?? '';
-        final name = data['name'] as String? ?? displayName.split(',').first.trim();
-        if (displayName.isNotEmpty) {
-          return MapPlace(
-            name: name.isNotEmpty ? name : 'Vị trí đã ghim',
-            displayName: displayName,
-            coordinate: location,
-            type: data['type'] as String?,
-            category: data['class'] as String?,
-          );
-        }
+      final maptilerPlace = await _executeMapboxReverse(location, timeout: const Duration(milliseconds: 1500));
+      if (maptilerPlace != null) {
+        return maptilerPlace;
       }
     } catch (_) {}
 
-    // Fallback to Photon Reverse
+    // 2. Fallback: Photon Reverse (1.5s timeout)
     try {
-      final url = Uri.parse(
-        '$_photonBaseUrl/reverse?lat=${location.latitude}&lon=${location.longitude}',
-      );
-      final response = await http.get(
-        url,
-        headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0'},
-      ).timeout(const Duration(seconds: 4));
+      final url = Uri.parse('$_photonBaseUrl/reverse?lat=${location.latitude}&lon=${location.longitude}');
+      final response = await http
+          .get(url, headers: {'User-Agent': 'ESP32_Smart_Navigator/2.0'})
+          .timeout(const Duration(milliseconds: 1500));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -1225,6 +1395,8 @@ class SearchService {
             coordinate: location,
             type: props['osm_value'] as String?,
             category: props['osm_key'] as String?,
+            precision: houseNumber.isNotEmpty ? PlacePrecision.exactAddress : (street.isNotEmpty ? PlacePrecision.street : PlacePrecision.poi),
+            source: 'photon',
           );
         }
       }
@@ -1234,6 +1406,8 @@ class SearchService {
       name: 'Vị trí đã ghim',
       displayName: 'Tọa độ: ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
       coordinate: location,
+      precision: PlacePrecision.coordinate,
+      source: 'coordinate',
     );
   }
 

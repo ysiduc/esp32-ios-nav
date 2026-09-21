@@ -11,6 +11,7 @@ import '../models/route_model.dart';
 import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/google_maps_parser.dart';
+import '../services/google_link_controller.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/search_service.dart';
@@ -36,6 +37,7 @@ class _MapScreenState extends State<MapScreen> {
   final SearchService _searchService = SearchService();
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
+  late final GoogleLinkResolutionController _googleLinkController;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
@@ -49,6 +51,47 @@ class _MapScreenState extends State<MapScreen> {
   String _transportMode = 'bike'; // Default to Motorcycle in Vietnam
   bool _isLoadingRoutes = false;
   bool _isSearching = false;
+  bool _isAutocompleteRefreshing = false;
+  bool _isResolvingGoogleLink = false;
+  String? _googleLinkStatusText;
+  int _searchGeneration = 0;
+  int _googleLinkGeneration = 0;
+  StateSetter? _activeModalSetState;
+
+  void _updateSearchUIState(VoidCallback fn) {
+    if (mounted) {
+      setState(fn);
+      _activeModalSetState?.call(() {});
+    }
+  }
+
+  void _cancelGoogleLinkResolution() {
+    _googleLinkController.cancel();
+  }
+
+  void _showGoogleMapsResolutionFailure(String rawUrl) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF1C1C1E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 6),
+        content: const Text(
+          'Không đọc được vị trí từ liên kết Google Maps',
+          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
+        ),
+        action: SnackBarAction(
+          label: 'Thử lại',
+          textColor: const Color(0xFF0A84FF),
+          onPressed: () {
+            _handleGoogleMapsOrSharedInput(rawUrl);
+          },
+        ),
+      ),
+    );
+  }
 
   // Auto-follow Camera Centering State
   bool _isAutoCentering = true;
@@ -71,6 +114,17 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    _googleLinkController = GoogleLinkResolutionController(
+      parser: _googleMapsParser,
+      onStateChanged: (state) {
+        if (mounted) {
+          _updateSearchUIState(() {
+            _isResolvingGoogleLink = state.isLoading;
+            _googleLinkStatusText = state.statusText;
+          });
+        }
+      },
+    );
     _isMuted = VoiceGuidanceService().isMuted;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
@@ -278,7 +332,6 @@ class _MapScreenState extends State<MapScreen> {
 
     _debounceTimer?.cancel();
     setState(() {
-      _isSearching = true;
       _clipboardGoogleMapsText = null;
       _lastDismissedClipboardText = clean;
     });
@@ -286,64 +339,64 @@ class _MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
-    final resolvedLink = await _googleMapsParser.parseResolvedLink(clean, userLocation: currentPos);
-    final place = await _googleMapsParser.parseInput(clean, userLocation: currentPos);
+    final place = await _googleLinkController.resolve(clean, userLocation: currentPos);
+    if (!mounted) return;
 
-    if (mounted) {
-      setState(() => _isSearching = false);
-      if (place != null) {
-        _searchController.text = place.name;
-        _onPlaceClicked(place);
+    if (place != null) {
+      _searchController.text = place.name;
+      _onPlaceClicked(place);
 
-        if (resolvedLink.confidence == GoogleMapsResolutionConfidence.approximate) {
-          // Section 32: Approximate Google Link Must Require Confirmation
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFFE65100),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              content: const Row(
-                children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.white, size: 22),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Vị trí này được ước lượng từ liên kết. Kiểm tra ghim trước khi dẫn đường.',
-                      style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
-                    ),
+      final isApprox = place.precision == PlacePrecision.approximate ||
+          place.precision == PlacePrecision.neighborhood ||
+          place.precision == PlacePrecision.street ||
+          place.source == 'google_link_approximate';
+
+      if (isApprox) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFE65100),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            content: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.white, size: 22),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Vị trí này được ước lượng từ liên kết. Kiểm tra ghim trước khi dẫn đường.',
+                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
                   ),
-                ],
-              ),
-              duration: const Duration(seconds: 5),
+                ),
+              ],
             ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF0084FF),
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              content: Row(
-                children: [
-                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Đã nhận điểm đến từ Google Maps: ${place.name}',
-                      style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
+            duration: const Duration(seconds: 5),
+          ),
+        );
       } else {
-        // Fallback to normal search
-        _onSearchSubmitted(clean);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF0084FF),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Đã nhận điểm đến từ Google Maps: ${place.name}',
+                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
       }
+    } else if (_googleLinkController.state.status != GoogleLinkResolutionStatus.cancelled) {
+      _showGoogleMapsResolutionFailure(clean);
     }
   }
 
@@ -363,21 +416,21 @@ class _MapScreenState extends State<MapScreen> {
     _debounceTimer?.cancel();
     final clean = query.trim();
     if (clean.isEmpty) {
-      setState(() {
+      _updateSearchUIState(() {
         _searchResults = [];
+        _isAutocompleteRefreshing = false;
         _isSearching = false;
       });
       return;
     }
 
     if (GoogleMapsParser.isGoogleMapsOrCoordInput(clean)) {
-      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _debounceTimer = Timer(const Duration(milliseconds: 220), () {
         _handleGoogleMapsOrSharedInput(clean);
       });
       return;
     }
 
-    // Không gửi request mạng với từ khóa quá ngắn (dưới 2 ký tự)
     if (clean.length < 2) return;
 
     try {
@@ -387,24 +440,46 @@ class _MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
-    // 1. Instant 0ms Local Offline Results
-    final instantMatches = _searchService.searchInstantLocal(clean, nearLocation: currentPos);
-    if (instantMatches.isNotEmpty) {
-      setState(() {
-        _searchResults = instantMatches;
+    // 1. Fast local cache / prefix reuse suggestions (0–30ms) without blanking UI
+    final cachedMatches = _searchService.findPrefixMatches(clean, nearLocation: currentPos);
+    if (cachedMatches.isNotEmpty) {
+      _updateSearchUIState(() {
+        _searchResults = cachedMatches;
       });
-    }
-
-    // 2. Debounce 450ms: Giảm đến 90% số lượng request lãng phí khi người dùng gõ phím
-    setState(() => _isSearching = true);
-    _debounceTimer = Timer(const Duration(milliseconds: 450), () async {
-      final results = await _searchService.searchPlaces(clean, nearLocation: currentPos);
-      if (mounted) {
-        setState(() {
-          _searchResults = results;
-          _isSearching = false;
+    } else {
+      final instantMatches = _searchService.searchInstantLocal(clean, nearLocation: currentPos);
+      if (instantMatches.isNotEmpty) {
+        _updateSearchUIState(() {
+          _searchResults = instantMatches;
         });
       }
+    }
+
+    // 2. Debounce 220ms for network autocomplete
+    final generation = ++_searchGeneration;
+    _updateSearchUIState(() {
+      _isAutocompleteRefreshing = true;
+      _isSearching = true;
+    });
+
+    _debounceTimer = Timer(const Duration(milliseconds: 220), () async {
+      await _searchService.searchPlacesProgressive(
+        clean,
+        nearLocation: currentPos,
+        mode: SearchExecutionMode.autocomplete,
+        onUpdate: (results, isFinal) {
+          if (!mounted || generation != _searchGeneration) return;
+          _updateSearchUIState(() {
+            if (results.isNotEmpty) {
+              _searchResults = results;
+            }
+            if (isFinal) {
+              _isAutocompleteRefreshing = false;
+              _isSearching = false;
+            }
+          });
+        },
+      );
     });
   }
 
@@ -418,45 +493,70 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     _debounceTimer?.cancel();
-    setState(() => _isSearching = true);
+    final generation = ++_searchGeneration;
+    _updateSearchUIState(() {
+      _isAutocompleteRefreshing = true;
+      _isSearching = true;
+    });
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
-    final results = await _searchService.searchPlaces(clean, nearLocation: currentPos);
 
-    if (mounted) {
-      setState(() {
-        _searchResults = results;
-        _isSearching = false;
-      });
-      // Section 18 & 19: Do NOT auto-select index 0 on normal ambiguous submit.
-      // Auto-select ONLY when result is single unambiguous coordinate or exact pin:
-      if (results.length == 1 &&
-          (results.first.precision == PlacePrecision.coordinate ||
-           results.first.source == 'google_link_exact')) {
-        _onPlaceClicked(results.first);
-      }
-    }
+    await _searchService.searchPlacesProgressive(
+      clean,
+      nearLocation: currentPos,
+      mode: SearchExecutionMode.submitted,
+      onUpdate: (results, isFinal) {
+        if (!mounted || generation != _searchGeneration) return;
+        _updateSearchUIState(() {
+          if (results.isNotEmpty) {
+            _searchResults = results;
+          }
+          if (isFinal) {
+            _isAutocompleteRefreshing = false;
+            _isSearching = false;
+          }
+        });
+        if (isFinal &&
+            results.length == 1 &&
+            (results.first.precision == PlacePrecision.coordinate ||
+             results.first.source == 'google_link_exact')) {
+          _onPlaceClicked(results.first);
+        }
+      },
+    );
   }
 
   void _onSelectCategory(QuickSearchCategory category) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
     _searchController.text = category.title;
-    setState(() => _isSearching = true);
+    final generation = ++_searchGeneration;
+    _updateSearchUIState(() {
+      _isAutocompleteRefreshing = true;
+      _isSearching = true;
+    });
 
-    final results = await _searchService.searchCategory(category, nearLocation: currentPos);
-    if (mounted) {
-      setState(() {
-        _searchResults = results;
-        _isSearching = false;
-      });
-      // Section 18 & 19: Do NOT auto-select index 0 on normal ambiguous submit.
-      // Auto-select ONLY when result is single unambiguous coordinate or exact pin:
-      if (results.length == 1 &&
-          (results.first.precision == PlacePrecision.coordinate ||
-           results.first.source == 'google_link_exact')) {
-        _onPlaceClicked(results.first);
+    try {
+      final results = await _searchService.searchCategory(category, nearLocation: currentPos);
+      if (mounted && generation == _searchGeneration) {
+        _updateSearchUIState(() {
+          _searchResults = results;
+          _isAutocompleteRefreshing = false;
+          _isSearching = false;
+        });
+        if (results.length == 1 &&
+            (results.first.precision == PlacePrecision.coordinate ||
+             results.first.source == 'google_link_exact')) {
+          _onPlaceClicked(results.first);
+        }
+      }
+    } finally {
+      if (mounted && generation == _searchGeneration) {
+        _updateSearchUIState(() {
+          _isAutocompleteRefreshing = false;
+          _isSearching = false;
+        });
       }
     }
   }
@@ -912,6 +1012,52 @@ class _MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
+          // Floating Google Maps Link Resolving Banner
+          if (_isResolvingGoogleLink)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 56,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.12),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _googleLinkStatusText ?? 'Đang mở liên kết Google Maps…',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _cancelGoogleLinkResolution,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        child: const Text('Hủy', style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold, fontSize: 13)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // 7. Active Driving Floating Street Bubble on Route (Screenshot 5)
           // -----------------------------------------------------------
           if (isDriving)
@@ -1265,6 +1411,7 @@ class _MapScreenState extends State<MapScreen> {
       builder: (modalCtx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            _activeModalSetState = setModalState;
             final query = _searchController.text.trim();
             final isQueryMode = query.isNotEmpty;
             final results = isQueryMode ? _searchResults : _searchService.recentSearches;
@@ -1344,7 +1491,7 @@ class _MapScreenState extends State<MapScreen> {
                                         },
                                       ),
                                     ),
-                                    if (_isSearching)
+                                    if (_isAutocompleteRefreshing || _isResolvingGoogleLink)
                                       const SizedBox(
                                         width: 16,
                                         height: 16,
@@ -1381,6 +1528,43 @@ class _MapScreenState extends State<MapScreen> {
                           ],
                         ),
                       ),
+
+                      if (_isResolvingGoogleLink)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF007AFF).withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFF007AFF).withOpacity(0.2)),
+                            ),
+                            child: Row(
+                              children: [
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _googleLinkStatusText ?? 'Đang mở liên kết Google Maps…',
+                                    style: const TextStyle(fontSize: 12, color: Color(0xFF007AFF), fontWeight: FontWeight.w600),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: _cancelGoogleLinkResolution,
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                    child: Text('Hủy', style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
 
                       const SizedBox(height: 16),
 
@@ -1768,7 +1952,9 @@ class _MapScreenState extends State<MapScreen> {
           },
         );
       },
-    );
+    ).whenComplete(() {
+      _activeModalSetState = null;
+    });
   }
 
   Widget _buildAppleCategoryRow(String emoji, String title, VoidCallback onTap) {

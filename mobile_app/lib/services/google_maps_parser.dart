@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:latlong2/latlong.dart';
@@ -13,48 +14,77 @@ class HttpGoogleMapsRedirectResolver implements GoogleMapsRedirectResolver {
   Future<({String finalUrl, String htmlBody})> resolve(String url) async {
     String currentUrl = url;
     String lastBody = '';
+    final visited = <String>{};
     final client = HttpClient();
+    client.connectionTimeout = const Duration(milliseconds: 1500);
     client.userAgent =
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
 
-    for (int i = 0; i < 5; i++) {
-      final uri = Uri.parse(currentUrl);
-      final request = await client.getUrl(uri);
-      request.followRedirects = false;
-      final response = await request.close().timeout(const Duration(seconds: 4));
+    try {
+      for (int i = 0; i < 5; i++) {
+        // Redirect loop protection (Section 24 & 45)
+        if (!visited.add(currentUrl)) {
+          break;
+        }
 
-      final location = response.headers.value('location');
-      if (location != null && location.isNotEmpty) {
-        currentUrl = Uri.parse(currentUrl).resolve(location).toString();
-        continue;
-      }
+        final uri = Uri.parse(currentUrl);
+        final request = await client.getUrl(uri).timeout(const Duration(milliseconds: 1500));
+        request.followRedirects = false;
+        final response = await request.close().timeout(const Duration(milliseconds: 1500));
 
-      final bodyBytes = await response.fold<List<int>>([], (prev, element) => prev..addAll(element));
-      final body = utf8.decode(bodyBytes, allowMalformed: true);
-      lastBody = body;
-
-      // Meta refresh check
-      final metaMatch = RegExp(r'<meta[^>]*http-equiv=["\x27]refresh["\x27][^>]*content=["\x27]\d+;\s*url=([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(body);
-      if (metaMatch != null) {
-        final nextUrl = metaMatch.group(1)!.trim();
-        if (nextUrl.startsWith('http')) {
-          currentUrl = nextUrl;
+        final location = response.headers.value('location');
+        if (location != null && location.isNotEmpty) {
+          currentUrl = Uri.parse(currentUrl).resolve(location).toString();
+          // Fast abort: If redirect location already contains exact coordinates, return immediately (Section 26)
+          if (GoogleMapsParser.hasAuthoritativeCoordinates(currentUrl)) {
+            return (finalUrl: currentUrl, htmlBody: '');
+          }
           continue;
         }
-      }
 
-      // og:url check
-      final ogMatch = RegExp(r'<meta[^>]*property=["\x27]og:url["\x27][^>]*content=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(body);
-      if (ogMatch != null) {
-        final ogUrl = ogMatch.group(1)!.trim();
-        if (ogUrl.startsWith('http') && ogUrl.contains('google.com/maps')) {
-          currentUrl = ogUrl;
-          continue;
+        final bodyBytes = await response
+            .timeout(const Duration(milliseconds: 1500))
+            .fold<List<int>>([], (prev, element) => prev..addAll(element));
+        final body = utf8.decode(bodyBytes, allowMalformed: true);
+        lastBody = body;
+
+        // Meta refresh check
+        final metaMatch = RegExp(
+          r'<meta[^>]*http-equiv=["\x27]refresh["\x27][^>]*content=["\x27]\d+;\s*url=([^"\x27]+)["\x27]',
+          caseSensitive: false,
+        ).firstMatch(body);
+        if (metaMatch != null) {
+          final nextUrl = metaMatch.group(1)!.trim();
+          if (nextUrl.startsWith('http')) {
+            currentUrl = nextUrl;
+            if (GoogleMapsParser.hasAuthoritativeCoordinates(currentUrl)) {
+              return (finalUrl: currentUrl, htmlBody: '');
+            }
+            continue;
+          }
         }
+
+        // og:url check
+        final ogMatch = RegExp(
+          r'<meta[^>]*property=["\x27]og:url["\x27][^>]*content=["\x27]([^"\x27]+)["\x27]',
+          caseSensitive: false,
+        ).firstMatch(body);
+        if (ogMatch != null) {
+          final ogUrl = ogMatch.group(1)!.trim();
+          if (ogUrl.startsWith('http') && ogUrl.contains('google.com/maps')) {
+            currentUrl = ogUrl;
+            if (GoogleMapsParser.hasAuthoritativeCoordinates(currentUrl)) {
+              return (finalUrl: currentUrl, htmlBody: '');
+            }
+            continue;
+          }
+        }
+        break;
       }
-      break;
+    } finally {
+      // Guaranteed HttpClient cleanup in finally (Section 25)
+      client.close(force: true);
     }
-    client.close();
     return (finalUrl: currentUrl, htmlBody: lastBody);
   }
 }
@@ -71,6 +101,25 @@ class GoogleMapsParser {
         _redirectResolver = redirectResolver ?? HttpGoogleMapsRedirectResolver();
 
   int get currentLinkResolutionGeneration => _linkResolutionGeneration;
+
+  /// Check if a URL already contains explicit authoritative coordinates
+  static bool hasAuthoritativeCoordinates(String url) {
+    final decoded = Uri.decodeFull(url);
+    if (decoded.contains('!3d') || decoded.contains('!4d')) return true;
+    if (RegExp(r'/place/(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})').hasMatch(decoded)) return true;
+    if (RegExp(r'/search/(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})').hasMatch(decoded)) return true;
+    if (RegExp(r'[?&](?:destination|daddr|dest|q|query)=(?:loc:)?(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})').hasMatch(decoded)) return true;
+    if (decoded.contains('/dir/')) {
+      final dirSection = decoded.split('/dir/').last.split('/@').first.split('/data=').first;
+      final segments = dirSection.split('/').where((s) => s.isNotEmpty).toList();
+      if (segments.length >= 2) {
+        if (RegExp(r'(\-?\d{1,2}\.\d{3,})[,\s\+]+(\-?\d{1,3}\.\d{3,})').hasMatch(segments.last)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   /// Parse DMS (Degrees Minutes Seconds) format into decimal LatLng
   static LatLng? parseDms(String text) {
@@ -230,7 +279,6 @@ class GoogleMapsParser {
     }
 
     // 6. Priority 5: /dir/ path - extract destination ONLY (Section 25 & 37)
-    // Format: /maps/dir/origin/destination/...
     if (decoded.contains('/dir/')) {
       final dirSection = decoded.split('/dir/').last.split('/@').first.split('/data=').first;
       final segments = dirSection.split('/').where((s) => s.isNotEmpty).toList();
@@ -267,8 +315,8 @@ class GoogleMapsParser {
         final raw = qTextMatch.group(1)!;
         if (!RegExp(r'^\-?\d{1,2}\.\d+').hasMatch(raw)) {
           var clean = raw.replaceAll('+', ' ').trim();
-          clean = clean.replaceAll(RegExp(r'\\bP\\.\\s*', caseSensitive: false), 'Phố ');
-          clean = clean.replaceAll(RegExp(r'\\bĐ\\.\\s*', caseSensitive: false), 'Đường ');
+          clean = clean.replaceAll(RegExp(r'\bP\.\s*', caseSensitive: false), 'Phố ');
+          clean = clean.replaceAll(RegExp(r'\bĐ\.\s*', caseSensitive: false), 'Đường ');
           destQuery = clean;
         }
       }
@@ -292,7 +340,7 @@ class GoogleMapsParser {
       return GoogleMapsResolvedLink(confidence: GoogleMapsResolutionConfidence.unresolved);
     }
 
-    // 1. DMS Coordinate Check
+    // 1. DMS Coordinate Check (< 1ms)
     final dmsCoord = parseDms(trimmed);
     if (dmsCoord != null) {
       return GoogleMapsResolvedLink(
@@ -337,7 +385,8 @@ class GoogleMapsParser {
     String rawPrefix = trimmed.replaceFirst(urlStr, '').replaceAll(RegExp(r'[\r\n\t]+'), ' ').trim();
     String userPrefix = cleanGoogleMapsPrefix(rawPrefix);
 
-    // 4. Resolve Shortlinks & Redirects (Section 26 & 38)
+    // 4. LOCAL FAST-PATH: If URL is a full Google URL with exact coordinates, parse immediately (0 HTTP calls!)
+    // (Sections 27 & 42)
     final isShortLink = urlStr.contains('maps.app.goo.gl') ||
         urlStr.contains('goo.gl') ||
         urlStr.contains('bit.ly') ||
@@ -380,11 +429,10 @@ class GoogleMapsParser {
     }
 
     // 6. Named Link Without Exact Coordinate (Section 21, 30, 35, 36)
-    // NEVER use @lat,lon camera center as the exact destination for a named place!
     if (placeTitle != null && placeTitle.isNotEmpty) {
       var query = placeTitle
-          .replaceAll(RegExp(r'\\bP\\.\\s*', caseSensitive: false), 'Phố ')
-          .replaceAll(RegExp(r'\\bĐ\\.\\s*', caseSensitive: false), 'Đường ');
+          .replaceAll(RegExp(r'\bP\.\s*', caseSensitive: false), 'Phố ')
+          .replaceAll(RegExp(r'\bĐ\.\s*', caseSensitive: false), 'Đường ');
       var searchList = await _searchService.searchPlaces(query, nearLocation: userLocation);
       if (searchList.isEmpty && query.contains(',')) {
         final firstPart = query.split(',').first.trim();
@@ -410,8 +458,7 @@ class GoogleMapsParser {
         );
       }
 
-      // If search failed to resolve the named place, fallback to camera coordinate
-      // ONLY as approximate requiring user confirmation (Section 23 & 36)
+      // If search failed to resolve named place, fallback to camera coordinate as approximate
       if (semantics.cameraCoord != null) {
         return GoogleMapsResolvedLink(
           finalUri: Uri.tryParse(urlStr),
@@ -445,21 +492,23 @@ class GoogleMapsParser {
     );
   }
 
-  /// Backward-compatible parseInput returning MapPlace with exact coordinate preservation
+  /// Fast exact-pin parseInput returning MapPlace immediately without reverse-geocoding block (Section 30)
   Future<MapPlace?> parseInput(String input, {LatLng? userLocation}) async {
     final resolved = await parseResolvedLink(input, userLocation: userLocation);
     final target = resolved.targetCoordinate;
     if (target == null) return null;
 
-    final rev = await _searchService.reverseGeocode(target);
-    final finalName = resolved.placeName ?? rev.name;
-    final finalDisplay = (resolved.placeName != null && !rev.displayName.contains(resolved.placeName!))
-        ? '${resolved.placeName}, ${rev.displayName}'
-        : rev.displayName;
+    final name = resolved.placeName ??
+        (resolved.confidence == GoogleMapsResolutionConfidence.exactPin ? 'Vị trí đã ghim' : 'Điểm đến Google Maps');
+    final display = (resolved.address != null && resolved.address!.isNotEmpty)
+        ? resolved.address!
+        : (resolved.placeName != null
+            ? resolved.placeName!
+            : 'Tọa độ: ${target.latitude.toStringAsFixed(6)}, ${target.longitude.toStringAsFixed(6)}');
 
     return MapPlace(
-      name: finalName.isNotEmpty ? finalName : 'Điểm đến Google Maps',
-      displayName: finalDisplay.isNotEmpty ? finalDisplay : 'Tọa độ: ${target.latitude}, ${target.longitude}',
+      name: name,
+      displayName: display,
       coordinate: target,
       precision: resolved.precision,
       source: resolved.isExact ? 'google_link_exact' : 'google_link_approx',
