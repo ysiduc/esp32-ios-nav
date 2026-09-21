@@ -11,12 +11,16 @@ public final class BLEManager: NSObject, ObservableObject {
     @Published public private(set) var negotiatedMTU: Int = 23
     @Published public private(set) var lastSentPacketTime: Date?
 
+    public let scheduler = BLESendScheduler()
+
     private var centralManager: CBCentralManager!
     private var navigationCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
 
     private var reconnectAttempts: Int = 0
     private var reconnectTimer: Timer?
+    private var scanTimer: Timer?
+    private var flushTimer: Timer?
     private var targetPeripheralUUID: UUID?
 
     public override init() {
@@ -32,9 +36,10 @@ public final class BLEManager: NSObject, ObservableObject {
         )
     }
 
-    /// Start scanning for ESP32 peripherals
-    public func startScanning() {
+    /// Start scanning for ESP32 peripherals with a bounded window.
+    public func startScanning(timeout: TimeInterval = 15.0) {
         guard centralManager != nil, centralManager.state == .poweredOn else { return }
+        scanTimer?.invalidate()
         connectionState = .scanning
         discoveredDevices.removeAll()
 
@@ -43,18 +48,29 @@ public final class BLEManager: NSObject, ObservableObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
 
-        // Also scan without service filter for 5s to catch unadvertised peripherals
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+        // Short broader fallback after 5s to catch unadvertised peripherals
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
             guard let self = self, self.connectionState == .scanning else { return }
             self.centralManager.scanForPeripherals(
                 withServices: nil,
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
             )
         }
+
+        // Bounded scan timeout
+        scanTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self, self.connectionState == .scanning else { return }
+                print("[BLEManager] Bounded scan window expired. Stopping scan.")
+                self.stopScanning()
+            }
+        }
     }
 
     /// Stop scanning
     public func stopScanning() {
+        scanTimer?.invalidate()
+        scanTimer = nil
         centralManager?.stopScan()
         if connectionState == .scanning {
             connectionState = .disconnected
@@ -79,6 +95,7 @@ public final class BLEManager: NSObject, ObservableObject {
         reconnectTimer = nil
         reconnectAttempts = 0
         targetPeripheralUUID = nil
+        scheduler.reset()
 
         if let p = connectedPeripheral {
             centralManager?.cancelPeripheralConnection(p)
@@ -86,7 +103,7 @@ public final class BLEManager: NSObject, ObservableObject {
         connectionState = .disconnected
     }
 
-    /// Send binary packed navigation packet to ESP32 screen
+    /// Send binary packed navigation packet to ESP32 screen using BLESendScheduler.
     public func sendNavigationPacket(_ progress: NavigationProgress) {
         guard connectionState == .connected,
               let peripheral = connectedPeripheral,
@@ -94,13 +111,61 @@ public final class BLEManager: NSObject, ObservableObject {
             return
         }
 
-        let packetData = BLEPacket.serialize(progress: progress)
-
         let writeType: CBCharacteristicWriteType =
             characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
 
-        peripheral.writeValue(packetData, for: characteristic, type: writeType)
+        let canSendWithoutResp: Bool = (writeType == .withoutResponse) ? peripheral.canSendWriteWithoutResponse : true
+
+        let action = scheduler.schedule(
+            progress: progress,
+            writeType: writeType,
+            canSendWithoutResponse: canSendWithoutResp,
+            now: Date()
+        )
+
+        switch action {
+        case .send(let data, let type):
+            executeWrite(data: data, writeType: type, on: peripheral, for: characteristic)
+        case .suppressedDuplicate:
+            break
+        case .queuedRateLimited:
+            scheduleRateLimitFlush()
+        case .queuedBackpressure:
+            break
+        }
+    }
+
+    private func executeWrite(
+        data: Data,
+        writeType: CBCharacteristicWriteType,
+        on peripheral: CBPeripheral,
+        for characteristic: CBCharacteristic
+    ) {
+        peripheral.writeValue(data, for: characteristic, type: writeType)
         lastSentPacketTime = Date()
+    }
+
+    private func scheduleRateLimitFlush() {
+        guard flushTimer == nil else { return }
+        flushTimer = Timer.scheduledTimer(withTimeInterval: scheduler.minSendInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.flushTimer = nil
+                self.flushPendingPacketIfReady()
+            }
+        }
+    }
+
+    private func flushPendingPacketIfReady() {
+        guard connectionState == .connected,
+              let peripheral = connectedPeripheral,
+              let characteristic = navigationCharacteristic else {
+            return
+        }
+
+        if let (data, writeType) = scheduler.rateLimitTimerFired(now: Date()) {
+            executeWrite(data: data, writeType: writeType, on: peripheral, for: characteristic)
+        }
     }
 
     // MARK: - Auto-Reconnect with Exponential Backoff
@@ -120,7 +185,7 @@ public final class BLEManager: NSObject, ObservableObject {
                 if let peripheral = known.first {
                     self.connect(to: peripheral)
                 } else {
-                    self.startScanning()
+                    self.startScanning(timeout: 10.0)
                 }
             }
         }
@@ -133,7 +198,11 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             print("[BLEManager] Bluetooth is powered ON.")
-            startScanning()
+            // If reconnect target exists, attempt reconnect; do not continuously broad-scan at launch
+            if let uuid = targetPeripheralUUID,
+               let known = central.retrievePeripherals(withIdentifiers: [uuid]).first {
+                connect(to: known)
+            }
         case .poweredOff:
             connectionState = .disconnected
             print("[BLEManager] Bluetooth is powered OFF.")
@@ -201,6 +270,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         connectedPeripheral = nil
         navigationCharacteristic = nil
         statusCharacteristic = nil
+        scheduler.reset()
 
         if targetPeripheralUUID != nil {
             scheduleReconnect()
@@ -243,5 +313,24 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             negotiatedMTU = peripheral.maximumWriteValueLength(for: .withoutResponse)
             print("[BLEManager] Link Ready! Max write length: \(negotiatedMTU) bytes")
         }
+    }
+
+    public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard let char = navigationCharacteristic,
+              let (data, writeType) = scheduler.transportBecameReady(now: Date()) else {
+            return
+        }
+        executeWrite(data: data, writeType: writeType, on: peripheral, for: char)
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error = error {
+            print("[BLEManager] didWriteValue error: \(error.localizedDescription)")
+        }
+        guard characteristic.uuid == BLEProtocolConstants.navigationDataCharUUID,
+              let (data, writeType) = scheduler.withResponseWriteCompleted(now: Date()) else {
+            return
+        }
+        executeWrite(data: data, writeType: writeType, on: peripheral, for: characteristic)
     }
 }

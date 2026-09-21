@@ -14,7 +14,7 @@ Key achievements in P4:
 - Fixed the MapKit fallback bug that unconditionally routed all transport modes as `.automobile`: established an explicit mode-safe fallback matrix where `.motorcycle` and `.bicycle` fallbacks are marked `isDegradedFallback = true` with warning metadata and UI badges.
 - Enhanced `NavigationViewModel` preview lifecycle to allow users to switch between route alternatives without resetting destination, search state, or session identity; `startNavigation()` authoritative commitment begins on the chosen alternative route.
 - Preserved single-flight, authoritative off-route rerouting in `RerouteManager` without mutating preview candidates.
-- Added 26 new unit tests, expanding the test suite to 129 tests (129/129 PASS).
+- Added 26 new unit tests for Initial P4 (129 tests, 129/129 PASS, Run 35533694130), subsequently expanded to 142 tests (142/142 PASS, Run 35566129892) across P4.1 and P4.1.1 reviewer corrections.
 
 ---
 
@@ -49,10 +49,11 @@ Key achievements in P4:
 - `mobile_app/ios_native/Sources/Views/MainMapView.swift`: Compact alternative route picker chips, degraded fallback banner, and dynamic preview polyline switching.
 
 ### Test Suites
-- `mobile_app/ios_native/Tests/ESP32NavAppTests/RoutingProfileTests.swift`: Profile options and structured JSON request serialization tests (8 tests).
-- `mobile_app/ios_native/Tests/ESP32NavAppTests/ValhallaRouteSetParserTests.swift`: Multi-route parsing and candidate deduplication tests (5 tests).
+Initial P4 added 26 tests (129 total); P4.1 and P4.1.1 added 13 additional tests, reaching 142 total tests (142/142 PASS):
+- `mobile_app/ios_native/Tests/ESP32NavAppTests/RoutingProfileTests.swift`: Profile options and structured JSON request serialization tests (8 initial, 9 final).
+- `mobile_app/ios_native/Tests/ESP32NavAppTests/ValhallaRouteSetParserTests.swift`: Multi-route parsing and candidate deduplication tests (5 initial, 6 final).
 - `mobile_app/ios_native/Tests/ESP32NavAppTests/RoutingFallbackTests.swift`: MapKit mode mapping and fallback capability tests (7 tests).
-- `mobile_app/ios_native/Tests/ESP32NavAppTests/RouteCandidateSelectionTests.swift`: Preview candidate selection, race safety, and startNavigation tests (6 tests).
+- `mobile_app/ios_native/Tests/ESP32NavAppTests/RouteCandidateSelectionTests.swift`: Preview candidate selection, race safety, and startNavigation tests (6 initial, 17 final).
 
 ---
 

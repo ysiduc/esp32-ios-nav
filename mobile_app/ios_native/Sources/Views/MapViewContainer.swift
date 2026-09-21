@@ -94,9 +94,12 @@ public struct MapViewContainer: UIViewRepresentable {
             mapView.setUserTrackingMode(wantedMode, animated: true, completionHandler: nil)
         }
 
-        // Zoom to fit on route preview
+        // Zoom to fit on route preview (cached to avoid animating every SwiftUI frame)
         if !isNavigating, let route = route, route.coordinates.count >= 2 {
-            c.zoomToFitRoute(route, on: mapView)
+            if c.renderPolicy.shouldZoomToFit(routeCoordinates: route.coordinates) {
+                c.renderPolicy.recordPreviewZoom()
+                c.zoomToFitRoute(route, on: mapView)
+            }
         }
 
         // Style switch
@@ -125,33 +128,40 @@ public struct MapViewContainer: UIViewRepresentable {
         private var destinationAnnotation: MLNPointAnnotation?
         private var lastDestinationCoord: CLLocationCoordinate2D?
 
-        // Track last drawn coords to avoid redundant redraws.
-        // Use coordinate count + first/last coords as a lightweight hash.
-        private var lastPolylineHash: Int = 0
+        public let renderPolicy = MapRenderPolicy()
 
         // MARK: - Polyline Rendering
 
         func updatePolyline(_ coords: [CLLocationCoordinate2D], on mapView: MLNMapView) {
-            guard mapView.style != nil else { return }
+            guard let style = mapView.style else { return }
 
-            // Lightweight hash: count + first lat + last lat
-            let hash: Int
-            if coords.count >= 2 {
-                let bits = coords.count &* 10_000_007
-                          &+ Int(coords.first!.latitude  * 1_000_000)
-                          &+ Int(coords.last!.latitude   * 1_000_000)
-                          &+ Int(coords.first!.longitude * 1_000_000)
-                hash = bits
-            } else {
-                hash = 0
+            let sourceExists = (style.source(withIdentifier: routeSourceID) != nil)
+            let layerExists = (style.layer(withIdentifier: routeLayerID) != nil)
+
+            let action = renderPolicy.evaluatePolylineUpdate(
+                coordsCount: coords.count,
+                sourceExists: sourceExists,
+                layerExists: layerExists
+            )
+
+            switch action {
+            case .updateShapeInPlace:
+                if let source = style.source(withIdentifier: routeSourceID) as? MLNShapeSource {
+                    let feature = MLNPolylineFeature(coordinates: coords, count: UInt(coords.count))
+                    source.shape = feature
+                    renderPolicy.recordShapeUpdate()
+                }
+            case .initialBuild, .rebuildForMissingLayer:
+                removeRouteLayer(from: mapView)
+                addRouteLayer(coords: coords, to: mapView)
+                renderPolicy.recordLayerRebuild()
+            case .clearShape:
+                if let source = style.source(withIdentifier: routeSourceID) as? MLNShapeSource {
+                    source.shape = nil
+                }
+            case .noChange:
+                break
             }
-
-            if hash == lastPolylineHash { return }
-            lastPolylineHash = hash
-
-            removeRouteLayer(from: mapView)
-            guard coords.count >= 2 else { return }
-            addRouteLayer(coords: coords, to: mapView)
         }
 
         private func removeRouteLayer(from mapView: MLNMapView) {

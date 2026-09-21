@@ -14,6 +14,7 @@
 import Combine
 import CoreLocation
 import Foundation
+import SwiftUI
 
 @MainActor
 public final class NavigationViewModel: ObservableObject {
@@ -400,6 +401,7 @@ public final class NavigationViewModel: ObservableObject {
 
     public func recalculateForTransportMode() {
         currentTransportMode = NavigationTransportMode(costingValue: transportMode)
+        navSession.updateTransportMode(currentTransportMode)
         if navSession.state == .navigating {
             rerouteManager.requestTransportModeReroute(costing: currentTransportMode.rawValue)
         } else {
@@ -446,5 +448,11 @@ public final class NavigationViewModel: ObservableObject {
     private func valhallaCosting(for mode: String) -> String {
         let tm = NavigationTransportMode(costingValue: mode)
         return RoutingProfile.profile(for: tm).valhallaCosting
+    }
+
+    // MARK: - Scene Lifecycle (P5)
+
+    public func handleScenePhase(_ phase: ScenePhase) {
+        navSession.handleScenePhaseChange(isForeground: phase == .active)
     }
 }

@@ -17,6 +17,7 @@ import SwiftUI
 
 public struct MainMapView: View {
 
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = NavigationViewModel()
 
     public init() {}
@@ -70,6 +71,9 @@ public struct MainMapView: View {
         .animation(.easeInOut(duration: 0.3), value: viewModel.navSession.state)
         .sheet(isPresented: $viewModel.showBLEScanner) {
             BLEScannerSheet(bleManager: viewModel.bleManager)
+        }
+        .onChange(of: scenePhase) { newPhase in
+            viewModel.handleScenePhase(newPhase)
         }
     }
 

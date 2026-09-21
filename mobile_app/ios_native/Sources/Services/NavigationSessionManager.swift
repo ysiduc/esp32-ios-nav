@@ -1,18 +1,21 @@
 //
 //  NavigationSessionManager.swift
-//  Core navigation state machine and GPS engine.
+//  Core navigation state machine, location tracking profiles, and GPS engine.
 //
 //  States: .idle -> .searching -> .routePreview -> .navigating -> .arrived
 //
 //  Key behaviours:
-//  1. High-accuracy GPS (kCLLocationAccuracyBestForNavigation)
-//  2. Background location (iOS 17+)
-//  3. Explicit location pipeline: rawLocation -> filteredLocation -> matchedLocation
-//  4. Independent route indices: maneuverStepIndex vs polylineSegmentIndex
-//  5. Authoritative RouteGeometry projection with continuity gating & heading tie-breaker
-//  6. Along-route step advancement & conservative arrival logic
-//  7. remainingPolyline trimmed by actual polylineSegmentIndex
-//  8. Kalman filter smoothing to reduce GPS jitter
+//  1. State-aware location tracking profiles (suspended, foregroundPassive, routePreview, activeNavigation)
+//  2. Availability-gated background activity session (iOS 17+)
+//  3. Pure transport-mode to CLActivityType mapping
+//  4. Explicit location pipeline: rawLocation -> filteredLocation -> matchedLocation
+//  5. Synchronous, deterministic location ingestion on @MainActor
+//  6. Independent route indices: maneuverStepIndex vs polylineSegmentIndex
+//  7. Authoritative RouteGeometry projection with continuity gating & heading tie-breaker
+//  8. Along-route step advancement & conservative arrival logic
+//  9. remainingPolyline trimmed by actual polylineSegmentIndex
+//  10. Kalman filter smoothing to reduce GPS jitter
+//  11. Runtime diagnostics metrics tracking
 //
 
 import CoreLocation
@@ -62,22 +65,28 @@ public struct NavigationProgress: Sendable {
         self.nextStreetName          = nextStreetName
     }
 
-    public var formattedDistanceToTurn: String {
-        distanceToTurnMeters >= 1000
-            ? String(format: "%.1f km", Double(distanceToTurnMeters) / 1000)
-            : "\(distanceToTurnMeters) m"
-    }
-
     public var formattedRemainingDistance: String {
-        remainingDistanceMeters >= 1000
-            ? String(format: "%.1f km", Double(remainingDistanceMeters) / 1000)
-            : "\(remainingDistanceMeters) m"
+        if remainingDistanceMeters >= 1000 {
+            return String(format: "%.1f km", Double(remainingDistanceMeters) / 1000.0)
+        }
+        return "\(remainingDistanceMeters) m"
     }
 
-    public var formattedRemainingEta: String {
-        let mins = Int(remainingEtaSeconds / 60)
-        if mins >= 60 { return "\(mins / 60)h \(mins % 60)m" }
-        return "\(mins) phut"
+    public var formattedDistanceToTurn: String {
+        if distanceToTurnMeters >= 1000 {
+            return String(format: "%.1f km", Double(distanceToTurnMeters) / 1000.0)
+        }
+        return "\(distanceToTurnMeters) m"
+    }
+
+    public var formattedEta: String {
+        let mins = remainingEtaSeconds / 60
+        if mins >= 60 {
+            let hours = mins / 60
+            let remainMins = mins % 60
+            return "\(hours) giờ \(remainMins) phút"
+        }
+        return "\(mins) phút"
     }
 }
 
@@ -88,83 +97,95 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: - Explicit Location Pipeline
     /// Raw, unfiltered GPS location directly from CoreLocation (diagnostics/debug).
-    @Published public var rawLocation: CLLocation?
-    /// Filtered (Kalman-smoothed) physical GPS location (used for search bias and route matching).
-    @Published public var filteredLocation: CLLocation?
-    /// Authoritative matched coordinate along route polyline (used for navigation puck).
-    @Published public var matchedLocation: CLLocationCoordinate2D?
-    /// Authoritative projection metadata along route polyline.
-    @Published public var currentProjection: RouteProjection?
+    @Published public private(set) var rawLocation: CLLocation?
 
-    // Backwards-compatible aliases
-    @Published public var userLocation: CLLocation?
-    @Published public var snappedLocation: CLLocationCoordinate2D?
+    /// Kalman-filtered, accuracy-checked GPS location.
+    @Published public private(set) var filteredLocation: CLLocation?
 
-    @Published public var state: NavigationState            = .idle
-    @Published public var activeRoute: NavRoute?
-    @Published public var activeProgress: NavigationProgress = NavigationProgress()
-    @Published public var locationAuthStatus: CLAuthorizationStatus = .notDetermined
-    @Published public var heading: Double = 0
-    /// Remaining (undriven) polyline — trimmed from snapped position to destination.
-    @Published public var remainingPolyline: [CLLocationCoordinate2D] = []
+    /// Backward-compatible alias for views observing user position.
+    @Published public private(set) var userLocation: CLLocation?
+
+    /// Exact mathematically projected position snapped to route geometry.
+    @Published public private(set) var matchedLocation: CLLocationCoordinate2D?
+
+    /// Exact projection coordinate for MapLibre puck rendering.
+    @Published public private(set) var snappedLocation: CLLocationCoordinate2D?
+
+    /// Full projection metadata (distance along route, lateral distance, segment index).
+    @Published public private(set) var currentProjection: RouteProjection?
+
+    /// Device heading in degrees (0-359).
+    @Published public private(set) var heading: CLLocationDirection?
+
+    /// Authorization status for location services.
+    @Published public private(set) var locationAuthStatus: CLAuthorizationStatus = .notDetermined
+
+    // MARK: - Location Tracking Profile & Power
+    @Published public private(set) var trackingProfile: LocationTrackingProfile = .foregroundPassive
+    @Published public private(set) var currentTrackingConfig: LocationTrackingConfiguration
 
     // MARK: - Session Identity & Destination Lifecycle
-    /// Monotonically increasing session generation. Incremented on start and stop.
-    public private(set) var sessionGeneration: UInt64 = 0
-    /// Monotonically increasing active route revision. Increments on route start, route replace, and stop.
-    public private(set) var activeRouteGeneration: UInt64 = 0
-    /// Active navigation destination frozen at start of navigation session.
-    public private(set) var navigationDestination: NavigationDestination?
+    @Published public private(set) var sessionGeneration: UInt64 = 0
+    @Published public private(set) var activeRouteGeneration: UInt64 = 0
+    @Published public private(set) var navigationDestination: NavigationDestination?
+
+    // MARK: - State Machine
+    @Published public private(set) var state: NavigationState = .idle
+    @Published public private(set) var activeRoute: NavRoute?
+    @Published public private(set) var remainingPolyline: [CLLocationCoordinate2D] = []
+    @Published public private(set) var activeProgress: NavigationProgress = NavigationProgress()
+
     /// Flag indicating background reroute computation is underway.
     @Published public private(set) var isRerouting: Bool = false
 
     // MARK: - Independent Route Indices
-    /// Index into route.steps (maneuver step progress).
-    public private(set) var currentManeuverStepIndex: Int = 0
-    /// Backwards compatible alias for step index.
-    public var currentStepIndex: Int { currentManeuverStepIndex }
+    @Published public private(set) var currentManeuverStepIndex: Int = 0
+    @Published public private(set) var currentPolylineSegmentIndex: Int = 0
 
-    /// Index into route.coordinates / linear segments.
-    public private(set) var currentPolylineSegmentIndex: Int = 0
+    // MARK: - Off-Route Detection (P2)
+    @Published public private(set) var offRouteDecision: OffRouteDecision?
+    @Published public private(set) var offRouteState: OffRouteState = .onRoute
+    @Published public private(set) var isOffRoute: Bool = false
+    private let offRouteDetector = OffRouteDetector()
 
-    /// Last matched projection used for continuity gating.
-    public private(set) var lastMatchedProjection: RouteProjection?
+    // MARK: - Diagnostics (P5)
+    public var diagnostics = NavigationDiagnostics()
 
-    /// Timestamp of last accepted matched projection for temporal continuity gating.
-    public private(set) var lastMatchedTimestamp: Date?
-
-    // MARK: Callbacks
+    // MARK: - Callbacks
     public var onProgressUpdate: ((NavigationProgress) -> Void)?
+    public var onOffRouteDecision: ((OffRouteDecision, CLLocation) -> Void)?
     public var onRerouteNeeded: (() -> Void)?
     public var onArrived: (() -> Void)?
 
     // MARK: Thresholds
     private let stepAdvanceThresholdMeters: Double = 15.0
-    private let maxAccuracyMeters: Double          = 20.0
-    private let arrivalThresholdMeters: Double     = 15.0
-
-    // MARK: Off-Route Detection (P2)
-    public let offRouteDetector = OffRouteDetector()
-    @Published public private(set) var isOffRoute: Bool = false
-    @Published public private(set) var offRouteState: OffRouteState = .onRoute
-    @Published public private(set) var offRouteDecision: OffRouteDecision?
-    public var onOffRouteDecision: ((OffRouteDecision, CLLocation) -> Void)?
+    private let arrivalRadiusMeters: Double        = 25.0
+    private let maxAccuracyMeters: Double          = 50.0
 
     // MARK: Private State
     private let locationManager = CLLocationManager()
-    private var backgroundSession: Any? = nil
+    private var backgroundActivitySession: Any? = nil
+    private var isForeground: Bool = true
+    private var currentTransportMode: NavigationTransportMode = .motorcycle
 
     // Kalman filter
     private var kalmanLat: Double = 0
     private var kalmanLon: Double = 0
     private var kalmanAccuracy: Double = 1.0
     private var kalmanTimestamp: Date?
-    private let kalmanQ: Double = 3.0 // m/s process noise
+    private let kalmanQ: Double = 3.0 // process noise (m/s)
+
+    // Route progress tracking state
+    private var lastMatchedProjection: RouteProjection?
+    private var lastMatchedTimestamp: Date?
 
     private let requestLocationAuthorizationOnInit: Bool
 
+    // MARK: - Init
+
     public init(requestLocationAuthorizationOnInit: Bool = true) {
         self.requestLocationAuthorizationOnInit = requestLocationAuthorizationOnInit
+        self.currentTrackingConfig = LocationTrackingPolicy.configuration(for: .foregroundPassive, transportMode: .motorcycle)
         super.init()
         setupLocationManager(requestAuthorization: requestLocationAuthorizationOnInit)
     }
@@ -172,21 +193,131 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     // MARK: - Setup
 
     private func setupLocationManager(requestAuthorization: Bool) {
-        locationManager.delegate        = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-        locationManager.distanceFilter  = kCLDistanceFilterNone
-        locationManager.headingFilter   = 2.0
-        locationManager.activityType    = .automotiveNavigation
-        locationManager.pausesLocationUpdatesAutomatically = false
-        if requestAuthorization {
-            locationManager.requestWhenInUseAuthorization()
+        locationManager.delegate = self
+        applyTrackingProfile(.foregroundPassive, transportMode: .motorcycle)
+
+        if requestAuthorization && !ProcessInfo.isRunningUnitTests {
+            requestLocationPermission()
         }
+    }
+
+    public func requestLocationPermission() {
+        guard !ProcessInfo.isRunningUnitTests else { return }
+        locationManager.requestWhenInUseAuthorization()
+    }
+
+    // MARK: - Tracking Profile & Power Policy (P5)
+
+    public func applyTrackingProfile(
+        _ profile: LocationTrackingProfile? = nil,
+        transportMode: NavigationTransportMode? = nil
+    ) {
+        if let mode = transportMode {
+            self.currentTransportMode = mode
+        }
+        let resolvedProfile = profile ?? LocationTrackingPolicy.resolveProfile(state: state, isForeground: isForeground)
+        self.trackingProfile = resolvedProfile
+        let config = LocationTrackingPolicy.configuration(for: resolvedProfile, transportMode: currentTransportMode)
+        self.currentTrackingConfig = config
+
+        guard requestLocationAuthorizationOnInit else { return }
+
+        locationManager.desiredAccuracy = config.desiredAccuracy
+        locationManager.distanceFilter  = config.distanceFilter
+        locationManager.activityType    = config.activityType
+        locationManager.pausesLocationUpdatesAutomatically = config.pausesLocationUpdatesAutomatically
+
+        if config.allowsBackgroundLocationUpdates {
+            locationManager.allowsBackgroundLocationUpdates = true
+            locationManager.showsBackgroundLocationIndicator = config.showsBackgroundLocationIndicator
+        } else {
+            locationManager.allowsBackgroundLocationUpdates = false
+            locationManager.showsBackgroundLocationIndicator = false
+        }
+
+        updateBackgroundActivitySession(for: resolvedProfile)
+
+        let isAuthorized = (locationAuthStatus == .authorizedWhenInUse || locationAuthStatus == .authorizedAlways)
+        if isAuthorized {
+            if resolvedProfile == .suspended {
+                locationManager.stopUpdatingLocation()
+                locationManager.stopUpdatingHeading()
+            } else {
+                locationManager.startUpdatingLocation()
+                if config.headingEnabled {
+                    locationManager.startUpdatingHeading()
+                } else {
+                    locationManager.stopUpdatingHeading()
+                }
+            }
+        }
+    }
+
+    public func handleScenePhaseChange(isForeground: Bool) {
+        self.isForeground = isForeground
+        applyTrackingProfile()
+    }
+
+    public func updateTransportMode(_ mode: NavigationTransportMode) {
+        self.currentTransportMode = mode
+        applyTrackingProfile(transportMode: mode)
+    }
+
+    private func updateBackgroundActivitySession(for profile: LocationTrackingProfile) {
+        #if canImport(CoreLocation)
+        if #available(iOS 17.0, *) {
+            if profile == .activeNavigation {
+                if backgroundActivitySession == nil && requestLocationAuthorizationOnInit && !ProcessInfo.isRunningUnitTests {
+                    backgroundActivitySession = CLBackgroundActivitySession()
+                }
+            } else {
+                if let session = backgroundActivitySession as? CLBackgroundActivitySession {
+                    session.invalidate()
+                }
+                backgroundActivitySession = nil
+            }
+        }
+        #endif
     }
 
     // MARK: - Public API
 
-    public func requestAlwaysAuthorization() {
-        locationManager.requestAlwaysAuthorization()
+    public func setSearching() {
+        state = .searching
+        applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
+    }
+
+    public func setIdle() {
+        state = .idle
+        applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
+    }
+
+    public func setRoutePreview(route: NavRoute) {
+        activeRoute       = route
+        remainingPolyline = route.coordinates
+        state             = .routePreview
+        applyTrackingProfile(isForeground ? .routePreview : .suspended)
+    }
+
+    public func clearRoute() {
+        activeRoute                 = nil
+        activeProgress              = NavigationProgress()
+        currentManeuverStepIndex    = 0
+        currentPolylineSegmentIndex = 0
+        lastMatchedProjection       = nil
+        lastMatchedTimestamp        = nil
+        currentProjection           = nil
+        matchedLocation             = nil
+        snappedLocation             = nil
+        remainingPolyline           = []
+        offRouteDetector.reset()
+        offRouteDecision            = nil
+        offRouteState               = .onRoute
+        isOffRoute                  = false
+        if state == .routePreview {
+            state = .idle
+            applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
+        }
     }
 
     public func startNavigation(route: NavRoute, destination: NavigationDestination) {
@@ -199,18 +330,16 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
-        matchedLocation             = nil
-        snappedLocation             = nil
-        offRouteDetector.reset()
-        isOffRoute                  = false
-        offRouteState               = .onRoute
-        offRouteDecision            = nil
         isRerouting                 = false
         remainingPolyline           = route.coordinates
-        kalmanTimestamp             = nil
+        offRouteDetector.reset()
+        offRouteDecision            = nil
+        offRouteState               = .onRoute
+        isOffRoute                  = false
         state                       = .navigating
-        enableBackgroundLocation()
-        print("[NavSession] Navigation started (session \(sessionGeneration), route rev \(activeRouteGeneration)) — \(route.steps.count) steps to \(destination.name ?? "destination")")
+
+        applyTrackingProfile(.activeNavigation)
+        print("[NavSession] Navigation started to \(destination.name ?? "destination")")
     }
 
     public func stopNavigation() {
@@ -228,27 +357,16 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         currentProjection           = nil
         matchedLocation             = nil
         snappedLocation             = nil
-        offRouteDetector.reset()
-        isOffRoute                  = false
-        offRouteState               = .onRoute
-        offRouteDecision            = nil
         remainingPolyline           = []
-        disableBackgroundLocation()
-        print("[NavSession] Navigation stopped (session invalidated to \(sessionGeneration), route rev \(activeRouteGeneration))")
+        offRouteDetector.reset()
+        offRouteDecision            = nil
+        offRouteState               = .onRoute
+        isOffRoute                  = false
+
+        applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
+        print("[NavSession] Navigation stopped")
     }
 
-    public func setRoutePreview(_ route: NavRoute) {
-        guard state != .navigating else {
-            print("[NavSession] setRoutePreview rejected: active navigation in progress")
-            return
-        }
-        activeRoute       = route
-        remainingPolyline = route.coordinates
-        state             = .routePreview
-    }
-
-    /// Replaces active route during an active navigation session (reroute commit).
-    /// Maintains session identity and destination while atomically replacing path and resetting step/segment progress.
     public func replaceActiveRoute(_ route: NavRoute) {
         guard state == .navigating else {
             print("[NavSession] Cannot replace route: not in navigating state")
@@ -261,261 +379,59 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
-        matchedLocation             = nil
-        snappedLocation             = nil
-        offRouteDetector.reset()
-        isOffRoute                  = false
-        offRouteState               = .onRoute
-        offRouteDecision            = nil
-        isRerouting                 = false
         remainingPolyline           = route.coordinates
-
-        // Recompute progress immediately on the new route if filtered location is available
-        if let loc = filteredLocation ?? userLocation {
-            var stepIdx = 0
-            var segIdx  = 0
-            let result = computeProgress(
-                currentLocation: loc,
-                route: route,
-                lastProjection: nil,
-                lastMatchedTimestamp: nil,
-                maneuverStepIndex: &stepIdx,
-                polylineSegmentIndex: &segIdx
-            )
-            currentManeuverStepIndex    = stepIdx
-            currentPolylineSegmentIndex = segIdx
-            lastMatchedProjection       = result.projection
-            lastMatchedTimestamp        = loc.timestamp
-            currentProjection           = result.projection
-            matchedLocation             = result.projection.coordinate
-            snappedLocation             = result.projection.coordinate
-            if result.remaining.count >= 2 { remainingPolyline = result.remaining }
-            activeProgress              = result.progress
-            onProgressUpdate?(result.progress)
-        }
-        print("[NavSession] Active route replaced successfully (session \(sessionGeneration)) — \(route.steps.count) steps")
-    }
-
-    public func setRerouting(_ rerouting: Bool) {
-        isRerouting = rerouting
-    }
-
-    public func clearRoute() {
-        activeRouteGeneration &+= 1
-        activeRoute                 = nil
-        remainingPolyline           = []
-        lastMatchedProjection       = nil
-        lastMatchedTimestamp        = nil
         offRouteDetector.reset()
-        isOffRoute                  = false
-        offRouteState               = .onRoute
         offRouteDecision            = nil
-        if state == .routePreview || state == .arrived { state = .idle }
+        offRouteState               = .onRoute
+        isOffRoute                  = false
+        diagnostics.rerouteCommits += 1
+        print("[NavSession] Active route replaced (rev \(activeRouteGeneration), \(route.coordinates.count) pts)")
     }
 
-    // MARK: - Background
-
-    private func enableBackgroundLocation() {
-        guard requestLocationAuthorizationOnInit else { return }
-        locationManager.allowsBackgroundLocationUpdates = true
-    }
-
-    private func disableBackgroundLocation() {
-        guard requestLocationAuthorizationOnInit else { return }
-        locationManager.allowsBackgroundLocationUpdates = false
-        backgroundSession = nil
-    }
-
-    // MARK: - Kalman Smoothing
-
-    private func kalmanSmooth(rawLat: Double, rawLon: Double,
-                               accuracy: Double, timestamp: Date) -> CLLocationCoordinate2D {
-        guard let last = kalmanTimestamp else {
-            kalmanLat = rawLat; kalmanLon = rawLon
-            kalmanAccuracy = accuracy; kalmanTimestamp = timestamp
-            return CLLocationCoordinate2D(latitude: rawLat, longitude: rawLon)
-        }
-        let dt = max(0.01, timestamp.timeIntervalSince(last))
-        kalmanTimestamp = timestamp
-        let predAcc = kalmanAccuracy + kalmanQ * dt
-        let k = predAcc / (predAcc + accuracy)
-        kalmanLat      += k * (rawLat - kalmanLat)
-        kalmanLon      += k * (rawLon - kalmanLon)
-        kalmanAccuracy  = (1.0 - k) * predAcc
-        return CLLocationCoordinate2D(latitude: kalmanLat, longitude: kalmanLon)
-    }
-
-    // MARK: - Progress Computation
-
-    nonisolated private func computeProgress(
-        currentLocation: CLLocation,
-        route: NavRoute,
-        lastProjection: RouteProjection?,
-        lastMatchedTimestamp: Date?,
-        maneuverStepIndex: inout Int,
-        polylineSegmentIndex: inout Int
-    ) -> (progress: NavigationProgress,
-          projection: RouteProjection,
-          remaining: [CLLocationCoordinate2D]) {
-
-        guard !route.steps.isEmpty, !route.coordinates.isEmpty else {
-            let fallbackProj = RouteProjection(
-                coordinate: currentLocation.coordinate,
-                segmentIndex: 0,
-                segmentFraction: 0,
-                lateralDistanceMeters: 0,
-                distanceAlongRouteMeters: 0
-            )
-            return (NavigationProgress(maneuver: .arrive, nextStreetName: "Đã đến đích"),
-                    fallbackProj, [])
-        }
-
-        let coords = route.coordinates
-
-        // Authoritative Route Projection with continuity gating
-        guard let projection = route.geometry.project(
-            location: currentLocation,
-            lastProjection: lastProjection,
-            lastMatchedTimestamp: lastMatchedTimestamp
-        ) else {
-            let fallbackCoord = route.coordinates.first ?? currentLocation.coordinate
-            let fallbackProj = RouteProjection(
-                coordinate: fallbackCoord,
-                segmentIndex: 0,
-                segmentFraction: 0,
-                lateralDistanceMeters: 0,
-                distanceAlongRouteMeters: 0
-            )
-            return (NavigationProgress(maneuver: .none), fallbackProj, coords)
-        }
-
-        // Maintain polylineSegmentIndex strictly from geometry projection
-        polylineSegmentIndex = projection.segmentIndex
-
-        // Conservative arrival check:
-        // Requires physical proximity (<= arrivalThresholdMeters 15m) AND remaining along-route distance (<= 30m),
-        // or very close physical proximity (<= 7.5m) in case polyline end has slight coordinate offset.
-        let destCoord = coords.last!
-        let destLocation = CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude)
-        let physicalDistToDest = currentLocation.distance(from: destLocation)
-        let remDist = route.geometry.remainingDistance(from: projection.distanceAlongRouteMeters)
-
-        let isPhysicallyNear = physicalDistToDest <= arrivalThresholdMeters
-        let isRouteProgressNear = remDist <= 30.0
-        if (isPhysicallyNear && isRouteProgressNear) || physicalDistToDest <= 7.5 {
-            let arrivalProj = RouteProjection(
-                coordinate: destCoord,
-                segmentIndex: max(0, coords.count - 2),
-                segmentFraction: 1.0,
-                lateralDistanceMeters: physicalDistToDest,
-                distanceAlongRouteMeters: route.geometry.totalDistanceMeters
-            )
-            return (NavigationProgress(maneuver: .arrive,
-                                       distanceToTurnMeters: 0,
-                                       remainingDistanceMeters: 0,
-                                       remainingEtaSeconds: 0,
-                                       currentSpeedKmh: 0,
-                                       speedLimitKmh: 0,
-                                       nextStreetName: "Đã đến đích"),
-                    arrivalProj, [])
-        }
-
-        // Maneuver step advancement based on along-route progress
-        let stepDistances = route.geometry.maneuverDistancesAlongRoute
-        while maneuverStepIndex + 1 < route.steps.count {
-            let stepTriggerDist = stepDistances[maneuverStepIndex]
-            if projection.distanceAlongRouteMeters >= (stepTriggerDist - stepAdvanceThresholdMeters) {
-                maneuverStepIndex += 1
-                let nextStep = route.steps[maneuverStepIndex]
-                print("[NavSession] -> Step \(maneuverStepIndex): \(nextStep.maneuverType.localizedInstruction)")
-            } else {
-                break
-            }
-        }
-
-        let curStep = route.steps[min(maneuverStepIndex, route.steps.count - 1)]
-
-
-
-        // Distance to turn along route
-        let distToTurn = route.geometry.distanceToManeuver(
-            stepIndex: maneuverStepIndex,
-            from: projection.distanceAlongRouteMeters
-        )
-
-        // Remaining polyline: starts at projection point followed by coordinates strictly after projection.segmentIndex
-        var remaining = [projection.coordinate]
-        let segIdx = projection.segmentIndex
-        if segIdx + 1 < coords.count {
-            remaining.append(contentsOf: coords[(segIdx + 1)...])
-        } else if let last = coords.last {
-            remaining.append(last)
-        }
-
-        // Stable proportional ETA
-        let totalGeomDist = route.geometry.totalDistanceMeters
-        let remainingRatio = totalGeomDist > 0 ? max(0.0, min(1.0, remDist / totalGeomDist)) : 0.0
-        let remSec = UInt32(round(route.totalDurationSeconds * remainingRatio))
-        let kmh = UInt8(min(255, max(0, currentLocation.speed * 3.6)))
-
-        let progress = NavigationProgress(
-            maneuver: curStep.maneuverType,
-            distanceToTurnMeters: UInt32(max(0, round(distToTurn))),
-            remainingDistanceMeters: UInt32(max(0, round(remDist))),
-            remainingEtaSeconds: remSec,
-            currentSpeedKmh: kmh,
-            speedLimitKmh: 0,
-            nextStreetName: curStep.streetName
-        )
-
-        return (progress, projection, remaining)
-    }
-}
-
-// MARK: - CLLocationManagerDelegate
-
-extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
-
-    public func locationManager(_ manager: CLLocationManager,
-                                didChangeAuthorization status: CLAuthorizationStatus) {
-        locationAuthStatus = status
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            manager.startUpdatingLocation(); manager.startUpdatingHeading()
+    public func setIsRerouting(_ value: Bool) {
+        isRerouting = value
+        if value {
+            diagnostics.rerouteRequests += 1
         }
     }
 
-    public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        locationAuthStatus = status
-        if status == .authorizedWhenInUse || status == .authorizedAlways {
-            manager.startUpdatingLocation(); manager.startUpdatingHeading()
-        }
-    }
+    // MARK: - Location Ingestion Pipeline (P5)
 
-    public func locationManager(_ manager: CLLocationManager,
-                                didUpdateLocations locations: [CLLocation]) {
-        guard let loc = locations.last else { return }
-
-        // Update raw location immediately for all incoming samples (including poor accuracy)
+    /// Ingest a location sample into the navigation pipeline synchronously on @MainActor.
+    public func ingestLocation(_ loc: CLLocation) {
         rawLocation = loc
+        diagnostics.locationsReceived += 1
 
         guard loc.horizontalAccuracy > 0, loc.horizontalAccuracy <= maxAccuracyMeters else {
+            diagnostics.locationsRejectedForAccuracy += 1
             print("[NavSession] GPS discarded acc=\(Int(loc.horizontalAccuracy))m")
             return
         }
 
+        diagnostics.locationsAccepted += 1
+
         // Kalman smooth
-        let sm = kalmanSmooth(rawLat: loc.coordinate.latitude, rawLon: loc.coordinate.longitude,
-                               accuracy: loc.horizontalAccuracy, timestamp: loc.timestamp)
-        let smLoc = CLLocation(coordinate: sm, altitude: loc.altitude,
-                                horizontalAccuracy: loc.horizontalAccuracy,
-                                verticalAccuracy: loc.verticalAccuracy,
-                                course: loc.course, speed: loc.speed,
-                                timestamp: loc.timestamp)
+        let sm = kalmanSmooth(
+            rawLat: loc.coordinate.latitude,
+            rawLon: loc.coordinate.longitude,
+            accuracy: loc.horizontalAccuracy,
+            timestamp: loc.timestamp
+        )
+        let smLoc = CLLocation(
+            coordinate: sm,
+            altitude: loc.altitude,
+            horizontalAccuracy: loc.horizontalAccuracy,
+            verticalAccuracy: loc.verticalAccuracy,
+            course: loc.course,
+            speed: loc.speed,
+            timestamp: loc.timestamp
+        )
         filteredLocation = smLoc
         userLocation     = smLoc
 
         guard state == .navigating, let route = activeRoute else { return }
+
+        diagnostics.progressComputations += 1
 
         // Capture session & route revision at computation time
         let capturedSessionGeneration = sessionGeneration
@@ -535,62 +451,236 @@ extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
             polylineSegmentIndex: &segIdx
         )
 
-        Task { @MainActor in
-            guard self.state == .navigating else { return }
-            guard self.sessionGeneration == capturedSessionGeneration else {
-                print("[NavSession] Discarding stale GPS progress (session \(capturedSessionGeneration) != current \(self.sessionGeneration))")
-                return
-            }
-            guard self.activeRouteGeneration == capturedRouteGeneration else {
-                print("[NavSession] Discarding stale GPS progress (route rev \(capturedRouteGeneration) != current \(self.activeRouteGeneration))")
-                return
-            }
-
-            self.currentManeuverStepIndex    = stepIdx
-            self.currentPolylineSegmentIndex = segIdx
-            self.lastMatchedProjection       = result.projection
-            self.lastMatchedTimestamp        = smLoc.timestamp
-            self.currentProjection           = result.projection
-            self.matchedLocation             = result.projection.coordinate
-            self.snappedLocation             = result.projection.coordinate
-            if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
-
-            // P2 Quality-Aware Off-Route Detection
-            let currentSegIdx = result.projection.segmentIndex
-            var routeBearing: Double? = nil
-            if currentSegIdx + 1 < route.coordinates.count {
-                routeBearing = RouteGeometry.bearing(from: route.coordinates[currentSegIdx], to: route.coordinates[currentSegIdx + 1])
-            }
-
-            let obs = OffRouteObservation(
-                timestamp: smLoc.timestamp,
-                lateralDistanceMeters: result.projection.lateralDistanceMeters,
-                horizontalAccuracyMeters: smLoc.horizontalAccuracy,
-                speedMetersPerSecond: max(0.0, smLoc.speed),
-                courseDegrees: smLoc.course >= 0.0 ? smLoc.course : nil,
-                routeBearingDegrees: routeBearing,
-                distanceAlongRouteMeters: result.projection.distanceAlongRouteMeters
-            )
-
-            let decision = self.offRouteDetector.evaluate(observation: obs)
-            self.offRouteDecision = decision
-            self.offRouteState = decision.state
-            self.isOffRoute = (decision.state == .confirmed)
-
-            self.onOffRouteDecision?(decision, smLoc)
-
-            if decision.becameConfirmed {
-                print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
-            }
-
-            if result.progress.maneuver == .arrive && self.state == .navigating {
-                self.state = .arrived
-                self.onArrived?()
-            }
-
-            self.activeProgress = result.progress
-            self.onProgressUpdate?(result.progress)
+        guard self.state == .navigating else { return }
+        guard self.sessionGeneration == capturedSessionGeneration else {
+            print("[NavSession] Discarding stale GPS progress (session \(capturedSessionGeneration) != current \(self.sessionGeneration))")
+            return
         }
+        guard self.activeRouteGeneration == capturedRouteGeneration else {
+            print("[NavSession] Discarding stale GPS progress (route rev \(capturedRouteGeneration) != current \(self.activeRouteGeneration))")
+            return
+        }
+
+        self.currentManeuverStepIndex    = stepIdx
+        self.currentPolylineSegmentIndex = segIdx
+        self.lastMatchedProjection       = result.projection
+        self.lastMatchedTimestamp        = smLoc.timestamp
+        self.currentProjection           = result.projection
+        self.matchedLocation             = result.projection.coordinate
+        self.snappedLocation             = result.projection.coordinate
+        if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
+
+        // P2 Quality-Aware Off-Route Detection
+        let currentSegIdx = result.projection.segmentIndex
+        var routeBearing: Double? = nil
+        if currentSegIdx + 1 < route.coordinates.count {
+            routeBearing = RouteGeometry.bearing(from: route.coordinates[currentSegIdx], to: route.coordinates[currentSegIdx + 1])
+        }
+
+        let obs = OffRouteObservation(
+            timestamp: smLoc.timestamp,
+            lateralDistanceMeters: result.projection.lateralDistanceMeters,
+            horizontalAccuracyMeters: smLoc.horizontalAccuracy,
+            speedMetersPerSecond: max(0.0, smLoc.speed),
+            courseDegrees: smLoc.course >= 0.0 ? smLoc.course : nil,
+            routeBearingDegrees: routeBearing,
+            distanceAlongRouteMeters: result.projection.distanceAlongRouteMeters
+        )
+        self.diagnostics.offRouteObservations += 1
+
+        let decision = self.offRouteDetector.evaluate(observation: obs)
+        self.offRouteDecision = decision
+        self.offRouteState = decision.state
+        self.isOffRoute = (decision.state == .confirmed)
+
+        if decision.becameConfirmed {
+            self.diagnostics.offRouteConfirmations += 1
+            print("[NavSession] OFF-ROUTE confirmed (reason=\(decision.reason.rawValue), lateral=\(Int(decision.lateralDistanceMeters))m)")
+        }
+
+        self.onOffRouteDecision?(decision, smLoc)
+
+        if result.progress.maneuver == .arrive && self.state == .navigating {
+            self.state = .arrived
+            self.onArrived?()
+        }
+
+        self.activeProgress = result.progress
+        self.onProgressUpdate?(result.progress)
+    }
+
+    // MARK: - Kalman Smoothing
+
+    private func kalmanSmooth(
+        rawLat: Double,
+        rawLon: Double,
+        accuracy: Double,
+        timestamp: Date
+    ) -> CLLocationCoordinate2D {
+        guard let last = kalmanTimestamp else {
+            kalmanLat = rawLat; kalmanLon = rawLon
+            kalmanAccuracy = accuracy; kalmanTimestamp = timestamp
+            return CLLocationCoordinate2D(latitude: rawLat, longitude: rawLon)
+        }
+        let dt = max(timestamp.timeIntervalSince(last), 0.0)
+        kalmanTimestamp = timestamp
+
+        let variance = kalmanAccuracy * kalmanAccuracy + dt * kalmanQ * kalmanQ
+        let r = accuracy * accuracy
+        let k = variance / (variance + r)
+
+        kalmanLat += k * (rawLat - kalmanLat)
+        kalmanLon += k * (rawLon - kalmanLon)
+        kalmanAccuracy = sqrt((1.0 - k) * variance)
+
+        return CLLocationCoordinate2D(latitude: kalmanLat, longitude: kalmanLon)
+    }
+
+    // MARK: - Progress Computation
+
+    private struct ProgressComputationResult {
+        let projection: RouteProjection
+        let progress: NavigationProgress
+        let remaining: [CLLocationCoordinate2D]
+    }
+
+    private func computeProgress(
+        currentLocation: CLLocation,
+        route: NavRoute,
+        lastProjection: RouteProjection?,
+        lastMatchedTimestamp: Date?,
+        maneuverStepIndex: inout Int,
+        polylineSegmentIndex: inout Int
+    ) -> ProgressComputationResult {
+        let coords = route.coordinates
+        guard coords.count >= 2 else {
+            return ProgressComputationResult(
+                projection: RouteProjection(
+                    coordinate: currentLocation.coordinate,
+                    segmentIndex: 0,
+                    fractionAlongSegment: 0.0,
+                    distanceAlongRouteMeters: 0.0,
+                    lateralDistanceMeters: 0.0
+                ),
+                progress: NavigationProgress(),
+                remaining: coords
+            )
+        }
+
+        let timeDelta = lastMatchedTimestamp.map { currentLocation.timestamp.timeIntervalSince($0) }
+        let currentSpeed = max(0.0, currentLocation.speed)
+
+        let projection = route.geometry.project(
+            coordinate: currentLocation.coordinate,
+            heading: currentLocation.course >= 0 ? currentLocation.course : nil,
+            previousProjection: lastProjection,
+            speedMetersPerSecond: currentSpeed,
+            timeDeltaSeconds: timeDelta
+        )
+
+        polylineSegmentIndex = max(polylineSegmentIndex, projection.segmentIndex)
+
+        let totalDist = route.totalDistanceMeters
+        let remainingDist = max(0.0, totalDist - projection.distanceAlongRouteMeters)
+
+        let speedMps = currentSpeed > 0 ? currentSpeed : 8.33
+        let remainingEta = remainingDist / speedMps
+
+        let destCoord = coords.last ?? currentLocation.coordinate
+        let physicalDistToDest = currentLocation.distance(from: CLLocation(latitude: destCoord.latitude, longitude: destCoord.longitude))
+
+        let isArrived = (physicalDistToDest <= arrivalRadiusMeters) &&
+                        (remainingDist <= arrivalRadiusMeters * 1.5 || projection.distanceAlongRouteMeters >= totalDist * 0.95)
+
+        if isArrived {
+            let p = NavigationProgress(
+                maneuver: .arrive,
+                distanceToTurnMeters: 0,
+                remainingDistanceMeters: 0,
+                remainingEtaSeconds: 0,
+                currentSpeedKmh: UInt8(clamping: Int(currentLocation.speed * 3.6)),
+                speedLimitKmh: 0,
+                nextStreetName: "Đã đến điểm đích"
+            )
+            return ProgressComputationResult(
+                projection: projection,
+                progress: p,
+                remaining: []
+            )
+        }
+
+        let steps = route.steps
+        if !steps.isEmpty {
+            while maneuverStepIndex < steps.count - 1 {
+                let nextStep = steps[maneuverStepIndex + 1]
+                let distToNextManeuver = currentLocation.distance(from: CLLocation(latitude: nextStep.coordinate.latitude, longitude: nextStep.coordinate.longitude))
+
+                var passedShapeThreshold = false
+                if let nextBeginIdx = nextStep.beginShapeIndex {
+                    passedShapeThreshold = (projection.segmentIndex >= nextBeginIdx)
+                }
+
+                if distToNextManeuver < stepAdvanceThresholdMeters || passedShapeThreshold {
+                    maneuverStepIndex += 1
+                } else {
+                    break
+                }
+            }
+        }
+
+        let currentStep: NavStep? = maneuverStepIndex < steps.count ? steps[maneuverStepIndex] : nil
+        let nextStep: NavStep? = (maneuverStepIndex + 1) < steps.count ? steps[maneuverStepIndex + 1] : nil
+
+        let distToTurn: Double
+        if let target = (nextStep ?? currentStep) {
+            distToTurn = currentLocation.distance(from: CLLocation(latitude: target.coordinate.latitude, longitude: target.coordinate.longitude))
+        } else {
+            distToTurn = remainingDist
+        }
+
+        let activeManeuver = nextStep?.maneuverType ?? currentStep?.maneuverType ?? .none
+        let nextStreet = nextStep?.streetName ?? currentStep?.streetName ?? ""
+
+        let progress = NavigationProgress(
+            maneuver: activeManeuver,
+            distanceToTurnMeters: UInt32(clamping: Int(distToTurn)),
+            remainingDistanceMeters: UInt32(clamping: Int(remainingDist)),
+            remainingEtaSeconds: UInt32(clamping: Int(remainingEta)),
+            currentSpeedKmh: UInt8(clamping: Int(max(0.0, currentLocation.speed) * 3.6)),
+            speedLimitKmh: 0,
+            nextStreetName: nextStreet
+        )
+
+        let remainingCoords = RouteGeometry.remainingPolyline(from: coords, currentSegmentIndex: polylineSegmentIndex)
+
+        return ProgressComputationResult(
+            projection: projection,
+            progress: progress,
+            remaining: remainingCoords
+        )
+    }
+}
+
+// MARK: - CLLocationManagerDelegate
+
+extension NavigationSessionManager: @preconcurrency CLLocationManagerDelegate {
+
+    public func locationManager(_ manager: CLLocationManager,
+                                didChangeAuthorization status: CLAuthorizationStatus) {
+        locationAuthStatus = status
+        applyTrackingProfile()
+    }
+
+    public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        locationAuthStatus = status
+        applyTrackingProfile()
+    }
+
+    public func locationManager(_ manager: CLLocationManager,
+                                didUpdateLocations locations: [CLLocation]) {
+        guard let loc = locations.last else { return }
+        ingestLocation(loc)
     }
 
     public func locationManager(_ manager: CLLocationManager,
