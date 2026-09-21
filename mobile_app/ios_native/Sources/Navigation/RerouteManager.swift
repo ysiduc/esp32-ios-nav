@@ -201,6 +201,9 @@ public final class RerouteManager: ObservableObject {
 
                 // Successful commit: atomically replace active route
                 s.replaceActiveRoute(newRoute)
+                // Ensure navSession.isRerouting is cleared even if replaceActiveRoute
+                // already cleared it internally (belt-and-suspenders).
+                s.setRerouting(false)
 
                 let commitTime = self.now()
                 self.failureCount = 0

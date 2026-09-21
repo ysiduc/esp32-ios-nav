@@ -68,20 +68,30 @@ public final class MapRenderPolicy: @unchecked Sendable {
 
     /// Determines if zoomToFitRoute should be invoked for route preview.
     /// Returns true only when a new distinct preview route is presented.
+    ///
+    /// - Parameter routeIdentifier: An authoritative render identity supplied by the caller.
+    ///   Should incorporate the route generation or candidate ID so that alternative routes
+    ///   sharing the same endpoints (but different geometry) are not incorrectly deduplicated.
+    ///   Example: "\(candidateID)-\(activeRouteGeneration)" or a UUID.
+    public func shouldZoomToFit(routeIdentifier: String) -> Bool {
+        guard !routeIdentifier.isEmpty else { return false }
+        if routeIdentifier == lastZoomedRouteSignature { return false }
+        lastZoomedRouteSignature = routeIdentifier
+        return true
+    }
+
+    /// Legacy coordinate-hash overload. Prefer `shouldZoomToFit(routeIdentifier:)` when the
+    /// caller has an authoritative route identity (candidate ID + generation counter).
+    /// This version is susceptible to false-negative deduplication for alternative routes
+    /// that share the same endpoints and coordinate count but differ in midpoints.
     public func shouldZoomToFit(routeCoordinates: [CLLocationCoordinate2D]) -> Bool {
         guard routeCoordinates.count >= 2 else { return false }
-
-        // Signature based on count + endpoints (microdegree precision)
         let first = routeCoordinates.first!
-        let last = routeCoordinates.last!
-        let sig = "\(routeCoordinates.count)_\(Int(first.latitude * 1e5))_\(Int(first.longitude * 1e5))_\(Int(last.latitude * 1e5))_\(Int(last.longitude * 1e5))"
-
-        if sig == lastZoomedRouteSignature {
-            return false
-        }
-
-        lastZoomedRouteSignature = sig
-        return true
+        let last  = routeCoordinates.last!
+        let mid   = routeCoordinates[routeCoordinates.count / 2]
+        // Include midpoint to distinguish alternative routes with shared endpoints
+        let sig = "\(routeCoordinates.count)_\(Int(first.latitude * 1e5))_\(Int(first.longitude * 1e5))_\(Int(mid.latitude * 1e5))_\(Int(mid.longitude * 1e5))_\(Int(last.latitude * 1e5))_\(Int(last.longitude * 1e5))"
+        return shouldZoomToFit(routeIdentifier: sig)
     }
 
     public func invalidatePreviewZoomCache() {

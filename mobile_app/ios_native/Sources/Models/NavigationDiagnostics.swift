@@ -19,16 +19,13 @@ public struct NavigationDiagnostics: Sendable, Equatable {
     public var rerouteRequests: Int = 0
     public var rerouteCommits: Int = 0
 
-    // BLE transmission metrics
-    public var blePacketsGenerated: Int = 0
-    public var bleWritesPerformed: Int = 0
-    public var bleDuplicatesSuppressed: Int = 0
-    public var blePacketsCoalesced: Int = 0
+    // BLE transmission metrics are owned by BLESendScheduler
+    // (packetsGenerated, writesPerformed, duplicatesSuppressed, packetsCoalesced).
+    // Read them directly from BLEManager.scheduler for accurate values.
 
-    // Map rendering metrics
-    public var mapRouteShapeUpdates: Int = 0
-    public var mapRouteLayerRebuilds: Int = 0
-    public var mapPreviewZooms: Int = 0
+    // Map rendering metrics are owned by MapRenderPolicy
+    // (routeShapeUpdates, routeLayerRebuilds, previewZooms).
+    // Read them directly from the MapRenderPolicy instance for accurate values.
 
     public init() {}
 

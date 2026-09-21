@@ -157,9 +157,10 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
     // MARK: Thresholds
     private let stepAdvanceThresholdMeters: Double = 15.0
-    private let arrivalRadiusMeters: Double        = 25.0
-    private let arrivalThresholdMeters: Double     = 25.0
-    private let maxAccuracyMeters: Double          = 50.0
+    /// Conservative arrival: physical distance from destination must be ≤15m (P1 accepted value).
+    private let arrivalThresholdMeters: Double     = 15.0
+    /// Maximum accepted GPS horizontal accuracy; samples above this are rejected.
+    private let maxAccuracyMeters: Double          = 20.0
 
     // MARK: Private State
     private let locationManager = CLLocationManager()
@@ -292,6 +293,11 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     }
 
     public func setRoutePreview(_ route: NavRoute) {
+        // Guard: active navigation owns state; preview cannot interrupt it.
+        guard state != .navigating else {
+            print("[NavSession] setRoutePreview ignored: navigation is active")
+            return
+        }
         activeRoute       = route
         remainingPolyline = route.coordinates
         state             = .routePreview
@@ -303,6 +309,12 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     }
 
     public func clearRoute() {
+        // Guard: do not silently destroy an active navigation session through preview cleanup.
+        guard state != .navigating else {
+            print("[NavSession] clearRoute ignored: navigation is active — call stopNavigation() instead")
+            return
+        }
+        activeRouteGeneration &+= 1
         activeRoute                 = nil
         activeProgress              = NavigationProgress()
         currentManeuverStepIndex    = 0
@@ -317,7 +329,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         offRouteDecision            = nil
         offRouteState               = .onRoute
         isOffRoute                  = false
-        if state == .routePreview {
+        if state == .routePreview || state == .arrived {
             state = .idle
             applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
         }
@@ -376,12 +388,17 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
             return
         }
         activeRouteGeneration &+= 1
+        // Clear isRerouting atomically with the route commit
+        isRerouting                 = false
         activeRoute                 = route
         currentManeuverStepIndex    = 0
         currentPolylineSegmentIndex = 0
+        // Clear all stale Route A match state — nothing from the old route survives
         lastMatchedProjection       = nil
         lastMatchedTimestamp        = nil
         currentProjection           = nil
+        matchedLocation             = nil
+        snappedLocation             = nil
         remainingPolyline           = route.coordinates
         offRouteDetector.reset()
         offRouteDecision            = nil
@@ -389,6 +406,38 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         isOffRoute                  = false
         diagnostics.rerouteCommits += 1
         print("[NavSession] Active route replaced (rev \(activeRouteGeneration), \(route.coordinates.count) pts)")
+
+        // Immediately recompute position on Route B from current filtered location.
+        // This makes reroute commit atomic: matched state is Route B from the moment
+        // the call returns, without waiting for the next GPS callback.
+        if let loc = filteredLocation ?? userLocation {
+            var stepIdx = currentManeuverStepIndex
+            var segIdx  = currentPolylineSegmentIndex
+            let capturedGen = activeRouteGeneration
+
+            let result = computeProgress(
+                currentLocation: loc,
+                route: route,
+                lastProjection: nil,
+                lastMatchedTimestamp: nil,
+                maneuverStepIndex: &stepIdx,
+                polylineSegmentIndex: &segIdx
+            )
+
+            // Only apply if route hasn't been replaced again during computation
+            guard self.activeRouteGeneration == capturedGen else { return }
+
+            self.currentManeuverStepIndex    = stepIdx
+            self.currentPolylineSegmentIndex = segIdx
+            self.lastMatchedProjection       = result.projection
+            self.lastMatchedTimestamp        = loc.timestamp
+            self.currentProjection           = result.projection
+            self.matchedLocation             = result.projection.coordinate
+            self.snappedLocation             = result.projection.coordinate
+            if result.remaining.count >= 2 { self.remainingPolyline = result.remaining }
+            self.activeProgress              = result.progress
+            self.onProgressUpdate?(result.progress)
+        }
     }
 
     public func setRerouting(_ rerouting: Bool) {
@@ -509,6 +558,8 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
 
         if result.progress.maneuver == .arrive && self.state == .navigating {
             self.state = .arrived
+            // Downgrade power profile immediately on arrival — do not wait for user tap
+            applyTrackingProfile(isForeground ? .foregroundPassive : .suspended)
             self.onArrived?()
         }
 

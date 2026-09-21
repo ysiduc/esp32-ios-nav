@@ -22,6 +22,9 @@ public final class BLEManager: NSObject, ObservableObject {
     private var scanTimer: Timer?
     private var flushTimer: Timer?
     private var targetPeripheralUUID: UUID?
+    /// Monotonically incremented on each startScanning call; captured by closures to prevent
+    /// stale fallback scans from mutating a newer scan session.
+    private var scanGeneration: UInt = 0
 
     public override init() {
         super.init()
@@ -48,9 +51,15 @@ public final class BLEManager: NSObject, ObservableObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
 
-        // Short broader fallback after 5s to catch unadvertised peripherals
+        // Short broader fallback after 5s to catch unadvertised peripherals.
+        // Capture scanGeneration so a later startScanning() call (which bumps the counter)
+        // prevents this stale closure from modifying the newer scan session.
+        scanGeneration &+= 1
+        let capturedScanGen = scanGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            guard let self = self, self.connectionState == .scanning else { return }
+            guard let self = self,
+                  self.connectionState == .scanning,
+                  self.scanGeneration == capturedScanGen else { return }
             self.centralManager.scanForPeripherals(
                 withServices: nil,
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
@@ -316,21 +325,27 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
     }
 
     public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
-        guard let char = navigationCharacteristic,
-              let (data, writeType) = scheduler.transportBecameReady(now: Date()) else {
-            return
+        guard let char = navigationCharacteristic else { return }
+        let now = Date()
+        if let (data, writeType) = scheduler.transportBecameReady(now: now) {
+            executeWrite(data: data, writeType: writeType, on: peripheral, for: char)
+        } else if scheduler.nextEligibleFlushDelay(now: now) != nil {
+            // Packet is pending but only rate-limited — arm the timer so it is not stranded.
+            scheduleRateLimitFlush()
         }
-        executeWrite(data: data, writeType: writeType, on: peripheral, for: char)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             print("[BLEManager] didWriteValue error: \(error.localizedDescription)")
         }
-        guard characteristic.uuid == BLEProtocolConstants.navigationDataCharUUID,
-              let (data, writeType) = scheduler.withResponseWriteCompleted(now: Date()) else {
-            return
+        guard characteristic.uuid == BLEProtocolConstants.navigationDataCharUUID else { return }
+        let now = Date()
+        if let (data, writeType) = scheduler.withResponseWriteCompleted(now: now) {
+            executeWrite(data: data, writeType: writeType, on: peripheral, for: characteristic)
+        } else if scheduler.nextEligibleFlushDelay(now: now) != nil {
+            // Packet is pending but only rate-limited — arm the timer so it is not stranded.
+            scheduleRateLimitFlush()
         }
-        executeWrite(data: data, writeType: writeType, on: peripheral, for: characteristic)
     }
 }

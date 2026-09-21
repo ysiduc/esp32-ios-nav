@@ -110,6 +110,22 @@ public final class BLESendScheduler {
         return flushPendingIfEligible(now: now)
     }
 
+    /// Returns the remaining time-interval before a pending rate-limited packet becomes eligible
+    /// to flush. Returns nil when there is no pending packet or when the packet is blocked by
+    /// flow-control (not rate-limit) — the caller should not schedule a rate-limit timer then.
+    public func nextEligibleFlushDelay(now: Date = Date()) -> TimeInterval? {
+        guard let pending = pendingPacket else { return nil }
+
+        // If blocked by flow-control (not just rate-limit), the transport events handle flushing.
+        if pending.writeType == .withoutResponse && !isTransportReady { return nil }
+        if pending.writeType == .withResponse && inFlightWithResponseWrite { return nil }
+
+        guard let lastTime = lastSentTime else { return 0 }
+        let elapsed = now.timeIntervalSince(lastTime)
+        let remaining = minSendInterval - elapsed
+        return remaining > 0 ? remaining : nil
+    }
+
     // MARK: - Private Helpers
 
     private func queuePending(data: Data, writeType: CBCharacteristicWriteType, progress: NavigationProgress) {

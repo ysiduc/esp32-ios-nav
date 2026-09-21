@@ -83,7 +83,7 @@ CLLocationManagerDelegate.didUpdateLocations
 ingestLocation(_ location: CLLocation)
        │
        ├─► 1. rawLocation updated (diagnostics visible for ALL samples)
-       ├─► 2. Horizontal accuracy gating (<= 50m threshold)
+       ├─► 2. Horizontal accuracy gating (<= 20m threshold)
        ├─► 3. 1D Kalman filter smoothing (lat, lon, accuracy, timestamp)
        ├─► 4. Route projection & progress computation (RouteGeometry)
        ├─► 5. OffRouteDetector evaluation (quality-aware observation)
@@ -118,7 +118,7 @@ All 15 replay scenarios execute deterministically in `NavigationReplayTests.swif
    - Vehicle sits stationary at a traffic stop while GPS coordinates jitter within a 5-meter circle.
    - Assertions: Kalman filter and route projection prevent spurious forward snapping; `offRouteState` remains strictly `.onRoute`.
 3. **Poor Accuracy Burst (`testReplay_PoorAccuracyBurst_RejectsWithoutAdvancingProgress`)**:
-   - Ingests 4 degraded samples with `horizontalAccuracy` between 65m and 120m (exceeding 50m threshold).
+   - Ingests 4 degraded samples with `horizontalAccuracy` between 65m and 120m (exceeding 20m threshold).
    - Assertions: `rawLocation` updates immediately for diagnostics; `filteredLocation` and `activeProgress` reject them; `locationsRejectedForAccuracy == 4`; subsequent good GPS sample resumes normally.
 4. **Parallel Road Disambiguation (`testReplay_ParallelRoad_ContinuityPreventsSnappingAcross`)**:
    - Tests two parallel road segments separated by 25 meters (targeting the *"đang ở bên này mà hiện bên kia đường"* defect).
@@ -142,7 +142,7 @@ All 15 replay scenarios execute deterministically in `NavigationReplayTests.swif
     - Simulated routing network failure initiates exponential backoff starting at completion time.
     - Assertions: Repeated off-route triggers during backoff window are suppressed; retry allowed only after cooldown expires.
 11. **Arrival Boundary Conditions (`testReplay_ArrivalConditions_RequiresPhysicalAndAlongRouteProximity`)**:
-    - Evaluates dual arrival conditions: physical Euclidean distance <= 25m AND remaining along-route distance <= 35m.
+    - Evaluates dual arrival conditions: physical Euclidean distance <= 15m AND remaining along-route distance <= 35m.
     - Assertions: Premature proximity without along-route completion does not trigger arrival; valid arrival fires `onArrived` exactly once.
 12. **Transport Mode Switch While Navigating (`testReplay_TransportModeSwitchWhileNavigating_PreservesActiveRoute`)**:
     - Transport mode changes from motorcycle to automobile during active navigation.
@@ -393,14 +393,14 @@ Instead of flaky wall-clock assertions (`must finish in 20ms`), performance regr
 ## 18. GitHub Actions Evidence
 
 - **Workflow Run ID**: `35573890081`
-- **Commit SHA**: `a2a28f73111f1ae59fc31cbfd077c5d0db2d3ba0`
+- **Commit SHA**: `a2a28f76feea138c32ac01e30011ff2d2fbb4126`
 - **Workflow Run URL**: [https://github.com/ysiduc/esp32-ios-nav/actions/runs/35573890081](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35573890081)
 
 ### CI Results Summary
 ```text
 Workflow: Build iOS IPA Packages
 Run: 35573890081
-Commit: a2a28f73111f1ae59fc31cbfd077c5d0db2d3ba0
+Commit: a2a28f76feea138c32ac01e30011ff2d2fbb4126
 
 Job: Compile Native iOS Swift/SwiftUI (ID 106251268050)
 Duration: 5m43s
@@ -455,7 +455,7 @@ The following manual validation checklist must be executed on physical hardware 
 - [ ] **Scenario 3: Overpass / Close Carriageways**: Navigate beneath or over an elevated roadway; verify GPS continuity and correct maneuver progression.
 - [ ] **Scenario 4: Intentional Wrong Turn**: Miss a designated turn; verify off-route detection dwell (3 seconds), off-route confirmation, and automatic reroute calculation.
 - [ ] **Scenario 5: Reroute Completion**: Confirm new route is installed seamlessly without freezing the map or resetting destination.
-- [ ] **Scenario 6: GPS Accuracy Degradation**: Enter an urban canyon or tunnel; verify poor accuracy samples (>50m) are rejected and last known good position holds.
+- [ ] **Scenario 6: GPS Accuracy Degradation**: Enter an urban canyon or tunnel; verify poor accuracy samples (>20m) are rejected and last known good position holds.
 - [ ] **Scenario 7: Stop at Traffic Light**: Remain stationary for 90 seconds; verify no erratic position jumping, no heading spinning, and no false off-route triggers.
 - [ ] **Scenario 8: Screen Lock / Background Transition**: Lock the iPhone while navigating; verify turn updates continue streaming to the ESP32 screen.
 - [ ] **Scenario 9: Return to Foreground**: Unlock phone; verify map view re-renders instantly without reloading style or recreating layers.
@@ -463,7 +463,7 @@ The following manual validation checklist must be executed on physical hardware 
 - [ ] **Scenario 11: ESP32 Packet Continuity**: Verify turn icon, remaining distance, speed, and street names on the ESP32 screen update without flicker.
 - [ ] **Scenario 12: Route Alternative Selection**: Select alternative route candidate in preview; verify selected polyline activates cleanly.
 - [ ] **Scenario 13: Transport Mode Switch**: Switch between Motorcycle, Automobile, and Bicycle; verify route calculation costing updates appropriately.
-- [ ] **Scenario 14: Destination Arrival**: Arrive within 25m of destination; verify arrival chime/screen triggers and navigation concludes.
+- [ ] **Scenario 14: Destination Arrival**: Arrive within 15m of destination; verify arrival chime/screen triggers and navigation concludes.
 - [ ] **Scenario 15: Extended Session (30+ Minutes)**: Conduct a 30+ minute continuous ride; verify no thermal throttling, excessive battery drain, or memory leaks.
 
 ### Real-Device Field Test Log Template
@@ -539,7 +539,38 @@ The complete ESP32 iOS Navigation architecture is organized into clean, decouple
 ## 22. Project Readiness
 
 Phase P5 completes all implementation, performance optimization, power policy enforcement, simulation replay testing, and architecture stabilization. The codebase is:
-- **100% Deterministic**: All navigation, off-route, and arrival edge cases are tested via synchronous replay.
+- **High Determinism**: Core navigation, off-route, and arrival edge cases are tested via synchronous replay. Full end-to-end integration uses real RerouteManager with async task concurrency (P5.1).
 - **Battery-Conscious**: Location and heading hardware are powered only when strictly needed; BLE writes and map rendering churn are throttled and coalesced.
 - **Robust Under Failure**: Network dropouts, GPS jitter, and BLE disconnects are handled gracefully without application crashes or state corruption.
 - **Production-Ready**: Passing 182 native unit tests and verified via full Native iOS and Flutter iOS release builds.
+
+---
+
+## 23. P5.1 — Final Correction Pass
+
+**Status**: PENDING CI verification
+
+**Problem**: External reviewer identified 12 regression points where P5 accidentally weakened previously-accepted invariants from P0–P4.
+
+**Fixes Applied**:
+
+1. **`setRoutePreview` navigation guard** — restored `guard state != .navigating` to both overloads
+2. **`clearRoute` route generation** — `activeRouteGeneration &+= 1` on clear; handles `.arrived → .idle`; no-op when `.navigating`
+3. **`replaceActiveRoute` immediate re-projection** — clears all Route A match state atomically; immediately reprojects onto Route B if `filteredLocation` is available; emits `onProgressUpdate`
+4. **`navSession.isRerouting` after commit** — `isRerouting = false` now cleared inside `replaceActiveRoute`; `RerouteManager` success path also calls `s.setRerouting(false)` for belt-and-suspenders
+5. **Arrival tracking profile** — `applyTrackingProfile(foregroundPassive/suspended)` now called immediately at `navigating → arrived` transition
+6. **Thresholds restored** — `maxAccuracyMeters = 20.0` (was 50m), `arrivalThresholdMeters = 15.0` (was 25m), duplicate `arrivalRadiusMeters` removed
+7. **BLE backpressure race** — `BLESendScheduler.nextEligibleFlushDelay(now:)` exposed; `BLEManager.peripheralIsReady` and `didWriteValueFor` arm rate-limit timer when pending packet is rate-limited-only
+8. **BLE scan generation** — `scanGeneration: UInt` counter added; 5-second fallback closure captures and validates generation before widening scan
+9. **Map route identity** — `MapRenderPolicy.shouldZoomToFit(routeIdentifier: String)` added; existing coordinate-hash overload now includes midpoint in signature to distinguish alternative routes
+10. **Dead diagnostics counters** — removed BLE/map fields from `NavigationDiagnostics`; added doc pointing to true owners
+11. **True end-to-end replay** — `NavigationIntegrationReplayTests` (4 tests) wires real `RerouteManager`; no manual `replaceActiveRoute` calls
+12. **P5 report** — SHA corrected, threshold values updated, "100% Deterministic" softened to "High Determinism"
+
+**New Tests**: 18 new tests in 4 new files (`NavigationSessionManagerP51Tests`, `BLESendSchedulerRaceTests`, `BLEScanGenerationTests`, `NavigationIntegrationReplayTests`) + 5 additional tests in `MapRenderPolicyTests`
+
+**Expected total after P5.1**: ≥205 tests
+
+**CI Target**: All ≥205/205 PASS, Native Release SUCCESS, Native IPA SUCCESS, Flutter SUCCESS
+
+> **NOTE**: Field tests remain MANUAL — PENDING. Navigation thresholds restored to P1-accepted values (15m arrival / 20m GPS).

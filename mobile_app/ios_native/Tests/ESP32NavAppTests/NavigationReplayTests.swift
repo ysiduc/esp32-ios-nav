@@ -162,7 +162,7 @@ final class NavigationReplayTests: XCTestCase {
         runner.replay(samples: [goodSample1])
         let progressAfterGood = sessionManager.currentProjection?.distanceAlongRouteMeters
 
-        // 3 degraded accuracy samples (> 50m)
+        // 3 degraded accuracy samples (> 20m — well above maxAccuracyMeters threshold)
         let badSamples = [
             NavigationReplaySample(timestamp: baseDate.addingTimeInterval(2), coordinate: coordB, horizontalAccuracy: 75.0),
             NavigationReplaySample(timestamp: baseDate.addingTimeInterval(4), coordinate: coordB, horizontalAccuracy: 90.0),
