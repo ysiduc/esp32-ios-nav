@@ -175,7 +175,7 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
                        "replaceActiveRoute must clear isRerouting atomically with the route commit")
     }
 
-    func testRerouteCommit_ClearsStaleMatchedLocation_AndReprojectsImmediately() {
+    func testRerouteCommit_ClearsStaleMatchedLocation_AndReprojectsImmediately() throws {
         // Construct Route A (North-South along lon 105.8540)
         let routeACoordStart = CLLocationCoordinate2D(latitude: 21.0300, longitude: 105.8540)
         let routeACoordEnd   = CLLocationCoordinate2D(latitude: 21.0400, longitude: 105.8540)
@@ -194,9 +194,8 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
         let locP = makeLocation(lat: 21.0350, lon: 105.8600, accuracy: 5.0)
         session.ingestLocation(locP)
 
-        let oldProjection = session.currentProjection
-        XCTAssertNotNil(oldProjection)
-        XCTAssertEqual(oldProjection?.coordinate.longitude, 105.8540, accuracy: 0.001,
+        let oldProjection = try XCTUnwrap(session.currentProjection)
+        XCTAssertEqual(oldProjection.coordinate.longitude, 105.8540, accuracy: 0.001,
                        "Route A projection must lock to Route A longitude")
 
         // Construct Route B (West-East along lat 21.0350, passing through locP)
@@ -231,7 +230,7 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
                        "Projection must lie on Route B latitude")
         XCTAssertEqual(newProjCoord.longitude, 105.8600, accuracy: 0.001,
                        "Projection must match physical location along Route B geometry")
-        XCTAssertNotEqual(newProjCoord.longitude, oldProjection!.coordinate.longitude,
+        XCTAssertNotEqual(newProjCoord.longitude, oldProjection.coordinate.longitude,
                           "Old Route A projection must not be retained")
         XCTAssertEqual(session.activeProgress.nextStreetName, "Route B Eastway",
                        "Active progress must correspond to Route B")
