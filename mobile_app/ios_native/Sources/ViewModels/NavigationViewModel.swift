@@ -214,20 +214,19 @@ public final class NavigationViewModel: ObservableObject {
         placeDetailTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let place = try await self.searchService.getPlaceDetail(placeID: prediction.placeID)
+                let place = try await self.searchService.resolve(prediction: prediction)
 
                 // Generation guard: a newer selection may have superseded this one
                 guard !Task.isCancelled,
                       self.destinationSelectionGeneration == mySelGen,
-                      self.selectedPrediction?.placeID == prediction.placeID else {
+                      self.selectedPrediction?.id == prediction.id else {
                     print("[ViewModel] Discarding stale Place Detail (gen \(mySelGen) vs \(self.destinationSelectionGeneration))")
                     return
                 }
 
                 self.selectedDestination = place
-                // Rotate session token now that Place Detail succeeded
                 self.searchService.clearPredictions()
-                await self.calculateRoute(to: place.location.coordinate)
+                await self.calculateRoute(to: place.coordinate)
 
             } catch is CancellationError {
                 // Superseded by newer selection — silent

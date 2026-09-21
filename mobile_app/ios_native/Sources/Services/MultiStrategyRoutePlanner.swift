@@ -144,7 +144,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
     // MARK: - Multi-Strategy Execution
 
     private func calculateMultiStrategyRoutes(request: RoutingRequest) async throws -> RouteSet {
-        let startTime = CACurrentMediaTime()
+        let startTime = Date().timeIntervalSinceReferenceDate
         let strategies: [RouteStrategy] = [
             .motorcycleBalanced(),
             .motorcycleMainRoads(),
@@ -157,9 +157,9 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
         // Concurrently execute strategies via structured task group
         let rawCandidates: [RouteCandidate] = await withTaskGroup(of: [RouteCandidate]?.self) { group in
             for strategy in strategies {
-                group.addTask {
+                group.addTask { () -> [RouteCandidate]? in
                     if Task.isCancelled { return nil }
-                    let stratStart = CACurrentMediaTime()
+                    let stratStart = Date().timeIntervalSinceReferenceDate
                     do {
                         let subProfile = RoutingProfile(
                             id: strategy.id,
@@ -177,7 +177,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                         )
 
                         let set = try await self.underlyingRouting.calculateRoutes(request: subRequest)
-                        let elapsed = CACurrentMediaTime() - stratStart
+                        let elapsed = Date().timeIntervalSinceReferenceDate - stratStart
 
                         // Relabel raw candidates with meaningful strategy label
                         let candidates = set.candidates.enumerated().map { idx, c in
@@ -198,7 +198,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                         print("[MultiStrategy] Strategy \(strategy.id) returned \(candidates.count) routes in \(String(format: "%.2f", elapsed))s")
                         return candidates
                     } catch {
-                        let elapsed = CACurrentMediaTime() - stratStart
+                        let elapsed = Date().timeIntervalSinceReferenceDate - stratStart
                         print("[MultiStrategy] Strategy \(strategy.id) failed in \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
                         return nil
                     }
@@ -250,7 +250,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
         // Limit target display count to at most 5 genuinely distinct routes
         let finalCandidates = Array(deduplicated.prefix(5))
 
-        let totalTime = CACurrentMediaTime() - startTime
+        let totalTime = Date().timeIntervalSinceReferenceDate - startTime
         print("[MultiStrategy] Aggregation complete: raw=\(rawCandidates.count), quality=\(candidatesToDedup.count), dedup=\(deduplicated.count), final=\(finalCandidates.count) in \(String(format: "%.2f", totalTime))s")
 
         return RouteSet(candidates: finalCandidates)
