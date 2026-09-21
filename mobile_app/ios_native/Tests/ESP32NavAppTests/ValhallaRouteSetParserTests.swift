@@ -223,7 +223,7 @@ final class ValhallaRouteSetParserTests: XCTestCase {
         let routeB = NavRoute(
             coordinates: [
                 CLLocationCoordinate2D(latitude: 21.0, longitude: 105.8),
-                CLLocationCoordinate2D(latitude: 21.05, longitude: 105.85),
+                CLLocationCoordinate2D(latitude: 21.05, longitude: 105.78),
                 CLLocationCoordinate2D(latitude: 21.1, longitude: 105.9)
             ],
             steps: [],
