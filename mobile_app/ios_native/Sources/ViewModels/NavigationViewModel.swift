@@ -135,6 +135,7 @@ public final class NavigationViewModel: ObservableObject {
             selectedPrediction != nil ||
             selectedDestination != nil ||
             placeDetailTask != nil ||
+            isCalculatingRoute ||
             navSession.state == .routePreview ||
             navSession.activeRoute != nil
         ) && text != searchQuery

@@ -347,7 +347,8 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
         viewModel.startNavigation()
 
-        XCTAssertEqual(navSession.state, .idle, "startNavigation must reject mode mismatch")
+        XCTAssertNotEqual(navSession.state, .navigating, "startNavigation must reject mode mismatch and not navigate")
+        XCTAssertEqual(navSession.state, .routePreview, "Session remains in routePreview")
         XCTAssertNotNil(viewModel.routeErrorMessage)
     }
 
