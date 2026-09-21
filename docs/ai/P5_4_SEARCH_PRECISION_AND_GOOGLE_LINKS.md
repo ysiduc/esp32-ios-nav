@@ -397,3 +397,16 @@ The resolution pipeline now strictly adheres to the following hierarchy:
   - Section 51 & 52: 20 GPS samples cause 0 route rebuilds, reroute causes exactly 1 rebuild.
   - Section 53: 30 GPS callbacks in 1 second bounded <= 10 camera updates.
 - **Flutter Test Suite**: **64 / 64 PASS** (0 failures).
+
+## 33. Verified CI Evidence (P5.4.1.2)
+- **Workflow Run ID**: `35632847097` (https://github.com/ysiduc/esp32-ios-nav/actions/runs/35632847097)
+- **Git Commit**: `d8cbbe0d859b7201c775d7e597143997232230ef`
+- **Compile Flutter iOS IPA** (Job ID: `106442980305`):
+  - Unit Tests: **64 / 64 PASS** (0 failures)
+  - iOS Release (No CodeSign): **SUCCESS**
+  - Flutter IPA Package & Upload: **SUCCESS** (`esp32_nav_flutter_ios_ipa`)
+- **Compile Native iOS Swift/SwiftUI** (Job ID: `106442980327`):
+  - Native Unit Tests: **241 / 241 PASS** (0 failures, 24 test suites)
+  - Native Release Build: **SUCCESS**
+  - Native IPA Package & Upload: **SUCCESS** (`esp32_nav_native_ios_ipa`)
+- **Final Acceptance**: P5.4.1.2 Google Maps shortlink structured payload fidelity and iPhone thermal & battery load reduction verified.
