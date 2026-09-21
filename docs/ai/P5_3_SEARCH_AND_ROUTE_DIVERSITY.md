@@ -185,12 +185,39 @@ The test suite was expanded and migrated to provider-neutral tests:
 ---
 
 ## 17. GitHub Actions Evidence
-- **Implementation SHA**: `PENDING_CI`
-- **Workflow Run ID**: `PENDING_CI`
-- **Native Unit Tests**: `PENDING_CI`
-- **Native Release Build**: `PENDING_CI`
-- **Native IPA Package**: `PENDING_CI`
-- **Flutter iOS Build**: `PENDING_CI`
+- **Implementation SHA**: `697e9423a02f0db94dfbd7af0756d82b4cf853c6`
+- **Workflow Run ID**: `35605312480`
+- **Workflow URL**: [GitHub Actions Run #35605312480](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35605312480)
+- **Native Unit Tests**: `PASS` (230 / 230 tests across 24 suites, 0 failures)
+  - AppLifecycleNavigationTests: 4 tests PASS
+  - ApplePlaceSearchServiceTests: 9 tests PASS
+  - BLEScanGenerationTests: 5 tests PASS
+  - BLESendSchedulerRaceTests: 7 tests PASS
+  - BLESendSchedulerTests: 7 tests PASS
+  - DestinationSelectionTests: 12 tests PASS
+  - LocationTrackingPolicyTests: 8 tests PASS
+  - ManeuverProgressionTests: 6 tests PASS
+  - MapRenderPolicyTests: 12 tests PASS
+  - MultiStrategyRoutePlannerTests: 6 tests PASS
+  - NavigationIntegrationReplayTests: 4 tests PASS
+  - NavigationReplayTests: 15 tests PASS
+  - NavigationSessionManagerP51Tests: 15 tests PASS
+  - OffRouteDetectorTests: 13 tests PASS
+  - OffRouteFieldLatencyTests: 10 tests PASS
+  - RerouteManagerTests: 15 tests PASS
+  - RouteCandidateSelectionTests: 17 tests PASS
+  - RouteGeometryTests: 15 tests PASS
+  - RouteMatchingFieldRegressionTests: 7 tests PASS
+  - RouteSimilarityTests: 6 tests PASS
+  - RoutingFallbackTests: 7 tests PASS
+  - RoutingProfileTests: 9 tests PASS
+  - SearchRankingTests: 15 tests PASS
+  - ValhallaRouteSetParserTests: 6 tests PASS
+- **Native Job**: `106350837994` (Compile Native iOS Swift/SwiftUI in 4m3s)
+  - Native Release Build: `SUCCESS`
+  - Native IPA Package: `SUCCESS`
+- **Flutter Job**: `106350838433` (Compile Flutter iOS IPA in 4m25s)
+  - Flutter iOS Build: `SUCCESS`
 - **Status**:
   ```text
   CI / deterministic regression PASS — REAL DEVICE VALIDATION PENDING
