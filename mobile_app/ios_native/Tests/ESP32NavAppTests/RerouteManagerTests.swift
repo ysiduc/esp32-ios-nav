@@ -508,12 +508,11 @@ final class RerouteManagerTests: XCTestCase {
         )
 
         // Start navigation
-        let place = GoongPlace(
-            placeID: "dest",
+        let place = ResolvedPlace(
+            id: "dest",
             name: "Goal",
             formattedAddress: "Address",
-            location: GoongLocation(latitude: 10.005, longitude: 106.0),
-            types: ["establishment"]
+            coordinate: CLLocationCoordinate2D(latitude: 10.005, longitude: 106.0)
         )
         viewModel.selectedDestination = place
         viewModel.startNavigation()

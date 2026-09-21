@@ -1,14 +1,14 @@
 //
 //  SearchResultItem.swift
 //  Legacy model kept for BLE packet compatibility.
-//  New code uses GoongPrediction + GoongPlace from GoongSearchService.swift.
+//  New code uses SearchPrediction + ResolvedPlace from SearchModels.swift.
 //
 
 import CoreLocation
 import Foundation
 
 /// Legacy search result model — used only by BLEManager.sendNavigationPacket indirectly.
-/// New UI code uses GoongPrediction + GoongPlace.
+/// New UI code uses SearchPrediction + ResolvedPlace.
 public struct SearchResultItem: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String

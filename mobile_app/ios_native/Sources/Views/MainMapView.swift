@@ -35,15 +35,20 @@ public struct MainMapView: View {
                 }
             }()
 
+            let altRoutes = viewModel.routeCandidates
+                .filter { bash.id != viewModel.selectedRouteCandidateID }
+                .map(\.route)
+
             MapViewContainer(
                 route: viewModel.activeRoute,
                 routeRenderID: viewModel.selectedRouteCandidateID,
                 remainingPolyline: viewModel.navSession.remainingPolyline,
-                destinationCoord: viewModel.selectedDestination?.location.coordinate,
+                destinationCoord: viewModel.selectedDestination?.coordinate,
                 snappedLocation: viewModel.snappedLocation,
                 userHeading: viewModel.heading,
                 isNavigating: viewModel.isNavigating,
-                presentationMode: presentation
+                presentationMode: presentation,
+                alternativeRoutes: altRoutes
             )
             .edgesIgnoringSafeArea(.all)
 
@@ -563,6 +568,12 @@ public struct MainMapView: View {
                         Text(candidate.route.formattedDistance)
                             .font(.system(size: 10))
                             .foregroundColor(isSelected ? Color.black.opacity(0.7) : .gray)
+
+                        if let delta = candidate.formattedDelta {
+                            Text(delta)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(isSelected ? Color.black.opacity(0.85) : Color.white.opacity(0.6))
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
@@ -607,7 +618,7 @@ public struct MainMapView: View {
 
     // MARK: - Helpers
 
-    private func placeIcon(for prediction: GoongPrediction) -> String {
+    private func placeIcon(for prediction: SearchPrediction) -> String {
         let desc = prediction.description.lowercased()
         if desc.contains("bệnh viện") || desc.contains("hospital") { return "cross.case.fill" }
         if desc.contains("trường") || desc.contains("school")      { return "graduationcap.fill" }

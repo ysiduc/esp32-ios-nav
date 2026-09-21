@@ -196,7 +196,7 @@ The build setting `GOONG_API_KEY` must be set via `.xcconfig` or CI secret injec
 
 CI unit tests never instantiate `GoongPlacesHTTPClient`; all tests inject `MockGoongPlacesClient`.
 
-> ⚠️ The previously committed key `LyG3pKyU88XZHKpKudhyUoG9jsB5i8twzm8vXfIq` is considered exposed and must be rotated at https://account.goong.io/keys.
+> ⚠️ The previously committed key `[REDACTED_HISTORICAL_KEY]` is considered exposed and must be rotated at https://account.goong.io/keys.
 
 ## 16. GoongPlacesClientProtocol
 

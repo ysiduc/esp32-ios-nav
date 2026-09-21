@@ -50,6 +50,30 @@ public struct RouteCandidate: Sendable, Identifiable, Equatable {
         self.relativeDistanceMeters = relativeDistanceMeters
     }
 
+    public var formattedDelta: String? {
+        guard !isPrimary else { return nil }
+        let mins = Int(round(relativeDurationSeconds / 60.0))
+        let timeDeltaStr: String
+        if mins > 0 {
+            timeDeltaStr = "+\(mins)p"
+        } else if mins < 0 {
+            timeDeltaStr = "\(mins)p"
+        } else {
+            timeDeltaStr = "+0p"
+        }
+
+        let distKm = relativeDistanceMeters / 1000.0
+        let distDeltaStr: String
+        if abs(distKm) >= 0.1 {
+            let sign = distKm > 0 ? "+" : ""
+            distDeltaStr = String(format: "%@%.1f km", sign, distKm)
+        } else {
+            distDeltaStr = "+0.0 km"
+        }
+
+        return "\(timeDeltaStr) · \(distDeltaStr)"
+    }
+
     public static func == (lhs: RouteCandidate, rhs: RouteCandidate) -> Bool {
         return lhs.id == rhs.id &&
                lhs.provider == rhs.provider &&
@@ -88,10 +112,15 @@ public struct RouteSet: Sendable, Equatable {
         var filtered: [RouteCandidate] = []
         for candidate in candidates {
             let isDuplicate = filtered.contains { existing in
+                // 1. Geometric overlap corridor metric (P5.3)
+                let overlap = RouteSimilarity.overlap(routeA: existing.route, routeB: candidate.route)
+                if overlap >= RouteSimilarity.defaultDiversityThreshold {
+                    return true
+                }
+
+                // 2. Exact coordinate sequence match fallback
                 let c1 = existing.route.coordinates
                 let c2 = candidate.route.coordinates
-
-                // Geometry Check: Identical coordinate count and sequence (microdegree precision ~1.1m)
                 if c1.count == c2.count && !c1.isEmpty {
                     var allMatch = true
                     for i in 0..<c1.count {
@@ -118,11 +147,16 @@ public struct RouteSet: Sendable, Equatable {
         for (idx, c) in filtered.enumerated() {
             let isPrim = (idx == 0)
             let label: String
-            switch idx {
-            case 0: label = "Đề xuất"
-            case 1: label = "Tuyến 2"
-            case 2: label = "Tuyến 3"
-            default: label = "Tuyến \(idx + 1)"
+            if isPrim {
+                label = c.label.isEmpty || c.label == "Tuyến phụ" ? "Đề xuất" : c.label
+            } else if !c.label.isEmpty && c.label != "Tuyến phụ" && c.label != "Đề xuất" {
+                label = c.label
+            } else {
+                switch idx {
+                case 1: label = "Tuyến 2"
+                case 2: label = "Tuyến 3"
+                default: label = "Tuyến \(idx + 1)"
+                }
             }
 
             let durDelta = isPrim ? 0 : (c.route.totalDurationSeconds - primary.route.totalDurationSeconds)

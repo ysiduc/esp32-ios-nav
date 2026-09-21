@@ -1,6 +1,6 @@
 //
 //  NavigationViewModel.swift
-//  Main view model — wires GoongSearchService → ValhallaRoutingService → NavigationSessionManager → BLE.
+//  Main view model — wires PlaceSearchServiceProtocol → RoutingServiceProtocol → NavigationSessionManager → BLE.
 //  Observes state changes and drives the UI.
 //
 //  Search lifecycle:
@@ -21,7 +21,7 @@ public final class NavigationViewModel: ObservableObject {
 
     // MARK: - Child Services
     public let navSession: NavigationSessionManager
-    public let searchService: GoongSearchService
+    public let searchService: any PlaceSearchServiceProtocol
     public let routing: RoutingServiceProtocol
     public let bleManager: BLEManager
     public let rerouteManager: RerouteManager
@@ -31,8 +31,8 @@ public final class NavigationViewModel: ObservableObject {
     @Published public var isSearchActive: Bool = false
     @Published public var isCalculatingRoute: Bool = false
     @Published public var routeErrorMessage: String? = nil
-    @Published public var selectedPrediction: GoongPrediction? = nil
-    @Published public var selectedDestination: GoongPlace? = nil
+    @Published public var selectedPrediction: SearchPrediction? = nil
+    @Published public var selectedDestination: ResolvedPlace? = nil
     @Published public var transportMode: String = "motorcycle" // "motorcycle" | "auto" | "bicycle" | "pedestrian"
 
     // MARK: - Route Candidates & Alternatives (P4)
@@ -81,12 +81,12 @@ public final class NavigationViewModel: ObservableObject {
     public init(
         routingService: RoutingServiceProtocol? = nil,
         navSession: NavigationSessionManager? = nil,
-        searchService: GoongSearchService? = nil,
+        searchService: (any PlaceSearchServiceProtocol)? = nil,
         bleManager: BLEManager? = nil
     ) {
         let session = navSession ?? NavigationSessionManager(requestLocationAuthorizationOnInit: !ProcessInfo.isRunningUnitTests)
-        let routing = routingService ?? ValhallaRoutingService.shared
-        let search = searchService ?? GoongSearchService()
+        let routing = routingService ?? MultiStrategyRoutePlanner.shared
+        let search = searchService ?? ApplePlaceSearchService()
         let ble = bleManager ?? BLEManager()
 
         self.navSession = session
@@ -94,8 +94,13 @@ public final class NavigationViewModel: ObservableObject {
         self.routing = routing
         self.bleManager = ble
         self.rerouteManager = RerouteManager(routingService: routing, navSession: session)
+        // Hook searchService prediction changes to notify SwiftUI
+        self.searchService.onPredictionsChanged = { [weak self] _ in
+            self?.objectWillChange.send()
+        }
 
-        // Forward filtered physical GPS location to Goong search for proximity-biased results
+
+        // Forward filtered physical GPS location to search for proximity-biased results
         self.navSession.$filteredLocation
             .compactMap { $0?.coordinate }
             .sink { [weak self] coord in
@@ -153,7 +158,7 @@ public final class NavigationViewModel: ObservableObject {
             selectedDestination = nil
             selectedPrediction  = nil
             routeErrorMessage   = nil
-            searchService.endSearchSession()
+            searchService.clearPredictions()
         }
         searchQuery = text
         searchService.updateQuery(text)
@@ -176,7 +181,19 @@ public final class NavigationViewModel: ObservableObject {
     ///   4. Fetch Place Detail using the current session token.
     ///   5. On success: set selectedDestination, rotate session token, calculate route.
     ///   6. On failure: show error; preserve selectedPrediction for retry context.
-    public func selectPrediction(_ prediction: GoongPrediction) {
+        /// Select a destination coordinate directly (e.g. from a map long-press or direct pin).
+    public func selectManualDestination(coordinate: CLLocationCoordinate2D, name: String = "Điểm đã chọn") {
+        _cancelPendingSelectionTask()
+        invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
+        destinationSelectionGeneration &+= 1
+        let place = ResolvedPlace(name: name, formattedAddress: name, coordinate: coordinate)
+        self.selectedDestination = place
+        self.searchQuery = name
+        self.isSearchActive = false
+        Task { await self.calculateRoute(to: coordinate) }
+    }
+
+    public func selectPrediction(_ prediction: SearchPrediction) {
         // Cancel prior selection & routing, clear stale preview, candidates, and errors
         _cancelPendingSelectionTask()
         invalidateRoutePreviewState(clearActivePreview: true, resetLoading: true)
@@ -209,7 +226,7 @@ public final class NavigationViewModel: ObservableObject {
 
                 self.selectedDestination = place
                 // Rotate session token now that Place Detail succeeded
-                self.searchService.endSearchSession()
+                self.searchService.clearPredictions()
                 await self.calculateRoute(to: place.location.coordinate)
 
             } catch is CancellationError {
@@ -378,9 +395,9 @@ public final class NavigationViewModel: ObservableObject {
         rerouteManager.cancel()
 
         let destination = NavigationDestination(
-            coordinate: place.location.coordinate,
+            coordinate: place.coordinate,
             name: place.name,
-            placeID: place.placeID
+            placeID: place.id
         )
 
         navSession.startNavigation(route: selectedCandidate.route, destination: destination)
@@ -411,7 +428,7 @@ public final class NavigationViewModel: ObservableObject {
             rerouteManager.requestTransportModeReroute(costing: currentTransportMode.rawValue)
         } else {
             invalidateRoutePreviewState(clearActivePreview: true, resetLoading: false)
-            if let dest = selectedDestination?.location.coordinate {
+            if let dest = selectedDestination?.coordinate {
                 Task { await calculateRoute(to: dest) }
             }
         }

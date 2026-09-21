@@ -5,13 +5,13 @@ class GoongConfig {
   // 1. GOONG MAP TILES KEY (Hiển thị bản đồ MapLibre GL)
   // Lấy tại: https://account.goong.io/keys -> Mục MapTiles Key
   // ============================================================
-  static String maptilesKey = 'i8CAxB85uuHXj0YbYO4YM7SjkqLmwdvChoQK36ds';
+  static String maptilesKey = '';
 
   // ============================================================
   // 2. GOONG REST API KEY (Tìm kiếm địa điểm, Autocomplete & Dẫn đường)
   // Lấy tại: https://account.goong.io/keys -> Mục API Key
   // ============================================================
-  static String restApiKey = 'LyG3pKyU88XZHKpKudhyUoG9jsB5i8twzm8vXfIq';
+  static String restApiKey = '';
 
   // ============================================================
   // Goong MapLibre Style URLs (GPU Vector Rendering)

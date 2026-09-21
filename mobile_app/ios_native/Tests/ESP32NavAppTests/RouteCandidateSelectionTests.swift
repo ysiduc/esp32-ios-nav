@@ -77,7 +77,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
     var mockRouting: MockMultiRouteService!
     var navSession: NavigationSessionManager!
-    var searchService: GoongSearchService!
+    var searchService: MockPlaceSearchService!
     var viewModel: NavigationViewModel!
 
     let coordA = CLLocationCoordinate2D(latitude: 21.0285, longitude: 105.8542)
@@ -91,7 +91,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         mockRouting = MockMultiRouteService()
         navSession = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         navSession.userLocation = CLLocation(latitude: coordA.latitude, longitude: coordA.longitude)
-        searchService = GoongSearchService(client: MockGoongPlacesClient(), debounceDelay: 0)
+        searchService = MockPlaceSearchService()
 
         viewModel = NavigationViewModel(
             routingService: mockRouting,
@@ -126,12 +126,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 2. Select Alternative Candidate
 
     func testUserSelectsAlternative_SwitchesPreviewWithoutMutatingDestinationOrSession() async {
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -153,12 +148,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 3. Start Navigation with Selected Alternative
 
     func testStartNavigation_UsesSelectedCandidateAlternative() async {
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -242,12 +232,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 6. Stop Navigation Clears Candidates
 
     func testStopNavigation_ClearsCandidateState() async {
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude), types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -274,13 +259,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         let autoCand = RouteCandidate(id: "auto_c0", route: rAuto, provider: .valhalla, requestedMode: .auto, profileID: "auto_standard", isPrimary: true, label: "Đề xuất")
         mockRouting.routeSetToReturn = RouteSet(candidates: [autoCand])
 
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // User switches mode to auto
@@ -308,13 +287,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(viewModel.routeCandidates.count, 3)
         XCTAssertNotNil(navSession.activeRoute)
 
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // 2. Next routing call (for auto) will fail
@@ -363,13 +336,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
 
         await viewModel.calculateRoute(to: coordB)
 
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         XCTAssertEqual(viewModel.currentTransportMode, .auto)
@@ -454,9 +421,8 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 12. Select Prediction Clears Old RouteSet Immediately
 
     func testSelectPrediction_ClearsOldRouteSetImmediately() async {
-        let mockClient = MockGoongPlacesClient()
-        mockClient.useContinuationForDetail = true
-        let searchSvc = GoongSearchService(client: mockClient, debounceDelay: 0)
+        let searchSvc = MockPlaceSearchService()
+        searchSvc.useContinuationForDetail = true
         let vm = NavigationViewModel(
             routingService: mockRouting,
             navSession: navSession,
@@ -472,20 +438,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(vm.selectedRouteCandidateID, "c0")
         XCTAssertNotNil(navSession.activeRoute)
 
-        let rawPred = mockClient.makePrediction(placeID: "p2", mainText: "New Destination")
-        let pred = GoongPrediction(
-            id: rawPred.placeID,
-            placeID: rawPred.placeID,
-            mainText: rawPred.mainText,
-            secondaryText: rawPred.secondaryText,
-            description: rawPred.description,
-            structuredFormatting: GoongStructuredFormatting(mainText: rawPred.mainText, secondaryText: rawPred.secondaryText),
-            providerScore: rawPred.providerScore,
-            providerIndex: rawPred.providerIndex,
-            district: nil,
-            commune: nil,
-            province: nil
-        )
+        let pred = SearchPrediction(id: "p2", title: "New Destination", subtitle: "")
 
         vm.selectPrediction(pred)
 
@@ -498,9 +451,8 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 13. Place Detail Failure Resets IsCalculatingRoute And Cleans Preview
 
     func testPlaceDetailFailure_ResetsIsCalculatingRouteAndCleansPreview() async throws {
-        let mockClient = MockGoongPlacesClient()
-        mockClient.detailResult = .failure(URLError(.cannotConnectToHost))
-        let searchSvc = GoongSearchService(client: mockClient, debounceDelay: 0)
+        let searchSvc = MockPlaceSearchService()
+        searchSvc.resolveResult = .failure(URLError(.cannotConnectToHost))
         let vm = NavigationViewModel(
             routingService: mockRouting,
             navSession: navSession,
@@ -508,20 +460,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
             bleManager: nil
         )
 
-        let rawPred = mockClient.makePrediction(placeID: "fail_p", mainText: "Failing Place")
-        let pred = GoongPrediction(
-            id: rawPred.placeID,
-            placeID: rawPred.placeID,
-            mainText: rawPred.mainText,
-            secondaryText: rawPred.secondaryText,
-            description: rawPred.description,
-            structuredFormatting: GoongStructuredFormatting(mainText: rawPred.mainText, secondaryText: rawPred.secondaryText),
-            providerScore: rawPred.providerScore,
-            providerIndex: rawPred.providerIndex,
-            district: nil,
-            commune: nil,
-            province: nil
-        )
+        let pred = SearchPrediction(id: "fail_p", title: "Failing Place", subtitle: "")
 
         vm.selectPrediction(pred)
 
@@ -586,13 +525,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 15. Select Route Candidate Ignored During Active Navigation
 
     func testSelectRouteCandidate_IgnoredDuringActiveNavigation() async {
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -612,13 +545,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
     // MARK: - 16. Mode Switch While Navigating Preserves Route and Triggers Reroute
 
     func testTransportModeSwitch_WhileNavigating_PreservesActiveRouteAndTriggersReroute() async {
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         await viewModel.calculateRoute(to: coordB)
@@ -641,13 +568,7 @@ final class RouteCandidateSelectionTests: XCTestCase {
         // 1. Initial preview route A (motorcycle)
         await viewModel.calculateRoute(to: coordB)
 
-        let testDest = GoongPlace(
-            placeID: "dest_1",
-            name: "Hồ Gươm",
-            formattedAddress: "Hà Nội",
-            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
-            types: []
-        )
+        let testDest = ResolvedPlace(id: "test_dest", name: "Destination", formattedAddress: "Hanoi", coordinate: coordB)
         viewModel.selectedDestination = testDest
 
         // 2. Start navigation on Route A

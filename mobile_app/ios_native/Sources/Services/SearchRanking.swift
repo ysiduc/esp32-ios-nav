@@ -1,18 +1,16 @@
 //
 //  SearchRanking.swift
-//  Pure, stateless ranking helper for Goong autocomplete results.
+//  Pure, stateless ranking helper for search predictions.
 //
 //  Ranking formula (higher is better):
 //    score = exactNormalizedMainText   × 100
 //          + prefixNormalizedMainText  ×  50
 //          + tokenCoverage             ×  10   (per query token present in description)
-//          + (providerScore ?? 0)      ×   0.1
 //
 //  Tie-break (ascending priority):
 //    1. score DESC
-//    2. providerScore DESC (Goong's own ranking signal)
-//    3. providerIndex ASC  (original response position — stable)
-//    4. placeID ASC        (deterministic final tie-break)
+//    2. original index ASC (stable)
+//    3. prediction id ASC  (deterministic final tie-break)
 //
 //  Vietnamese normalization:
 //    1. Diacritic folding via fixed Locale(identifier: "vi_VN") (deterministic)
@@ -28,28 +26,20 @@ public enum SearchRanking {
 
     // MARK: - Public API
 
-    /// Rank a list of raw Goong predictions for `query` and return them sorted best-first.
-    public static func rank(_ predictions: [GoongRawPrediction], query: String) -> [GoongRawPrediction] {
+    /// Rank a list of predictions for  and return them sorted best-first.
+    public static func rank(_ predictions: [SearchPrediction], query: String) -> [SearchPrediction] {
         guard !predictions.isEmpty else { return [] }
         let normalizedQuery = normalize(query)
         let queryTokens     = tokens(normalizedQuery)
 
-        let scored: [(prediction: GoongRawPrediction, score: Double)] = predictions.map { p in
-            (p, score(for: p, normalizedQuery: normalizedQuery, queryTokens: queryTokens))
+        let scored: [(prediction: SearchPrediction, score: Double, index: Int)] = predictions.enumerated().map { idx, p in
+            (p, score(for: p, normalizedQuery: normalizedQuery, queryTokens: queryTokens), idx)
         }
 
         return scored.sorted { lhs, rhs in
             if lhs.score != rhs.score { return lhs.score > rhs.score }
-            // Tie-break 1: Goong's own provider score DESC
-            let lScore = lhs.prediction.providerScore ?? 0
-            let rScore = rhs.prediction.providerScore ?? 0
-            if lScore != rScore { return lScore > rScore }
-            // Tie-break 2: Original response position ASC
-            if lhs.prediction.providerIndex != rhs.prediction.providerIndex {
-                return lhs.prediction.providerIndex < rhs.prediction.providerIndex
-            }
-            // Tie-break 3: placeID lexicographic ASC (fully deterministic)
-            return lhs.prediction.placeID < rhs.prediction.placeID
+            if lhs.index != rhs.index { return lhs.index < rhs.index }
+            return lhs.prediction.id < rhs.prediction.id
         }.map(\.prediction)
     }
 
@@ -88,7 +78,7 @@ public enum SearchRanking {
 
         // 4. Collapse runs of whitespace and trim
         let collapsed = cleaned.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
+            .filter { !bash.isEmpty }
             .joined(separator: " ")
         return collapsed
     }
@@ -96,20 +86,20 @@ public enum SearchRanking {
     // MARK: - Private
 
     private static func tokens(_ normalized: String) -> [String] {
-        normalized.components(separatedBy: " ").filter { !$0.isEmpty }
+        normalized.components(separatedBy: " ").filter { !bash.isEmpty }
     }
 
     private static func score(
-        for prediction: GoongRawPrediction,
+        for prediction: SearchPrediction,
         normalizedQuery: String,
         queryTokens: [String]
     ) -> Double {
-        let normalizedMain = normalize(prediction.mainText)
+        let normalizedMain = normalize(prediction.title)
         let normalizedDesc = normalize(prediction.description)
 
         var s: Double = 0
 
-        // Exact mainText match
+        // Exact title match
         if normalizedMain == normalizedQuery {
             s += 100
         } else if normalizedMain.hasPrefix(normalizedQuery) {
@@ -118,11 +108,8 @@ public enum SearchRanking {
         }
 
         // Token coverage: count how many query tokens appear in full description
-        let matchedTokens = queryTokens.filter { normalizedDesc.contains($0) }
+        let matchedTokens = queryTokens.filter { normalizedDesc.contains(bash) }
         s += Double(matchedTokens.count) * 10
-
-        // Goong provider score signal
-        s += (prediction.providerScore ?? 0) * 0.1
 
         return s
     }

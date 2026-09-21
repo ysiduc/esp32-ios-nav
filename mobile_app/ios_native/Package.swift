@@ -14,7 +14,7 @@ let package = Package(
     ],
     // External dependencies:
     // - MapLibre Native iOS: vector map rendering at 60fps, offline-capable
-    // - Goong Search: pure REST API calls (no SDK needed)
+    // - Apple MapKit Search: native framework (no SDK needed)
     // - Valhalla Routing: C++ engine via ObjC++ wrapper (no Swift package)
     dependencies: [
         .package(

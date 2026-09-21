@@ -1,5 +1,5 @@
 # Data Preparation & Xcode Setup Guide
-## MapLibre + Goong + Valhalla iOS Navigation App
+## MapLibre + Apple MapKit Search + Valhalla iOS Navigation App
 
 ---
 
@@ -213,18 +213,10 @@ Already configured in `mobile_app/ios_native/Info.plist`:
 
 ---
 
-## Part 3: Goong API Key
+## Part 3: Search Configuration
 
-1. Register at https://account.goong.io/
-2. Create a new API key (free tier: 1000 requests/day)
-3. Open `GoongSearchService.swift` and update:
-   ```swift
-   private let apiKey = "YOUR_GOONG_API_KEY_HERE"
-   ```
-   *(Currently set to the provided key `LyG3pKyU88XZHKpKudhyUoG9jsB5i8twzm8vXfIq`)*
-
----
-
+The app uses native Apple MapKit Search (`MKLocalSearchCompleter` and `MKLocalSearch`).
+No external third-party API keys or credentials are required.
 ## Part 4: OpenFreeMap Tile Style (no API key needed)
 
 The app uses OpenFreeMap for vector map tiles — completely free, no sign-up:
@@ -277,12 +269,12 @@ open ESP32NavApp.xcodeproj
 
 ```
 User Types "Bệnh viện Bạch Mai"
-  → GoongSearchService.search("Bệnh viện Bạch Mai")  [300ms debounce]
-  → GET rsapi.goong.io/Place/AutoComplete             [real REST API]
+  → ApplePlaceSearchService.updateQuery("Bệnh viện Bạch Mai")  [300ms debounce]
+  → MKLocalSearchCompleter (native Apple MapKit)
   → Shows 5 predictions in dropdown
 
 User Taps "Bệnh viện Bạch Mai, Hà Nội"
-  → GoongSearchService.getPlaceDetail(placeID)        [GET rsapi.goong.io/Place/Detail]
+  → ApplePlaceSearchService.resolve(prediction)        [MKLocalSearch]
   → Returns {lat: 21.0016, lng: 105.8412}
   → NavigationViewModel.calculateRoute(to: ...)
     → ValhallaRoutingService.calculateRoute(...)       [on background queue]

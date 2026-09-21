@@ -1,4 +1,1 @@
-// Example local configuration for Goong API key.
-// Copy this file to Config.xcconfig (which is gitignored) and insert your Goong API key.
-// Never commit real API keys to version control.
-GOONG_API_KEY =
+// Local development configuration overrides

@@ -23,9 +23,6 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
-	<!-- Goong API Key (injected via build setting GOONG_API_KEY in .xcconfig / CI) -->
-	<key>GOONG_API_KEY</key>
-	<string>$(GOONG_API_KEY)</string>
 
 	<!-- Location Permissions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
