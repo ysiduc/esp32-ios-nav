@@ -182,7 +182,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                             valhallaCosting: strategy.valhallaCosting,
                             costingOptions: strategy.costingOptions,
                             maxAlternatives: strategy.requestedAlternatives,
-                            fallbackPolicy: RoutingProfile.FallbackPolicy(allowMapKitFallback: false, mapKitCapability: .unsupported)
+                            fallbackPolicy: FallbackPolicy(allowMapKitFallback: false, mapKitCapability: .unsupported)
                         )
                         let subRequest = RoutingRequest(
                             origin: request.origin,
@@ -236,7 +236,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
         // If ALL Valhalla strategies fail, run a single degraded motorcycle fallback request
         if strategyResults.isEmpty {
             print("[MultiStrategy] All Valhalla motorcycle strategies failed; executing single emergency degraded fallback")
-            let emergencyProfile = RoutingProfile.motorcycle() // has fallbackPolicy: .motorcycle
+            let emergencyProfile = RoutingProfile.profile(for: .motorcycle)
             let emergencyRequest = RoutingRequest(
                 origin: request.origin,
                 destination: request.destination,
