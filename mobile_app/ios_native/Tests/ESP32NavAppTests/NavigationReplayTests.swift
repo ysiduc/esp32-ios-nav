@@ -535,10 +535,20 @@ final class NavigationReplayTests: XCTestCase {
         XCTAssertEqual(sessionManager.activeRoute?.totalDistanceMeters, 500)
 
         // 7. Route progress continues on Route B to arrival
-        runner.replay(samples: [
-            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(25), coordinate: CLLocationCoordinate2D(latitude: 21.0340, longitude: 105.8550)),
-            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(35), coordinate: coordC) // Arrival!
-        ])
+        let startB = CLLocationCoordinate2D(latitude: 21.0340, longitude: 105.8550)
+        var samplesB: [NavigationReplaySample] = []
+        for i in 0...3 {
+            let frac = Double(i) / 3.0
+            let lat = startB.latitude + frac * (coordC.latitude - startB.latitude)
+            let lon = startB.longitude + frac * (coordC.longitude - startB.longitude)
+            samplesB.append(NavigationReplaySample(
+                timestamp: baseDate.addingTimeInterval(25.0 + Double(i) * 10.0),
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                speed: 10.0,
+                course: 0.0
+            ))
+        }
+        runner.replay(samples: samplesB)
 
         XCTAssertEqual(runner.arrivalCount, 1)
         XCTAssertEqual(sessionManager.state, .arrived)
@@ -584,17 +594,25 @@ final class NavigationReplayTests: XCTestCase {
         let baseDate = Date()
 
         // Ingest progress with BLE disconnected
-        runner.replay(samples: [
-            NavigationReplaySample(timestamp: baseDate, coordinate: coordA),
-            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(10), coordinate: coordB),
-            NavigationReplaySample(timestamp: baseDate.addingTimeInterval(20), coordinate: coordC)
-        ])
+        var bleSamples: [NavigationReplaySample] = []
+        for i in 0...4 {
+            let frac = Double(i) / 4.0
+            let lat = coordA.latitude + frac * (coordC.latitude - coordA.latitude)
+            let lon = coordA.longitude
+            bleSamples.append(NavigationReplaySample(
+                timestamp: baseDate.addingTimeInterval(Double(i) * 15.0),
+                coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                speed: 10.0,
+                course: 0.0
+            ))
+        }
+        runner.replay(samples: bleSamples)
 
         // Navigation progressed completely to arrival despite BLE being disconnected
-        XCTAssertEqual(runner.capturedProgress.count, 3)
+        XCTAssertEqual(runner.capturedProgress.count, 5)
         XCTAssertEqual(runner.arrivalCount, 1)
         XCTAssertEqual(sessionManager.state, .arrived)
-        XCTAssertEqual(runner.sessionManager.diagnostics.locationsAccepted, 3)
-        XCTAssertEqual(runner.sessionManager.diagnostics.progressComputations, 3)
+        XCTAssertEqual(runner.sessionManager.diagnostics.locationsAccepted, 5)
+        XCTAssertEqual(runner.sessionManager.diagnostics.progressComputations, 5)
     }
 }
