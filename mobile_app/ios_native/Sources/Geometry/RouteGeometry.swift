@@ -264,7 +264,8 @@ public struct RouteGeometry: Sendable {
         location: CLLocation,
         lastProjection: RouteProjection? = nil,
         lastMatchedTimestamp: Date? = nil,
-        stuckRecoveryTriggered: Bool = false
+        stuckRecoveryTriggered: Bool = false,
+        previousPhysicalCoordinate: CLLocationCoordinate2D? = nil
     ) -> RouteMatchResult? {
         guard segmentCount > 0 else {
             if let first = coordinates.first {
@@ -296,7 +297,9 @@ public struct RouteGeometry: Sendable {
         }
 
         let physicalTravel: Double
-        if let prev = lastProjection {
+        if let prevPhysical = previousPhysicalCoordinate {
+            physicalTravel = RouteGeometry.distanceBetween(prevPhysical, point)
+        } else if let prev = lastProjection {
             physicalTravel = RouteGeometry.distanceBetween(prev.coordinate, point)
         } else {
             physicalTravel = 0.0
@@ -547,8 +550,34 @@ public struct RouteGeometry: Sendable {
         return max(0.0, stepDist - distanceAlongRouteMeters)
     }
 
-    /// Returns the remaining polyline coordinates starting from the specified along-route distance (P5.2 Requirements 17 & 18).
+    /// Pure geometry helper returning the exact coordinate along the route at the given along-route distance (P5.2.1).
+    public func coordinate(
+        atDistanceAlongRoute distanceMeters: Double
+    ) -> CLLocationCoordinate2D? {
+        guard !coordinates.isEmpty else { return nil }
+        guard coordinates.count >= 2 else { return coordinates.first }
+        let targetDist = max(0.0, min(totalDistanceMeters, distanceMeters))
+
+        var segIdx = 0
+        while segIdx + 1 < cumulativeDistances.count && cumulativeDistances[segIdx + 1] < targetDist {
+            segIdx += 1
+        }
+        segIdx = min(segIdx, segmentCount - 1)
+
+        let a = coordinates[segIdx]
+        let b = coordinates[segIdx + 1]
+        let segStartDist = cumulativeDistances[segIdx]
+        let segLen = cumulativeDistances[segIdx + 1] - segStartDist
+        let fraction = segLen > 1e-6 ? max(0.0, min(1.0, (targetDist - segStartDist) / segLen)) : 0.0
+
+        let lat = a.latitude + fraction * (b.latitude - a.latitude)
+        let lon = a.longitude + fraction * (b.longitude - a.longitude)
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    /// Returns the remaining polyline coordinates starting from the specified along-route distance (P5.2 Requirements 17 & 18, P5.2.1).
     /// Continuous polyline trimming ensures passed geometry is promptly removed without requiring reroute.
+    /// The first coordinate is derived directly from the along-route distance unless an explicit snapped coordinate is supplied.
     public func trimmedPolyline(
         from distanceAlongRouteMeters: Double,
         snappedCoordinate: CLLocationCoordinate2D? = nil
@@ -556,28 +585,15 @@ public struct RouteGeometry: Sendable {
         guard coordinates.count >= 2 else { return coordinates }
         let targetDist = max(0.0, min(totalDistanceMeters, distanceAlongRouteMeters))
 
-        // Find the active segment index where cumulativeDistances[segIdx] <= targetDist <= cumulativeDistances[segIdx+1]
+        guard let startCoord = (snappedCoordinate ?? coordinate(atDistanceAlongRoute: targetDist)) else {
+            return coordinates
+        }
+
         var segIdx = 0
         while segIdx + 1 < cumulativeDistances.count && cumulativeDistances[segIdx + 1] < targetDist {
             segIdx += 1
         }
         segIdx = min(segIdx, segmentCount - 1)
-
-        // Interpolate coordinate at targetDist
-        let a = coordinates[segIdx]
-        let b = coordinates[segIdx + 1]
-        let segStartDist = cumulativeDistances[segIdx]
-        let segLen = cumulativeDistances[segIdx + 1] - segStartDist
-        let fraction = segLen > 1e-6 ? max(0.0, min(1.0, (targetDist - segStartDist) / segLen)) : 0.0
-
-        let startCoord: CLLocationCoordinate2D
-        if let snapped = snappedCoordinate {
-            startCoord = snapped
-        } else {
-            let lat = a.latitude + fraction * (b.latitude - a.latitude)
-            let lon = a.longitude + fraction * (b.longitude - a.longitude)
-            startCoord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        }
 
         var remaining: [CLLocationCoordinate2D] = [startCoord]
         if segIdx + 1 < coordinates.count {

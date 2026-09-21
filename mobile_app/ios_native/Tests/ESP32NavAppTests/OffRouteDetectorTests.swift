@@ -285,4 +285,94 @@ final class OffRouteDetectorTests: XCTestCase {
         XCTAssertNil(detector.recoveryStartedAt)
         XCTAssertNil(detector.lastObservationTimestamp)
     }
+
+    // MARK: - Test 11: Production Detector Config Defaults (Requirement 21)
+
+    func testOffRouteDetectorConfigProductionDefaults() {
+        let cfg = OffRouteDetectorConfig()
+        XCTAssertEqual(cfg.baseEnterThresholdMeters, 15.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.accuracyMultiplier, 1.2, accuracy: 1e-6)
+        XCTAssertEqual(cfg.recoveryThresholdMeters, 10.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.standardDwellSeconds, 2.5, accuracy: 1e-6)
+        XCTAssertEqual(cfg.courseDivergenceDwellSeconds, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.stationaryDwellSeconds, 5.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.strongDeviationDwellSeconds, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.strongDeviationThresholdMeters, 40.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.strongDeviationMaxAccuracyMeters, 15.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.courseMismatchAngleDegrees, 45.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.minSpeedForCourseMetersPerSecond, 3.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.recoveryDwellSeconds, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(cfg.moderateDeviationDwellSeconds, 2.0, accuracy: 1e-6)
+    }
+
+    // MARK: - Test 12: Planned 90-Degree Sharp Turn Does Not Trigger Reroute (Requirement 17)
+
+    func testPlanned90DegreeSharpTurn_DoesNotTriggerReroute() {
+        let detector = OffRouteDetector()
+
+        // Vehicle turns 90 degrees onto next segment of route.
+        // Matcher is briefly still on previous segment, so matched lateral distance is 18m,
+        // BUT physical raw distance to next planned segment is only 2.0m!
+        let obsTurn = OffRouteObservation(
+            timestamp: baseDate,
+            matchedProjectionLateralDistanceMeters: 18.0,
+            rawPhysicalRouteDistanceMeters: 2.0,
+            horizontalAccuracyMeters: 5.0,
+            speedMetersPerSecond: 8.0,
+            courseDegrees: 90.0,
+            routeBearingDegrees: 90.0
+        )
+        let dec = detector.evaluate(observation: obsTurn)
+        XCTAssertEqual(dec.state, .onRoute, "Raw physical proximity to next planned segment prevents false off-route during planned 90-degree turn")
+    }
+
+    // MARK: - Test 13: Quality-Aware Moderate Parallel Deviation (Requirements 10, 11, 12, 14)
+
+    func testModerateParallelDeviation_QualityAwareTrigger() {
+        let detector = OffRouteDetector()
+
+        // Case A: High quality GPS (accuracy 4m) with 12.5m physical separation
+        // moderateThreshold = max(10.0, 4.0 * 1.5) = 10.0m <= 12.5m -> triggers suspicion
+        let obsGood = OffRouteObservation(
+            timestamp: baseDate,
+            matchedProjectionLateralDistanceMeters: 12.5,
+            rawPhysicalRouteDistanceMeters: 12.5,
+            horizontalAccuracyMeters: 4.0,
+            speedMetersPerSecond: 8.5,
+            courseDegrees: 0.0,
+            routeBearingDegrees: 0.0
+        )
+        let decGood = detector.evaluate(observation: obsGood)
+        XCTAssertEqual(decGood.state, .suspected)
+        XCTAssertEqual(decGood.reason, .persistentModerateLateralDeviation)
+
+        // Confirms after moderateDeviationDwell (2.0s)
+        let obsGoodConf = OffRouteObservation(
+            timestamp: baseDate.addingTimeInterval(2.1),
+            matchedProjectionLateralDistanceMeters: 12.5,
+            rawPhysicalRouteDistanceMeters: 12.5,
+            horizontalAccuracyMeters: 4.0,
+            speedMetersPerSecond: 8.5,
+            courseDegrees: 0.0,
+            routeBearingDegrees: 0.0
+        )
+        let decGoodConf = detector.evaluate(observation: obsGoodConf)
+        XCTAssertEqual(decGoodConf.state, .confirmed)
+        XCTAssertTrue(decGoodConf.becameConfirmed)
+
+        // Case B: Noisy GPS (accuracy 14m) with same 12.5m physical separation
+        // moderateThreshold = max(10.0, 14.0 * 1.5) = 21.0m > 12.5m -> does NOT trigger suspicion
+        let detectorNoisy = OffRouteDetector()
+        let obsNoisy = OffRouteObservation(
+            timestamp: baseDate,
+            matchedProjectionLateralDistanceMeters: 12.5,
+            rawPhysicalRouteDistanceMeters: 12.5,
+            horizontalAccuracyMeters: 14.0,
+            speedMetersPerSecond: 8.5,
+            courseDegrees: 0.0,
+            routeBearingDegrees: 0.0
+        )
+        let decNoisy = detectorNoisy.evaluate(observation: obsNoisy)
+        XCTAssertEqual(decNoisy.state, .onRoute, "Noisy GPS (14m accuracy) scales threshold up and prevents false reroute")
+    }
 }

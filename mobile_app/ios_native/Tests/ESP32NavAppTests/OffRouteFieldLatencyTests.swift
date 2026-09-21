@@ -451,6 +451,52 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         )
         return NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 422.0, totalDurationSeconds: 50.0)
     }
+
+    // MARK: - Test 11: Route Progress Continues While Reroute Is Pending (Requirement 41)
+
+    func testRouteProgressContinuesWhileRerouteIsPending() async {
+        let routeA = makeTurnRoute()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
+        // Delayed routing service holds reroute request pending for 5 seconds
+        let delayedService = DelayedRoutingService(delay: 5.0)
+        var currentTime = baseDate
+        let rerouteManager = RerouteManager(
+            routingService: delayedService,
+            navSession: session,
+            now: { currentTime }
+        )
+        session.onOffRouteDecision = { decision, loc in
+            rerouteManager.handleObservation(location: loc, decision: decision, currentTime: currentTime)
+        }
+
+        session.startNavigation(route: routeA, destination: NavigationDestination(coordinate: routeA.coordinates.last!, name: "Đích"))
+        let initialRemainingCount = session.remainingPolyline.count
+        XCTAssertGreaterThanOrEqual(initialRemainingCount, 4)
+
+        // Trigger off-route to start pending reroute request
+        session.setRerouting(true)
+        XCTAssertTrue(session.isRerouting)
+
+        // Driver continues moving along Route A while recalculation is pending
+        // Route A must remain active, progress must update, and polyline must continue trimming!
+        let progressBefore = session.displayProgressDistanceAlongRoute
+        let locAhead = CLLocation(
+            coordinate: routeA.coordinates[2],
+            altitude: 10.0,
+            horizontalAccuracy: 4.0,
+            verticalAccuracy: 4.0,
+            course: 0.0,
+            speed: 8.0,
+            timestamp: currentTime.addingTimeInterval(1.0)
+        )
+        session.ingestLocation(locAhead)
+
+        XCTAssertNotNil(session.activeRoute)
+        XCTAssertEqual(session.activeRoute?.totalDistanceMeters, routeA.totalDistanceMeters)
+        XCTAssertGreaterThan(session.displayProgressDistanceAlongRoute, progressBefore)
+        XCTAssertLessThanOrEqual(session.remainingPolyline.count, initialRemainingCount)
+        XCTAssertTrue(session.isRerouting, "Reroute UI flag remains active while request is pending")
+    }
 }
 
 // MARK: - Mocks for Testing

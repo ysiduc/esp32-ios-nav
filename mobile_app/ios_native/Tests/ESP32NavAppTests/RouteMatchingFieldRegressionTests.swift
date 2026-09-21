@@ -116,9 +116,127 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         XCTAssertFalse(session.isOffRoute, "Vehicle followed the turn onto Route, must NOT be confirmed off-route")
     }
 
-    // MARK: - Test 3: Close Parallel Roads (Requirement 20 & 45)
+    // MARK: - Test 3: Close Parallel Roads (Requirements 8-14, 35)
 
-    func testCloseParallelRoads_DetectsPhysicalSeparationWithoutStaleSnap() {
+    func testCloseParallelRoads_DetectsPhysicalSeparationAndTriggersReroute() async {
+        let coordsA = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8000),
+            CLLocationCoordinate2D(latitude: 21.005, longitude: 105.8000)
+        ]
+        let step = NavStep(
+            coordinate: coordsA[1],
+            distanceMeters: 556.0,
+            durationSeconds: 60.0,
+            streetName: "Đường chính",
+            maneuverType: .arrive,
+            instruction: "Đến đích",
+            beginShapeIndex: 0,
+            endShapeIndex: 1
+        )
+        let route = NavRoute(coordinates: coordsA, steps: [step], totalDistanceMeters: 556.0, totalDurationSeconds: 60.0)
+
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
+        let routingService = ParallelTestRecordingRoutingService()
+        var time = baseDate
+        let rerouteManager = RerouteManager(
+            routingService: routingService,
+            navSession: session,
+            now: { time }
+        )
+        session.onOffRouteDecision = { decision, loc in
+            rerouteManager.handleObservation(location: loc, decision: decision, currentTime: time)
+        }
+
+        session.startNavigation(route: route, destination: NavigationDestination(coordinate: coordsA[1], name: "Đích"))
+
+        // Vehicle drives on parallel service road: ~12.5m east (lon 105.80012)
+        // Same course (0.0° north), speed 8.5 m/s, GPS accuracy 4.0m
+        // Ingest sample 1 at t=0
+        let loc1 = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 21.0014, longitude: 105.80012),
+            altitude: 10.0,
+            horizontalAccuracy: 4.0,
+            verticalAccuracy: 4.0,
+            course: 0.0,
+            speed: 8.5,
+            timestamp: time
+        )
+        session.ingestLocation(loc1)
+
+        // Moderate deviation threshold with 4m accuracy: max(10.0, 4.0 * 1.5) = 10.0m <= 12.5m
+        // First sample becomes suspected with persistentModerateLateralDeviation
+        XCTAssertEqual(session.offRouteState, .suspected)
+        XCTAssertEqual(session.offRouteDecision?.reason, .persistentModerateLateralDeviation)
+        XCTAssertFalse(session.isOffRoute)
+        XCTAssertEqual(session.diagnostics.rerouteRequests, 0)
+
+        // Sample 2 at t = 1.0s (dwell 1.0s < moderateDeviationDwell 2.0s) -> remains suspected
+        time = time.addingTimeInterval(1.0)
+        let loc2 = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 21.0022, longitude: 105.80012),
+            altitude: 10.0,
+            horizontalAccuracy: 4.0,
+            verticalAccuracy: 4.0,
+            course: 0.0,
+            speed: 8.5,
+            timestamp: time
+        )
+        session.ingestLocation(loc2)
+        XCTAssertEqual(session.offRouteState, .suspected)
+        XCTAssertFalse(session.isOffRoute)
+        XCTAssertEqual(session.diagnostics.rerouteRequests, 0)
+
+        // Sample 3 at t = 2.1s (elapsed 2.1s >= 2.0s dwell) -> confirms off-route!
+        time = time.addingTimeInterval(1.1)
+        let loc3 = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 21.0030, longitude: 105.80012),
+            altitude: 10.0,
+            horizontalAccuracy: 4.0,
+            verticalAccuracy: 4.0,
+            course: 0.0,
+            speed: 8.5,
+            timestamp: time
+        )
+        session.ingestLocation(loc3)
+
+        // Asserts:
+        // 1. Confirmed off-route within bounded latency (~2.1s)
+        XCTAssertEqual(session.offRouteState, .confirmed)
+        XCTAssertTrue(session.isOffRoute)
+        XCTAssertEqual(session.offRouteDecision?.reason, .persistentModerateLateralDeviation)
+
+        // 2. Exactly one reroute request starts
+        XCTAssertEqual(session.diagnostics.rerouteRequests, 1)
+        XCTAssertTrue(rerouteManager.isRerouting)
+
+        // Wait for async task to record routing origin
+        for _ in 0..<30 {
+            if routingService.lastOrigin != nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        // 3. Reroute origin equals latest acceptedPhysicalLocation
+        XCTAssertNotNil(routingService.lastOrigin)
+        XCTAssertEqual(routingService.lastOrigin?.latitude ?? 0, loc3.coordinate.latitude, accuracy: 1e-5)
+        XCTAssertEqual(routingService.lastOrigin?.longitude ?? 0, loc3.coordinate.longitude, accuracy: 1e-5)
+        XCTAssertEqual(session.acceptedPhysicalLocation?.coordinate.latitude ?? 0, loc3.coordinate.latitude, accuracy: 1e-5)
+
+        // 4. Single-flight behavior: feeding another observation while rerouting does not launch duplicate request
+        time = time.addingTimeInterval(0.5)
+        let loc4 = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 21.0034, longitude: 105.80012),
+            altitude: 10.0,
+            horizontalAccuracy: 4.0,
+            verticalAccuracy: 4.0,
+            course: 0.0,
+            speed: 8.5,
+            timestamp: time
+        )
+        session.ingestLocation(loc4)
+        XCTAssertEqual(session.diagnostics.rerouteRequests, 1, "Single-flight guard must prevent duplicate reroute request")
+    }
+
+    func testCloseParallelRoads_PoorGPS_DoesNotInstantlyConfirmOffRoute() {
         let coordsA = [
             CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8000),
             CLLocationCoordinate2D(latitude: 21.005, longitude: 105.8000)
@@ -140,27 +258,27 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
 
         var time = baseDate
 
-        for i in 1...6 {
-            let lat = 21.001 + Double(i) * 0.0004
+        // Same 12.5m separation, but horizontalAccuracy = 14.0m
+        // moderateThreshold = max(10.0, 14.0 * 1.5) = 21.0m > 12.5m
+        // enterThreshold = max(15.0, 14.0 * 1.2) = 16.8m > 12.5m
+        // Vehicle must remain onRoute!
+        for i in 1...4 {
+            let lat = 21.001 + Double(i) * 0.0008
             let loc = CLLocation(
                 coordinate: CLLocationCoordinate2D(latitude: lat, longitude: 105.80012),
                 altitude: 10.0,
-                horizontalAccuracy: 4.0,
+                horizontalAccuracy: 14.0,
                 verticalAccuracy: 4.0,
                 course: 0.0,
-                speed: 8.0,
+                speed: 8.5,
                 timestamp: time
             )
             session.ingestLocation(loc)
             time = time.addingTimeInterval(1.0)
         }
 
-        let rawNearest = route.geometry.nearestProjection(to: CLLocationCoordinate2D(latitude: 21.003, longitude: 105.80012))
-        XCTAssertNotNil(rawNearest)
-        XCTAssertEqual(rawNearest!.lateralDistanceMeters, 12.5, accuracy: 2.0)
-
-        XCTAssertNotNil(session.acceptedPhysicalLocation)
-        XCTAssertEqual(session.acceptedPhysicalLocation?.coordinate.longitude ?? 0, 105.80012, accuracy: 1e-5)
+        XCTAssertEqual(session.offRouteState, .onRoute, "Poor GPS accuracy (14m) scales thresholds and prevents premature off-route confirmation")
+        XCTAssertFalse(session.isOffRoute)
     }
 
     // MARK: - Test 4: Bridge / Underpass Self-Near Geometry (Requirement 46)
@@ -304,5 +422,30 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         }
 
         XCTAssertLessThanOrEqual(session.remainingPolyline.count, 6)
+    }
+}
+
+
+private final class ParallelTestRecordingRoutingService: RoutingServiceProtocol, @unchecked Sendable {
+    var lastOrigin: CLLocationCoordinate2D?
+
+    func calculateRoute(
+        from origin: CLLocationCoordinate2D,
+        to destination: CLLocationCoordinate2D,
+        costing: String
+    ) async throws -> NavRoute {
+        lastOrigin = origin
+        let coords = [origin, destination]
+        let step = NavStep(
+            coordinate: destination,
+            distanceMeters: 100.0,
+            durationSeconds: 10.0,
+            streetName: "Đường mới",
+            maneuverType: .arrive,
+            instruction: "Đến đích",
+            beginShapeIndex: 0,
+            endShapeIndex: 1
+        )
+        return NavRoute(coordinates: coords, steps: [step], totalDistanceMeters: 100.0, totalDurationSeconds: 10.0)
     }
 }

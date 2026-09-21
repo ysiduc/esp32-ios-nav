@@ -513,4 +513,90 @@ final class RouteGeometryTests: XCTestCase {
         XCTAssertEqual(remainingB, routeB.geometry.totalDistanceMeters - (projB?.distanceAlongRouteMeters ?? 0), accuracy: 1e-4)
         XCTAssertGreaterThan(remainingB, 900.0) // On Route B (~980m remaining), whereas Route A was only 500m total!
     }
+
+    // MARK: - Tests for coordinate(atDistanceAlongRoute:) & Authoritative Trimming (Requirements 3, 4, 5)
+
+    func testCoordinateAtDistanceAlongRoute_PureHelperInterpolatesCorrectly() {
+        let coords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.010, longitude: 105.800) // ~1113m north
+        ]
+        let geom = RouteGeometry(coordinates: coords)
+        let totalDist = geom.totalDistanceMeters
+
+        // 1. At start (0m)
+        let atStart = geom.coordinate(atDistanceAlongRoute: 0.0)
+        XCTAssertNotNil(atStart)
+        XCTAssertEqual(atStart!.latitude, 21.000, accuracy: 1e-6)
+        XCTAssertEqual(atStart!.longitude, 105.800, accuracy: 1e-6)
+
+        // 2. Negative distance clamps to start
+        let atNeg = geom.coordinate(atDistanceAlongRoute: -50.0)
+        XCTAssertNotNil(atNeg)
+        XCTAssertEqual(atNeg!.latitude, 21.000, accuracy: 1e-6)
+
+        // 3. At end (totalDist)
+        let atEnd = geom.coordinate(atDistanceAlongRoute: totalDist)
+        XCTAssertNotNil(atEnd)
+        XCTAssertEqual(atEnd!.latitude, 21.010, accuracy: 1e-6)
+        XCTAssertEqual(atEnd!.longitude, 105.800, accuracy: 1e-6)
+
+        // 4. Beyond total distance clamps to end
+        let atBeyond = geom.coordinate(atDistanceAlongRoute: totalDist + 500.0)
+        XCTAssertNotNil(atBeyond)
+        XCTAssertEqual(atBeyond!.latitude, 21.010, accuracy: 1e-6)
+
+        // 5. At midpoint
+        let atMid = geom.coordinate(atDistanceAlongRoute: totalDist / 2.0)
+        XCTAssertNotNil(atMid)
+        XCTAssertEqual(atMid!.latitude, 21.005, accuracy: 1e-5)
+        XCTAssertEqual(atMid!.longitude, 105.800, accuracy: 1e-6)
+    }
+
+    func testTrimmedPolyline_FirstCoordinateMatchesAuthoritativeDistance() {
+        let coords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.005, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.010, longitude: 105.800)
+        ]
+        let geom = RouteGeometry(coordinates: coords)
+        let targetDist = 300.0
+
+        let expectedCoord = geom.coordinate(atDistanceAlongRoute: targetDist)!
+        let trimmed = geom.trimmedPolyline(from: targetDist)
+
+        XCTAssertFalse(trimmed.isEmpty)
+        let firstCoord = trimmed.first!
+        XCTAssertEqual(firstCoord.latitude, expectedCoord.latitude, accuracy: 1e-6)
+        XCTAssertEqual(firstCoord.longitude, expectedCoord.longitude, accuracy: 1e-6)
+    }
+
+    func testTrimmedPolyline_StaleProjectionFallbackDoesNotRegressFirstCoordinate() {
+        // Multi-segment route: 500m total
+        let coords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.8000),
+            CLLocationCoordinate2D(latitude: 21.001, longitude: 105.8000), // ~111m
+            CLLocationCoordinate2D(latitude: 21.002, longitude: 105.8000), // ~222m
+            CLLocationCoordinate2D(latitude: 21.004, longitude: 105.8000)  // ~445m
+        ]
+        let geom = RouteGeometry(coordinates: coords)
+
+        // Display progress = 150m
+        let displayProgress = 150.0
+        let coordAt150 = geom.coordinate(atDistanceAlongRoute: displayProgress)!
+
+        // Stale projection from noisy backward snap at 80m
+        let coordAt80 = geom.coordinate(atDistanceAlongRoute: 80.0)!
+
+        // Authoritative trimmed polyline is derived from displayProgress (150m)
+        let trimmed = geom.trimmedPolyline(from: displayProgress)
+        let firstTrimmed = trimmed.first!
+
+        // First point MUST be near 150m and MUST NOT be near 80m
+        let distTo150 = RouteGeometry.distanceBetween(firstTrimmed, coordAt150)
+        let distTo80 = RouteGeometry.distanceBetween(firstTrimmed, coordAt80)
+
+        XCTAssertLessThan(distTo150, 0.5, "Trimmed polyline must begin exactly at display progress (150m)")
+        XCTAssertGreaterThan(distTo80, 60.0, "Trimmed polyline must NOT begin at stale projection (80m)")
+    }
 }

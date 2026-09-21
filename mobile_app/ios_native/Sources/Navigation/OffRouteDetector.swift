@@ -11,15 +11,41 @@ import CoreLocation
 /// Input observation from the location pipeline (physical raw/filtered GPS + route projection).
 public struct OffRouteObservation: Sendable, Equatable {
     public let timestamp: Date
-    public let lateralDistanceMeters: Double
+    public let matchedProjectionLateralDistanceMeters: Double
+    public let rawPhysicalRouteDistanceMeters: Double
     public let horizontalAccuracyMeters: Double
     public let speedMetersPerSecond: Double
     public let courseDegrees: Double?
     public let routeBearingDegrees: Double?
     public let distanceAlongRouteMeters: Double
-    public let rawNearestRouteDistanceMeters: Double
     public let isMatcherStuck: Bool
 
+    public var lateralDistanceMeters: Double { matchedProjectionLateralDistanceMeters }
+    public var rawNearestRouteDistanceMeters: Double { rawPhysicalRouteDistanceMeters }
+
+    public init(
+        timestamp: Date,
+        matchedProjectionLateralDistanceMeters: Double = 0.0,
+        rawPhysicalRouteDistanceMeters: Double = 0.0,
+        horizontalAccuracyMeters: Double,
+        speedMetersPerSecond: Double,
+        courseDegrees: Double? = nil,
+        routeBearingDegrees: Double? = nil,
+        distanceAlongRouteMeters: Double = 0.0,
+        isMatcherStuck: Bool = false
+    ) {
+        self.timestamp = timestamp
+        self.matchedProjectionLateralDistanceMeters = matchedProjectionLateralDistanceMeters
+        self.rawPhysicalRouteDistanceMeters = rawPhysicalRouteDistanceMeters
+        self.horizontalAccuracyMeters = horizontalAccuracyMeters
+        self.speedMetersPerSecond = speedMetersPerSecond
+        self.courseDegrees = courseDegrees
+        self.routeBearingDegrees = routeBearingDegrees
+        self.distanceAlongRouteMeters = distanceAlongRouteMeters
+        self.isMatcherStuck = isMatcherStuck
+    }
+
+    /// Backward-compatible initializer for existing callers and tests
     public init(
         timestamp: Date,
         lateralDistanceMeters: Double,
@@ -32,13 +58,13 @@ public struct OffRouteObservation: Sendable, Equatable {
         isMatcherStuck: Bool = false
     ) {
         self.timestamp = timestamp
-        self.lateralDistanceMeters = lateralDistanceMeters
+        self.matchedProjectionLateralDistanceMeters = lateralDistanceMeters
+        self.rawPhysicalRouteDistanceMeters = rawNearestRouteDistanceMeters > 0.0 ? rawNearestRouteDistanceMeters : lateralDistanceMeters
         self.horizontalAccuracyMeters = horizontalAccuracyMeters
         self.speedMetersPerSecond = speedMetersPerSecond
         self.courseDegrees = courseDegrees
         self.routeBearingDegrees = routeBearingDegrees
         self.distanceAlongRouteMeters = distanceAlongRouteMeters
-        self.rawNearestRouteDistanceMeters = rawNearestRouteDistanceMeters
         self.isMatcherStuck = isMatcherStuck
     }
 }
@@ -58,6 +84,7 @@ public enum OffRouteReason: String, Sendable, Equatable {
     case strongLateralDeviation
     case lowSpeedDriftDwell
     case stuckMatcherDeviation
+    case persistentModerateLateralDeviation
     case recoveredToRoute
 }
 
@@ -101,6 +128,7 @@ public struct OffRouteDetectorConfig: Sendable {
     public var courseMismatchAngleDegrees: Double
     public var minSpeedForCourseMetersPerSecond: Double
     public var recoveryDwellSeconds: Double
+    public var moderateDeviationDwellSeconds: Double
 
     public init(
         baseEnterThresholdMeters: Double = 15.0,
@@ -114,7 +142,8 @@ public struct OffRouteDetectorConfig: Sendable {
         strongDeviationMaxAccuracyMeters: Double = 15.0,
         courseMismatchAngleDegrees: Double = 45.0,
         minSpeedForCourseMetersPerSecond: Double = 3.0,
-        recoveryDwellSeconds: Double = 1.0
+        recoveryDwellSeconds: Double = 1.0,
+        moderateDeviationDwellSeconds: Double = 2.0
     ) {
         self.baseEnterThresholdMeters = baseEnterThresholdMeters
         self.accuracyMultiplier = accuracyMultiplier
@@ -128,6 +157,7 @@ public struct OffRouteDetectorConfig: Sendable {
         self.courseMismatchAngleDegrees = courseMismatchAngleDegrees
         self.minSpeedForCourseMetersPerSecond = minSpeedForCourseMetersPerSecond
         self.recoveryDwellSeconds = recoveryDwellSeconds
+        self.moderateDeviationDwellSeconds = moderateDeviationDwellSeconds
     }
 }
 
@@ -157,16 +187,19 @@ public final class OffRouteDetector: @unchecked Sendable {
             enterThreshold * 0.65
         )
 
-        // Effective physical distance uses pure raw nearest distance if available and larger
-        let effectivePhysicalDistance = max(observation.lateralDistanceMeters, observation.rawNearestRouteDistanceMeters)
+        // Primary physical distance derives from accepted physical GPS to pure route geometry (P5.2.1 Requirements 15 & 16)
+        let physicalDistance = observation.rawPhysicalRouteDistanceMeters
+
+        // Quality-aware moderate lateral threshold for parallel road / service road detection (P5.2.1 Requirements 10, 11, 12)
+        let moderateThreshold = max(10.0, observation.horizontalAccuracyMeters * 1.5)
 
         switch state {
         case .onRoute:
             var suspicionTriggered = false
             var initialReason: OffRouteReason = .none
 
-            // Signal A: Lateral or pure raw nearest distance exceeds physical enter threshold
-            if effectivePhysicalDistance > enterThreshold {
+            // Signal A: Pure raw physical route distance exceeds standard physical enter threshold
+            if physicalDistance > enterThreshold {
                 suspicionTriggered = true
                 initialReason = .sustainedLateralDeviation
             }
@@ -176,14 +209,14 @@ public final class OffRouteDetector: @unchecked Sendable {
                let course = observation.courseDegrees, course >= 0.0,
                let bearing = observation.routeBearingDegrees {
                 let diff = angularDifferenceDegrees(course, bearing)
-                if diff >= config.courseMismatchAngleDegrees && effectivePhysicalDistance >= 8.0 {
+                if diff >= config.courseMismatchAngleDegrees && physicalDistance >= 8.0 {
                     suspicionTriggered = true
                     initialReason = .courseDivergence
                 }
             }
 
             // Signal C: Stuck matcher progress while physical GPS advances
-            if !suspicionTriggered && observation.isMatcherStuck && effectivePhysicalDistance >= 8.0 {
+            if !suspicionTriggered && observation.isMatcherStuck && physicalDistance >= 8.0 {
                 suspicionTriggered = true
                 initialReason = .stuckMatcherDeviation
             }
@@ -193,10 +226,19 @@ public final class OffRouteDetector: @unchecked Sendable {
                let course = observation.courseDegrees, course >= 0.0,
                let bearing = observation.routeBearingDegrees {
                 let diff = angularDifferenceDegrees(course, bearing)
-                if diff >= 45.0 && effectivePhysicalDistance >= 10.0 {
+                if diff >= 45.0 && physicalDistance >= 10.0 {
                     suspicionTriggered = true
                     initialReason = .courseDivergence
                 }
+            }
+
+            // Signal E: Persistent moderate physical deviation for same-direction parallel roads (P5.2.1)
+            if !suspicionTriggered &&
+               observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
+               observation.horizontalAccuracyMeters <= 20.0 &&
+               physicalDistance >= moderateThreshold {
+                suspicionTriggered = true
+                initialReason = .persistentModerateLateralDeviation
             }
 
             if suspicionTriggered {
@@ -208,7 +250,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: false,
                     recovered: false,
                     reason: initialReason,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: enterThreshold
                 )
             } else {
@@ -217,14 +259,14 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: false,
                     recovered: false,
                     reason: .none,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: enterThreshold
                 )
             }
 
         case .suspected:
-            // If observation returned below recovery threshold, immediately abort suspicion (spike protection)
-            if effectivePhysicalDistance <= recoveryThreshold {
+            // If observation returned below recovery threshold, immediately abort suspicion (spike & planned sharp turn protection)
+            if physicalDistance <= recoveryThreshold {
                 state = .onRoute
                 suspectStartedAt = nil
                 recoveryStartedAt = nil
@@ -233,7 +275,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: false,
                     recovered: true,
                     reason: .recoveredToRoute,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: recoveryThreshold
                 )
             }
@@ -242,7 +284,11 @@ public final class OffRouteDetector: @unchecked Sendable {
             let elapsedSuspect = max(0.0, observation.timestamp.timeIntervalSince(suspectStartTime))
 
             // Determine required dwell time and reason
-            let (requiredDwell, reason) = determineDwellAndReason(observation: observation, effectiveDistance: effectivePhysicalDistance)
+            let (requiredDwell, reason) = determineDwellAndReason(
+                observation: observation,
+                physicalDistance: physicalDistance,
+                moderateThreshold: moderateThreshold
+            )
 
             if elapsedSuspect >= requiredDwell {
                 state = .confirmed
@@ -251,7 +297,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: true,
                     recovered: false,
                     reason: reason,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: enterThreshold
                 )
             } else {
@@ -260,14 +306,14 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: false,
                     recovered: false,
                     reason: reason,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: enterThreshold
                 )
             }
 
         case .confirmed:
             // While confirmed, evaluate recovery with hysteresis and dwell
-            if effectivePhysicalDistance <= recoveryThreshold {
+            if physicalDistance <= recoveryThreshold {
                 let recStartTime = recoveryStartedAt ?? observation.timestamp
                 if recoveryStartedAt == nil {
                     recoveryStartedAt = observation.timestamp
@@ -283,7 +329,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                         becameConfirmed: false,
                         recovered: true,
                         reason: .recoveredToRoute,
-                        lateralDistanceMeters: effectivePhysicalDistance,
+                        lateralDistanceMeters: physicalDistance,
                         activeThresholdMeters: recoveryThreshold
                     )
                 } else {
@@ -292,7 +338,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                         becameConfirmed: false,
                         recovered: false,
                         reason: .none,
-                        lateralDistanceMeters: effectivePhysicalDistance,
+                        lateralDistanceMeters: physicalDistance,
                         activeThresholdMeters: recoveryThreshold
                     )
                 }
@@ -303,7 +349,7 @@ public final class OffRouteDetector: @unchecked Sendable {
                     becameConfirmed: false,
                     recovered: false,
                     reason: .sustainedLateralDeviation,
-                    lateralDistanceMeters: effectivePhysicalDistance,
+                    lateralDistanceMeters: physicalDistance,
                     activeThresholdMeters: enterThreshold
                 )
             }
@@ -322,10 +368,11 @@ public final class OffRouteDetector: @unchecked Sendable {
 
     private func determineDwellAndReason(
         observation: OffRouteObservation,
-        effectiveDistance: Double
+        physicalDistance: Double,
+        moderateThreshold: Double
     ) -> (Double, OffRouteReason) {
         // 1. Strong deviation fast track
-        if effectiveDistance >= config.strongDeviationThresholdMeters &&
+        if physicalDistance >= config.strongDeviationThresholdMeters &&
            observation.horizontalAccuracyMeters <= config.strongDeviationMaxAccuracyMeters {
             return (config.strongDeviationDwellSeconds, .strongLateralDeviation)
         }
@@ -345,12 +392,19 @@ public final class OffRouteDetector: @unchecked Sendable {
             return (config.courseDivergenceDwellSeconds, .stuckMatcherDeviation)
         }
 
-        // 4. Normal vehicle motion
+        // 4. Moderate parallel deviation with good GPS (P5.2.1)
+        if observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
+           observation.horizontalAccuracyMeters <= 20.0 &&
+           physicalDistance >= moderateThreshold {
+            return (config.moderateDeviationDwellSeconds, .persistentModerateLateralDeviation)
+        }
+
+        // 5. Normal vehicle motion
         if observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond {
             return (config.standardDwellSeconds, .sustainedLateralDeviation)
         }
 
-        // 5. Low speed / stationary motion
+        // 6. Low speed / stationary motion
         return (config.stationaryDwellSeconds, .lowSpeedDriftDwell)
     }
 

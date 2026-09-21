@@ -205,10 +205,11 @@ Total native tests: **237 / 237 PASS**.
 | **Stuck Matcher Physical Travel** | `>= 25.0m` over <= 3.5s | Corresponds to ~2.5s of urban motorcycle movement (10 m/s). |
 | **Stuck Matcher Matched Progress** | `<= 6.0m` | Indicates the matcher is pinned on an orthogonal or stale segment while physical motion occurs. |
 | **Backward Tolerance** | `2.0m` | Filters minor GPS jitter (<2m) without locking legitimate reversals. |
-| **Course Mismatch Threshold** | `>= 50.0°` at speed `>= 3.0 m/s` | Compass fluctuates when stationary, but above 3 m/s, >50° mismatch indicates wrong turn. |
+| **Course Mismatch Threshold** | `>= 45.0°` at speed `>= 3.0 m/s` | Authoritative production threshold in `OffRouteDetectorConfig`. |
 | **Course Divergence Moving Dwell** | `1.0s` | Reaches target ~1.0–1.5s total confirmation latency on real-world wrong turns. |
-| **Strong Deviation Dwell** | `1.0s` (lateral >= 25m, acc <= 15m) | High physical separation with good GPS warrants rapid confirmation. |
-| **Standard Moving Dwell** | `1.8s` (speed >= 3.0 m/s) | Balanced between responsiveness and noise suppression. |
+| **Strong Deviation Threshold & Dwell** | `40.0m` / `1.0s` (acc <= 15m) | High physical separation with good GPS warrants rapid confirmation. |
+| **Standard Moving Dwell** | `2.5s` (speed >= 3.0 m/s) | Balanced between responsiveness and noise suppression. |
+| **Moderate Deviation Threshold & Dwell** | `max(10.0m, acc * 1.5)` / `2.0s` | Parallel-road / service-road detection scaled by GPS accuracy. |
 | **Stationary Dwell** | `5.0s` (speed < 2.5 m/s) | Prevents urban canyon multipath drift at traffic lights from triggering reroutes. |
 | **Maneuver Pass Tolerance** | `2.0m` | Advances instruction immediately once junction is crossed without lingering. |
 | **GPS Accuracy Threshold** | `20.0m` | Kept strictly at accepted limit; rejects poor multipath noise. |
@@ -219,7 +220,7 @@ Total native tests: **237 / 237 PASS**.
 
 - **Implementation SHA**: `7869f5f2a2a6a5fb3da9754194d4c109d592d5dc`
 - **Workflow Run ID**: `35592469883`
-- **Native Unit Tests**: 237 / 237 PASS (0 failures, 237 executed across 18 test suites)
+- **Native Unit Tests**: 237 / 237 PASS (0 failures, 237 executed across 22 named test suites)
 - **Native Release Build**: SUCCESS
 - **Native IPA Package**: SUCCESS
 - **Flutter iOS Build**: SUCCESS
@@ -232,3 +233,91 @@ Simulator and replay test suites validate deterministic logic, but field validat
 1. Re-test navigation along Kim Đồng through the Giải Phóng underpass to verify tunnel instruction advances immediately upon exit.
 2. Intentionally take wrong turns onto parallel and cross streets to verify reroute recalculation initiates within ~1.0–1.5 seconds.
 3. Observe route polyline during normal driving to confirm already-driven sections disappear continuously.
+
+
+## 16. P5.2.1 Reviewer Corrections
+
+External audit and field analysis identified remaining edge cases in P5.2 that required targeted architectural corrections:
+
+### 16.1 Authoritative Route Trimming & Pure Geometry Helper
+- **Defect**: `trimmedPolyline` previously accepted an optional `snappedCoordinate` that could override the first polyline point with a stale projection (e.g. projection briefly regressed to 80m while display progress was 150m), causing driven geometry to reappear behind the vehicle.
+- **Correction**:
+  - Implemented pure geometry helper:
+    ```swift
+    func coordinate(atDistanceAlongRoute distance: Double) -> CLLocationCoordinate2D?
+    ```
+  - `trimmedPolyline(from:)` derives its start point strictly from `displayProgressDistanceAlongRoute` without allowing mismatched projections to override it.
+  - Validated by unit tests asserting exact first coordinate matches the distance along route within 1e-6 lat/lon tolerance.
+
+### 16.2 Strictly Monotonic Display Progress
+- **Defect**: Progress allowed a 2.0m backward slip per frame (`max(displayProgressDistance - 2.0, rawMatchedProgress)`), allowing up to 20m cumulative regression over 10 frames.
+- **Correction**: Enforced strictly non-decreasing display progress on active routes:
+  ```swift
+  displayProgressDistance = max(displayProgressDistance, rawMatchedProgress)
+  ```
+  Progress resets strictly on route lifecycle events (`startNavigation`, `replaceActiveRoute`, `stopNavigation`, `clearRoute`).
+
+### 16.3 Same-Direction Parallel-Road Detection
+- **Defect**: When traveling on a parallel service road (12–13m away) in the same direction, course mismatch was ~0° and matcher progressed along planned geometry. Because distance was below 15m, all detection signals were false, leaving navigation stuck in `.onRoute` indefinitely.
+- **Correction**:
+  - Added quality-aware moderate threshold:
+    ```swift
+    let moderateThreshold = max(10.0, observation.horizontalAccuracyMeters * 1.5)
+    ```
+  - When vehicle is moving (`speed >= 3.0 m/s`), GPS accuracy is good (`<= 20.0m`), and raw physical distance exceeds `moderateThreshold`, the detector enters `.suspected` with reason `.persistentModerateLateralDeviation`.
+  - Confirms within `moderateDeviationDwellSeconds` (2.0s), initiating exactly one reroute request with origin equal to `acceptedPhysicalLocation`.
+  - On noisy GPS (e.g. 14m accuracy), `moderateThreshold` scales up to 21.0m, preventing false reroutes.
+
+### 16.4 Separation of Physical Distance and Continuity Matched Distance
+- **Defect**: Detector previously evaluated `max(lateralDistanceMeters, rawNearestRouteDistanceMeters)` and treated the result as physical truth.
+- **Correction**:
+  - Separated `rawPhysicalRouteDistanceMeters` (from pure Euclidean nearest projection) from `matchedProjectionLateralDistanceMeters` (continuity-constrained matcher).
+  - Primary physical deviation derives strictly from `rawPhysicalRouteDistanceMeters`.
+  - Protects planned 90° sharp turns: when turning onto the next segment, raw physical distance to the new segment is small (<3m), preventing false off-route triggers even if the matcher temporarily trails on the prior segment.
+
+### 16.5 Physical-to-Physical Diagnostic Displacement
+- **Defect**: `FieldNavigationTraceSnapshot.physicalDisplacement` previously calculated distance from `lastProjection.coordinate` to raw GPS.
+- **Correction**:
+  - Maintained `previousAcceptedPhysicalLocation` in `NavigationSessionManager`.
+  - Computes physical-to-physical displacement:
+    ```swift
+    physicalDisplacement = RouteGeometry.distanceBetween(prevPhysical.coordinate, loc.coordinate)
+    ```
+  - Verified by unit tests confirming physical GPS displacement is reported accurately regardless of matcher lag.
+
+### 16.6 Arrival Map Presentation & Route Polyline Clearing
+- **Defect**: Upon arrival (`state == .arrived`, `isNavigating == false`), `MapViewContainer` fell back to drawing full `activeRoute.coordinates`, redrawing the complete historical route over the arrival screen.
+- **Correction**:
+  - Introduced explicit presentation enum:
+    ```swift
+    public enum RouteMapPresentation: Sendable, Equatable {
+        case none, preview, navigating, arrived
+    }
+    ```
+  - When `presentationMode == .arrived`, `displayCoords` is empty and matched puck is removed.
+  - `remainingPolyline` is explicitly cleared to `[]` on arrival.
+
+### 16.7 Route Progression During Pending Reroutes
+- Verified that while `isRerouting == true` and a reroute request is pending, incoming GPS samples continue updating `displayProgressDistanceAlongRoute` and trimming `remainingPolyline` without freezing the UI.
+
+### 16.8 Exact Production Detector Configuration Parity
+- Locked all production constants via explicit regression test `testOffRouteDetectorConfigProductionDefaults`:
+  - `baseEnterThresholdMeters = 15.0m`
+  - `accuracyMultiplier = 1.2`
+  - `recoveryThresholdMeters = 10.0m`
+  - `standardDwellSeconds = 2.5s`
+  - `courseDivergenceDwellSeconds = 1.0s`
+  - `stationaryDwellSeconds = 5.0s`
+  - `strongDeviationDwellSeconds = 1.0s`
+  - `strongDeviationThresholdMeters = 40.0m`
+  - `strongDeviationMaxAccuracyMeters = 15.0m`
+  - `courseMismatchAngleDegrees = 45.0°`
+  - `minSpeedForCourseMetersPerSecond = 3.0 m/s`
+  - `recoveryDwellSeconds = 1.0s`
+  - `moderateDeviationDwellSeconds = 2.0s`
+
+### 16.9 Current Status
+```text
+CI / deterministic regression PASS — REAL DEVICE VALIDATION PENDING
+```
+*(Field navigation defects remain pending until another physical road test is performed in Hanoi.)*

@@ -38,6 +38,7 @@ public struct MapViewContainer: UIViewRepresentable {
     public let snappedLocation: CLLocationCoordinate2D?
     public let userHeading: Double
     public let isNavigating: Bool
+    public let presentationMode: RouteMapPresentation?
 
     public init(
         route: NavRoute? = nil,
@@ -46,7 +47,8 @@ public struct MapViewContainer: UIViewRepresentable {
         destinationCoord: CLLocationCoordinate2D? = nil,
         snappedLocation: CLLocationCoordinate2D? = nil,
         userHeading: Double = 0,
-        isNavigating: Bool = false
+        isNavigating: Bool = false,
+        presentationMode: RouteMapPresentation? = nil
     ) {
         self.route             = route
         self.routeRenderID     = routeRenderID
@@ -55,6 +57,7 @@ public struct MapViewContainer: UIViewRepresentable {
         self.snappedLocation   = snappedLocation
         self.userHeading       = userHeading
         self.isNavigating      = isNavigating
+        self.presentationMode  = presentationMode
     }
 
     public func makeUIView(context: Context) -> MLNMapView {
@@ -74,32 +77,47 @@ public struct MapViewContainer: UIViewRepresentable {
     public func updateUIView(_ mapView: MLNMapView, context: Context) {
         let c = context.coordinator
 
-        // Determine which polyline coords to draw:
-        // - During navigation: remainingPolyline (trimmed, updates every GPS frame)
-        // - During preview:    full route.coordinates
+        // Determine which polyline coords to draw (P5.2.1 RouteMapPresentation):
+        // - arrived: empty polyline (never redraw full historical route behind arrival overlay)
+        // - navigating: remainingPolyline (trimmed, updates every GPS frame)
+        // - preview: full route.coordinates
+        // - none: empty
         let displayCoords: [CLLocationCoordinate2D]
-        if isNavigating && remainingPolyline.count >= 2 {
-            displayCoords = remainingPolyline
-        } else if let route = route, route.coordinates.count >= 2 {
-            displayCoords = route.coordinates
+        if let mode = presentationMode {
+            switch mode {
+            case .none, .arrived:
+                displayCoords = []
+            case .navigating:
+                displayCoords = remainingPolyline.count >= 2 ? remainingPolyline : []
+            case .preview:
+                displayCoords = (route != nil && route!.coordinates.count >= 2) ? route!.coordinates : []
+            }
         } else {
-            displayCoords = []
+            if isNavigating && remainingPolyline.count >= 2 {
+                displayCoords = remainingPolyline
+            } else if let route = route, route.coordinates.count >= 2 {
+                displayCoords = route.coordinates
+            } else {
+                displayCoords = []
+            }
         }
 
-        c.isNavigating = isNavigating
-        c.userLocationView?.isHidden = isNavigating
+        let effectiveIsNavigating = (presentationMode == .navigating) || (presentationMode == nil && isNavigating)
+        c.isNavigating = effectiveIsNavigating
+        c.userLocationView?.isHidden = effectiveIsNavigating
         c.updatePolyline(displayCoords, on: mapView)
         c.updateDestination(destinationCoord, on: mapView)
-        c.updateMatchedPuck(snappedLocation, isNavigating: isNavigating, on: mapView)
+        c.updateMatchedPuck(snappedLocation, isNavigating: effectiveIsNavigating, on: mapView)
 
         // Navigation tracking mode
-        let wantedMode: MLNUserTrackingMode = isNavigating ? .followWithHeading : .follow
+        let wantedMode: MLNUserTrackingMode = effectiveIsNavigating ? .followWithHeading : .follow
         if mapView.userTrackingMode != wantedMode {
             mapView.setUserTrackingMode(wantedMode, animated: true, completionHandler: nil)
         }
 
         // Zoom to fit on route preview (cached to avoid animating every SwiftUI frame)
-        if !isNavigating, let route = route, route.coordinates.count >= 2 {
+        let isPreview = (presentationMode == .preview) || (presentationMode == nil && !isNavigating)
+        if isPreview, let route = route, route.coordinates.count >= 2 {
             let shouldZoom: Bool
             if let renderID = routeRenderID, !renderID.isEmpty {
                 shouldZoom = c.renderPolicy.shouldZoomToFit(routeIdentifier: renderID)

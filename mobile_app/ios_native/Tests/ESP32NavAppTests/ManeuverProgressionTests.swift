@@ -213,6 +213,12 @@ final class ManeuverProgressionTests: XCTestCase {
         XCTAssertEqual(session.currentManeuverStepIndex, 2, "Once tunnel entrance is passed, upcoming maneuver must advance to post-tunnel road")
         XCTAssertEqual(session.activeProgress.nextStreetName, "Đường Giải Phóng")
 
+        // Link maneuver progression to authoritative route trimming (Requirement 38)
+        XCTAssertFalse(session.remainingPolyline.isEmpty)
+        let firstRemaining = session.remainingPolyline.first!
+        let distAlong = route.geometry.project(location: CLLocation(latitude: firstRemaining.latitude, longitude: firstRemaining.longitude))?.distanceAlongRouteMeters ?? 0.0
+        XCTAssertGreaterThanOrEqual(distAlong, 500.0, "Remaining polyline first coordinate must be at or past tunnel entrance (500m) when instruction advances")
+
         // 3. Past tunnel exit (coord 11, ~1100m) -> completely past tunnel exit (1000m)
         // 500m physical travel at 10 m/s = 50 seconds
         time = time.addingTimeInterval(50.0)

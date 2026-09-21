@@ -7,6 +7,13 @@
 import CoreLocation
 import Foundation
 
+public enum RouteMapPresentation: Sendable, Equatable {
+    case none
+    case preview
+    case navigating
+    case arrived
+}
+
 public enum MapRenderAction: Equatable, Sendable {
     case initialBuild
     case updateShapeInPlace

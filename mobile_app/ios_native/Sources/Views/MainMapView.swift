@@ -26,6 +26,15 @@ public struct MainMapView: View {
         ZStack(alignment: .top) {
 
             // ── Layer 1: Full-screen Map ──────────────────────────────────
+            let presentation: RouteMapPresentation = {
+                switch viewModel.navSession.state {
+                case .navigating: return .navigating
+                case .routePreview: return .preview
+                case .arrived: return .arrived
+                case .idle: return .none
+                }
+            }()
+
             MapViewContainer(
                 route: viewModel.activeRoute,
                 routeRenderID: viewModel.selectedRouteCandidateID,
@@ -33,7 +42,8 @@ public struct MainMapView: View {
                 destinationCoord: viewModel.selectedDestination?.location.coordinate,
                 snappedLocation: viewModel.snappedLocation,
                 userHeading: viewModel.heading,
-                isNavigating: viewModel.isNavigating
+                isNavigating: viewModel.isNavigating,
+                presentationMode: presentation
             )
             .edgesIgnoringSafeArea(.all)
 

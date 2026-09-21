@@ -337,4 +337,90 @@ final class NavigationSessionManagerP51Tests: XCTestCase {
                        "Arrival must not trigger when physicalDist > 15m from destination")
         XCTAssertEqual(session.state, .navigating)
     }
+
+    // ─────────────────────────────────────────────
+    // P5.2.1 Regressions: Trimming, Monotonic Progress, Physical Displacement & Arrival
+    // ─────────────────────────────────────────────
+
+    func testMonotonicDisplayProgress_NoisyBackwardMatchDoesNotDecreaseProgress() {
+        // Northbound route ~1113m total
+        let rCoords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.010, longitude: 105.800)
+        ]
+        let testRoute = NavRoute(
+            coordinates: rCoords,
+            steps: [NavStep(coordinate: rCoords[1], distanceMeters: 1113.0, durationSeconds: 100.0, streetName: "North Ave", maneuverType: .straight, instruction: "Straight")],
+            totalDistanceMeters: 1113.0,
+            totalDurationSeconds: 100.0
+        )
+        session.startNavigation(route: testRoute, destination: NavigationDestination(coordinate: rCoords[1], name: "Dest"))
+
+        var time = Date()
+
+        // 1. Progress to 20m, 40m, 60m along route
+        for step in [0.00018, 0.00036, 0.00054] {
+            time = time.addingTimeInterval(2.0)
+            let loc = makeLocation(lat: 21.000 + step, lon: 105.800, accuracy: 3.0, speed: 10.0, ts: time)
+            session.ingestLocation(loc)
+        }
+
+        let progressAt60 = session.displayProgressDistanceAlongRoute
+        XCTAssertGreaterThanOrEqual(progressAt60, 58.0, "Progress should be around 60m")
+
+        // 2. Inject noisy backward sample corresponding to ~35m (lat 21.000 + 0.00031)
+        time = time.addingTimeInterval(1.0)
+        let noisyBackwardLoc = makeLocation(lat: 21.000 + 0.00031, lon: 105.800, accuracy: 4.0, speed: 10.0, ts: time)
+        session.ingestLocation(noisyBackwardLoc)
+
+        // 3. Assert display progress did NOT regress
+        XCTAssertGreaterThanOrEqual(session.displayProgressDistanceAlongRoute, progressAt60, "Display progress must be strictly non-decreasing along active route")
+
+        // 4. Assert remaining polyline first coordinate is at or beyond 60m
+        XCTAssertFalse(session.remainingPolyline.isEmpty)
+        let firstRemaining = session.remainingPolyline.first!
+        let distAlong = testRoute.geometry.project(location: CLLocation(latitude: firstRemaining.latitude, longitude: firstRemaining.longitude))?.distanceAlongRouteMeters ?? 0.0
+        XCTAssertGreaterThanOrEqual(distAlong, 58.0, "Remaining polyline must not recreate passed route geometry")
+    }
+
+    func testPhysicalDisplacementDiagnostics_MeasuresPhysicalToPhysical() {
+        session.startNavigation(route: route, destination: dest)
+
+        let time1 = Date()
+        let locA = makeLocation(lat: 21.03000, lon: 105.85400, accuracy: 3.0, speed: 5.0, ts: time1)
+        session.ingestLocation(locA)
+
+        // Move physical vehicle ~10 meters north (0.00009 deg lat ≈ 10.0m)
+        let time2 = time1.addingTimeInterval(1.0)
+        let locB = makeLocation(lat: 21.03009, lon: 105.85400, accuracy: 3.0, speed: 5.0, ts: time2)
+        session.ingestLocation(locB)
+
+        let displacement = session.diagnostics.latestFieldTrace?.physicalDisplacement ?? 0.0
+        XCTAssertEqual(displacement, 10.0, accuracy: 1.0, "physicalDisplacement must measure physical GPS A to GPS B")
+        XCTAssertEqual(session.previousAcceptedPhysicalLocation?.coordinate.latitude ?? 0, locA.coordinate.latitude, accuracy: 1e-6)
+        XCTAssertEqual(session.acceptedPhysicalLocation?.coordinate.latitude ?? 0, locB.coordinate.latitude, accuracy: 1e-6)
+    }
+
+    func testArrivalMapPresentation_ClearsPolylineAndDoesNotSelectHistoricalRoute() {
+        let shortRoute = makeRoute(from: startCoord, to: destCoord, distance: 20)
+        session.startNavigation(route: shortRoute, destination: dest)
+
+        // Arrive right at destination (within 5m)
+        let atDestLoc = makeLocation(lat: destCoord.latitude, lon: destCoord.longitude, accuracy: 3.0)
+        session.ingestLocation(atDestLoc)
+
+        XCTAssertEqual(session.state, .arrived)
+        XCTAssertTrue(session.remainingPolyline.isEmpty, "Arrival must clear remainingPolyline")
+
+        // Check RouteMapPresentation mapping
+        let presentation: RouteMapPresentation = {
+            switch session.state {
+            case .navigating: return .navigating
+            case .routePreview: return .preview
+            case .arrived: return .arrived
+            case .idle: return .none
+            }
+        }()
+        XCTAssertEqual(presentation, .arrived)
+    }
 }
