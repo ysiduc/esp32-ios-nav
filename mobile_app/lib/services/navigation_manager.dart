@@ -1,3 +1,4 @@
+import 'background_navigation_coordinator.dart';
 import 'voice_guidance_service.dart';
 import 'dart:async';
 import 'dart:io';
@@ -184,19 +185,11 @@ class NavigationManager extends ChangeNotifier {
   static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
 
   void _enableBackgroundNavigation() {
-    if (Platform.isIOS) {
-      try {
-        _locationChannel.invokeMethod('startBackgroundNavigation');
-      } catch (_) {}
-    }
+    BackgroundNavigationCoordinator.instance.updateState(isNavigating: true);
   }
 
   void _disableBackgroundNavigation() {
-    if (Platform.isIOS) {
-      try {
-        _locationChannel.invokeMethod('stopBackgroundNavigation');
-      } catch (_) {}
-    }
+    BackgroundNavigationCoordinator.instance.updateState(isNavigating: false);
   }
 
   /// Start Real-World Turn-by-Turn Navigation with GPS

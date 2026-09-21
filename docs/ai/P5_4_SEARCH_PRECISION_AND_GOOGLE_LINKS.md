@@ -410,3 +410,57 @@ The resolution pipeline now strictly adheres to the following hierarchy:
   - Native Release Build: **SUCCESS**
   - Native IPA Package & Upload: **SUCCESS** (`esp32_nav_native_ios_ipa`)
 - **Final Acceptance**: P5.4.1.2 Google Maps shortlink structured payload fidelity and iPhone thermal & battery load reduction verified.
+
+---
+
+# PART X — P5.4.1.3: RESTORE SMOOTH ESP JPEG STREAMING, REMOVE CUSTOM VECTOR MAP RENDERER & LIQUID GLASS UI
+
+## 34. Restored Smooth Streaming & Transport Hierarchy
+- **BLE Consumer Fix**: `hasEspDisplayConsumer` previously ignored BLE-only connections, causing the stream loop to stall when Wi-Fi was unavailable. Fixed by checking `activeJpegTransport != EspJpegTransport.none`, explicitly enabling BLE JPEG streaming.
+- **Explicit Transport Hierarchy (`EspJpegTransport`)**:
+  - `wifiWebSocket` (IP 172.20.10.1:8080 Hotspot)
+  - `wifiTcp` (Persistent TCP socket direct to SoftAP)
+  - `ble` (Bluetooth Low Energy chunked transfer)
+  - `none`
+- **Transport-Specific Frame Rates**:
+  - Wi-Fi WebSocket: **14 FPS** foreground (restoring smooth display on TFT), **6 FPS** background (nominal).
+  - Wi-Fi TCP: **12–14 FPS** foreground, **5–6 FPS** background.
+  - BLE: **adaptive 2–5 FPS** foreground based on measured chunk transfer latency (`lastBleTransferDurationMs`), **2–3 FPS** background.
+  - Gradual thermal scaling: `fair` ~80% (11 / 5 FPS), `serious` ~50% (7 / 3 FPS), `critical` minimal/pause (1 / 0 FPS).
+  - Low Power Mode: clamps to <= 8 FPS foreground / <= 4 FPS background.
+- **ACK-Driven Pacing & Backpressure**:
+  - Wi-Fi WebSocket pacing relies on ESP32 ACK ('K') receipt before dispatching the next frame.
+  - Strict 1-in-flight backpressure check occurs *before* rendering and JPEG encoding. If the transport is busy or unacknowledged, ticks are dropped with latest-frame-wins semantics, eliminating render queues and device heat.
+
+## 35. Removal of Custom Vector/Canvas Map Engine & Unified Raster Pipeline
+- **Removed Legacy Engines**:
+  - Removed manual Flutter Canvas path rendering (`_drawRealMapCanvas`).
+  - Removed pure CPU software tile composer (`_renderCpuMapFrame`).
+  - Removed tile caching math, synthetic grid fallback, and manual tile prefetching loops.
+- **Unified Raster Architecture (`EspMapFrameRenderer`)**:
+  - **Foreground source**: Live rendered map snapshot via `mapSnapshotProvider` (hooked to MapLibre's `RepaintBoundary`).
+  - **Background source**: Native iOS `MKMapSnapshotter` via MethodChannel (`renderMapSnapshot`).
+  - **Snapshot Caching**: Caches raster snapshot and refreshes only when vehicle moves >= 10m, heading changes >= 15°, or route/theme changes.
+  - **Intermediate Frames**: Reuses cached snapshot with lightweight overlay (authoritative remaining route polyline + blue vehicle arrow puck) or translation/rotation, delivering smooth TFT motion up to configured FPS without expensive tile re-fetches.
+  - **Adaptive JPEG Quality**: Quality 70 on Wi-Fi (crisp HD TFT) and Quality 45 on BLE (~2-3 KB payload for fast transfer).
+
+## 36. Centralized Background Keep-Alive (`BackgroundNavigationCoordinator`)
+- Consolidated background navigation and audio keep-alive ownership into a single coordinator.
+- Eliminates duplicated or orphaned calls across `BleService`, `EspStreamService`, and `NavigationManager`.
+- Keep-alive is strictly active only when `(isNavigating || isEspStreamRequired) && isBackground`.
+
+## 37. Liquid Glass UI Visual Language
+- **`LiquidGlassContainer` & `LiquidGlassButton`** (`mobile_app/lib/widgets/liquid_glass.dart`):
+  - Translucent frosted glass aesthetic using `BackdropFilter` (blur sigma 20), semi-transparent gradient, thin highlight border (white 0.35 light / 0.18 dark), and soft layered shadow.
+  - Accessibility: respects `MediaQuery.disableAnimations` (reduced motion bypasses GPU `BackdropFilter` filter).
+  - Buttons feature spring scale feedback (0.96) and selected-state glowing blue accents.
+- **Modernized Map Screen Controls** (`mobile_app/lib/screens/map_screen.dart`):
+  - **Top-Left Menu & Weather Group**: Combined into a single cohesive Liquid Glass capsule `[ Menu | 27° Weather ]`.
+  - **Right-Side Control Stack**: Vertical Liquid Glass stack housing Layers, Compass, and Transport Mode (Motorcycle/Car) with subtle separators, accompanied by a floating circular glass Location centering button.
+  - **Bottom Search Capsule**: Sleek frosted glass capsule with magnifying glass, placeholder, voice/mic affordance, and avatar.
+  - **DEBUG Stream Telemetry Overlay**: Floating glass card (toggled by tapping the weather pill) displaying live transport, output FPS, render FPS, snapshot age, JPEG size, ACK latency, and thermal state.
+
+## 38. Deterministic Test Suite
+- Unit & widget test count: **75 / 75 PASS** (0 failures, 0 socket conflicts).
+- Added `test/liquid_glass_test.dart`: verifies glass container backdrop, dark mode adaptation, reduced motion bypass, button taps, and capsule layouts.
+- Updated `test/stream_thermal_test.dart`: covers BLE-only activation, Wi-Fi 14 FPS restoration, background 5-6 FPS, gradual thermal reduction, BLE throughput adaptation, backpressure, and snapshot cache reuse.

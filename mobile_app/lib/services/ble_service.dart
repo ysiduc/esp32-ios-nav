@@ -1,3 +1,4 @@
+import 'background_navigation_coordinator.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -33,6 +34,12 @@ class BleLogItem {
 }
 
 class BleService extends ChangeNotifier {
+  int _lastBleTransferDurationMs = 0;
+  int get lastBleTransferDurationMs => _lastBleTransferDurationMs;
+  void recordBleTransferDuration(int ms) {
+    _lastBleTransferDurationMs = ms;
+  }
+
   // Custom Navigation Service & Characteristic UUIDs (Standard 16-bit UUID / Custom)
   static final Guid navServiceUuid = Guid('0000FFE0-0000-1000-8000-00805F9B34FB');
   static final Guid navCharUuid = Guid('0000FFE1-0000-1000-8000-00805F9B34FB');
@@ -70,6 +77,12 @@ class BleService extends ChangeNotifier {
   // Getters
   bool get isScanning => _isScanning;
   bool get isConnected => _isConnected;
+
+  @visibleForTesting
+  void setConnectedForTesting(bool connected) {
+    _isConnected = connected;
+    notifyListeners();
+  }
   bool get isConnecting => _isConnecting;
   String? get connectedDeviceName => _connectedDeviceName;
   BluetoothDevice? get connectedDevice => _connectedDevice;
@@ -481,19 +494,11 @@ class BleService extends ChangeNotifier {
   static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
 
   void _enableBackgroundKeepAlive() {
-    if (Platform.isIOS) {
-      try {
-        _locationChannel.invokeMethod('startBackgroundNavigation');
-      } catch (_) {}
-    }
+    BackgroundNavigationCoordinator.instance.updateState(isEspStreamRequired: true);
   }
 
   void _disableBackgroundKeepAlive() {
-    if (Platform.isIOS) {
-      try {
-        _locationChannel.invokeMethod('stopBackgroundNavigation');
-      } catch (_) {}
-    }
+    BackgroundNavigationCoordinator.instance.updateState(isEspStreamRequired: false);
   }
 
   /// Start periodic heartbeat to prevent BLE sleep/timeout on iOS

@@ -1,3 +1,5 @@
+import '../widgets/liquid_glass.dart';
+import 'package:flutter/rendering.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
@@ -34,6 +36,9 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  final GlobalKey _mapBoundaryKey = GlobalKey();
+  bool _showDebugOverlay = false;
+
   ml.MapLibreMapController? _mapController;
   final SearchService _searchService = SearchService();
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
@@ -185,6 +190,24 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        final streamService = Provider.of<EspStreamService>(context, listen: false);
+        streamService.mapSnapshotProvider = ({int? width, int? height}) async {
+          try {
+            final boundary = _mapBoundaryKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+            if (boundary == null) return null;
+            final ui.Image image = await boundary.toImage(pixelRatio: 1.0);
+            final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+            image.dispose();
+            return byteData?.buffer.asUint8List();
+          } catch (_) {
+            return null;
+          }
+        };
+      } catch (_) {}
+    });
     _googleLinkController = GoogleLinkResolutionController(
       parser: _googleMapsParser,
       onStateChanged: (state) {
@@ -1031,6 +1054,7 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     final navManager = context.watch<NavigationManager>();
     final bleService = context.watch<BleService>();
+    final streamService = context.watch<EspStreamService>();
     final isDriving = navManager.isNavigating;
     final userPos = navManager.currentLocation ?? _userPosition;
 
@@ -1042,7 +1066,9 @@ class _MapScreenState extends State<MapScreen> {
           // -----------------------------------------------------------
           // 1. MapLibre Native Vector Map (60fps GPU-rendered)
           // -----------------------------------------------------------
-          ml.MapLibreMap(
+          RepaintBoundary(
+            key: _mapBoundaryKey,
+            child: ml.MapLibreMap(
             styleString: _buildMaplibreStyleString(),
             initialCameraPosition: ml.CameraPosition(
               target: ml.LatLng(userPos.latitude, userPos.longitude),
@@ -1067,6 +1093,7 @@ class _MapScreenState extends State<MapScreen> {
             zoomGesturesEnabled: true,
             tiltGesturesEnabled: true,
           ),
+          ),
 
           // -----------------------------------------------------------
           // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
@@ -1077,16 +1104,16 @@ class _MapScreenState extends State<MapScreen> {
                 alignment: Alignment.topLeft,
                 child: Padding(
                   padding: const EdgeInsets.only(left: 16.0, top: 8.0),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildMenuButton(context, bleService),
-                      const SizedBox(width: 8),
-                      _buildAppleWeatherPill(),
-                    ],
-                  ),
+                  child: _buildTopLeftGlassGroup(context, bleService, streamService),
                 ),
               ),
+            ),
+
+          if (_showDebugOverlay)
+            Positioned(
+              left: 16,
+              top: 72,
+              child: _buildDebugOverlay(streamService),
             ),
 
           // -----------------------------------------------------------
@@ -1110,25 +1137,7 @@ class _MapScreenState extends State<MapScreen> {
             Positioned(
               right: 16,
               bottom: _viewMode == 0 ? 95 : 325,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildCircularGlassButton(
-                    icon: Icons.layers_rounded,
-                    tooltip: 'Đổi nền bản đồ',
-                    onTap: _showMapThemePicker,
-                  ),
-                  const SizedBox(height: 10),
-                  _buildCircularGlassButton(
-                    icon: Icons.explore_rounded,
-                    iconColor: const Color(0xFFFF3B30),
-                    tooltip: 'Hướng Bắc',
-                    onTap: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-                  ),
-                  const SizedBox(height: 10),
-                  _buildAppleVerticalControlPill(navManager, isDriving),
-                ],
-              ),
+              child: _buildRightSideGlassStack(navManager, isDriving),
             ),
 
           // -----------------------------------------------------------
@@ -1308,6 +1317,199 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
+
+  // ─────────────────────────────────────────────────────────────
+  // Liquid Glass Floating Controls (P5.4.1.3 Sections 36-45, 64)
+  // ─────────────────────────────────────────────────────────────
+  Widget _buildTopLeftGlassGroup(BuildContext context, BleService bleService, EspStreamService streamService) {
+    return LiquidGlassContainer(
+      radius: 24,
+      blur: 20,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: Stack(
+              alignment: Alignment.center,
+              children: [
+                const Icon(Icons.menu_rounded, color: Color(0xFF1C1C1E), size: 22),
+                if (bleService.isConnected)
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: bleService.isWifiConnected ? const Color(0xFF05FFA1) : const Color(0xFF007AFF),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            tooltip: 'Menu',
+            onPressed: () {
+              if (widget.onOpenMenu != null) {
+                widget.onOpenMenu!();
+              } else {
+                Scaffold.maybeOf(context)?.openDrawer();
+              }
+            },
+          ),
+          Container(
+            width: 1.0,
+            height: 22,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            color: Colors.black.withOpacity(0.12),
+          ),
+          GestureDetector(
+            onTap: () {
+              setState(() => _showDebugOverlay = !_showDebugOverlay);
+            },
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.cloudy_snowing, color: Color(0xFF007AFF), size: 16),
+                  SizedBox(width: 5),
+                  Text(
+                    '27°',
+                    style: TextStyle(
+                      color: Color(0xFF1C1C1E),
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        LiquidGlassContainer(
+          radius: 22,
+          blur: 20,
+          width: 46,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 20),
+                tooltip: 'Đổi nền bản đồ',
+                onPressed: _showMapThemePicker,
+              ),
+              Container(width: 26, height: 0.8, color: Colors.black.withOpacity(0.10)),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 20),
+                tooltip: 'Hướng Bắc',
+                onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
+              ),
+              Container(width: 26, height: 0.8, color: Colors.black.withOpacity(0.10)),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                icon: Icon(
+                  _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+                  color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+                  size: 20,
+                ),
+                tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
+                onPressed: () {
+                  setState(() {
+                    _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
+                  });
+                  if (_selectedPlace != null) {
+                    _calculateRoutesForPlace(_selectedPlace!);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        LiquidGlassButton(
+          size: 46,
+          radius: 23,
+          isSelected: _isAutoCentering,
+          activeGlowColor: const Color(0xFF007AFF),
+          icon: Icon(
+            _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
+            color: const Color(0xFF007AFF),
+            size: 22,
+          ),
+          tooltip: 'Vị trí hiện tại',
+          onTap: () {
+            if (isDriving) {
+              _recenterToVehicle();
+            } else {
+              final current = navManager.currentLocation ?? _userPosition;
+              _mapController?.animateCamera(
+                ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
+              );
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugOverlay(EspStreamService streamService) {
+    return LiquidGlassContainer(
+      radius: 16,
+      blur: 24,
+      padding: const EdgeInsets.all(12),
+      width: 200,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'STREAM TELEMETRY',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF007AFF)),
+              ),
+              GestureDetector(
+                onTap: () => setState(() => _showDebugOverlay = false),
+                child: const Icon(Icons.close_rounded, size: 14, color: Colors.black54),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('Transport: ${streamService.activeJpegTransport.name}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
+          Text('Render FPS: ${streamService.renderFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
+          Text('Target FPS: ${streamService.effectiveTargetFps}', style: const TextStyle(fontSize: 11)),
+          Text('Snapshot age: ${streamService.snapshotAgeMs} ms', style: const TextStyle(fontSize: 11)),
+          Text('JPEG size: ${streamService.frameSizeKb} KB', style: const TextStyle(fontSize: 11)),
+          Text('ACK latency: ${streamService.ackLatencyMs} ms', style: const TextStyle(fontSize: 11)),
+          Text('BLE duration: ${streamService.bleTransferMs} ms', style: const TextStyle(fontSize: 11)),
+          Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
+        ],
+      ),
+    );
+  }
+
   // Apple Maps Top-Left 3-line Menu Button
   // -------------------------------------------------------------
   Widget _buildMenuButton(BuildContext context, BleService bleService) {
@@ -1505,30 +1707,20 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildAppleBottomSearchCapsule() {
     return GestureDetector(
       onTap: _openAppleSearchModal,
-      child: Container(
+      child: LiquidGlassContainer(
         height: 56,
+        radius: 28,
+        blur: 24,
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.14),
-              blurRadius: 20,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
         child: Row(
           children: [
-            const Icon(Icons.search_rounded, color: Colors.black54, size: 24),
+            const Icon(Icons.search_rounded, color: Colors.black87, size: 24),
             const SizedBox(width: 12),
             const Expanded(
               child: Text(
-                'Bản Đồ Apple',
+                'Tìm kiếm điểm đến...',
                 style: TextStyle(
-                  color: Colors.black54,
+                  color: Colors.black87,
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
                   letterSpacing: -0.2,
@@ -1536,11 +1728,10 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.mic_none_rounded, color: Colors.black54, size: 22),
+              icon: const Icon(Icons.mic_none_rounded, color: Colors.black87, size: 22),
               onPressed: _openAppleSearchModal,
             ),
             GestureDetector(
-              
               child: Container(
                 width: 32,
                 height: 32,
