@@ -111,7 +111,7 @@ final class BLESendSchedulerTests: XCTestCase {
     func testUrgentManeuverChange_BypassesDuplicateSuppression() {
         let baseDate = Date()
         let p1 = NavigationProgress(maneuver: .straight, distanceToTurnMeters: 100, remainingDistanceMeters: 500, remainingEtaSeconds: 50, currentSpeedKmh: 30, speedLimitKmh: 0, nextStreetName: "C")
-        let p2 = NavigationProgress(maneuver: .turnLeft, distanceToTurnMeters: 100, remainingDistanceMeters: 500, remainingEtaSeconds: 50, currentSpeedKmh: 30, speedLimitKmh: 0, nextStreetName: "C")
+        let p2 = NavigationProgress(maneuver: .left, distanceToTurnMeters: 100, remainingDistanceMeters: 500, remainingEtaSeconds: 50, currentSpeedKmh: 30, speedLimitKmh: 0, nextStreetName: "C")
 
         let a1 = scheduler.schedule(progress: p1, writeType: .withoutResponse, canSendWithoutResponse: true, now: baseDate)
         if case .send = a1 {} else { XCTFail() }

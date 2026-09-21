@@ -175,8 +175,8 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     private let kalmanQ: Double = 3.0 // process noise (m/s)
 
     // Route progress tracking state
-    private var lastMatchedProjection: RouteProjection?
-    private var lastMatchedTimestamp: Date?
+    public private(set) var lastMatchedProjection: RouteProjection?
+    public private(set) var lastMatchedTimestamp: Date?
 
     private let requestLocationAuthorizationOnInit: Bool
 
