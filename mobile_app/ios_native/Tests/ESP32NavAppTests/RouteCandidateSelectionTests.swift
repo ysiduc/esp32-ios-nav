@@ -609,7 +609,33 @@ final class RouteCandidateSelectionTests: XCTestCase {
         XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, originalDist, "selectRouteCandidate must not alter active navigation route")
     }
 
-    // MARK: - 16. Transport Mode Switch While Navigating Commits New Route
+    // MARK: - 16. Mode Switch While Navigating Preserves Route and Triggers Reroute
+
+    func testTransportModeSwitch_WhileNavigating_PreservesActiveRouteAndTriggersReroute() async {
+        let testDest = GoongPlace(
+            placeID: "dest_1",
+            name: "Hồ Gươm",
+            formattedAddress: "Hà Nội",
+            location: GoongLocation(latitude: coordB.latitude, longitude: coordB.longitude),
+            types: []
+        )
+        viewModel.selectedDestination = testDest
+
+        await viewModel.calculateRoute(to: coordB)
+        viewModel.startNavigation()
+        XCTAssertEqual(navSession.state, .navigating)
+        let activeDist = navSession.activeRoute?.totalDistanceMeters
+
+        // User changes transport mode while actively navigating
+        viewModel.transportMode = "auto"
+        viewModel.recalculateForTransportMode()
+
+        // Active route MUST NOT be cleared immediately; remains active until reroute replaces it
+        XCTAssertEqual(navSession.state, .navigating)
+        XCTAssertEqual(navSession.activeRoute?.totalDistanceMeters, activeDist, "Active navigation route must remain while transport mode reroute is in flight")
+    }
+
+    // MARK: - 17. Transport Mode Switch While Navigating Commits New Route
 
     func testTransportModeSwitch_WhileNavigating_CommitsNewRoute() async throws {
         // 1. Initial preview route A (motorcycle)
