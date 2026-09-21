@@ -255,6 +255,8 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
         XCTAssertEqual(set.candidates.count, 1)
         XCTAssertEqual(set.candidates[0].provider, .mapKit)
         XCTAssertTrue(set.candidates[0].isDegradedFallback)
+        XCTAssertNotNil(set.candidates[0].degradedReason)
+        XCTAssertEqual(set.candidates[0].label, "Đề xuất (Dự phòng)")
 
         // Verify that emergency fallback was queried with requestedAlternatives = 0
         let fallbackCalls = mockRouting.calculateRoutesCalls.filter { $0.profile.id == "motorcycle_standard" }
@@ -342,5 +344,166 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
         XCTAssertEqual(orderA, orderC, "Order in Run A and Run C must be identical")
         XCTAssertEqual(orderA.first, "motorcycle_balanced_0", "Balanced candidate must be primary first")
     }
-}
 
+
+    // MARK: - Requirement 11: Single Valhalla Emergency Success
+
+    func testSingleValhallaEmergencySuccess_ReturnsNonDegradedValhallaCandidate() async throws {
+        let origin = CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800)
+        let dest   = CLLocationCoordinate2D(latitude: 21.030, longitude: 105.800)
+
+        // Mock: All 4 multi-strategies fail, but the emergency single-route request to Valhalla succeeds!
+        mockRouting.onCalculateRoutes = { request in
+            if request.profile.id == "motorcycle_standard" {
+                let r = NavRoute(coordinates: [origin, dest], steps: [], totalDistanceMeters: 3500, totalDurationSeconds: 500)
+                let c = RouteCandidate(
+                    id: "valhalla_emergency_single",
+                    route: r,
+                    provider: .valhalla,
+                    requestedMode: .motorcycle,
+                    profileID: request.profile.id,
+                    isPrimary: true,
+                    isDegradedFallback: false,
+                    degradedReason: nil
+                )
+                return RouteSet(candidates: [c])
+            } else {
+                throw ValhallaRoutingError.noRouteFound("Multi-strategy query failed")
+            }
+        }
+
+        let profile = RoutingProfile.profile(for: .motorcycle)
+        let req = RoutingRequest(origin: origin, destination: dest, profile: profile, requestedAlternatives: 2)
+
+        let set = try await planner.calculateRoutes(request: req)
+
+        XCTAssertEqual(set.candidates.count, 1)
+        let candidate = set.candidates[0]
+        XCTAssertEqual(candidate.provider, .valhalla, "Emergency Valhalla route must retain Valhalla provider")
+        XCTAssertFalse(candidate.isDegradedFallback, "Emergency Valhalla route must not be marked degraded")
+        XCTAssertNil(candidate.degradedReason, "Emergency Valhalla route must not have a degraded reason")
+        XCTAssertEqual(candidate.label, "Đề xuất", "Emergency Valhalla route must be labelled Đề xuất")
+        XCTAssertEqual(candidate.id, "motorcycle_emergency_standard_0")
+    }
+
+    // MARK: - Requirement 13: Emergency Returns Empty Throws NoRouteFound
+
+    func testEmergencyFallback_WhenEmergencyReturnsEmpty_ThrowsNoRouteFound() async {
+        let origin = CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800)
+        let dest   = CLLocationCoordinate2D(latitude: 21.030, longitude: 105.800)
+
+        // Mock: All 4 multi-strategies fail, and emergency request returns empty candidates
+        mockRouting.onCalculateRoutes = { request in
+            if request.profile.id == "motorcycle_standard" {
+                return RouteSet(candidates: [])
+            } else {
+                throw ValhallaRoutingError.noRouteFound("Multi-strategy query failed")
+            }
+        }
+
+        let profile = RoutingProfile.profile(for: .motorcycle)
+        let req = RoutingRequest(origin: origin, destination: dest, profile: profile, requestedAlternatives: 2)
+
+        do {
+            _ = try await planner.calculateRoutes(request: req)
+            XCTFail("Planner must throw error when emergency returns empty candidate set")
+        } catch {
+            XCTAssertTrue(error is ValhallaRoutingError)
+        }
+    }
+
+    // MARK: - Requirement 14 & 9: Provider Metadata Preservation & Inconsistency Guard
+
+    func testNormalizeEmergencyMotorcycleCandidate_PreservesProviderMetadataAndGuardsInconsistencies() throws {
+        let coords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.030, longitude: 105.800)
+        ]
+        let route = NavRoute(coordinates: coords, steps: [], totalDistanceMeters: 3500, totalDurationSeconds: 500)
+
+        // Case 1: Valid Valhalla candidate -> must remain non-degraded with no reason
+        let validValhalla = RouteCandidate(
+            id: "raw_valhalla",
+            route: route,
+            provider: .valhalla,
+            requestedMode: .motorcycle,
+            profileID: "motorcycle_standard",
+            isPrimary: true,
+            isDegradedFallback: false,
+            degradedReason: nil,
+            label: "Đề xuất"
+        )
+        let normValhalla = try MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(validValhalla)
+        XCTAssertEqual(normValhalla.provider, .valhalla)
+        XCTAssertFalse(normValhalla.isDegradedFallback)
+        XCTAssertNil(normValhalla.degradedReason)
+        XCTAssertEqual(normValhalla.label, "Đề xuất")
+
+        // Case 2: Inconsistent Valhalla candidate (marked degraded) -> defensive guard clears degraded flag
+        let inconsistentValhalla = RouteCandidate(
+            id: "raw_valhalla_err",
+            route: route,
+            provider: .valhalla,
+            requestedMode: .motorcycle,
+            profileID: "motorcycle_standard",
+            isPrimary: true,
+            isDegradedFallback: true,
+            degradedReason: "Accidental car warning",
+            label: "Dự phòng"
+        )
+        let normInconsistentValhalla = try MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(inconsistentValhalla)
+        XCTAssertEqual(normInconsistentValhalla.provider, .valhalla)
+        XCTAssertFalse(normInconsistentValhalla.isDegradedFallback, "Valhalla motorcycle route must never be marked degraded")
+        XCTAssertNil(normInconsistentValhalla.degradedReason, "Valhalla motorcycle route must never carry degraded reason")
+        XCTAssertEqual(normInconsistentValhalla.label, "Đề xuất")
+
+        // Case 3: Valid MapKit degraded candidate -> preserves reason and degraded flag
+        let mapKitWithReason = RouteCandidate(
+            id: "raw_mapkit",
+            route: route,
+            provider: .mapKit,
+            requestedMode: .motorcycle,
+            profileID: "motorcycle_standard",
+            isPrimary: true,
+            isDegradedFallback: true,
+            degradedReason: "MapKit không hỗ trợ xe máy",
+            label: "Đề xuất (Dự phòng)"
+        )
+        let normMapKit = try MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(mapKitWithReason)
+        XCTAssertEqual(normMapKit.provider, .mapKit)
+        XCTAssertTrue(normMapKit.isDegradedFallback)
+        XCTAssertEqual(normMapKit.degradedReason, "MapKit không hỗ trợ xe máy")
+        XCTAssertEqual(normMapKit.label, "Đề xuất (Dự phòng)")
+
+        // Case 4: Inconsistent MapKit candidate (not marked degraded) -> defensive guard forces degraded flag for motorcycle
+        let inconsistentMapKit = RouteCandidate(
+            id: "raw_mapkit_unmarked",
+            route: route,
+            provider: .mapKit,
+            requestedMode: .motorcycle,
+            profileID: "motorcycle_standard",
+            isPrimary: true,
+            isDegradedFallback: false,
+            degradedReason: nil,
+            label: "Đề xuất"
+        )
+        let normInconsistentMapKit = try MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(inconsistentMapKit)
+        XCTAssertEqual(normInconsistentMapKit.provider, .mapKit)
+        XCTAssertTrue(normInconsistentMapKit.isDegradedFallback, "MapKit motorcycle approximation must always be marked degraded")
+        XCTAssertNotNil(normInconsistentMapKit.degradedReason)
+        XCTAssertEqual(normInconsistentMapKit.label, "Đề xuất (Dự phòng)")
+
+        // Case 5: Insufficient coordinates (< 2) -> throws noRouteFound
+        let invalidRoute = NavRoute(coordinates: [coords[0]], steps: [], totalDistanceMeters: 0, totalDurationSeconds: 0)
+        let invalidCandidate = RouteCandidate(
+            id: "invalid_candidate",
+            route: invalidRoute,
+            provider: .valhalla,
+            requestedMode: .motorcycle,
+            profileID: "motorcycle_standard",
+            isPrimary: true
+        )
+        XCTAssertThrowsError(try MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(invalidCandidate))
+    }
+
+}

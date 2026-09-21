@@ -233,9 +233,9 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         try Task.checkCancellation()
 
-        // If ALL Valhalla strategies fail, run a single degraded motorcycle fallback request
+        // If ALL Valhalla multi-strategy queries fail, run a single standard motorcycle fallback request
         if strategyResults.isEmpty {
-            print("[MultiStrategy] All Valhalla motorcycle strategies failed; executing single emergency degraded fallback")
+            print("[MultiStrategy] All Valhalla motorcycle strategies failed; executing single emergency fallback")
             let emergencyProfile = RoutingProfile.profile(for: .motorcycle)
             let emergencyRequest = RoutingRequest(
                 origin: request.origin,
@@ -248,17 +248,7 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                 throw ValhallaRoutingError.noRouteFound("Không tìm thấy lộ trình phù hợp từ các chiến lược định tuyến")
             }
 
-            let fallbackCandidate = RouteCandidate(
-                id: "motorcycle_degraded_fallback_0",
-                route: firstFallback.route,
-                provider: firstFallback.provider,
-                requestedMode: .motorcycle,
-                profileID: "motorcycle_degraded_fallback",
-                isPrimary: true,
-                isDegradedFallback: true,
-                degradedReason: "Apple MapKit does not natively support motorcycle routing; automobile route approximation is used.",
-                label: "Đề xuất (Dự phòng)"
-            )
+            let fallbackCandidate = try Self.normalizeEmergencyMotorcycleCandidate(firstFallback)
             return RouteSet(candidates: [fallbackCandidate])
         }
 
@@ -333,4 +323,53 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         return RouteSet(candidates: finalCandidates)
     }
+
+    // MARK: - Emergency Candidate Normalization
+
+    /// Normalizes a single emergency fallback candidate for motorcycle routing, ensuring provider metadata consistency.
+    /// - If the emergency request succeeded with Valhalla, the route is non-degraded with no MapKit warning.
+    /// - If the emergency request fell back to MapKit, the route is marked degraded with the appropriate reason.
+    /// - Inconsistent states (e.g. MapKit motorcycle non-degraded, or Valhalla marked degraded) are normalized defensively.
+    public static func normalizeEmergencyMotorcycleCandidate(
+        _ candidate: RouteCandidate
+    ) throws -> RouteCandidate {
+        guard candidate.route.coordinates.count >= 2 else {
+            throw ValhallaRoutingError.noRouteFound("Lộ trình dự phòng không đủ toạ độ hợp lệ")
+        }
+
+        switch candidate.provider {
+        case .valhalla:
+            let label = (candidate.label.isEmpty || candidate.label.contains("Dự phòng")) ? "Đề xuất" : candidate.label
+            return RouteCandidate(
+                id: "motorcycle_emergency_standard_0",
+                route: candidate.route,
+                provider: .valhalla,
+                requestedMode: .motorcycle,
+                profileID: "motorcycle_emergency_standard",
+                isPrimary: true,
+                isDegradedFallback: false,
+                degradedReason: nil,
+                label: label
+            )
+        case .mapKit:
+            let reason: String
+            if let existing = candidate.degradedReason, !existing.isEmpty {
+                reason = existing
+            } else {
+                reason = "Apple MapKit does not natively support motorcycle routing; automobile route approximation is used."
+            }
+            return RouteCandidate(
+                id: "motorcycle_degraded_fallback_0",
+                route: candidate.route,
+                provider: .mapKit,
+                requestedMode: .motorcycle,
+                profileID: "motorcycle_degraded_fallback",
+                isPrimary: true,
+                isDegradedFallback: true,
+                degradedReason: reason,
+                label: "Đề xuất (Dự phòng)"
+            )
+        }
+    }
+
 }

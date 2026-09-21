@@ -249,7 +249,7 @@ The test suite was expanded and migrated to provider-neutral tests:
 ### 18.3 Motorcycle Valhalla-Only Strategy Isolation & Emergency Fallback
 - **Strict Strategy Profiles**: In `MultiStrategyRoutePlanner`, all motorcycle subprofile requests (`motorcycle_balanced`, `motorcycle_main_roads`, `motorcycle_local`, `motorcycle_low_toll`) are configured with `allowMapKitFallback: false` and `mapKitCapability: .unsupported`.
 - **Zero Car-Route Injection**: Individual motorcycle strategies can only produce `provider == .valhalla` and `isDegradedFallback == false` routes. If an individual Valhalla strategy fails, it is dropped from the candidate pool; MapKit automobile routes are never mixed into motorcycle choices.
-- **Single Degraded Fallback**: Only if all Valhalla strategies fail does the planner execute a single emergency fallback request (`requestedAlternatives = 0`, `isDegradedFallback = true`). It is presented as a single clearly degraded approximation, not multiple pseudo-motorcycle alternatives.
+- **Single Emergency Fallback Request**: Only if all concurrent multi-strategy attempts fail does the planner execute a single standard single-route motorcycle request (`requestedAlternatives = 0`). If Valhalla succeeds for this single route, it is returned as a valid, non-degraded route without any MapKit warning. Only if the single request also fails Valhalla does the underlying service fall back to MapKit, producing a single clearly marked degraded automobile approximation.
 
 ### 18.4 Deterministic Strategy Ordering & Route Ranker
 - **Stable Priority**: Defined explicit strategy priority:
@@ -315,3 +315,39 @@ The test suite was expanded and migrated to provider-neutral tests:
   ```text
   P5.3.1 CORRECTIONS VERIFIED — 238 / 238 TESTS PASS — REAL DEVICE ROAD VALIDATION PENDING
   ```
+
+---
+
+## 19. P5.3.2 Emergency Provider Semantics
+
+### 19.1 Architecture & Problem Context
+In P5.3.1, when all four concurrent multi-strategy queries failed, the emergency fallback request was executed with `profile: RoutingProfile.profile(for: .motorcycle)` and `requestedAlternatives = 0`. However, the planner previously hardcoded `isDegradedFallback = true` and attached an Apple MapKit warning to whatever candidate was returned.
+
+In reality, `ValhallaRoutingService.calculateRoutes()` attempts Valhalla first before falling back to MapKit. A multi-strategy query might fail due to complex alternate constraints, while a single standard request to Valhalla (`alternatives = 0`) can successfully return a genuine Valhalla motorcycle route. Hardcoding `isDegradedFallback = true` incorrectly warned users that a native Valhalla motorcycle route was an automobile approximation.
+
+### 19.2 Pure Emergency Candidate Normalization
+Implemented `MultiStrategyRoutePlanner.normalizeEmergencyMotorcycleCandidate(_:)`:
+- **Case A — Emergency Returns Valhalla**:
+  - `provider`: `.valhalla`
+  - `isDegradedFallback`: `false`
+  - `degradedReason`: `nil`
+  - `label`: `"Đề xuất"`
+  - `profileID`: `"motorcycle_emergency_standard"`
+  - Zero false MapKit warnings displayed to the user.
+- **Case B — Emergency Falls Back to MapKit**:
+  - `provider`: `.mapKit`
+  - `isDegradedFallback`: `true`
+  - `degradedReason`: preserves existing reason if present, or defaults to `"Apple MapKit does not natively support motorcycle routing; automobile route approximation is used."`
+  - `label`: `"Đề xuất (Dự phòng)"`
+  - `profileID`: `"motorcycle_degraded_fallback"`
+- **Defensive Inconsistency Guards**:
+  - If a Valhalla route is received with `isDegradedFallback == true`, the degraded flag is cleared because Valhalla motorcycle routing is native.
+  - If a MapKit route is received with `isDegradedFallback == false`, `isDegradedFallback` is forced to `true` with the explanatory warning because MapKit cannot natively calculate motorcycle routes.
+  - If candidate route geometry has fewer than 2 coordinates, throws `ValhallaRoutingError.noRouteFound`.
+
+### 19.3 Test Suite Expansion
+Added comprehensive unit tests in `MultiStrategyRoutePlannerTests`:
+- `testSingleValhallaEmergencySuccess_ReturnsNonDegradedValhallaCandidate`: Verifies that when multi-strategy fails but single Valhalla succeeds, the resulting route is non-degraded without MapKit warning.
+- `testAllValhallaStrategiesFail_ProducesOneDegradedMapKitFallback`: Verifies that when Valhalla fails completely and falls back to MapKit, the candidate is marked degraded with the warning reason and `"Đề xuất (Dự phòng)"` label.
+- `testEmergencyFallback_WhenEmergencyReturnsEmpty_ThrowsNoRouteFound`: Verifies that if the emergency request yields zero candidates, `noRouteFound` error is thrown without fabricating invalid routes.
+- `testNormalizeEmergencyMotorcycleCandidate_PreservesProviderMetadataAndGuardsInconsistencies`: Directly tests the pure normalizer across Valhalla, MapKit, and inconsistent edge-case inputs.
