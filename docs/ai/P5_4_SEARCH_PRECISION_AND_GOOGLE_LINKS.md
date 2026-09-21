@@ -160,9 +160,20 @@ All tests run deterministically and pass locally:
    - Cancellation generation and stale network resolution rejection.
 
 ## 15. CI Evidence
-- Added step `4b. Run Flutter Unit Tests` (`flutter test --reporter expanded`) in `.github/workflows/build_ios.yml` before Release build.
-- Native baseline preserved: all 241 native tests pass.
-- Flutter test baseline: 38/38 test suites pass.
+- **GitHub Actions Run ID**: `35619674919` (Branch `main`, Commit `8a9cff5`)
+- **Verified Jobs**:
+  1. **Flutter iOS Job** (Job ID `106399293710`): **SUCCESS**
+     - Step `4b. Run Flutter Unit Tests`: **38 / 38 PASS** (`00:32 +38: All tests passed!`)
+     - Step `6. Build iOS Release (No CodeSign)`: **SUCCESS**
+     - Step `7. Package Flutter IPA`: **SUCCESS**
+     - Step `8. Upload Flutter IPA artifact`: **SUCCESS** (`esp32_nav_flutter_ios_ipa`)
+  2. **Native iOS Swift/SwiftUI Job** (Job ID `106399293991`): **SUCCESS**
+     - Step `6. Run Native Unit Tests`: **241 / 241 PASS** (0 failures across all 24 test suites)
+     - Step `7. Build Native iOS App`: **SUCCESS**
+     - Step `8. Package Native IPA`: **SUCCESS**
+     - Step `9. Upload Native IPA artifact`: **SUCCESS** (`esp32_nav_native_ios_ipa`)
+- **Zero Goong references** across entire codebase.
+- **Zero paid Google Places API keys required**.
 
 ## 16. Known Limitations
 - Without Google Places API, not every Google Maps POI identity can be reproduced exactly from place ID alone.
