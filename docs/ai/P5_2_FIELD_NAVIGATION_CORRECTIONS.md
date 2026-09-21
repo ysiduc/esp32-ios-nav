@@ -217,11 +217,9 @@ Total native tests: **237 / 237 PASS**.
 
 ## 14. GitHub Actions Evidence
 
-*(To be recorded following CI execution)*
-
-- **Implementation SHA**:
-- **Workflow Run ID**:
-- **Native Unit Tests**: 237 / 237 PASS (0 failures)
+- **Implementation SHA**: `7869f5f2a2a6a5fb3da9754194d4c109d592d5dc`
+- **Workflow Run ID**: `35592469883`
+- **Native Unit Tests**: 237 / 237 PASS (0 failures, 237 executed across 18 test suites)
 - **Native Release Build**: SUCCESS
 - **Native IPA Package**: SUCCESS
 - **Flutter iOS Build**: SUCCESS
