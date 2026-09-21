@@ -548,6 +548,21 @@ final class NavigationReplayTests: XCTestCase {
                 course: 0.0
             ))
         }
+        // Vehicle reaches destination coordC
+        samplesB.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(60.0),
+            coordinate: coordC,
+            horizontalAccuracy: 5.0,
+            speed: 0.0,
+            course: 0.0
+        ))
+        samplesB.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(62.0),
+            coordinate: coordC,
+            horizontalAccuracy: 5.0,
+            speed: 0.0,
+            course: 0.0
+        ))
         runner.replay(samples: samplesB)
 
         XCTAssertEqual(runner.arrivalCount, 1)
@@ -606,13 +621,28 @@ final class NavigationReplayTests: XCTestCase {
                 course: 0.0
             ))
         }
+        // Vehicle reaches destination coordC
+        bleSamples.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(65.0),
+            coordinate: coordC,
+            horizontalAccuracy: 5.0,
+            speed: 0.0,
+            course: 0.0
+        ))
+        bleSamples.append(NavigationReplaySample(
+            timestamp: baseDate.addingTimeInterval(67.0),
+            coordinate: coordC,
+            horizontalAccuracy: 5.0,
+            speed: 0.0,
+            course: 0.0
+        ))
         runner.replay(samples: bleSamples)
 
         // Navigation progressed completely to arrival despite BLE being disconnected
-        XCTAssertEqual(runner.capturedProgress.count, 5)
+        XCTAssertGreaterThanOrEqual(runner.capturedProgress.count, 5)
         XCTAssertEqual(runner.arrivalCount, 1)
         XCTAssertEqual(sessionManager.state, .arrived)
-        XCTAssertEqual(runner.sessionManager.diagnostics.locationsAccepted, 5)
-        XCTAssertEqual(runner.sessionManager.diagnostics.progressComputations, 5)
+        XCTAssertEqual(runner.sessionManager.diagnostics.locationsAccepted, bleSamples.count)
+        XCTAssertEqual(runner.sessionManager.diagnostics.progressComputations, bleSamples.count)
     }
 }

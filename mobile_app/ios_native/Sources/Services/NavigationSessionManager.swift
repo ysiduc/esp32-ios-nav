@@ -158,7 +158,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
     // MARK: Thresholds
     private let stepAdvanceThresholdMeters: Double = 15.0
     private let arrivalRadiusMeters: Double        = 25.0
-    private let arrivalThresholdMeters: Double     = 15.0
+    private let arrivalThresholdMeters: Double     = 25.0
     private let maxAccuracyMeters: Double          = 50.0
 
     // MARK: Private State
