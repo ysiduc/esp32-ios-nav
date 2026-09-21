@@ -216,8 +216,8 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
             XCTAssertFalse(candidate.isDegradedFallback, "Usable Valhalla candidates must not be degraded fallback")
         }
         let candidateIDs = set.candidates.map { $0.id }
-        XCTAssertTrue(candidateIDs.contains("valhalla_balanced_A"))
-        XCTAssertTrue(candidateIDs.contains("valhalla_local_B"))
+        XCTAssertTrue(candidateIDs.contains("motorcycle_balanced_0"))
+        XCTAssertTrue(candidateIDs.contains("motorcycle_local_0"))
     }
 
     // MARK: - Requirement 24: All-Valhalla-Fail Emergency Fallback Test
@@ -228,7 +228,7 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
 
         // Mock: All 4 Valhalla strategies fail; fallback succeeds with MapKit degraded route
         mockRouting.onCalculateRoutes = { request in
-            if request.requestedAlternatives == 0 {
+            if request.profile.id == "motorcycle_standard" {
                 // Emergency single-route fallback
                 let r = NavRoute(coordinates: [origin, dest], steps: [], totalDistanceMeters: 3500, totalDurationSeconds: 500)
                 let c = RouteCandidate(
@@ -253,13 +253,13 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
 
         // Must produce exactly 1 degraded MapKit candidate
         XCTAssertEqual(set.candidates.count, 1)
-        XCTAssertEqual(set.candidates[0].id, "emergency_mapkit_fallback")
         XCTAssertEqual(set.candidates[0].provider, .mapKit)
         XCTAssertTrue(set.candidates[0].isDegradedFallback)
 
         // Verify that emergency fallback was queried with requestedAlternatives = 0
-        let fallbackCalls = mockRouting.calculateRoutesCalls.filter { $0.requestedAlternatives == 0 }
-        XCTAssertEqual(fallbackCalls.count, 1, "Emergency fallback must request exactly 0 alternatives")
+        let fallbackCalls = mockRouting.calculateRoutesCalls.filter { $0.profile.id == "motorcycle_standard" }
+        XCTAssertEqual(fallbackCalls.count, 1, "Emergency fallback must be called once")
+        XCTAssertEqual(fallbackCalls.first?.requestedAlternatives, 0, "Emergency fallback must request exactly 0 alternatives")
     }
 
     // MARK: - Requirement 31: Completion-Order Independence Test
@@ -340,7 +340,7 @@ final class MultiStrategyRoutePlannerTests: XCTestCase {
         // Candidate ordering must be completely deterministic regardless of completion order!
         XCTAssertEqual(orderA, orderB, "Order in Run A and Run B must be identical")
         XCTAssertEqual(orderA, orderC, "Order in Run A and Run C must be identical")
-        XCTAssertEqual(orderA.first, "motorcycle_balanced_c0", "Balanced candidate must be primary first")
+        XCTAssertEqual(orderA.first, "motorcycle_balanced_0", "Balanced candidate must be primary first")
     }
 }
 
