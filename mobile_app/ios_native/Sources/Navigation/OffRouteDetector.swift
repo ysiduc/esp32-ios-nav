@@ -232,11 +232,12 @@ public final class OffRouteDetector: @unchecked Sendable {
                 }
             }
 
-            // Signal E: Persistent moderate physical deviation for same-direction parallel roads (P5.2.1)
+            // Signal E: Persistent moderate physical deviation for same-direction parallel roads below enter threshold (P5.2.1)
             if !suspicionTriggered &&
                observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
                observation.horizontalAccuracyMeters <= 20.0 &&
-               physicalDistance >= moderateThreshold {
+               physicalDistance >= moderateThreshold &&
+               physicalDistance <= enterThreshold {
                 suspicionTriggered = true
                 initialReason = .persistentModerateLateralDeviation
             }
@@ -287,7 +288,8 @@ public final class OffRouteDetector: @unchecked Sendable {
             let (requiredDwell, reason) = determineDwellAndReason(
                 observation: observation,
                 physicalDistance: physicalDistance,
-                moderateThreshold: moderateThreshold
+                moderateThreshold: moderateThreshold,
+                enterThreshold: enterThreshold
             )
 
             if elapsedSuspect >= requiredDwell {
@@ -369,7 +371,8 @@ public final class OffRouteDetector: @unchecked Sendable {
     private func determineDwellAndReason(
         observation: OffRouteObservation,
         physicalDistance: Double,
-        moderateThreshold: Double
+        moderateThreshold: Double,
+        enterThreshold: Double
     ) -> (Double, OffRouteReason) {
         // 1. Strong deviation fast track
         if physicalDistance >= config.strongDeviationThresholdMeters &&
@@ -392,14 +395,15 @@ public final class OffRouteDetector: @unchecked Sendable {
             return (config.courseDivergenceDwellSeconds, .stuckMatcherDeviation)
         }
 
-        // 4. Moderate parallel deviation with good GPS (P5.2.1)
+        // 4. Moderate parallel deviation with good GPS below enter threshold (P5.2.1)
         if observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
            observation.horizontalAccuracyMeters <= 20.0 &&
-           physicalDistance >= moderateThreshold {
+           physicalDistance >= moderateThreshold &&
+           physicalDistance <= enterThreshold {
             return (config.moderateDeviationDwellSeconds, .persistentModerateLateralDeviation)
         }
 
-        // 5. Normal vehicle motion
+        // 5. Normal vehicle motion (sustained lateral deviation)
         if observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond {
             return (config.standardDwellSeconds, .sustainedLateralDeviation)
         }
