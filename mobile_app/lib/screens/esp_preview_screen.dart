@@ -678,7 +678,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
             const SizedBox(height: 14),
 
-            // Goong Map / MapTiler Minimap Style Switcher
+            // Minimap Style Switcher
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -713,8 +713,6 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF00F0FF)),
                     style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                     items: const [
-                      DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN (Mặc định)')),
-                      DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
                       DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
                       DropdownMenuItem(value: 'streets-v2-dark', child: Text('MapTiler Dark')),
                       DropdownMenuItem(value: 'hybrid', child: Text('Hybrid (Vệ tinh)')),

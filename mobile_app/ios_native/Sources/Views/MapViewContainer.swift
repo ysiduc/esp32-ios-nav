@@ -109,6 +109,12 @@ public struct MapViewContainer: UIViewRepresentable {
         c.isNavigating = effectiveIsNavigating
         c.userLocationView?.isHidden = effectiveIsNavigating
         c.updatePolyline(displayCoords, on: mapView)
+        c.updateAlternativePolylines(
+            alternativeRoutes: alternativeRoutes,
+            presentationMode: presentationMode,
+            isNavigating: effectiveIsNavigating,
+            on: mapView
+        )
         c.updateDestination(destinationCoord, on: mapView)
         c.updateMatchedPuck(snappedLocation, isNavigating: effectiveIsNavigating, on: mapView)
 
@@ -239,45 +245,66 @@ public struct MapViewContainer: UIViewRepresentable {
         private let altRouteSourceID = "route-alternatives-source"
         private let altRouteLayerID  = "route-alternatives-layer"
 
-        func updateAlternativePolylines(_ routes: [NavRoute], isPreview: Bool, on mapView: MLNMapView) {
+        func updateAlternativePolylines(
+            alternativeRoutes: [NavRoute],
+            presentationMode: RouteMapPresentation?,
+            isNavigating: Bool,
+            on mapView: MLNMapView
+        ) {
             guard let style = mapView.style else { return }
-            guard isPreview && !routes.isEmpty else {
+
+            let action = renderPolicy.evaluateAlternativeRoutes(
+                presentationMode: presentationMode,
+                isNavigating: isNavigating,
+                alternativeRoutes: alternativeRoutes
+            )
+
+            switch action {
+            case .clear:
                 removeAlternativeRouteLayers(from: mapView)
-                return
-            }
+                renderPolicy.recordAlternativeClear()
 
-            var features: [MLNPolylineFeature] = []
-            for r in routes {
-                guard r.coordinates.count >= 2 else { continue }
-                features.append(MLNPolylineFeature(coordinates: r.coordinates, count: UInt(r.coordinates.count)))
-            }
-
-            guard !features.isEmpty else {
-                removeAlternativeRouteLayers(from: mapView)
-                return
-            }
-
-            let multiFeature = MLNMultiPolylineFeature(polylines: features)
-
-            if let source = style.source(withIdentifier: altRouteSourceID) as? MLNShapeSource {
-                source.shape = multiFeature
-            } else {
-                let source = MLNShapeSource(identifier: altRouteSourceID, shape: multiFeature, options: nil)
-                style.addSource(source)
-
-                let lineLayer = MLNLineStyleLayer(identifier: altRouteLayerID, source: source)
-                lineLayer.lineColor = NSExpression(forConstantValue: UIColor(red: 0.45, green: 0.52, blue: 0.62, alpha: 0.65))
-                lineLayer.lineWidth = NSExpression(forConstantValue: 4.5)
-                lineLayer.lineCap = NSExpression(forConstantValue: "round")
-                lineLayer.lineJoin = NSExpression(forConstantValue: "round")
-
-                if let mainRouteLayer = style.layer(withIdentifier: routeLayerID) {
-                    style.insertLayer(lineLayer, below: mainRouteLayer)
-                } else if let labelLayer = style.layers.first(where: { $0.identifier.contains("label") }) {
-                    style.insertLayer(lineLayer, below: labelLayer)
-                } else {
-                    style.addLayer(lineLayer)
+            case .render(let routes):
+                var features: [MLNPolylineFeature] = []
+                for r in routes {
+                    guard r.coordinates.count >= 2 else { continue }
+                    features.append(MLNPolylineFeature(coordinates: r.coordinates, count: UInt(r.coordinates.count)))
                 }
+
+                guard !features.isEmpty else {
+                    removeAlternativeRouteLayers(from: mapView)
+                    renderPolicy.recordAlternativeClear()
+                    return
+                }
+
+                let multiFeature = MLNMultiPolylineFeature(polylines: features)
+
+                let sourceExists = (style.source(withIdentifier: altRouteSourceID) != nil)
+                let layerExists  = (style.layer(withIdentifier: altRouteLayerID) != nil)
+
+                if sourceExists && layerExists, let source = style.source(withIdentifier: altRouteSourceID) as? MLNShapeSource {
+                    source.shape = multiFeature
+                } else {
+                    removeAlternativeRouteLayers(from: mapView)
+
+                    let source = MLNShapeSource(identifier: altRouteSourceID, shape: multiFeature, options: nil)
+                    style.addSource(source)
+
+                    let lineLayer = MLNLineStyleLayer(identifier: altRouteLayerID, source: source)
+                    lineLayer.lineColor = NSExpression(forConstantValue: UIColor(red: 0.45, green: 0.52, blue: 0.62, alpha: 0.65))
+                    lineLayer.lineWidth = NSExpression(forConstantValue: 4.5)
+                    lineLayer.lineCap = NSExpression(forConstantValue: "round")
+                    lineLayer.lineJoin = NSExpression(forConstantValue: "round")
+
+                    if let mainRouteLayer = style.layer(withIdentifier: routeLayerID) {
+                        style.insertLayer(lineLayer, below: mainRouteLayer)
+                    } else if let labelLayer = style.layers.first(where: { $0.identifier.contains("label") }) {
+                        style.insertLayer(lineLayer, below: labelLayer)
+                    } else {
+                        style.addLayer(lineLayer)
+                    }
+                }
+                renderPolicy.recordAlternativeRender()
             }
         }
 

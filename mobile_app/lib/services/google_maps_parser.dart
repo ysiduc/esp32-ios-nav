@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:latlong2/latlong.dart';
 import '../models/route_model.dart';
-import 'goong_service.dart';
 import 'search_service.dart';
 
 class GoogleMapsParser {
@@ -121,12 +120,7 @@ class GoogleMapsParser {
         nearLocation: userLocation,
       );
       if (searchList.isNotEmpty) {
-        var top = searchList.first;
-        if (top.placeId != null && (top.coordinate.latitude == 0 && top.coordinate.longitude == 0)) {
-          final detailed = await GoongService().getPlaceDetail(top.placeId!);
-          if (detailed != null) top = detailed;
-        }
-        return top;
+        return searchList.first;
       }
       return null;
     }
@@ -303,12 +297,7 @@ class GoogleMapsParser {
           }
         }
 
-        if (top.placeId != null && (top.coordinate.latitude == 0 && top.coordinate.longitude == 0)) {
-          final detailed = await GoongService().getPlaceDetail(top.placeId!);
-          if (detailed != null) {
-            top = detailed;
-          }
-        }
+
 
         final finalName = parts.isNotEmpty ? parts.first : top.name;
         return MapPlace(

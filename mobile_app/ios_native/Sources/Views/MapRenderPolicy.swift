@@ -22,12 +22,19 @@ public enum MapRenderAction: Equatable, Sendable {
     case noChange
 }
 
+public enum AlternativeRenderAction: Equatable, Sendable {
+    case render(routes: [NavRoute])
+    case clear
+}
+
 /// Pure policy and counter engine for map rendering operations.
 public final class MapRenderPolicy: @unchecked Sendable {
 
     public private(set) var routeShapeUpdates: Int = 0
     public private(set) var routeLayerRebuilds: Int = 0
     public private(set) var previewZooms: Int = 0
+    public private(set) var alternativeRenderUpdates: Int = 0
+    public private(set) var alternativeRenderClears: Int = 0
 
     private var lastRenderedCoordinatesCount: Int = 0
     private var lastZoomedRouteSignature: String?
@@ -38,6 +45,8 @@ public final class MapRenderPolicy: @unchecked Sendable {
         routeShapeUpdates = 0
         routeLayerRebuilds = 0
         previewZooms = 0
+        alternativeRenderUpdates = 0
+        alternativeRenderClears = 0
         lastRenderedCoordinatesCount = 0
         lastZoomedRouteSignature = nil
     }
@@ -103,5 +112,40 @@ public final class MapRenderPolicy: @unchecked Sendable {
 
     public func invalidatePreviewZoomCache() {
         lastZoomedRouteSignature = nil
+    }
+
+    /// Evaluates alternative route polyline rendering based on presentation state and candidates.
+    /// Only allows alternative routes to be rendered during route preview.
+    /// In all other states (navigating, arrived, none, idle), returns .clear.
+    public func evaluateAlternativeRoutes(
+        presentationMode: RouteMapPresentation?,
+        isNavigating: Bool,
+        alternativeRoutes: [NavRoute]
+    ) -> AlternativeRenderAction {
+        let isPreview: Bool
+        if let mode = presentationMode {
+            isPreview = (mode == .preview)
+        } else {
+            isPreview = !isNavigating
+        }
+
+        guard isPreview else {
+            return .clear
+        }
+
+        let validRoutes = alternativeRoutes.filter { $0.coordinates.count >= 2 }
+        if !validRoutes.isEmpty {
+            return .render(routes: validRoutes)
+        } else {
+            return .clear
+        }
+    }
+
+    public func recordAlternativeRender() {
+        alternativeRenderUpdates += 1
+    }
+
+    public func recordAlternativeClear() {
+        alternativeRenderClears += 1
     }
 }

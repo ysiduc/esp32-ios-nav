@@ -167,8 +167,8 @@ The test suite was expanded and migrated to provider-neutral tests:
 ---
 
 ## 15. Performance
-- **Preview Latency**: Concurrent execution with `withTaskGroup` parallelizes Valhalla queries across CPU cores, keeping preview calculation under ~300–500ms on device.
-- **Corridor Deduplication**: Resampling every 25m outside the 150m endpoint mask processes typical 5–15km urban routes in < 5ms.
+- **Preview Latency**: Strategies execute concurrently with `withTaskGroup` to reduce preview latency by issuing Valhalla queries in parallel across CPU cores.
+- **Corridor Deduplication**: Deduplication operates efficiently on bounded resampled geometry every 25m outside the 150m endpoint mask, bounded to relevant diverse segments.
 - **Memory & Battery**: Alternatives layer in `MapViewContainer` shares a single GeoJSON source and clears completely upon starting navigation.
 
 ---
@@ -222,3 +222,56 @@ The test suite was expanded and migrated to provider-neutral tests:
   ```text
   CI / deterministic regression PASS — REAL DEVICE VALIDATION PENDING
   ```
+
+---
+
+## 18. P5.3.1 Reviewer Corrections
+
+### 18.1 Complete Flutter Goong Removal
+- **Deleted Production Files**:
+  - `mobile_app/lib/config/goong_config.dart`
+  - `mobile_app/lib/services/goong_service.dart`
+- **Cleaned Flutter Call-Sites & UI**:
+  - `search_service.dart`: Removed Goong autocomplete and reverse-geocoding calls. The search pipeline now uses local curated search and configured non-Goong search providers with proper debouncing and caching.
+  - `map_screen.dart`: Removed `_showGoongKeyDialog`, Goong map styles (`goong-streets`), Goong place detail calls, and settings tiles.
+  - `esp_stream_service.dart`, `google_maps_parser.dart`, `mapbox_directions_service.dart`, `esp_preview_screen.dart`, `home_screen.dart`: Removed all dead Goong imports, map styles, and routing paths.
+- **Repository Verification**: Zero occurrences of `Goong`, `rsapi.goong.io`, or `GOONG_API_KEY` across `mobile_app/lib/` and `mobile_app/ios_native/Sources/`. The app requires no Goong credentials.
+
+### 18.2 Native MapLibre Alternative Layer Runtime Wiring
+- **Runtime Invocation**: Wired `c.updateAlternativePolylines(alternativeRoutes, isPreview: isPreview, on: mapView)` inside `MapViewContainer.updateUIView()`.
+- **Pure Lifecycle Policy**: Extended `MapRenderPolicy` with `AlternativeRenderAction` (`.render(routes:)`, `.clear`) and `evaluateAlternativeRoutes(_:isPreview:)`.
+  - Preview mode + N alternatives: layer rendered as muted lines behind prominent selected route.
+  - Active navigation: layer cleared.
+  - Arrived / Idle: layer cleared.
+- **Authoritative Selection Isolation**: Selected route candidate is filtered out of `alternativeRoutes`, ensuring the primary route is never drawn twice.
+- **Style Reload Resilience**: `MapViewContainer` checks whether the MGLSource/MGLLineStyleLayer exist on the reloaded style and rebuilds or updates shape in-place without churn.
+
+### 18.3 Motorcycle Valhalla-Only Strategy Isolation & Emergency Fallback
+- **Strict Strategy Profiles**: In `MultiStrategyRoutePlanner`, all motorcycle subprofile requests (`motorcycle_balanced`, `motorcycle_main_roads`, `motorcycle_local`, `motorcycle_low_toll`) are configured with `allowMapKitFallback: false` and `mapKitCapability: .unsupported`.
+- **Zero Car-Route Injection**: Individual motorcycle strategies can only produce `provider == .valhalla` and `isDegradedFallback == false` routes. If an individual Valhalla strategy fails, it is dropped from the candidate pool; MapKit automobile routes are never mixed into motorcycle choices.
+- **Single Degraded Fallback**: Only if all Valhalla strategies fail does the planner execute a single emergency fallback request (`requestedAlternatives = 0`, `isDegradedFallback = true`). It is presented as a single clearly degraded approximation, not multiple pseudo-motorcycle alternatives.
+
+### 18.4 Deterministic Strategy Ordering & Route Ranker
+- **Stable Priority**: Defined explicit strategy priority:
+  - 0: Balanced
+  - 1: Main Roads
+  - 2: Local Roads
+  - 3: Low Toll
+- **Pre-Deduplication Sorting**: Collected results from `withTaskGroup` are sorted by `(isPrimary, priority, candidateIndex, duration, distance, id)` before corridor deduplication.
+- **Task-Completion Order Independence**: Variations in async task finish times cannot alter route ranking or cause slower duplicates to win.
+
+### 18.5 Consistent Geometry Length in Route Similarity
+- Updated `RouteSimilarity.corridorMatchRatio` to sample along `subjectRoute.geometry.totalDistanceMeters` rather than relying on provider summary distance. This ensures exact geometric alignment between polyline coordinates and sampling intervals.
+
+### 18.6 Test Coverage
+- `MapRenderPolicyTests`:
+  - `testEvaluateAlternativeRoutes_PreviewMode_ReturnsRender`: Validates `.render` in preview.
+  - `testEvaluateAlternativeRoutes_NavigationMode_ReturnsClear`: Validates `.clear` during navigation.
+  - `testEvaluateAlternativeRoutes_EmptyRoutes_ReturnsClear`: Validates `.clear` when alternatives empty.
+  - `testMapAlternativeStateLifecycle_PreviewSelectionNavigationArrival`: Verifies full lifecycle transitions.
+- `MultiStrategyRoutePlannerTests`:
+  - `testMotorcycleMixedFailure_DoesNotInjectMapKitCarRoutes`: Verifies partial Valhalla failure leaves only valid Valhalla routes without MapKit pollution.
+  - `testAllValhallaStrategiesFail_ProducesOneDegradedMapKitFallback`: Verifies single emergency fallback when all Valhalla strategies fail.
+  - `testCompletionOrderIndependence_ProducesDeterministicCandidateOrder`: Verifies candidate ordering is identical across different task completion timings.
+- `RouteSimilarityTests`:
+  - `testOverlap_DiscrepancyBetweenSummaryDistanceAndPolylineGeometry_UsesGeometryLengthAccurately`: Verifies geometry length consistency under summary distance mismatch.

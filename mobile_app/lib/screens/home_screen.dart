@@ -87,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           SizedBox(height: 2),
                           Text(
-                            'Apple Maps & Goong VN',
+                            'Bản đồ dẫn đường thông minh',
                             style: TextStyle(color: Colors.white54, fontSize: 12),
                           ),
                         ],
@@ -139,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildDrawerTile(
               icon: Icons.map_rounded,
               title: 'Bản đồ dẫn đường',
-              subtitle: 'Giao diện chính Apple Maps & Goong',
+              subtitle: 'Giao diện chính bản đồ',
               isSelected: _currentIndex == 0,
               onTap: () {
                 Navigator.pop(context);

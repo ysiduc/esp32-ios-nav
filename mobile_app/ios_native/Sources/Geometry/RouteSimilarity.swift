@@ -67,7 +67,7 @@ public enum RouteSimilarity {
         sampleIntervalMeters: Double,
         endpointMaskDistanceMeters: Double
     ) -> Double {
-        let totalLen = subjectRoute.totalDistanceMeters
+        let totalLen = subjectRoute.geometry.totalDistanceMeters
         guard totalLen > 0 else { return 0.0 }
 
         let mask = min(endpointMaskDistanceMeters, totalLen * 0.05)

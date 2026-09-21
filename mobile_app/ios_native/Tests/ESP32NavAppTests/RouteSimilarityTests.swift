@@ -173,4 +173,36 @@ final class RouteSimilarityTests: XCTestCase {
         XCTAssertEqual(deduped[1].id, "c3")
         XCTAssertEqual(deduped[1].label, "Đường chính") // Custom label preserved
     }
+
+    // MARK: - Requirement 33: Consistent Geometry Distance in Overlap
+
+    func testOverlap_DiscrepancyBetweenSummaryDistanceAndPolylineGeometry_UsesGeometryLengthAccurately() {
+        let coords = [
+            CLLocationCoordinate2D(latitude: 21.000, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.010, longitude: 105.800),
+            CLLocationCoordinate2D(latitude: 21.020, longitude: 105.800)
+        ]
+        // Polyline length is ~2224 meters.
+        // Route A has accurate totalDistanceMeters
+        let rA = makeRoute(coords: coords)
+
+        // Route B has identical coordinates, but simulated provider discrepancy where
+        // totalDistanceMeters is reported as 50,000 meters (50km).
+        let rB = NavRoute(
+            coordinates: coords,
+            steps: [],
+            totalDistanceMeters: 50_000, // Discrepant provider summary distance
+            totalDurationSeconds: 600
+        )
+
+        // If RouteSimilarity sampled using NavRoute.totalDistanceMeters (50,000m),
+        // samples after 2,224m would be clamped to the end, distorting the overlap.
+        // Using route.geometry.totalDistanceMeters guarantees geometric fidelity.
+        let simAB = RouteSimilarity.overlap(routeA: rA, routeB: rB)
+        let simBA = RouteSimilarity.overlap(routeA: rB, routeB: rA)
+
+        XCTAssertGreaterThanOrEqual(simAB, 0.95, "Overlap should remain high despite summary distance discrepancy")
+        XCTAssertGreaterThanOrEqual(simBA, 0.95, "Overlap should remain symmetric and high")
+    }
 }
+

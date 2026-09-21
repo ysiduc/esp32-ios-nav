@@ -10,7 +10,6 @@ import 'package:http/http.dart' as http;
 
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
-import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
@@ -22,7 +21,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _isSendingWifi = false;
 
-  /// Optional hook to take live vector snapshots from MapLibre Goong map
+  /// Optional hook to take live vector snapshots from MapLibre map
   Future<Uint8List?> Function({int? width, int? height})? mapSnapshotProvider;
 
   bool _isStreaming = false;
@@ -64,7 +63,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
-  String _streamMapStyle = GoongConfig.isConfigured ? 'goong-streets' : 'streets-v2';
+  String _streamMapStyle = 'streets-v2';
   String get streamMapStyle => _streamMapStyle;
   set streamMapStyle(String val) {
     if (_streamMapStyle != val) {
@@ -675,21 +674,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final style = _streamMapStyle;
       final isDark = style.contains('dark');
-      final isGoong = style.contains('goong');
       final ext = style == 'hybrid' ? 'jpg' : 'png';
 
       final apiKey = MapboxConfig.maptilerApiKey;
-      String url;
-      if (isGoong) {
-        // High-definition Google Vietnam localized raster tiles (100% authentic Vietnamese labels: Sông Lừ, Đ. Trường Chinh, etc.)
-        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi';
-      } else {
-        url = apiKey.isNotEmpty
-            ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
-            : (isDark
-                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
-      }
+      final String url = apiKey.isNotEmpty
+          ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
+          : (isDark
+              ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+              : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
 
       var response = await http.get(
         Uri.parse(url),
@@ -698,11 +690,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        final fallbackUrl = isGoong
-            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi'
-            : (isDark
-                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
-                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
+        final fallbackUrl = (isDark
+            ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+            : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
@@ -719,23 +709,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             if (cpuImg.width > 256) {
               cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
             }
-            if (isDark && isGoong) {
-              // Convert light tile to sleek dark mode
-              img.invert(cpuImg);
-              for (final pixel in cpuImg) {
-                pixel.r = (pixel.r * 0.7).round();
-                pixel.g = (pixel.g * 0.8).round();
-                pixel.b = (pixel.b * 1.0).round();
-              }
-            }
+
             _cpuTileCache[key] = cpuImg;
             if (_cpuTileCache.length > 100) {
               _cpuTileCache.remove(_cpuTileCache.keys.first);
             }
 
-            if (isDark && isGoong) {
-              finalBytes = Uint8List.fromList(img.encodePng(cpuImg));
-            }
+
           }
         } catch (_) {}
 
@@ -776,7 +756,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }) {
     final isDark = _streamMapStyle.contains('dark');
 
-    // 1. Background Fill: Clean Light Cream for Apple Maps / Goong (#F4F6F8) or Dark Navy (#0B111A)
+    // 1. Background Fill: Clean Light Cream for Apple Maps (#F4F6F8) or Dark Navy (#0B111A)
     final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFEBF0F0);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 

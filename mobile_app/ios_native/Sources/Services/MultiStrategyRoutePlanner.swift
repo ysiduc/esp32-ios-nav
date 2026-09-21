@@ -11,6 +11,7 @@ import Foundation
 
 public struct RouteStrategy: Sendable, Equatable {
     public let id: String
+    public let priority: Int
     public let label: String
     public let valhallaCosting: String
     public let costingOptions: ProfileCostingOptions
@@ -18,22 +19,25 @@ public struct RouteStrategy: Sendable, Equatable {
 
     public init(
         id: String,
+        priority: Int,
         label: String,
         valhallaCosting: String,
         costingOptions: ProfileCostingOptions,
         requestedAlternatives: Int
     ) {
         self.id = id
+        self.priority = priority
         self.label = label
         self.valhallaCosting = valhallaCosting
         self.costingOptions = costingOptions
         self.requestedAlternatives = requestedAlternatives
     }
 
-    /// Primary balanced strategy
+    /// Primary balanced strategy (priority 0)
     public static func motorcycleBalanced() -> RouteStrategy {
         RouteStrategy(
             id: "motorcycle_balanced",
+            priority: 0,
             label: "Đề xuất",
             valhallaCosting: "motorcycle",
             costingOptions: ProfileCostingOptions([
@@ -48,10 +52,11 @@ public struct RouteStrategy: Sendable, Equatable {
         )
     }
 
-    /// Major through roads variant
+    /// Major through roads variant (priority 1)
     public static func motorcycleMainRoads() -> RouteStrategy {
         RouteStrategy(
             id: "motorcycle_main_roads",
+            priority: 1,
             label: "Đường chính",
             valhallaCosting: "motorcycle",
             costingOptions: ProfileCostingOptions([
@@ -66,10 +71,11 @@ public struct RouteStrategy: Sendable, Equatable {
         )
     }
 
-    /// Urban & local road family variant
+    /// Urban & local road family variant (priority 2)
     public static func motorcycleLocal() -> RouteStrategy {
         RouteStrategy(
             id: "motorcycle_local",
+            priority: 2,
             label: "Đường nội đô",
             valhallaCosting: "motorcycle",
             costingOptions: ProfileCostingOptions([
@@ -84,10 +90,11 @@ public struct RouteStrategy: Sendable, Equatable {
         )
     }
 
-    /// Low-toll road variant
+    /// Low-toll road variant (priority 3)
     public static func motorcycleLowToll() -> RouteStrategy {
         RouteStrategy(
             id: "motorcycle_low_toll",
+            priority: 3,
             label: "Ít trạm thu phí",
             valhallaCosting: "motorcycle",
             costingOptions: ProfileCostingOptions([
@@ -143,6 +150,12 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
     // MARK: - Multi-Strategy Execution
 
+    struct StrategyResult: Sendable {
+        let priority: Int
+        let strategyID: String
+        let candidates: [RouteCandidate]
+    }
+
     private func calculateMultiStrategyRoutes(request: RoutingRequest) async throws -> RouteSet {
         let startTime = Date().timeIntervalSinceReferenceDate
         let strategies: [RouteStrategy] = [
@@ -154,20 +167,22 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         print("[MultiStrategy] Starting \(strategies.count) concurrent strategies for motorcycle preview")
 
-        // Concurrently execute strategies via structured task group
-        let rawCandidates: [RouteCandidate] = await withTaskGroup(of: [RouteCandidate]?.self) { group in
+        // Concurrently execute strategies via structured task group.
+        // Individual strategies are STRICTLY Valhalla-only (allowMapKitFallback: false)
+        let strategyResults: [StrategyResult] = await withTaskGroup(of: StrategyResult?.self) { group in
             for strategy in strategies {
-                group.addTask { () -> [RouteCandidate]? in
+                group.addTask { () -> StrategyResult? in
                     if Task.isCancelled { return nil }
                     let stratStart = Date().timeIntervalSinceReferenceDate
                     do {
+                        // Subprofile strictly disables MapKit fallback to prevent car routes from entering motorcycle strategies
                         let subProfile = RoutingProfile(
                             id: strategy.id,
                             transportMode: .motorcycle,
                             valhallaCosting: strategy.valhallaCosting,
                             costingOptions: strategy.costingOptions,
                             maxAlternatives: strategy.requestedAlternatives,
-                            fallbackPolicy: .motorcycle
+                            fallbackPolicy: RoutingProfile.FallbackPolicy(allowMapKitFallback: false, mapKitCapability: .unsupported)
                         )
                         let subRequest = RoutingRequest(
                             origin: request.origin,
@@ -179,8 +194,10 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                         let set = try await self.underlyingRouting.calculateRoutes(request: subRequest)
                         let elapsed = Date().timeIntervalSinceReferenceDate - stratStart
 
-                        // Relabel raw candidates with meaningful strategy label
-                        let candidates = set.candidates.enumerated().map { idx, c in
+                        // Ensure only valid Valhalla routes without degraded fallback are accepted
+                        let validValhallaRoutes = set.candidates.filter { $0.provider == .valhalla && !$0.isDegradedFallback }
+
+                        let candidates = validValhallaRoutes.enumerated().map { idx, c in
                             let label = (idx == 0) ? strategy.label : "\(strategy.label) \(idx + 1)"
                             return RouteCandidate(
                                 id: "\(strategy.id)_\(idx)",
@@ -189,14 +206,14 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                                 requestedMode: c.requestedMode,
                                 profileID: strategy.id,
                                 isPrimary: (strategy.id == "motorcycle_balanced" && idx == 0),
-                                isDegradedFallback: c.isDegradedFallback,
-                                degradedReason: c.degradedReason,
+                                isDegradedFallback: false,
+                                degradedReason: nil,
                                 label: label
                             )
                         }
 
                         print("[MultiStrategy] Strategy \(strategy.id) returned \(candidates.count) routes in \(String(format: "%.2f", elapsed))s")
-                        return candidates
+                        return StrategyResult(priority: strategy.priority, strategyID: strategy.id, candidates: candidates)
                     } catch {
                         let elapsed = Date().timeIntervalSinceReferenceDate - stratStart
                         print("[MultiStrategy] Strategy \(strategy.id) failed in \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
@@ -205,10 +222,10 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
                 }
             }
 
-            var accumulated: [RouteCandidate] = []
+            var accumulated: [StrategyResult] = []
             for await result in group {
-                if let list = result {
-                    accumulated.append(contentsOf: list)
+                if let batch = result, !batch.candidates.isEmpty {
+                    accumulated.append(batch)
                 }
             }
             return accumulated
@@ -216,11 +233,71 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         try Task.checkCancellation()
 
-        guard !rawCandidates.isEmpty else {
-            throw ValhallaRoutingError.noRouteFound("Không tìm thấy lộ trình phù hợp từ các chiến lược định tuyến")
+        // If ALL Valhalla strategies fail, run a single degraded motorcycle fallback request
+        if strategyResults.isEmpty {
+            print("[MultiStrategy] All Valhalla motorcycle strategies failed; executing single emergency degraded fallback")
+            let emergencyProfile = RoutingProfile.motorcycle() // has fallbackPolicy: .motorcycle
+            let emergencyRequest = RoutingRequest(
+                origin: request.origin,
+                destination: request.destination,
+                profile: emergencyProfile,
+                requestedAlternatives: 0
+            )
+            let emergencySet = try await self.underlyingRouting.calculateRoutes(request: emergencyRequest)
+            guard let firstFallback = emergencySet.candidates.first else {
+                throw ValhallaRoutingError.noRouteFound("Không tìm thấy lộ trình phù hợp từ các chiến lược định tuyến")
+            }
+
+            let fallbackCandidate = RouteCandidate(
+                id: "motorcycle_degraded_fallback_0",
+                route: firstFallback.route,
+                provider: firstFallback.provider,
+                requestedMode: .motorcycle,
+                profileID: "motorcycle_degraded_fallback",
+                isPrimary: true,
+                isDegradedFallback: true,
+                degradedReason: "Apple MapKit does not natively support motorcycle routing; automobile route approximation is used.",
+                label: "Đề xuất (Dự phòng)"
+            )
+            return RouteSet(candidates: [fallbackCandidate])
         }
 
-        // Separate primary balanced candidate
+        // Deterministic candidate ranking:
+        // Group and order candidates independently of async completion order.
+        var allScored: [(priority: Int, candidateIndex: Int, candidate: RouteCandidate)] = []
+        for batch in strategyResults {
+            for (idx, cand) in batch.candidates.enumerated() {
+                allScored.append((priority: batch.priority, candidateIndex: idx, candidate: cand))
+            }
+        }
+
+        allScored.sort { a, b in
+            // 1. Balanced primary always first
+            let aIsPrimary = (a.priority == 0 && a.candidateIndex == 0)
+            let bIsPrimary = (b.priority == 0 && b.candidateIndex == 0)
+            if aIsPrimary != bIsPrimary { return aIsPrimary }
+
+            // 2. Faster duration (shorter time)
+            let durDiff = a.candidate.route.totalDurationSeconds - b.candidate.route.totalDurationSeconds
+            if abs(durDiff) > 1.0 { return durDiff < 0 }
+
+            // 3. Shorter distance
+            let distDiff = a.candidate.route.totalDistanceMeters - b.candidate.route.totalDistanceMeters
+            if abs(distDiff) > 5.0 { return distDiff < 0 }
+
+            // 4. Strategy priority (balanced < main < local < low_toll)
+            if a.priority != b.priority { return a.priority < b.priority }
+
+            // 5. Candidate index within strategy
+            if a.candidateIndex != b.candidateIndex { return a.candidateIndex < b.candidateIndex }
+
+            // 6. Deterministic tiebreak
+            return a.candidate.id < b.candidate.id
+        }
+
+        let rawCandidates = allScored.map(\.candidate)
+
+        // Separate primary candidate (guaranteed index 0 by sort)
         let primaryCandidate = rawCandidates.first(where: { $0.profileID == "motorcycle_balanced" && $0.isPrimary }) ?? rawCandidates[0]
 
         // Find reference fastest duration & shortest distance
@@ -240,8 +317,9 @@ public final class MultiStrategyRoutePlanner: RoutingServiceProtocol {
 
         let candidatesToDedup = qualityCandidates.isEmpty ? rawCandidates : qualityCandidates
 
-        // Deduplicate using RouteSimilarity.overlap (corridor metric)
-        // Ensure primary candidate is evaluated first so it remains index 0
+        // Deduplicate using RouteSimilarity.overlap (corridor metric).
+        // Since candidates are deterministically ordered with the best/faster routes first,
+        // duplicate routes with overlap >= threshold will discard the slower duplicate.
         var orderedCandidates = candidatesToDedup.filter { $0.id == primaryCandidate.id }
         orderedCandidates.append(contentsOf: candidatesToDedup.filter { $0.id != primaryCandidate.id })
 

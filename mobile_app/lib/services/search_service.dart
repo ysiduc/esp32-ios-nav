@@ -2,10 +2,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
-import 'goong_service.dart';
 
 class SearchService {
   static const String _photonBaseUrl = 'https://photon.komoot.io';
@@ -886,7 +884,7 @@ class SearchService {
 
     void addPlace(MapPlace p) {
       final key = (p.placeId != null && p.placeId!.isNotEmpty)
-          ? 'goong_id_${p.placeId}'
+          ? 'place_id_${p.placeId}'
           : '${p.name}_${p.coordinate.latitude.toStringAsFixed(4)}_${p.coordinate.longitude.toStringAsFixed(4)}'.toLowerCase();
       if (!seenKeys.contains(key)) {
         seenKeys.add(key);
@@ -911,20 +909,6 @@ class SearchService {
       }
     }
 
-    // -------------------------------------------------------------
-    // Step 0: Goong Map Places API (Chuẩn xác 100% Việt Nam, số nhà, ngõ ngách)
-    // -------------------------------------------------------------
-    if (GoongConfig.hasRestApiKey) {
-      try {
-        final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation);
-        if (goongPlaces.isNotEmpty) {
-          for (final p in goongPlaces) {
-            addPlace(p);
-          }
-          return mergedResults;
-        }
-      } catch (_) {}
-    }
 
     // -------------------------------------------------------------
     // Step 1: Check Built-in Vietnamese Landmark / POI Database first
@@ -1336,13 +1320,6 @@ class SearchService {
 
   /// Reverse Geocode Coordinates to Human-Readable Vietnamese Address
   Future<MapPlace> reverseGeocode(LatLng location) async {
-    // 0. Try Goong Map Geocode first (chính xác số nhà, ngõ ngách theo chuẩn Việt Nam)
-    if (GoongConfig.hasRestApiKey) {
-      try {
-        final goongPlace = await GoongService().reverseGeocode(location);
-        if (goongPlace != null) return goongPlace;
-      } catch (_) {}
-    }
 
     // 1. Try MapTiler Reverse first (instant, high accuracy for Vietnam)
     final maptilerPlace = await _executeMapboxReverse(location);

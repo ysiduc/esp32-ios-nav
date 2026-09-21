@@ -2,19 +2,16 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
-import 'goong_service.dart';
 import 'osrm_service.dart';
 
 /// Navigation Directions Service
-/// Supports Goong Map / MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
+/// Supports MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
 class MapboxDirectionsService {
   // In-Memory Route Cache (instant retrieval for repeated queries)
   static final Map<String, List<NavRoute>> _routeCache = {};
   final OsrmService _osrmService = OsrmService();
-  final GoongService _goongService = GoongService();
 
   /// Calculate multiple alternative routes
   Future<List<NavRoute>> calculateMultipleRoutes(
@@ -33,18 +30,6 @@ class MapboxDirectionsService {
 
     List<NavRoute> routes = [];
 
-    // Priority 1: Goong Direction API (Tối ưu giao thông Việt Nam: xe máy/ô tô)
-    if (GoongConfig.hasRestApiKey) {
-      final vehicle = (mode == 'driving') ? 'car' : 'bike';
-      final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
-      if (goongRoute != null) {
-        routes.add(goongRoute.copyWith(
-          title: 'Tuyến Goong Map',
-          subtitle: 'Nhanh nhất (Tối ưu giao thông VN)',
-          isFastest: true,
-        ));
-      }
-    }
 
     // Bổ sung 1-2 lộ trình thay thế (Alternatives) từ OSRM để người dùng có nhiều lựa chọn
     try {
