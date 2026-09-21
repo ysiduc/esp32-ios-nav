@@ -16,8 +16,15 @@ public final class NavigationReplayRunner {
     public private(set) var recordedOffRouteDecisions: [(decision: OffRouteDecision, location: CLLocation)] = []
     public private(set) var arrivalCount: Int = 0
 
-    public init(sessionManager: NavigationSessionManager = NavigationSessionManager(requestLocationAuthorizationOnInit: false)) {
+    public var capturedProgress: [NavigationProgress] { recordedProgress }
+
+    public init(sessionManager: NavigationSessionManager) {
         self.sessionManager = sessionManager
+        setupCallbacks()
+    }
+
+    public init() {
+        self.sessionManager = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         setupCallbacks()
     }
 
@@ -31,6 +38,15 @@ public final class NavigationReplayRunner {
         sessionManager.onArrived = { [weak self] in
             self?.arrivalCount += 1
         }
+    }
+
+    /// Helper to install and start navigation on a route
+    public func installRoute(_ route: NavRoute, destination: NavigationDestination? = nil) {
+        let dest = destination ?? NavigationDestination(
+            coordinate: route.coordinates.last ?? CLLocationCoordinate2D(),
+            name: "Destination"
+        )
+        sessionManager.startNavigation(route: route, destination: dest)
     }
 
     /// Feeds a sequence of replay samples into the session manager synchronously.
