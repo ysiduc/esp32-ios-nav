@@ -118,6 +118,22 @@ public final class MapRenderPolicy: @unchecked Sendable {
     /// Only allows alternative routes to be rendered during route preview.
     /// In all other states (navigating, arrived, none, idle), returns .clear.
     public func evaluateAlternativeRoutes(
+        _ routes: [NavRoute],
+        isPreview: Bool
+    ) -> AlternativeRenderAction {
+        guard isPreview else {
+            return .clear
+        }
+
+        let validRoutes = routes.filter { $0.coordinates.count >= 2 }
+        if !validRoutes.isEmpty {
+            return .render(routes: validRoutes)
+        } else {
+            return .clear
+        }
+    }
+
+    public func evaluateAlternativeRoutes(
         presentationMode: RouteMapPresentation?,
         isNavigating: Bool,
         alternativeRoutes: [NavRoute]
@@ -128,17 +144,7 @@ public final class MapRenderPolicy: @unchecked Sendable {
         } else {
             isPreview = !isNavigating
         }
-
-        guard isPreview else {
-            return .clear
-        }
-
-        let validRoutes = alternativeRoutes.filter { $0.coordinates.count >= 2 }
-        if !validRoutes.isEmpty {
-            return .render(routes: validRoutes)
-        } else {
-            return .clear
-        }
+        return evaluateAlternativeRoutes(alternativeRoutes, isPreview: isPreview)
     }
 
     public func recordAlternativeRender() {
