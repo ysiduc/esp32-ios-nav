@@ -130,9 +130,11 @@ class BleService extends ChangeNotifier {
   }
 
   BleService() {
-    _initBle();
-    _startWifiProbe();
-    checkSystemDevices();
+    if (!Platform.environment.containsKey("FLUTTER_TEST")) {
+      _initBle();
+      _startWifiProbe();
+      checkSystemDevices();
+    }
   }
 
   void _startWifiProbe() {
@@ -204,7 +206,7 @@ class BleService extends ChangeNotifier {
 
 
   void _initBle() {
-    if (Platform.isLinux || Platform.isWindows) return;
+    if (Platform.environment.containsKey("FLUTTER_TEST") || Platform.isLinux || Platform.isWindows) return;
     try {
       _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
         _addLog('Bluetooth Adapter State: $state', isTx: false);
@@ -225,7 +227,7 @@ class BleService extends ChangeNotifier {
   /// Queries custom service FFE0, AMS, ANCS, 1800, and centralManager.connectedDevices.
   Future<List<BluetoothDevice>> checkSystemDevices() async {
     final List<BluetoothDevice> matched = [];
-    if (Platform.isLinux || Platform.isWindows) return matched;
+    if (Platform.environment.containsKey("FLUTTER_TEST") || Platform.isLinux || Platform.isWindows) return matched;
     try {
       final isSupported = await FlutterBluePlus.isSupported;
       if (!isSupported) return matched;

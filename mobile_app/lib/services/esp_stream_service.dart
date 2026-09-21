@@ -154,7 +154,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
-    _startWebSocketServer();
+    if (!Platform.environment.containsKey("FLUTTER_TEST")) {
+      _startWebSocketServer();
+    }
   }
 
   /// Start internal HTTP/WebSocket server listening on port 8080
