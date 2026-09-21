@@ -321,3 +321,19 @@ External audit and field analysis identified remaining edge cases in P5.2 that r
 CI / deterministic regression PASS — REAL DEVICE VALIDATION PENDING
 ```
 *(Field navigation defects remain pending until another physical road test is performed in Hanoi.)*
+
+### 16.10 Final P5.2.1 CI Verification Evidence
+- **Implementation SHA**: `63fbe3c90cffa350beddab947503fec539f0ac88`
+- **Workflow Run ID**: `35597282806`
+- **Native Unit Tests Job ID**: `106324915794`
+  - Result: **248 / 248 PASS** (0 failures, 22 named test suites)
+- **Flutter iOS IPA Job ID**: `106324916100`
+  - Result: **SUCCESS**
+- **Native Release Build**: **SUCCESS**
+- **Native IPA Package**: **SUCCESS**
+- **Flutter iOS**: **SUCCESS**
+- **Status**:
+  ```text
+  CI / deterministic regression PASS — REAL DEVICE VALIDATION PENDING
+  ```
+
