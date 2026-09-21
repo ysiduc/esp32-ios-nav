@@ -113,7 +113,7 @@ public enum RouteSimilarity {
             if let point = subjectRoute.geometry.coordinate(atDistanceAlongRoute: currentD) {
                 totalSamples += 1
                 if let proj = targetRoute.geometry.nearestProjection(to: point) {
-                    if proj.distanceToRouteMeters <= corridorDistanceMeters {
+                    if proj.lateralDistanceMeters <= corridorDistanceMeters {
                         matchedSamples += 1
                     }
                 }
