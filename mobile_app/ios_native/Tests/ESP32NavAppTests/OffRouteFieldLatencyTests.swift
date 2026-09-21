@@ -66,7 +66,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testConfirmedToRequestStart_IsImmediate() {
         let route = makeSimpleRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         let fakeRouting = DelayedRoutingService(delay: 0.05)
         var currentTime = baseDate
         let rerouteManager = RerouteManager(
@@ -122,7 +122,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testRerouteOrigin_UsesAcceptedPhysicalLocation() {
         let route = makeSimpleRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         let recordingService = RecordingRoutingService()
         let rerouteManager = RerouteManager(
             routingService: recordingService,
@@ -155,7 +155,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testFirstReroute_NotDelayedByPostSuccessStabilization() {
         let route = makeSimpleRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         let recordingService = RecordingRoutingService()
         let rerouteManager = RerouteManager(
             routingService: recordingService,
@@ -228,7 +228,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testSingleFlightRerouteGuarantee_DoesNotSpawnDuplicateRequests() {
         let route = makeSimpleRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         let delayedService = DelayedRoutingService(delay: 5.0)
         let rerouteManager = RerouteManager(
             routingService: delayedService,
@@ -260,7 +260,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testFieldReplay1_NormalManeuverPass() {
         let route = makeTurnRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: route.coordinates.last!, name: "Đích"))
 
         var time = baseDate
@@ -289,7 +289,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
 
     func testFieldReplay2_WrongTurn() async {
         let routeA = makeTurnRoute()
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         let recordingService = RecordingRoutingService()
         var currentTime = baseDate
         let rerouteManager = RerouteManager(
@@ -366,7 +366,7 @@ final class OffRouteFieldLatencyTests: XCTestCase {
         let step2 = NavStep(coordinate: coords[15], distanceMeters: 400.0, durationSeconds: 30.0, streetName: "Đường Giải Phóng", maneuverType: .arrive, instruction: "Đến đích", beginShapeIndex: 10, endShapeIndex: 15)
 
         let route = NavRoute(coordinates: coords, steps: [step0, step1, step2], totalDistanceMeters: 1200.0, totalDurationSeconds: 100.0)
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
         var time = baseDate

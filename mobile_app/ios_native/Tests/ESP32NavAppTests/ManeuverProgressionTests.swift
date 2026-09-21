@@ -58,7 +58,7 @@ final class ManeuverProgressionTests: XCTestCase {
             totalDurationSeconds: 15.0
         )
 
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
         let begin0 = route.geometry.maneuverBeginDistancesAlongRoute[0]
@@ -167,7 +167,7 @@ final class ManeuverProgressionTests: XCTestCase {
             totalDurationSeconds: 120.0
         )
 
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
         var time = baseDate
@@ -250,7 +250,7 @@ final class ManeuverProgressionTests: XCTestCase {
         )
 
         let route = NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 600.0, totalDurationSeconds: 60.0)
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords[2], name: "Đích"))
 
         // Initial sample at start (0m)
@@ -298,7 +298,7 @@ final class ManeuverProgressionTests: XCTestCase {
         ]
 
         let route = NavRoute(coordinates: coords, steps: steps, totalDistanceMeters: routeDistance(coords), totalDurationSeconds: 40.0)
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
         // GPS skip: vehicle jumps from coord 2 (before step 1) to coord 12 (past step 1 and step 2)

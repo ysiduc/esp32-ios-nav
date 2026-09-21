@@ -23,7 +23,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         ]
         let geometry = RouteGeometry(coordinates: coords)
 
-        let queryPoint = CLLocationCoordinate2D(latitude: 21.0001, longitude: 105.820)
+        let queryPoint = CLLocationCoordinate2D(latitude: 21.0001, longitude: 105.825)
         let nearest = geometry.nearestProjection(to: queryPoint)
 
         XCTAssertNotNil(nearest)
@@ -61,7 +61,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         )
 
         let route = NavRoute(coordinates: coords, steps: [step0, step1], totalDistanceMeters: 749.0, totalDurationSeconds: 70.0)
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: endCoord, name: "Đích"))
 
         var currentTime = baseDate
@@ -123,7 +123,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         )
         let route = NavRoute(coordinates: coordsA, steps: [step], totalDistanceMeters: 556.0, totalDurationSeconds: 60.0)
 
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coordsA[1], name: "Đích"))
 
         var time = baseDate
@@ -256,7 +256,7 @@ final class RouteMatchingFieldRegressionTests: XCTestCase {
         )
         let route = NavRoute(coordinates: coords, steps: [step], totalDistanceMeters: 1000.0, totalDurationSeconds: 100.0)
 
-        let session = NavigationSessionManager()
+        let session = NavigationSessionManager(requestLocationAuthorizationOnInit: false)
         session.startNavigation(route: route, destination: NavigationDestination(coordinate: coords.last!, name: "Đích"))
 
         XCTAssertEqual(session.remainingPolyline.count, 10, "Initial polyline must have all 10 points")

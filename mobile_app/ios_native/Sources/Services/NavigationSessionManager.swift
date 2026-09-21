@@ -272,7 +272,7 @@ public final class NavigationSessionManager: NSObject, ObservableObject {
         let config = LocationTrackingPolicy.configuration(for: resolvedProfile, transportMode: currentTransportMode)
         self.currentTrackingConfig = config
 
-        guard requestLocationAuthorizationOnInit else { return }
+        guard requestLocationAuthorizationOnInit && !ProcessInfo.isRunningUnitTests else { return }
 
         locationManager.desiredAccuracy = config.desiredAccuracy
         locationManager.distanceFilter  = config.distanceFilter

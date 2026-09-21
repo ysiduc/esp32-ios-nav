@@ -104,17 +104,17 @@ public struct OffRouteDetectorConfig: Sendable {
 
     public init(
         baseEnterThresholdMeters: Double = 15.0,
-        accuracyMultiplier: Double = 1.5,
-        recoveryThresholdMeters: Double = 8.0,
-        standardDwellSeconds: Double = 1.8,
+        accuracyMultiplier: Double = 1.2,
+        recoveryThresholdMeters: Double = 10.0,
+        standardDwellSeconds: Double = 2.5,
         courseDivergenceDwellSeconds: Double = 1.0,
         stationaryDwellSeconds: Double = 5.0,
         strongDeviationDwellSeconds: Double = 1.0,
-        strongDeviationThresholdMeters: Double = 25.0,
+        strongDeviationThresholdMeters: Double = 40.0,
         strongDeviationMaxAccuracyMeters: Double = 15.0,
-        courseMismatchAngleDegrees: Double = 50.0,
+        courseMismatchAngleDegrees: Double = 45.0,
         minSpeedForCourseMetersPerSecond: Double = 3.0,
-        recoveryDwellSeconds: Double = 2.0
+        recoveryDwellSeconds: Double = 1.0
     ) {
         self.baseEnterThresholdMeters = baseEnterThresholdMeters
         self.accuracyMultiplier = accuracyMultiplier
