@@ -5,6 +5,97 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 /// Design system variants for Liquid Glass components (P5.7 & P5.7.1)
+
+/// Centralized Design System Tokens for Apple Maps Liquid Glass (P5.8.2)
+/// Adheres strictly to Target Images 1 & 2 (light, airy, translucent, subtle frosted milk,
+/// 0.5pt specular edges, diffused soft shadows) while rejecting Anti-reference Images 3 & 4.
+class AppleGlassTokens {
+  // --- 1. Blur Intensities ---
+  static const double blurLight = 16.0;
+  static const double blurRegular = 20.0;
+  static const double blurProminent = 24.0;
+  static const double blurSheet = 30.0;
+
+  // --- 2. Translucent Light Fills (Milky frosted, airy, low gray tint) ---
+  static final Color fillLight = Colors.white.withOpacity(0.72);
+  static final Color fillRegular = Colors.white.withOpacity(0.78);
+  static final Color fillProminent = Colors.white.withOpacity(0.85);
+  static final Color fillToolbar = Colors.white.withOpacity(0.80);
+  static final Color fillSheet = const Color(0xFFF2F2F7).withOpacity(0.95);
+  static final Color fillSearchField = Colors.white.withOpacity(0.92);
+  static const Color fillCard = Colors.white;
+
+  // --- 3. Specular Border Strokes (0.5pt subtle, refined light highlights) ---
+  static final Color borderSubtle = Colors.white.withOpacity(0.60);
+  static final Color borderEdge = Colors.white.withOpacity(0.80);
+  static final Color borderSheet = Colors.black.withOpacity(0.04);
+  static final Color borderCard = Colors.black.withOpacity(0.06);
+
+  // --- 4. Soft Apple Shadows (Subtle, diffused, no harsh dark drops) ---
+  static final List<BoxShadow> shadowSoft = [
+    BoxShadow(
+      color: Colors.black.withOpacity(0.06),
+      blurRadius: 16,
+      offset: const Offset(0, 3),
+    ),
+  ];
+  static final List<BoxShadow> shadowCard = [
+    BoxShadow(
+      color: Colors.black.withOpacity(0.04),
+      blurRadius: 8,
+      offset: const Offset(0, 2),
+    ),
+  ];
+  static final List<BoxShadow> shadowSheet = [
+    BoxShadow(
+      color: Colors.black.withOpacity(0.12),
+      blurRadius: 28,
+      offset: const Offset(0, -6),
+    ),
+  ];
+
+  // --- 5. Standard Corner Radii ---
+  static const double radiusPill = 24.0;
+  static const double radiusToolbar = 23.0;
+  static const double radiusSheet = 24.0;
+  static const double radiusCard = 16.0;
+
+  // --- 6. Named Tone System Presets (P5.8.2 Requirement C.3) ---
+  static BoxDecoration get glassLight => BoxDecoration(
+    color: fillLight,
+    borderRadius: BorderRadius.circular(radiusPill),
+    border: Border.all(color: borderSubtle, width: 0.5),
+    boxShadow: shadowSoft,
+  );
+
+  static BoxDecoration get glassProminentLight => BoxDecoration(
+    color: fillProminent,
+    borderRadius: BorderRadius.circular(radiusPill),
+    border: Border.all(color: borderEdge, width: 0.5),
+    boxShadow: shadowSoft,
+  );
+
+  static BoxDecoration get glassToolbar => BoxDecoration(
+    color: fillToolbar,
+    borderRadius: BorderRadius.circular(radiusToolbar),
+    border: Border.all(color: borderEdge, width: 0.5),
+    boxShadow: shadowSoft,
+  );
+
+  static BoxDecoration get glassSheet => BoxDecoration(
+    color: fillSheet,
+    borderRadius: const BorderRadius.vertical(top: Radius.circular(radiusSheet)),
+    boxShadow: shadowSheet,
+  );
+
+  static BoxDecoration get glassSearchField => BoxDecoration(
+    color: fillSearchField,
+    borderRadius: BorderRadius.circular(23.0),
+    border: Border.all(color: borderCard, width: 0.5),
+    boxShadow: shadowCard,
+  );
+}
+
 enum AppGlassVariant {
   /// Balanced frosted diffusion with specular edge (default)
   regular,
@@ -532,31 +623,23 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
       );
     }
 
-    // Determine default specular border color
+    // Determine default specular border color (P5.8.2: 0.5pt subtle Apple highlight)
     Color defaultBorderColor;
     switch (widget.variant) {
       case AppGlassVariant.prominent:
-        defaultBorderColor = isDark
-            ? Colors.white.withOpacity(0.24)
-            : Colors.white.withOpacity(0.85);
+        defaultBorderColor = AppleGlassTokens.borderEdge;
         break;
 
       case AppGlassVariant.clear:
-        defaultBorderColor = isDark
-            ? Colors.white.withOpacity(0.20)
-            : Colors.white.withOpacity(0.60);
+        defaultBorderColor = AppleGlassTokens.borderSubtle.withOpacity(0.45);
         break;
 
       case AppGlassVariant.danger:
-        defaultBorderColor = isDark
-            ? const Color(0xFFF87171).withOpacity(0.40)
-            : const Color(0xFFEF4444).withOpacity(0.35);
+        defaultBorderColor = const Color(0xFFEF4444).withOpacity(0.35);
         break;
 
       case AppGlassVariant.regular:
-        defaultBorderColor = isDark
-            ? Colors.white.withOpacity(0.28)
-            : Colors.white.withOpacity(0.65);
+        defaultBorderColor = AppleGlassTokens.borderSubtle;
         break;
     }
 
@@ -564,18 +647,18 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
       color: widget.isSelected
           ? (widget.selectedBorderColor ?? const Color(0xFF007AFF))
           : defaultBorderColor,
-      width: widget.isSelected ? 1.5 : 1.0,
+      width: widget.isSelected ? 1.5 : 0.5,
     );
 
     final shadows = widget.customShadow ?? [
       BoxShadow(
-        color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
+        color: Colors.black.withOpacity(0.06),
         blurRadius: 16,
-        offset: const Offset(0, 4),
+        offset: const Offset(0, 3),
       ),
       if (widget.isSelected)
         BoxShadow(
-          color: (widget.selectedBorderColor ?? const Color(0xFF007AFF)).withOpacity(0.35),
+          color: (widget.selectedBorderColor ?? const Color(0xFF007AFF)).withOpacity(0.25),
           blurRadius: 12,
           spreadRadius: 1,
         ),
@@ -614,27 +697,19 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
     Color fillColor;
     switch (widget.variant) {
       case AppGlassVariant.prominent:
-        fillColor = isDark
-            ? const Color(0xFF1E293B).withOpacity(0.65)
-            : Colors.white.withOpacity(0.85);
+        fillColor = AppleGlassTokens.fillProminent;
         break;
 
       case AppGlassVariant.clear:
-        fillColor = isDark
-            ? Colors.black.withOpacity(0.25)
-            : Colors.white.withOpacity(0.30);
+        fillColor = AppleGlassTokens.fillLight.withOpacity(0.30);
         break;
 
       case AppGlassVariant.danger:
-        fillColor = isDark
-            ? const Color(0xFFEF4444).withOpacity(0.35)
-            : const Color(0xFFEF4444).withOpacity(0.20);
+        fillColor = const Color(0xFFEF4444).withOpacity(0.20);
         break;
 
       case AppGlassVariant.regular:
-        fillColor = isDark
-            ? const Color(0xFF0F172A).withOpacity(0.55)
-            : Colors.white.withOpacity(0.65);
+        fillColor = AppleGlassTokens.fillRegular;
         break;
     }
 

@@ -1243,4 +1243,220 @@ void main() {
       expect(toolbarSurface.groupId, equals('right-toolbar'));
     });
   });
+
+  group('P5.8.2 Map Touch Pass-Through & Apple Maps Liquid Glass Visual', () {
+    tearDown(() {
+      AppGlassBackend.forcePlatformForTesting = null;
+      AppGlassBackend.forceBackendForTesting = null;
+      NativeGlassHostController.instance.resetForTesting();
+    });
+
+    testWidgets('NativeGlassHostLayer wraps platform view in IgnorePointer(ignoring: true)', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                NativeGlassHostLayer(),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final ignorePointerFinder = find.descendant(
+        of: find.byType(NativeGlassHostLayer),
+        matching: find.byType(IgnorePointer),
+      );
+      expect(ignorePointerFinder, findsOneWidget);
+      final IgnorePointer ignorePointer = tester.widget(ignorePointerFinder);
+      expect(ignorePointer.ignoring, isTrue);
+    });
+
+    testWidgets('Map area gestures (tap, drag) pass through NativeGlassHostLayer to underlying map seam', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+
+      int mapTapCount = 0;
+      int mapDragCount = 0;
+      int buttonTapCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                // 1. Underlying Map with gesture detector (simulating MapLibre)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => mapTapCount++,
+                    onPanUpdate: (_) => mapDragCount++,
+                    child: Container(color: Colors.blue.shade900),
+                  ),
+                ),
+
+                // 2. Native Glass Host Layer (Visual only, pass-through)
+                const NativeGlassHostLayer(),
+
+                // 3. Foreground interactive controls
+                Positioned(
+                  top: 100,
+                  right: 20,
+                  child: AppGlassToolbar(
+                    groupId: 'right-toolbar',
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.layers),
+                        onPressed: () => buttonTapCount++,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tap on empty map area (center of screen)
+      await tester.tapAt(const Offset(200, 300));
+      await tester.pump();
+      expect(mapTapCount, equals(1), reason: 'Tap on empty map area must reach the map seam through glass host layer');
+
+      // Drag on empty map area (simulating pan / pinch zoom)
+      await tester.dragFrom(const Offset(200, 300), const Offset(50, 50));
+      await tester.pump();
+      expect(mapDragCount, greaterThan(0), reason: 'Pan/drag gestures on map area must pass through to the map seam');
+
+      // Tap on foreground glass control
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+      expect(buttonTapCount, equals(1), reason: 'Buttons on top of glass host layer must remain interactive');
+    });
+
+    testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec', (tester) {
+      expect(AppleGlassTokens.blurLight, equals(16.0));
+      expect(AppleGlassTokens.blurRegular, equals(20.0));
+      expect(AppleGlassTokens.blurProminent, equals(24.0));
+      expect(AppleGlassTokens.blurSheet, equals(30.0));
+
+      expect(AppleGlassTokens.fillSheet.opacity, closeTo(0.95, 0.02));
+      expect(AppleGlassTokens.radiusSheet, equals(24.0));
+      expect(AppleGlassTokens.radiusToolbar, equals(23.0));
+
+      final toolbarBox = AppleGlassTokens.glassToolbar;
+      expect(toolbarBox.borderRadius, equals(BorderRadius.circular(23.0)));
+
+      final sheetBox = AppleGlassTokens.glassSheet;
+      expect(sheetBox.borderRadius, equals(const BorderRadius.vertical(top: Radius.circular(24.0))));
+    });
+
+    testWidgets('Right toolbar renders as a single unified vertical capsule without ghost rings', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlassContainer;
+
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                const NativeGlassHostLayer(),
+                Positioned(
+                  right: 16,
+                  top: 100,
+                  child: AppGlassToolbar(
+                    groupId: 'right-toolbar',
+                    radius: 23,
+                    width: 46,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    children: [
+                      IconButton(icon: const Icon(Icons.layers), onPressed: () {}),
+                      Container(width: 26, height: 0.8, color: Colors.black12),
+                      IconButton(icon: const Icon(Icons.explore), onPressed: () {}),
+                      Container(width: 26, height: 0.8, color: Colors.black12),
+                      IconButton(icon: const Icon(Icons.directions_car), onPressed: () {}),
+                      Container(width: 26, height: 0.8, color: Colors.black12),
+                      IconButton(icon: const Icon(Icons.navigation), onPressed: () {}),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Ensure only ONE unified surface is registered for right-toolbar (no ghost rings!)
+      expect(controller.surfaces.length, equals(1));
+      final surf = controller.surfaces.values.first;
+      expect(surf.groupId, equals('right-toolbar'));
+      expect(surf.radius, equals(23.0));
+      expect(surf.rect.width, equals(46.0));
+    });
+
+    testWidgets('Top-left weather pill registers single light pill geometry', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                const NativeGlassHostLayer(),
+                Positioned(
+                  left: 16,
+                  top: 50,
+                  child: AppGlassPill(
+                    height: 44,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(icon: const Icon(Icons.menu), onPressed: () {}),
+                        const Text('27°'),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(controller.surfaces.length, equals(1));
+      final surf = controller.surfaces.values.first;
+      expect(surf.rect.height, equals(44.0));
+    });
+
+    testWidgets('Opening search overlay hides native glass host to preserve z-order', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      expect(controller.isOverlayActive, isFalse);
+
+      controller.setOverlayMode(MapOverlayMode.search);
+      expect(controller.isOverlayActive, isTrue);
+
+      controller.setOverlayMode(MapOverlayMode.none);
+      expect(controller.isOverlayActive, isFalse);
+    });
+  });
 }

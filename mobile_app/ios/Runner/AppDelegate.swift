@@ -971,13 +971,21 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
       }
     }
 
-    let blurEffect = UIBlurEffect(style: .systemMaterial)
+    let blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
     let effectView = UIVisualEffectView(effect: blurEffect)
     effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     effectView.layer.cornerRadius = cornerRadius
     effectView.layer.masksToBounds = true
     effectView.isUserInteractionEnabled = false
     container.addSubview(effectView)
+
+    let specularEdge = UIView()
+    specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    specularEdge.layer.cornerRadius = cornerRadius
+    specularEdge.layer.borderWidth = 0.5
+    specularEdge.layer.borderColor = UIColor.white.withAlphaComponent(0.40).cgColor
+    specularEdge.isUserInteractionEnabled = false
+    container.addSubview(specularEdge)
     return container
   }
 
@@ -1017,7 +1025,7 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
     specularEdge.layer.borderWidth = isSelected ? 1.5 : 0.5
     specularEdge.layer.borderColor = isSelected
       ? UIColor(red: 0/255, green: 122/255, blue: 255/255, alpha: 0.9).cgColor
-      : UIColor.white.withAlphaComponent(0.25).cgColor
+      : UIColor.white.withAlphaComponent(0.40).cgColor
     specularEdge.isUserInteractionEnabled = false
     container.addSubview(specularEdge)
 
@@ -1035,29 +1043,29 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
 
     switch variant {
     case "prominent":
-      blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+      blurEffect = UIBlurEffect(style: .systemMaterialLight)
       if tintColor == nil {
-        tintColor = UIColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.35)
+        tintColor = UIColor.white.withAlphaComponent(0.35)
       }
     case "clear":
-      blurEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+      blurEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
       if tintColor == nil {
-        tintColor = UIColor.white.withAlphaComponent(0.04)
+        tintColor = UIColor.white.withAlphaComponent(0.08)
       }
     case "danger":
-      blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
+      blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
       if tintColor == nil {
-        tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.28)
+        tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.20)
       }
     case "regular":
-      blurEffect = UIBlurEffect(style: .systemMaterial)
+      blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
       if tintColor == nil {
-        tintColor = UIColor.white.withAlphaComponent(0.12)
+        tintColor = UIColor.white.withAlphaComponent(0.20)
       }
     default:
-      blurEffect = UIBlurEffect(style: .systemMaterial)
+      blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
       if tintColor == nil {
-        tintColor = UIColor.white.withAlphaComponent(0.12)
+        tintColor = UIColor.white.withAlphaComponent(0.20)
       }
     }
 
@@ -1080,9 +1088,18 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
   }
 }
 
+/// Dedicated pass-through container view for NativeGlassHost (P5.8.2).
+/// Overrides hitTest to return nil so that all touch events (pan, drag, pinch, zoom, tap)
+/// pass directly through the native glass host layer to the underlying MapLibre view hierarchy.
+class PassThroughContainerView: UIView {
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    return nil
+  }
+}
+
 class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
   private static var activeHosts: [NativeGlassHostPlatformView] = []
-  private var containerView: UIView
+  private var containerView: PassThroughContainerView
   private var surfaceViews: [String: UIView] = [:]
   private var groupContainers: [String: UIView] = [:]
 
@@ -1104,7 +1121,7 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
     arguments args: Any?,
     binaryMessenger: FlutterBinaryMessenger?
   ) {
-    containerView = UIView(frame: frame)
+    containerView = PassThroughContainerView(frame: frame)
     containerView.backgroundColor = .clear
     containerView.isUserInteractionEnabled = false
     super.init()
@@ -1169,6 +1186,7 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
           tintColorOverride: tintColor
         )
         view.frame = frame
+        view.isUserInteractionEnabled = false
         containerView.addSubview(view)
         surfaceViews[id] = view
       }
@@ -1200,6 +1218,7 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
       } else {
         groupContainer = NativeGlassPlatformView.createGlassContainerView(cornerRadius: 22.0)
         groupContainer.frame = groupFrame
+        groupContainer.isUserInteractionEnabled = false
         containerView.addSubview(groupContainer)
         groupContainers[groupId] = groupContainer
       }
@@ -1218,18 +1237,30 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
         if let existing = surfaceViews[id] {
           existing.frame = relFrame
         } else {
-          let view = NativeGlassPlatformView.createGlassEffectView(
-            variant: variant,
-            cornerRadius: radius,
-            isSelected: isSelected
-          )
-          view.frame = relFrame
-          if let effectView = groupContainer.subviews.compactMap({ $0 as? UIVisualEffectView }).first {
-            effectView.contentView.addSubview(view)
+          // If UIGlassContainerEffect is available (iOS 26+), child uses UIGlassEffect.
+          // Otherwise, groupContainer already provides unified UIBlurEffect backdrop (no ghost rings!).
+          if NativeGlassPlatformView.isGlassContainerAvailable {
+            let view = NativeGlassPlatformView.createGlassEffectView(
+              variant: variant,
+              cornerRadius: radius,
+              isSelected: isSelected
+            )
+            view.frame = relFrame
+            view.isUserInteractionEnabled = false
+            if let effectView = groupContainer.subviews.compactMap({ $0 as? UIVisualEffectView }).first {
+              effectView.contentView.addSubview(view)
+            } else {
+              groupContainer.addSubview(view)
+            }
+            surfaceViews[id] = view
           } else {
+            // Fallback: child view is purely a layout anchor inside the unified group container
+            let view = UIView(frame: relFrame)
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
             groupContainer.addSubview(view)
+            surfaceViews[id] = view
           }
-          surfaceViews[id] = view
         }
       }
     }

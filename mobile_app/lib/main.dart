@@ -60,13 +60,13 @@ class Esp32NavApp extends StatelessWidget {
         title: 'ysiduc',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: const Color(0xFF0D1117),
-          primaryColor: const Color(0xFF00F0FF),
-          colorScheme: const ColorScheme.dark(
-            primary: Color(0xFF00F0FF),
-            secondary: Color(0xFF05FFA1),
-            surface: Color(0xFF161B22),
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: const Color(0xFFF2F2F7),
+          primaryColor: const Color(0xFF007AFF),
+          colorScheme: const ColorScheme.light(
+            primary: Color(0xFF007AFF),
+            secondary: Color(0xFF5E5CE6),
+            surface: Color(0xFFFFFFFF),
           ),
           fontFamily: 'Roboto',
           useMaterial3: true,
