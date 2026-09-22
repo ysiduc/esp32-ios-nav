@@ -1340,7 +1340,7 @@ void main() {
       expect(buttonTapCount, equals(1), reason: 'Buttons on top of glass host layer must remain interactive');
     });
 
-    testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec', (tester) {
+    testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec', (tester) async {
       expect(AppleGlassTokens.blurLight, equals(16.0));
       expect(AppleGlassTokens.blurRegular, equals(20.0));
       expect(AppleGlassTokens.blurProminent, equals(24.0));
