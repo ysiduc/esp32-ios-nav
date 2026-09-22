@@ -42,6 +42,7 @@ enum OffRouteReason {
   none,
   sustainedLateralDeviation,
   courseDivergence,
+  wrongWayDivergence,
   strongLateralDeviation,
   lowSpeedDriftDwell,
   stuckMatcherDeviation,
@@ -84,6 +85,8 @@ class OffRouteDetectorConfig {
   final double strongDeviationThresholdMeters;
   final double strongDeviationMaxAccuracyMeters;
   final double courseMismatchAngleDegrees;
+  final double wrongWayMismatchAngleDegrees;
+  final double wrongWayDwellSeconds;
   final double minSpeedForCourseMetersPerSecond;
   final double recoveryDwellSeconds;
   final double moderateDeviationDwellSeconds;
@@ -94,11 +97,13 @@ class OffRouteDetectorConfig {
     this.recoveryThresholdMeters = 10.0,
     this.standardDwellSeconds = 2.5,
     this.courseDivergenceDwellSeconds = 1.0,
+    this.wrongWayDwellSeconds = 0.8,
     this.stationaryDwellSeconds = 5.0,
     this.strongDeviationDwellSeconds = 1.0,
     this.strongDeviationThresholdMeters = 40.0,
     this.strongDeviationMaxAccuracyMeters = 15.0,
     this.courseMismatchAngleDegrees = 45.0,
+    this.wrongWayMismatchAngleDegrees = 120.0,
     this.minSpeedForCourseMetersPerSecond = 3.0,
     this.recoveryDwellSeconds = 1.0,
     this.moderateDeviationDwellSeconds = 2.0,
@@ -144,13 +149,32 @@ class OffRouteDetector {
     final moderateThreshold = math.max(10.0, observation.horizontalAccuracyMeters * 1.5);
     final recoveryThreshold = config.recoveryThresholdMeters;
 
+    final diffAngle = (observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
+            observation.courseDegrees != null &&
+            observation.courseDegrees! >= 0.0 &&
+            observation.routeBearingDegrees != null)
+        ? angularDifferenceDegrees(observation.courseDegrees!, observation.routeBearingDegrees!)
+        : null;
+
+    final isWrongWay = diffAngle != null &&
+        diffAngle >= config.wrongWayMismatchAngleDegrees &&
+        observation.horizontalAccuracyMeters <= 20.0;
+
     switch (_state) {
       case OffRouteState.onRoute:
         bool suspicionTriggered = false;
         OffRouteReason initialReason = OffRouteReason.none;
 
+        // Signal W: Wrong-way movement fast track (P5.6 Section 3)
+        // User moving opposite to route bearing escalates even inside corridor (>= 3m)
+        if (isWrongWay && physicalDistance >= 3.0) {
+          suspicionTriggered = true;
+          initialReason = OffRouteReason.wrongWayDivergence;
+        }
+
         // Signal D: Strong deviation fast track (checked first for accurate initialReason)
-        if (physicalDistance >= config.strongDeviationThresholdMeters &&
+        if (!suspicionTriggered &&
+            physicalDistance >= config.strongDeviationThresholdMeters &&
             observation.horizontalAccuracyMeters <= config.strongDeviationMaxAccuracyMeters) {
           suspicionTriggered = true;
           initialReason = OffRouteReason.strongLateralDeviation;
@@ -224,7 +248,8 @@ class OffRouteDetector {
 
       case OffRouteState.suspected:
         // If physical distance returned below recovery threshold, abort suspicion immediately
-        if (physicalDistance <= recoveryThreshold) {
+        // (Only recover if not traveling in the wrong direction)
+        if (physicalDistance <= recoveryThreshold && !isWrongWay) {
           _state = OffRouteState.onRoute;
           _suspectStartedAt = null;
           _recoveryStartedAt = null;
@@ -274,7 +299,7 @@ class OffRouteDetector {
         }
 
       case OffRouteState.confirmed:
-        if (physicalDistance <= recoveryThreshold) {
+        if (physicalDistance <= recoveryThreshold && !isWrongWay) {
           final recStart = _recoveryStartedAt ?? observation.timestamp;
           _recoveryStartedAt ??= observation.timestamp;
           final elapsedRecovery =
@@ -322,6 +347,21 @@ class OffRouteDetector {
     required double moderateThreshold,
     required double enterThreshold,
   }) {
+    // 0. Wrong-way fast track (P5.6 Section 3: angle >= 120 deg while moving)
+    if (observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
+        observation.horizontalAccuracyMeters <= 20.0 &&
+        observation.courseDegrees != null &&
+        observation.courseDegrees! >= 0.0 &&
+        observation.routeBearingDegrees != null) {
+      final diff = angularDifferenceDegrees(
+        observation.courseDegrees!,
+        observation.routeBearingDegrees!,
+      );
+      if (diff >= config.wrongWayMismatchAngleDegrees) {
+        return (config.wrongWayDwellSeconds, OffRouteReason.wrongWayDivergence);
+      }
+    }
+
     // 1. Strong deviation fast track
     if (physicalDistance >= config.strongDeviationThresholdMeters &&
         observation.horizontalAccuracyMeters <= config.strongDeviationMaxAccuracyMeters) {

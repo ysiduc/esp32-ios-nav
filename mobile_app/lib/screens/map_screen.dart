@@ -54,12 +54,31 @@ class _MapLibreLineDrawer implements MapLineDrawer {
   }
 
   @override
-  Future<void> drawActiveRoute({required List<LatLng> remainingPolyline}) async {
+  Future<void> drawActiveRoute({
+    required List<LatLng> remainingPolyline,
+    List<LatLng>? secondaryPolyline,
+  }) async {
     final ctrl = getController();
-    if (ctrl == null || remainingPolyline.length < 2) return;
+    if (ctrl == null) return;
+
+    // 1. Draw Secondary reference route (pale blue ~50% opacity) if present (P5.6 BUG F)
+    if (secondaryPolyline != null && secondaryPolyline.length >= 2) {
+      final secGeometry = secondaryPolyline.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: secGeometry,
+          lineColor: '#007AFF',
+          lineWidth: 5.0,
+          lineOpacity: 0.45,
+          lineJoin: 'round',
+        ),
+      );
+    }
+
+    if (remainingPolyline.length < 2) return;
     final mlGeometry = remainingPolyline.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
 
-    // 1. Casing / Glow outline (Apple Maps Deep Blue Casing #0051B3)
+    // 2. Casing / Glow outline (Apple Maps Deep Blue Casing #0051B3)
     await ctrl.addLine(
       ml.LineOptions(
         geometry: mlGeometry,
@@ -70,7 +89,7 @@ class _MapLibreLineDrawer implements MapLineDrawer {
       ),
     );
 
-    // 2. Core Apple Maps Vibrant Route Line (#007AFF)
+    // 3. Core Apple Maps Vibrant Route Line (#007AFF)
     await ctrl.addLine(
       ml.LineOptions(
         geometry: mlGeometry,
@@ -200,11 +219,43 @@ class _MapScreenState extends State<MapScreen> {
   bool _isAutoCentering = true;
   Timer? _recenterTimer;
 
-  // P5.5.1: Deterministic RouteRenderController
+  // P5.5.1 & P5.6: Deterministic RouteRenderController
   late final RouteRenderController _routeRenderController;
   int _lastObservedRouteRevision = -1;
   bool _lastObservedNavigating = false;
   int get routeGeometryUpdatesCount => _routeRenderController.renderCount;
+
+  DateTime _lastRouteRenderTime = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _routeRenderCadenceTimer;
+
+  void _throttledUpdateRouteOnMap({bool forceRedraw = false}) {
+    if (forceRedraw) {
+      _routeRenderCadenceTimer?.cancel();
+      _lastRouteRenderTime = DateTime.now();
+      _updateRouteOnMap(forceRedraw: true);
+      return;
+    }
+
+    final now = DateTime.now();
+    final elapsedMs = now.difference(_lastRouteRenderTime).inMilliseconds;
+
+    // P5.6 Section 5: Decoupled responsive ~250ms route redraw cadence
+    if (elapsedMs < 250) {
+      if (_routeRenderCadenceTimer == null || !_routeRenderCadenceTimer!.isActive) {
+        final delayMs = (250 - elapsedMs > 0) ? (250 - elapsedMs) : 0;
+        _routeRenderCadenceTimer = Timer(Duration(milliseconds: delayMs), () {
+          if (mounted) {
+            _lastRouteRenderTime = DateTime.now();
+            _updateRouteOnMap();
+          }
+        });
+      }
+      return;
+    }
+
+    _lastRouteRenderTime = now;
+    _updateRouteOnMap();
+  }
 
   DateTime _lastCameraAnimateTime = DateTime.fromMillisecondsSinceEpoch(0);
   bool _isCameraAnimating = false;
@@ -317,7 +368,7 @@ class _MapScreenState extends State<MapScreen> {
           if (_isAutoCentering) {
             _throttledAnimateCamera(loc, heading);
           }
-          _updateRouteOnMap();
+          _throttledUpdateRouteOnMap();
         }
       };
 
@@ -386,6 +437,9 @@ class _MapScreenState extends State<MapScreen> {
     switch (mode) {
       case RoutePresentationMode.navigating:
         mainPoints = navManager.remainingPolyline;
+        if (navManager.secondaryPolyline.length >= 2) {
+          altPoints.add(navManager.secondaryPolyline);
+        }
         break;
       case RoutePresentationMode.preview:
         if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
@@ -660,12 +714,17 @@ class _MapScreenState extends State<MapScreen> {
     if (rev != _lastObservedRouteRevision || isNav != _lastObservedNavigating) {
       _lastObservedRouteRevision = rev;
       _lastObservedNavigating = isNav;
-      _updateRouteOnMap(forceRedraw: true);
+      if (!isNav) {
+        _routes = [];
+        _routeRenderController.reset();
+      }
+      _throttledUpdateRouteOnMap(forceRedraw: true);
     }
   }
 
   @override
   void dispose() {
+    _routeRenderCadenceTimer?.cancel();
     _cameraCadenceTimer?.cancel();
     _debounceTimer?.cancel();
     _recenterTimer?.cancel();
@@ -1588,7 +1647,7 @@ class _MapScreenState extends State<MapScreen> {
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),
             const Text(
-              'NAV ENGINE (P5.5.2)',
+              'NAV ENGINE (P5.6)',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFFFF9500)),
             ),
             const SizedBox(height: 4),
@@ -1597,6 +1656,11 @@ class _MapScreenState extends State<MapScreen> {
               Text('Phys: ${physicalLoc.latitude.toStringAsFixed(5)}, ${physicalLoc.longitude.toStringAsFixed(5)}', style: const TextStyle(fontSize: 10, color: Colors.black87)),
             if (matchedLoc != null)
               Text('Match: ${matchedLoc.latitude.toStringAsFixed(5)}, ${matchedLoc.longitude.toStringAsFixed(5)}', style: const TextStyle(fontSize: 10, color: Colors.black87)),
+            Text('Step: #${navManager.authoritativeCurrentManeuver?.stepIndex ?? 0} (${navManager.authoritativeCurrentManeuver?.maneuverType.name ?? "none"})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Modifier: ${navManager.authoritativeCurrentManeuver?.maneuverModifier ?? "none"}', style: const TextStyle(fontSize: 11)),
+            Text('Heading Δ: ${navManager.headingDeltaVsRouteDegrees?.toStringAsFixed(0) ?? "--"}° (WrongWay: ${navManager.isWrongWayDivergence ? "YES" : "NO"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: navManager.isWrongWayDivergence ? Colors.red : Colors.black87)),
+            Text('Secondary route: ${navManager.secondaryPolyline.isNotEmpty ? "YES" : "NO"}', style: const TextStyle(fontSize: 11)),
+            Text('Renders count: ${_routeRenderController.renderCount}', style: const TextStyle(fontSize: 11)),
             Text('Physical route dist: ${physicalRouteDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
             Text('Matched lateral: ${matchedLateralDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
             Text('Progress: ${navManager.displayProgressMeters.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11)),
@@ -3008,11 +3072,10 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Active Driving Turn Banner (Screenshot 5)
   // -------------------------------------------------------------
   Widget _buildAppleActiveDrivingTurnBanner(NavigationManager navManager) {
-    final step = navManager.currentStep;
     final dist = navManager.distanceToNextManeuver.round();
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)} km' : '$dist m';
-    final street = step?.streetName ?? 'Tiếp tục đi thẳng';
-    final icon = step?.icon ?? Icons.straight_rounded;
+    final instruction = navManager.bannerInstruction;
+    final icon = navManager.bannerTurnIcon;
 
     return GestureDetector(
       onTap: () {
@@ -3062,7 +3125,7 @@ class _MapScreenState extends State<MapScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  street,
+                  instruction,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -3309,8 +3372,13 @@ class _MapScreenState extends State<MapScreen> {
                     // Red circular End Route button - Clears route and restores clean map
                     GestureDetector(
                       onTap: () async {
+                        _routeRenderCadenceTimer?.cancel();
+                        _routes = [];
+                        _selectedRouteIndex = 0;
+                        _routeRenderController.reset();
                         navManager.stopNavigation();
                         navManager.setPreviewRoute(null);
+                        await _updateRouteOnMap(forceRedraw: true);
                         await _mapController?.clearLines();
                         await _mapController?.clearCircles();
                         setState(() {

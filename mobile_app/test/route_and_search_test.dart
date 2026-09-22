@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/models/esp_payload.dart';
@@ -162,6 +163,86 @@ void main() {
       expect(voice.isMuted, isTrue);
       voice.setMuted(false);
       expect(voice.isMuted, isFalse);
+    });
+
+    test('P5.6 Section 7 & 11: Comprehensive maneuver, modifier, icon and turn code directional mapping', () {
+      NavStep createStep(String typeStr, String? modifier) {
+        return NavStep(
+          stepIndex: 0,
+          instruction: 'Instruction',
+          streetName: 'Street',
+          distanceMeters: 100.0,
+          durationSeconds: 10.0,
+          coordinate: const LatLng(21.0, 105.0),
+          maneuverTypeStr: typeStr,
+          maneuverModifier: modifier,
+        );
+      }
+
+      // Straight
+      final sStraight = createStep('turn', 'straight');
+      expect(sStraight.maneuverType, equals(ManeuverType.straight));
+      expect(sStraight.icon, equals(Icons.arrow_upward_rounded));
+      expect(sStraight.turnCode, equals(0));
+
+      // Slight Right
+      final sSlightRight = createStep('turn', 'slight right');
+      expect(sSlightRight.maneuverType, equals(ManeuverType.slightRight));
+      expect(sSlightRight.icon, equals(Icons.turn_slight_right_rounded));
+      expect(sSlightRight.turnCode, equals(1));
+
+      // Right
+      final sRight = createStep('turn', 'right');
+      expect(sRight.maneuverType, equals(ManeuverType.turnRight));
+      expect(sRight.icon, equals(Icons.turn_right_rounded));
+      expect(sRight.turnCode, equals(2));
+
+      // Sharp Right
+      final sSharpRight = createStep('turn', 'sharp right');
+      expect(sSharpRight.maneuverType, equals(ManeuverType.sharpRight));
+      expect(sSharpRight.icon, equals(Icons.turn_sharp_right_rounded));
+      expect(sSharpRight.turnCode, equals(3));
+
+      // U-turn
+      final sUturn = createStep('turn', 'u-turn');
+      expect(sUturn.maneuverType, equals(ManeuverType.uTurn));
+      expect(sUturn.icon, equals(Icons.u_turn_left_rounded));
+      expect(sUturn.turnCode, equals(4));
+
+      // Sharp Left
+      final sSharpLeft = createStep('turn', 'sharp left');
+      expect(sSharpLeft.maneuverType, equals(ManeuverType.sharpLeft));
+      expect(sSharpLeft.icon, equals(Icons.turn_sharp_left_rounded));
+      expect(sSharpLeft.turnCode, equals(5));
+
+      // Left
+      final sLeft = createStep('turn', 'left');
+      expect(sLeft.maneuverType, equals(ManeuverType.turnLeft));
+      expect(sLeft.icon, equals(Icons.turn_left_rounded));
+      expect(sLeft.turnCode, equals(6));
+
+      // Slight Left
+      final sSlightLeft = createStep('turn', 'slight left');
+      expect(sSlightLeft.maneuverType, equals(ManeuverType.slightLeft));
+      expect(sSlightLeft.icon, equals(Icons.turn_slight_left_rounded));
+      expect(sSlightLeft.turnCode, equals(7));
+
+      // Roundabout
+      final sRoundabout = createStep('roundabout', null);
+      expect(sRoundabout.maneuverType, equals(ManeuverType.roundabout));
+      expect(sRoundabout.icon, equals(Icons.roundabout_right_rounded));
+      expect(sRoundabout.turnCode, equals(8));
+
+      // Arrive
+      final sArrive = createStep('arrive', null);
+      expect(sArrive.maneuverType, equals(ManeuverType.arrive));
+      expect(sArrive.icon, equals(Icons.flag_rounded));
+      expect(sArrive.turnCode, equals(9));
+
+      // Depart
+      final sDepart = createStep('depart', null);
+      expect(sDepart.maneuverType, equals(ManeuverType.depart));
+      expect(sDepart.turnCode, equals(10));
     });
   });
 }

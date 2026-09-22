@@ -9,6 +9,7 @@ class MockMapLineDrawer implements MapLineDrawer {
   int drawPreviewRoutesCallCount = 0;
 
   List<LatLng> lastDrawnActivePolyline = [];
+  List<LatLng>? lastDrawnSecondaryPolyline;
   List<LatLng> lastDrawnMainRoute = [];
   List<List<LatLng>> lastDrawnAltRoutes = [];
 
@@ -30,9 +31,13 @@ class MockMapLineDrawer implements MapLineDrawer {
   }
 
   @override
-  Future<void> drawActiveRoute({required List<LatLng> remainingPolyline}) async {
+  Future<void> drawActiveRoute({
+    required List<LatLng> remainingPolyline,
+    List<LatLng>? secondaryPolyline,
+  }) async {
     drawActiveRouteCallCount++;
     lastDrawnActivePolyline = List.unmodifiable(remainingPolyline);
+    lastDrawnSecondaryPolyline = secondaryPolyline != null ? List.unmodifiable(secondaryPolyline) : null;
     if (onDrawStarted != null && !onDrawStarted!.isCompleted) {
       onDrawStarted!.complete();
     }
@@ -327,6 +332,72 @@ void main() {
       expect(controller.lastRenderedMode, RoutePresentationMode.none);
       expect(controller.lastRenderedPointsCount, 0);
       expect(controller.isRendering, isFalse);
+    });
+  
+    test('P5.6 Section 10: Dual-route primary + secondary route drawing and persistence', () async {
+      final drawer = MockMapLineDrawer();
+      final controller = RouteRenderController(drawer);
+
+      final primary = [
+        const LatLng(21.000, 105.000),
+        const LatLng(21.001, 105.001),
+      ];
+      final secondary = [
+        const LatLng(21.000, 105.000),
+        const LatLng(21.000, 105.002),
+        const LatLng(21.000, 105.005),
+      ];
+
+      await controller.submitRequest(
+        routeRevision: 2,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: primary,
+        altPoints: [secondary],
+      );
+
+      expect(drawer.drawActiveRouteCallCount, 1);
+      expect(drawer.lastDrawnActivePolyline, primary);
+      expect(drawer.lastDrawnSecondaryPolyline, secondary);
+      expect(controller.lastRenderedRouteRevision, 2);
+
+      // Now cancel navigation -> both must clear cleanly
+      controller.reset();
+      await controller.submitRequest(
+        routeRevision: 3,
+        mode: RoutePresentationMode.none,
+        mainPoints: [],
+        
+        forceRedraw: true,
+      );
+
+      expect(controller.lastRenderedMode, RoutePresentationMode.none);
+      expect(controller.lastRenderedPointsCount, 0);
+    });
+
+    test('P5.6 Section 5: Rapid 10 Hz GPS cadence does not starve or freeze render queue', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.clearDelay = const Duration(milliseconds: 10);
+      drawer.drawDelay = const Duration(milliseconds: 10);
+      final controller = RouteRenderController(drawer);
+
+      final futures = <Future<void>>[];
+      for (int i = 0; i < 10; i++) {
+        final pts = [
+          LatLng(21.0 + i * 0.0001, 105.0 + i * 0.0001),
+          const LatLng(21.01, 105.01),
+        ];
+        futures.add(controller.submitRequest(
+          routeRevision: 1,
+          mode: RoutePresentationMode.navigating,
+          mainPoints: pts,
+        ));
+      }
+
+      await Future.wait(futures);
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.latestCommittedGeneration, 10);
+      expect(drawer.lastDrawnActivePolyline.first.latitude, closeTo(21.0009, 0.00001));
     });
   });
 }

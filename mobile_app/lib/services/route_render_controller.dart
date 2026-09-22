@@ -18,6 +18,7 @@ abstract class MapLineDrawer {
   });
   Future<void> drawActiveRoute({
     required List<LatLng> remainingPolyline,
+    List<LatLng>? secondaryPolyline,
   });
 }
 
@@ -158,7 +159,11 @@ class RouteRenderController {
 
         if (req.mode == RoutePresentationMode.navigating) {
           if (req.mainPoints.length >= 2) {
-            await _drawer.drawActiveRoute(remainingPolyline: req.mainPoints);
+            final sec = req.altPoints.isNotEmpty ? req.altPoints.first : null;
+            await _drawer.drawActiveRoute(
+              remainingPolyline: req.mainPoints,
+              secondaryPolyline: sec,
+            );
           }
         } else if (req.mode == RoutePresentationMode.preview) {
           if (req.mainPoints.length >= 2) {

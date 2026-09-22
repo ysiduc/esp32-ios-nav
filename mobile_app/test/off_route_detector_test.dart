@@ -219,5 +219,72 @@ void main() {
       expect(dec1.state, equals(OffRouteState.onRoute));
       expect(dec1.recovered, isTrue);
     });
+
+    test('P5.6 Section 3: Wrong-way movement triggers suspicion inside corridor and confirms in 0.8s', () {
+      final t0 = baseTime;
+      // Route heads East (90 deg), vehicle drives West (270 deg) -> angle diff = 180 deg
+      // Vehicle is only 4.0m from centerline (inside normal corridor)
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 4.0,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec0.state, equals(OffRouteState.suspected));
+      expect(dec0.reason, equals(OffRouteReason.wrongWayDivergence));
+
+      // After 0.9s (> 0.8s wrongWayDwellSeconds), confirmed off route
+      final t1 = t0.add(const Duration(milliseconds: 900));
+      final dec1 = detector.evaluate(OffRouteObservation(
+        timestamp: t1,
+        rawPhysicalRouteDistanceMeters: 4.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec1.state, equals(OffRouteState.confirmed));
+      expect(dec1.becameConfirmed, isTrue);
+      expect(dec1.reason, equals(OffRouteReason.wrongWayDivergence));
+    });
+
+    test('P5.6 Section 3: Active wrong-way travel prohibits false recovery to onRoute near centerline', () {
+      final t0 = baseTime;
+      detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 4.0,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(detector.state, equals(OffRouteState.suspected));
+
+      // Crosses road centerline (distance 1.5m <= 10m recovery threshold), but still driving wrong-way
+      final t1 = t0.add(const Duration(milliseconds: 400));
+      final dec1 = detector.evaluate(OffRouteObservation(
+        timestamp: t1,
+        rawPhysicalRouteDistanceMeters: 1.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec1.state, equals(OffRouteState.suspected), reason: 'Must NOT recover while driving in opposite direction');
+
+      // Reaches dwell time -> confirms
+      final t2 = t0.add(const Duration(milliseconds: 900));
+      final dec2 = detector.evaluate(OffRouteObservation(
+        timestamp: t2,
+        rawPhysicalRouteDistanceMeters: 2.0,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec2.state, equals(OffRouteState.confirmed));
+    });
   });
 }

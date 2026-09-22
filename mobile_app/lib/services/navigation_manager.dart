@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/esp_payload.dart';
@@ -126,7 +127,15 @@ class NavigationManager extends ChangeNotifier {
   LatLng? get acceptedPhysicalLocation => _acceptedPhysicalLocation;
   RouteProjection? get matchedProjection => _matchedProjection;
   LatLng? get matchedLocation => _matchedLocation;
-  LatLng? get currentLocation => _matchedLocation ?? _acceptedPhysicalLocation ?? _rawLocation;
+
+  // P5.6 Section 9: When off-route, display physical location to prevent vehicle puck from sticking to old route
+  LatLng? get currentLocation {
+    if (_lastOffRouteDecision?.state == OffRouteState.confirmed ||
+        _lastOffRouteDecision?.state == OffRouteState.suspected) {
+      return _acceptedPhysicalLocation ?? _rawLocation ?? _matchedLocation;
+    }
+    return _matchedLocation ?? _acceptedPhysicalLocation ?? _rawLocation;
+  }
   double get horizontalAccuracy => _horizontalAccuracy;
 
   // Progress Getters
@@ -135,10 +144,28 @@ class NavigationManager extends ChangeNotifier {
   double get displayProgressMeters => _displayProgressMeters;
   LatLng? get navigationDestination => _navigationDestination;
 
+  // Secondary Reference Route (P5.6 BUG F)
+  NavRoute? _secondaryRoute;
+  NavRoute? get secondaryRoute => _secondaryRoute;
+  List<LatLng> get secondaryPolyline => _secondaryRoute?.polylinePoints ?? const [];
+
   // Diagnostics Getters
   OffRouteDecision? get lastOffRouteDecision => _lastOffRouteDecision;
   String get rerouteStatus => _rerouteStatus;
   int get rerouteGeneration => _rerouteGeneration;
+
+  // Telemetry Getters (P5.6 Section 12)
+  double? get headingDeltaVsRouteDegrees {
+    if (_currentHeading < 0.0 || _currentSpeedKmh < 3.0) return null;
+    final routeBearing = _matchedProjection?.routeBearingDegrees;
+    if (routeBearing == null) return null;
+    return OffRouteDetector.angularDifferenceDegrees(effectiveHeading, routeBearing);
+  }
+
+  bool get isWrongWayDivergence {
+    final d = headingDeltaVsRouteDegrees;
+    return d != null && d >= 120.0 && _horizontalAccuracy <= 20.0;
+  }
 
   /// Authoritative remaining polyline starting directly from _displayProgressMeters (Section 14).
   /// Passed vertices are promptly stripped; the first coordinate represents displayProgress.
@@ -189,6 +216,28 @@ class NavigationManager extends ChangeNotifier {
       return null;
     }
     return _activeRoute!.steps[_currentStepIndex];
+  }
+
+  /// Authoritative current/upcoming maneuver for banner & ESP32 synchronization (P5.6 Section 6)
+  /// When approaching next turn ahead, the upcoming action is step index + 1
+  NavStep? get authoritativeCurrentManeuver {
+    if (_activeRoute == null || _activeRoute!.steps.isEmpty) return null;
+    if (_currentStepIndex + 1 < _activeRoute!.steps.length) {
+      return _activeRoute!.steps[_currentStepIndex + 1];
+    }
+    return _activeRoute!.steps.last;
+  }
+
+  String get bannerInstruction {
+    final m = authoritativeCurrentManeuver;
+    if (m == null) return 'Tiếp tục đi thẳng';
+    if (m.instruction.isNotEmpty) return m.instruction;
+    if (m.streetName.isNotEmpty) return 'Đi vào ${m.streetName}';
+    return 'Tiếp tục đi thẳng';
+  }
+
+  IconData get bannerTurnIcon {
+    return authoritativeCurrentManeuver?.icon ?? Icons.arrow_upward_rounded;
   }
 
   NavigationManager({
@@ -437,6 +486,7 @@ class NavigationManager extends ChangeNotifier {
         _remainingTotalDistance = 0.0;
         _remainingEtaMinutes = 0;
         _currentSpeedKmh = 0.0;
+        _secondaryRoute = null;
         VoiceGuidanceService().announceArrival(_activeRoute?.title);
         notifyListeners();
         _sendCurrentPayloadToEsp32();
@@ -670,6 +720,18 @@ class NavigationManager extends ChangeNotifier {
 
       if (newRoute != null && newRoute.polylinePoints.length >= 2) {
         routeReceivedAt = completionTime;
+
+        // P5.6 BUG F: Preserve remaining portion of old route as secondary reference route
+        if (_activeRoute != null && _activeRouteGeometry != null) {
+          _secondaryRoute = NavRoute(
+            totalDistanceMeters: _activeRoute!.totalDistanceMeters,
+            totalDurationSeconds: _activeRoute!.totalDurationSeconds,
+            polylinePoints: remainingPolyline,
+            steps: const [],
+            summary: 'Lộ trình cũ',
+          );
+        }
+
         // ATOMIC COMMIT OF ROUTE B (Sections 40, 42)
         _activeRoute = newRoute;
         _activeRouteGeometry = RouteGeometry(newRoute.polylinePoints, steps: newRoute.steps);
@@ -826,7 +888,7 @@ class NavigationManager extends ChangeNotifier {
   void _pushNavigationDataToBle() {
     if ((!bleService.isConnected && !bleService.isWifiConnected) || _activeRoute == null) return;
 
-    final step = currentStep ?? _activeRoute!.steps.first;
+    final step = authoritativeCurrentManeuver ?? currentStep ?? _activeRoute!.steps.first;
     final upcomingPts = computeUpcomingRoutePoints();
 
     final now = DateTime.now();
@@ -840,7 +902,7 @@ class NavigationManager extends ChangeNotifier {
       distanceToTurn: _distanceToNextManeuver.round(),
       totalDistance: _remainingTotalDistance.round(),
       etaMinutes: _remainingEtaMinutes,
-      streetName: step.streetName,
+      streetName: step.streetName.isNotEmpty ? step.streetName : step.instruction,
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _currentStepIndex,
       totalSteps: _activeRoute!.steps.length,
@@ -866,14 +928,15 @@ class NavigationManager extends ChangeNotifier {
     final curClock = '$h:$m';
     final upcomingPts = _isNavigating ? computeUpcomingRoutePoints() : <List<int>>[];
 
+    final mStep = authoritativeCurrentManeuver ?? currentStep;
     final payload = EspNavPayload(
       isNavigating: _isNavigating,
-      turnCode: _isNavigating ? (currentStep?.turnCode ?? 0) : 0,
+      turnCode: _isNavigating ? (mStep?.turnCode ?? 0) : 0,
       distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
       totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
       etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
       streetName: _isNavigating
-          ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '')
+          ? (mStep?.streetName.isNotEmpty == true ? mStep!.streetName : (mStep?.instruction ?? ''))
           : 'SAN SANG',
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _isNavigating ? _currentStepIndex : 0,
@@ -907,6 +970,7 @@ class NavigationManager extends ChangeNotifier {
     _rerouteStatus = 'idle';
     _activeRoute = null;
     _previewRoute = null;
+    _secondaryRoute = null;
     _activeRouteGeometry = null;
     _navigationDestination = null;
     _currentStepIndex = 0;

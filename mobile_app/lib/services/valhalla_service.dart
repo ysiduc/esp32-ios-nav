@@ -151,23 +151,44 @@ class ValhallaService implements RoutingService {
   String _mapValhallaTypeToString(int type) {
     if (type == 4 || type == 5 || type == 6) return 'arrive';
     if (type == 1 || type == 2 || type == 3) return 'depart';
-    if (type >= 24 && type <= 27) return 'roundabout';
+    if (type == 26 || type == 27) return 'roundabout';
+    if (type == 17 || type == 18 || type == 19) return 'ramp';
+    if (type == 20 || type == 21) return 'exit';
+    if (type == 25) return 'merge';
     return 'turn';
   }
 
   String _mapValhallaTypeToModifier(int type) {
     switch (type) {
-      case 10: return 'slight right';
-      case 11: return 'right';
-      case 12: return 'sharp right';
-      case 13: return 'u-turn';
-      case 14: return 'sharp left';
-      case 15: return 'left';
-      case 16: return 'slight left';
-      case 7:
-      case 8:
-      case 9:
-      default: return 'straight';
+      case 2: // kStartRight
+      case 9: // kSlightRight
+      case 18: // kRampRight
+      case 20: // kExitRight
+      case 23: // kStayRight
+        return 'slight right';
+      case 10: // kRight
+        return 'right';
+      case 11: // kSharpRight
+        return 'sharp right';
+      case 12: // kUturnRight
+      case 13: // kUturnLeft
+        return 'u-turn';
+      case 14: // kSharpLeft
+        return 'sharp left';
+      case 15: // kLeft
+        return 'left';
+      case 3: // kStartLeft
+      case 16: // kSlightLeft
+      case 19: // kRampLeft
+      case 21: // kExitLeft
+      case 24: // kStayLeft
+        return 'slight left';
+      case 7: // kBecomes
+      case 8: // kContinue
+      case 17: // kRampStraight
+      case 22: // kStayStraight
+      default:
+        return 'straight';
     }
   }
 }

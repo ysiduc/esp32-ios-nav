@@ -668,5 +668,113 @@ void main() {
       expect(mockRouter.callCount, equals(2));
       expect(navManager.rerouteRetryCount, equals(2));
     });
+  
+    test('P5.6 Section 3, 4 & 6: Wrong-way movement fast reroute commits Route B as primary and Route A as secondary', () async {
+      DateTime syntheticTime = DateTime(2026, 9, 22, 14, 0, 0);
+      navManager.nowProvider = () => syntheticTime;
+      navManager.startNavigation(routeA);
+
+      final completer = Completer<NavRoute?>();
+      mockRouter.pendingCompleter = completer;
+
+      // Vehicle moves West (heading 270) along route that points East (heading 90)
+      // Angle diff = 180° >= 120° wrongWayMismatchAngleDegrees
+      final wrongWayCoord = const LatLng(21.00004, 105.8050);
+
+      // T0: suspected wrong-way divergence
+      navManager.updatePositionForTesting(
+        wrongWayCoord,
+        speedKmh: 36.0, // 10 m/s >= 3.0 m/s
+        heading: 270.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.suspected));
+      expect(navManager.lastOffRouteDecision?.reason, equals(OffRouteReason.wrongWayDivergence));
+      expect(navManager.isWrongWayDivergence, isTrue);
+      expect(navManager.headingDeltaVsRouteDegrees, closeTo(180.0, 1.0));
+
+      // T0 + 0.85s: exceeds wrongWayDwellSeconds (0.8s) -> confirmed!
+      syntheticTime = syntheticTime.add(const Duration(milliseconds: 850));
+      navManager.updatePositionForTesting(
+        const LatLng(21.00004, 105.8048),
+        speedKmh: 36.0,
+        heading: 270.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.confirmed));
+      expect(navManager.isRerouting, isTrue);
+      expect(mockRouter.callCount, equals(1));
+
+      // Build Route B from current position to destCoord
+      const bStart = LatLng(21.00004, 105.8048);
+      final routeBPoints = [bStart, destCoord];
+      final geomB = RouteGeometry(routeBPoints);
+      final routeB = NavRoute(
+        totalDistanceMeters: geomB.totalDistanceMeters,
+        totalDurationSeconds: 85.0,
+        polylinePoints: routeBPoints,
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Quay đầu rồi đi thẳng',
+            streetName: 'Đường B',
+            distanceMeters: geomB.totalDistanceMeters,
+            durationSeconds: 85.0,
+            coordinate: bStart,
+            maneuverTypeStr: 'u-turn',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+        ],
+        summary: 'Lộ trình mới B',
+      );
+
+      completer.complete(routeB);
+      await pumpEventQueue();
+
+      // Verify Primary + Secondary Dual-Route
+      expect(navManager.activeRoute, equals(routeB), reason: 'Route B is the primary active route');
+      expect(navManager.secondaryRoute, isNotNull, reason: 'Route A remains as secondary reference route');
+      expect(navManager.secondaryPolyline.isNotEmpty, isTrue);
+
+      // Verify authoritative maneuver is solely driven by Primary Route B
+      expect(navManager.authoritativeCurrentManeuver, isNotNull);
+      expect(navManager.bannerInstruction, equals('Quay đầu rồi đi thẳng'));
+      expect(navManager.bannerTurnIcon, isNotNull);
+    });
+
+    test('P5.6 Section 8: Cancel navigation clears both active and secondary routes', () async {
+      navManager.startNavigation(routeA);
+
+      // Force a secondary route state
+      final routeB = NavRoute(
+        totalDistanceMeters: 500,
+        totalDurationSeconds: 60,
+        polylinePoints: [const LatLng(21.0, 105.8), const LatLng(21.0, 105.805)],
+        steps: [],
+        summary: 'B',
+      );
+      mockRouter.nextRouteToReturn = routeB;
+      navManager.triggerRerouteForTesting(const LatLng(21.0004, 105.802));
+      await pumpEventQueue();
+
+      expect(navManager.activeRoute, isNotNull);
+
+      // Cancel / stop navigation
+      navManager.stopNavigation();
+
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+      expect(navManager.secondaryRoute, isNull);
+      expect(navManager.secondaryPolyline, isEmpty);
+      expect(navManager.remainingPolyline, isEmpty);
+      expect(navManager.authoritativeCurrentManeuver, isNull);
+      expect(navManager.authoritativeCurrentManeuver, isNull);
+      expect(navManager.bannerInstruction, equals('Tiếp tục đi thẳng'));
+    });
   });
 }

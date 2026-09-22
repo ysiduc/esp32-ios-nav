@@ -83,7 +83,7 @@ class NavStep {
       return ManeuverType.roundabout;
     }
 
-    final mod = maneuverModifier?.toLowerCase() ?? '';
+    final mod = '${maneuverModifier ?? ''} $maneuverTypeStr'.toLowerCase();
     if (mod.contains('sharp right')) return ManeuverType.sharpRight;
     if (mod.contains('slight right')) return ManeuverType.slightRight;
     if (mod.contains('right')) return ManeuverType.turnRight;
@@ -91,12 +91,12 @@ class NavStep {
     if (mod.contains('slight left')) return ManeuverType.slightLeft;
     if (mod.contains('left')) return ManeuverType.turnLeft;
     if (mod.contains('uturn') || mod.contains('u-turn')) return ManeuverType.uTurn;
-    if (mod.contains('straight')) return ManeuverType.straight;
+    if (mod.contains('straight') || mod.contains('continue')) return ManeuverType.straight;
 
     if (maneuverTypeStr == 'fork') return ManeuverType.fork;
     if (maneuverTypeStr == 'merge') return ManeuverType.merge;
-    if (maneuverTypeStr == 'off ramp') return ManeuverType.offRamp;
-    if (maneuverTypeStr == 'on ramp') return ManeuverType.onRamp;
+    if (maneuverTypeStr == 'off ramp' || maneuverTypeStr == 'exit') return ManeuverType.offRamp;
+    if (maneuverTypeStr == 'on ramp' || maneuverTypeStr == 'ramp') return ManeuverType.onRamp;
 
     return ManeuverType.straight;
   }

@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/models/route_model.dart';
@@ -172,6 +173,75 @@ void main() {
       // While loop in NavigationManager advances index directly to Step 3
       expect(navManager.currentStepIndex, equals(3));
       expect(navManager.currentStep?.maneuverTypeStr, equals('arrive'));
+    });
+
+    test('P5.6 Section 6: Authoritative maneuver synchronization between distance, banner instruction and turn icon', () {
+      navManager.startNavigation(route);
+
+      // At start (Step 0: Depart):
+      // Upcoming maneuver must be Step 1 (Turn Right into Trần Khát Chân)
+      expect(navManager.currentStepIndex, equals(0));
+      expect(navManager.authoritativeCurrentManeuver?.stepIndex, equals(1));
+      expect(navManager.authoritativeCurrentManeuver?.maneuverType, equals(ManeuverType.turnRight));
+      expect(navManager.bannerTurnIcon, equals(Icons.turn_right_rounded));
+      expect(navManager.bannerInstruction, contains('Trần Khát Chân'));
+
+      // Move forward 50m (halfway to Step 1)
+      final midPoint = geom.coordinateAtDistance(50.0)!;
+      navManager.updatePositionForTesting(
+        midPoint,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+      );
+
+      expect(navManager.currentStepIndex, equals(0));
+      expect(navManager.authoritativeCurrentManeuver?.stepIndex, equals(1));
+      expect(navManager.bannerTurnIcon, equals(Icons.turn_right_rounded));
+      expect(navManager.distanceToNextManeuver, closeTo(geom.cumulativeDistances[1] - 50.0, 1.0));
+
+      // Advance past Step 1 turn into Step 2 (e.g. 85m then 125m)
+      final step1Begin = navManager.activeRouteGeometry!.maneuverBeginDistancesAlongRoute[1];
+      final nearStep1 = geom.coordinateAtDistance(step1Begin - 15.0)!;
+      navManager.updatePositionForTesting(
+        nearStep1,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+      );
+
+      final pastStep1 = geom.coordinateAtDistance(step1Begin + 20.0)!;
+      navManager.updatePositionForTesting(
+        pastStep1,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+      );
+
+      // Now index is 1, upcoming maneuver is Step 2
+      expect(navManager.currentStepIndex, equals(1));
+      expect(navManager.authoritativeCurrentManeuver?.stepIndex, equals(2));
+      expect(navManager.bannerInstruction, contains(route.steps[2].streetName));
+      expect(navManager.bannerTurnIcon, equals(route.steps[2].icon));
+    });
+
+    test('P5.6 Section 5: Real-time route trimming monotonically strips passed coordinates', () {
+      navManager.startNavigation(route);
+      final initialLength = navManager.remainingPolyline.length;
+
+      // Advance by 120m (past first vertex p1 at ~112m)
+      final at120m = geom.coordinateAtDistance(120.0)!;
+      navManager.updatePositionForTesting(
+        at120m,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+      );
+
+      final trimmed = navManager.remainingPolyline;
+      expect(trimmed.first.latitude, closeTo(at120m.latitude, 0.0001));
+      expect(trimmed.first.longitude, closeTo(at120m.longitude, 0.0001));
+      expect(trimmed.length, lessThan(initialLength));
     });
   });
 }
