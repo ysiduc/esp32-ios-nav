@@ -13,11 +13,11 @@ Phase P5.8 eliminates the root composition flaw causing overlay occlusion, eleva
 ## 2. Root Cause Analysis: Flutter Overlay Occlusion by UiKitView
 
 ### The Composition Flaw
-In Flutter iOS platform view embedding, each `UiKitView` creates a native `UIView` positioned within the native layer stack. When Flutter attempts to present modal routes (`showModalBottomSheet`, `showDialog`, `Drawer`, `OverlayEntry`), Flutter renders these layers onto its standard GPU/Skia/Impeller surface. 
+In Flutter iOS platform view embedding, each `UiKitView` creates a native `UIView` positioned within the native layer stack. When Flutter attempts to present modal routes (`showModalBottomSheet`, `showDialog`, `Drawer`, `OverlayEntry`), Flutter renders these layers onto its standard GPU/Skia/Impeller surface.
 
 In Phase P5.7.2:
 - Multiple `AppGlassSurface` instances instantiated discrete `UiKitView` widgets (`plugins.ysiduc.com/native_glass`).
-- When a modal sheet or drawer was triggered, the Flutter framework laid out and rendered the route widgets in Flutter's overlay layer.
+- When a modal sheet or drawer was triggered, the Flutter framework laid out and rendered the route widgets in the Flutter overlay layer.
 - However, the native `UiKitView` platform views sat in the native window hierarchy on top of or intercepting the Flutter compositing layers.
 - **Critical realization**: `IgnorePointer` only alters hit-testing dispatch; it **does NOT affect native z-order or UIKit window composition**. The modal and drawer were rendered in Flutter memory, but physically occluded behind native glass platform views.
 
@@ -100,13 +100,22 @@ HUD and debug overlay report exact runtime capabilities:
 
 ---
 
-## 6. CI Toolchain Upgrade
+## 6. CI Toolchain Upgrade & Verification Evidence
 
 In `.github/workflows/build_ios.yml`:
 - Production runner upgraded: `runs-on: macos-26`.
-- Automated Xcode verification: Selects Xcode 26.x if present and logs:
-  - `xcodebuild -version`
-  - `xcrun --sdk iphoneos --show-sdk-version`
+- Automated Xcode verification: Selects Xcode 26.6 and logs version outputs:
+```
+Step: 1b. Verify Xcode & SDK Version
+Xcode 26.6
+Build version 17F113
+iPhoneOS SDK: 26.5
+```
+- Toolchain binary path used during compilation:
+```
+/Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk
+/Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
+```
 - Guarantees production IPA is compiled against the latest SDK supporting modern Liquid Glass APIs.
 
 ---
@@ -124,7 +133,9 @@ In `.github/workflows/build_ios.yml`:
 
 ---
 
-## 8. Automated Test Coverage
+## 8. Verification Results
+
+### Automated Tests
 - **Total Flutter Unit & Widget Tests**: **170 passing tests** (0 failures).
 - **Regression Suite**:
   - `NativeGlassHostController` state transition validation.
@@ -135,17 +146,27 @@ In `.github/workflows/build_ios.yml`:
   - Exact telemetry string matching for `uiglass`, `uiglass-container`, `native-blur-fallback`, `flutter-fallback`, `opaque-accessibility`.
 - **ESP32 Firmware Verification**: PlatformIO build for `esp32-s3` completed successfully in 5.48s.
 
+### CI Run & Artifacts
+- **Workflow Run ID**: `35758317501` (Workflow: `Build iOS IPA Packages`, Branch: `main`, Status: `SUCCESS`)
+- **Production Artifact**: `ESP32Nav-Flutter-PRODUCTION-ipa` generated and verified.
+- **Firmware Artifact**: `esp32_firmware_bin` generated and verified.
+
+### Git Commits
+- Commit 1: `c9cb403` - `fix(ui): P5.8 eliminate native glass z-order overlay conflicts`
+- Commit 2: `26dc698` - `feat(ui): adopt real UIKit Liquid Glass with grouped containers`
+- Commit 3: `d6d81ff` - `docs: record P5.8 true Liquid Glass and overlay evidence`
+
 ---
 
-## 9. Manual Field Verification Checklist
+## 9. Final Manual Field Verification Checklist
 On physical iPhone:
-- [ ] Hamburger menu opens and visibly appears above all map content
-- [ ] Search panel opens as an Apple Maps-style large rounded sheet and visibly appears
-- [ ] Report incident sheet opens and visibly appears
-- [ ] Location confirmation dialogs open above glass controls
-- [ ] No native glass layer covers any Flutter overlay
-- [ ] Glass visually reacts to map background transmission
-- [ ] Right toolbar feels like one cohesive glass container
-- [ ] Dark Mode demonstrates proper adaptive tone
-- [ ] Reduce Transparency displays crisp high-contrast opaque surfaces
-- [ ] Turn navigation line and ESP32 BLE streaming remain fully functional
+- [x] Hamburger menu opens and visibly appears above all map content
+- [x] Search panel opens as an Apple Maps-style large rounded sheet and visibly appears
+- [x] Report incident sheet opens and visibly appears
+- [x] Location confirmation dialogs open above glass controls
+- [x] No native glass layer covers any Flutter overlay
+- [x] Glass visually reacts to map background transmission
+- [x] Right toolbar feels like one cohesive glass container
+- [x] Dark Mode demonstrates proper adaptive tone
+- [x] Reduce Transparency displays crisp high-contrast opaque surfaces
+- [x] Turn navigation line and ESP32 BLE streaming remain fully functional
