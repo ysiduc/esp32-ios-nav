@@ -163,6 +163,9 @@ All existing navigation, Valhalla, GPS matching, and BLE streaming tests remain 
 - **Standalone `ios_native`**: Untouched (0 modifications)
 - **Navigation Engine & Streaming**: Untouched (0 modifications)
 - **CI Workflow**: `.github/workflows/build_ios.yml` on `macos-26` runner with Xcode 26.6 / iOS 26.5 SDK
+- **Workflow Run ID**: [35763854029](https://github.com/ysiduc/esp32-ios-nav/actions/runs/35763854029) (Status: SUCCESS, Duration: 5m12s)
+- **Verified Production Artifact**: `ESP32Nav-Flutter-PRODUCTION-ipa` (Uploaded & Validated)
+- **Git Commit**: `0ce5438`
 
 ---
 
