@@ -25,6 +25,11 @@ import AVFoundation
   ) -> Bool {
     if let controller = window?.rootViewController as? FlutterViewController {
       setupChannels(binaryMessenger: controller.binaryMessenger)
+      let registrar = self.registrar(forPlugin: "NativeGlassPlugin")
+      registrar?.register(
+        NativeGlassPlatformViewFactory(messenger: controller.binaryMessenger),
+        withId: "plugins.ysiduc.com/native_glass"
+      )
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -760,5 +765,89 @@ class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
       ])
     }
     return results
+  }
+}
+
+
+// MARK: - Native iOS Liquid Glass PlatformView (P5.7 Part C)
+class NativeGlassPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
+  private var messenger: FlutterBinaryMessenger
+
+  init(messenger: FlutterBinaryMessenger) {
+    self.messenger = messenger
+    super.init()
+  }
+
+  func create(
+    withFrame frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?
+  ) -> FlutterPlatformView {
+    return NativeGlassPlatformView(
+      frame: frame,
+      viewIdentifier: viewId,
+      arguments: args,
+      binaryMessenger: messenger
+    )
+  }
+
+  public func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+    return FlutterStandardMessageCodec.sharedInstance()
+  }
+}
+
+class NativeGlassPlatformView: NSObject, FlutterPlatformView {
+  private var containerView: UIView
+
+  init(
+    frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?,
+    binaryMessenger: FlutterBinaryMessenger?
+  ) {
+    containerView = UIView(frame: frame)
+    super.init()
+    setupNativeGlass(arguments: args)
+  }
+
+  func view() -> UIView {
+    return containerView
+  }
+
+  private func setupNativeGlass(arguments: Any?) {
+    let params = arguments as? [String: Any]
+    let variant = params?["variant"] as? String ?? "regular"
+    let cornerRadius = CGFloat(params?["radius"] as? Double ?? 20.0)
+
+    containerView.backgroundColor = .clear
+    containerView.layer.cornerRadius = cornerRadius
+    containerView.layer.masksToBounds = true
+
+    let blurEffect: UIBlurEffect
+    switch variant {
+    case "prominent":
+      blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+    case "clear":
+      blurEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+    case "danger":
+      blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
+    default:
+      blurEffect = UIBlurEffect(style: .systemMaterial)
+    }
+
+    let blurView = UIVisualEffectView(effect: blurEffect)
+    blurView.frame = containerView.bounds
+    blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    blurView.layer.cornerRadius = cornerRadius
+    blurView.layer.masksToBounds = true
+    containerView.addSubview(blurView)
+
+    let specularEdge = UIView(frame: containerView.bounds)
+    specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    specularEdge.layer.cornerRadius = cornerRadius
+    specularEdge.layer.borderWidth = 0.5
+    specularEdge.layer.borderColor = UIColor.white.withAlphaComponent(0.20).cgColor
+    specularEdge.isUserInteractionEnabled = false
+    containerView.addSubview(specularEdge)
   }
 }

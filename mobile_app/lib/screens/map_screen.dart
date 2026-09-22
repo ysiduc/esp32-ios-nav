@@ -1690,87 +1690,58 @@ class _MapScreenState extends State<MapScreen> {
     required String tooltip,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.white.withOpacity(0.92),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 12,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Icon(icon, color: iconColor ?? Colors.black87, size: 22),
+    return Tooltip(
+      message: tooltip,
+      child: AppGlassButton(
+        icon: Icon(icon, color: iconColor ?? Colors.black87, size: 22),
+        size: 44,
+        variant: AppGlassVariant.regular,
+        onTap: onTap,
       ),
     );
   }
 
   Widget _buildAppleVerticalControlPill(NavigationManager navManager, bool isDriving) {
-    return Container(
+    return AppGlassToolbar(
       width: 44,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.94),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.black.withOpacity(0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 14,
-            offset: const Offset(0, 3),
+      radius: 22,
+      children: [
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: Icon(
+            _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+            color: Colors.black87,
+            size: 20,
           ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-            icon: Icon(
-              _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-              color: Colors.black87,
-              size: 20,
-            ),
-            tooltip: 'Chế độ phương tiện',
-            onPressed: () {
-              setState(() {
-                _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
-              });
-              if (_selectedPlace != null) {
-                _calculateRoutesForPlace(_selectedPlace!);
-              }
-            },
-          ),
-          Container(
-            width: 28,
-            height: 0.8,
-            color: Colors.black12,
-          ),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-            icon: const Icon(Icons.navigation_rounded, color: Color(0xFF007AFF), size: 22),
-            tooltip: 'Vị trí hiện tại',
-            onPressed: () {
-              if (isDriving) {
-                _recenterToVehicle();
-              } else {
-                final current = navManager.currentLocation ?? _userPosition;
-                _mapController?.animateCamera(
-                  ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
-                );
-              }
-            },
-          ),
-        ],
-      ),
+          tooltip: 'Chế độ phương tiện',
+          onPressed: () {
+            setState(() {
+              _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
+            });
+            if (_selectedPlace != null) {
+              _calculateRoutesForPlace(_selectedPlace!);
+            }
+          },
+        ),
+        const AppGlassToolbarDivider(),
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: const Icon(Icons.navigation_rounded, color: Color(0xFF007AFF), size: 22),
+          tooltip: 'Vị trí hiện tại',
+          onPressed: () {
+            if (isDriving) {
+              _recenterToVehicle();
+            } else {
+              final current = navManager.currentLocation ?? _userPosition;
+              _mapController?.animateCamera(
+                ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
+              );
+            }
+          },
+        ),
+      ],
     );
   }
 
@@ -1778,54 +1749,50 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Bottom Search Capsule (Screenshot 1)
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
-    return GestureDetector(
+    return AppGlassPill(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       onTap: _openAppleSearchModal,
-      child: LiquidGlassContainer(
-        height: 56,
-        radius: 28,
-        blur: 24,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
-          children: [
-            const Icon(Icons.search_rounded, color: Colors.black87, size: 24),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Tìm kiếm điểm đến...',
-                style: TextStyle(
-                  color: Colors.black87,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.2,
-                ),
+      child: Row(
+        children: [
+          const Icon(Icons.search_rounded, color: Colors.black87, size: 24),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Tìm kiếm điểm đến...',
+              style: TextStyle(
+                color: Colors.black87,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.2,
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.mic_none_rounded, color: Colors.black87, size: 22),
-              onPressed: _openAppleSearchModal,
-            ),
-            GestureDetector(
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF5E5CE6),
-                ),
-                child: const Center(
-                  child: Text(
-                    'Y',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                    ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.mic_none_rounded, color: Colors.black87, size: 22),
+            onPressed: _openAppleSearchModal,
+          ),
+          GestureDetector(
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFF5E5CE6),
+              ),
+              child: const Center(
+                child: Text(
+                  'Y',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -3087,82 +3054,63 @@ class _MapScreenState extends State<MapScreen> {
           setState(() => _showDebugOverlay = !_showDebugOverlay);
         }
       },
-      child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E).withOpacity(0.96),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.35),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // Large Maneuver Icon (Circle with arrow)
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white.withOpacity(0.12),
+      child: AppGlassSurface(
+        variant: AppGlassVariant.prominent,
+        radius: 24,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            // Maneuver Icon in dedicated glass circle (P5.7 Liquid Glass)
+            AppGlassSurface(
+              variant: AppGlassVariant.clear,
+              radius: 24,
+              width: 48,
+              height: 48,
+              child: Center(
+                child: Icon(icon, color: Colors.white, size: 28),
+              ),
             ),
-            child: Icon(icon, color: Colors.white, size: 28),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Trong $distStr',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Trong $distStr',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  instruction,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: -0.3,
+                  const SizedBox(height: 2),
+                  Text(
+                    instruction,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildAppleFloatingStreetPill(NavigationManager navManager) {
     final street = navManager.currentStep?.streetName ?? 'Lộ trình hiện tại';
-    return Container(
+    return AppGlassPill(
+      height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF007AFF),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF007AFF).withOpacity(0.4),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      tint: const Color(0xFF007AFF).withOpacity(0.85),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3269,162 +3217,136 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
 
-        // Bottom Capsule Navigation HUD
-        Container(
+        // Bottom Capsule Navigation HUD (P5.7 Liquid Glass)
+        AppGlassBottomBar(
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.92),
-            borderRadius: BorderRadius.circular(36),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 20,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(36),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                child: Row(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          radius: 36,
+          variant: AppGlassVariant.regular,
+          child: Row(
+            children: [
+              // Column 1: ETA Clock
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // Column 1: ETA Clock
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            timeStr,
-                            style: const TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF1C1C1E),
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          const Text(
-                            'đến',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF8E8E93),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
+                    Text(
+                      timeStr,
+                      style: const TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1C1C1E),
+                        letterSpacing: -0.5,
                       ),
                     ),
-                    // Column 2: Duration
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            durationStr,
-                            style: const TextStyle(
-                              fontSize: 21,
-                              fontWeight: FontWeight.w900,
-                              color: Color(0xFF007AFF),
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            durationUnit,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF8E8E93),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Column 3: Distance
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            distanceStr,
-                            style: const TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF1C1C1E),
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            distanceUnit,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF8E8E93),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Red circular End Route button - Clears route and restores clean map
-                    GestureDetector(
-                      onTap: () async {
-                        _routeRenderCadenceTimer?.cancel();
-                        _cameraCadenceTimer?.cancel();
-                        _routes = [];
-                        _selectedRouteIndex = 0;
-                        navManager.stopNavigation();
-                        navManager.setPreviewRoute(null);
-                        await _routeRenderController.clearAndInvalidate();
-                        await _mapController?.clearCircles();
-                        if (mounted) {
-                          setState(() {
-                            _viewMode = 0;
-                            _routes = [];
-                            _selectedPlace = null;
-                            _isDrivingZoomOverview = false;
-                          });
-                        }
-                        _updateDestinationMarker();
-                        final pos = navManager.currentLocation ?? _userPosition;
-                        _mapController?.animateCamera(
-                          ml.CameraUpdate.newCameraPosition(
-                            ml.CameraPosition(
-                              target: ml.LatLng(pos.latitude, pos.longitude),
-                              zoom: 16.5,
-                              tilt: 0.0,
-                              bearing: 0.0,
-                            ),
-                          ),
-                        );
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFF3B30).withOpacity(0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.close_rounded,
-                          color: Color(0xFFFF3B30),
-                          size: 24,
-                        ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'đến',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8E8E93),
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
+              // Column 2: Duration
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      durationStr,
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF007AFF),
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      durationUnit,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8E8E93),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Column 3: Distance
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      distanceStr,
+                      style: const TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1C1C1E),
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      distanceUnit,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8E8E93),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Liquid Glass Danger End Route button
+              AppGlassButton(
+                variant: AppGlassVariant.danger,
+                size: 44,
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 22),
+                tooltip: 'Kết thúc dẫn đường',
+                onTap: () async {
+                  _routeRenderCadenceTimer?.cancel();
+                  _cameraCadenceTimer?.cancel();
+                  _routes = [];
+                  _selectedRouteIndex = 0;
+                  navManager.stopNavigation();
+                  navManager.setPreviewRoute(null);
+                  await _routeRenderController.clearAndInvalidate();
+                  await _mapController?.clearCircles();
+                  if (mounted) {
+                    setState(() {
+                      _viewMode = 0;
+                      _routes = [];
+                      _selectedPlace = null;
+                      _isDrivingZoomOverview = false;
+                    });
+                  }
+                  _updateDestinationMarker();
+                  final pos = navManager.currentLocation ?? _userPosition;
+                  _mapController?.animateCamera(
+                    ml.CameraUpdate.newCameraPosition(
+                      ml.CameraPosition(
+                        target: ml.LatLng(pos.latitude, pos.longitude),
+                        zoom: 16.5,
+                        tilt: 0.0,
+                        bearing: 0.0,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
-        ),
+        )
       ],
     );
   }
@@ -3512,14 +3434,11 @@ class _MapScreenState extends State<MapScreen> {
 
   Widget _buildBleStatusBadge(BleService bleService) {
     final isConnected = bleService.isConnected;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E293B).withAlpha(230),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isConnected ? const Color(0xFF05FFA1) : Colors.white12),
-        boxShadow: [BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 8)],
-      ),
+    return AppGlassPill(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      variant: AppGlassVariant.prominent,
+      tint: isConnected ? const Color(0xFF05FFA1).withOpacity(0.18) : Colors.black.withOpacity(0.4),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
