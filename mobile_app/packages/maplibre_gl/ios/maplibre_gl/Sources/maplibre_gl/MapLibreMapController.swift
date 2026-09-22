@@ -1786,15 +1786,8 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
     func setAttributionButtonPosition(position: MLNOrnamentPosition) {
         mapView.attributionButtonPosition = position
     }
-}
 
-extension String {
-    func deletingPrefix(_ prefix: String) -> String {
-        guard self.hasPrefix(prefix) else { return self }
-        return String(self.dropFirst(prefix.count))
-    }
-
-    // MARK: - Native Liquid Glass Backdrop Integration (P5.9)
+// MARK: - Native Liquid Glass Backdrop Integration (P5.9)
 
     private func updateNativeGlassSurfaces(surfaces: [[String: Any]]) {
         if glassBackdropContainer == nil {
@@ -2091,5 +2084,13 @@ extension String {
             tintView.isUserInteractionEnabled = false
             container.addSubview(tintView)
         }
+    }
+}
+}
+
+extension String {
+    func deletingPrefix(_ prefix: String) -> String {
+        guard self.hasPrefix(prefix) else { return self }
+        return String(self.dropFirst(prefix.count))
     }
 }
