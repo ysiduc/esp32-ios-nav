@@ -564,19 +564,22 @@ void main() {
         ),
       );
 
-      // Synthetic test state representing future SDK support (not production on iOS 18 / Xcode 16)
-      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeModern;
-      expect(AppGlassBackend.currentName(capturedContext), equals('native-modern'));
+      // Synthetic test state representing true glass capabilities (P5.8)
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+      expect(AppGlassBackend.currentName(capturedContext), equals('uiglass'));
+
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlassContainer;
+      expect(AppGlassBackend.currentName(capturedContext), equals('uiglass-container'));
 
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
       expect(AppGlassBackend.currentName(capturedContext), equals('native-blur-fallback'));
 
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.flutterFallback;
-      expect(AppGlassBackend.currentName(capturedContext), equals('flutter'));
+      expect(AppGlassBackend.currentName(capturedContext), equals('flutter-fallback'));
 
       AppGlassBackend.forceBackendForTesting = null;
       AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
-      expect(AppGlassBackend.currentName(capturedContext), equals('opaque-fallback'));
+      expect(AppGlassBackend.currentName(capturedContext), equals('opaque-accessibility'));
     });
 
     testWidgets('Right-side driving toolbar contains exactly ONE glass surface for all 3 buttons', (tester) async {
@@ -703,6 +706,312 @@ void main() {
       await tester.tap(find.byType(AppGlassButton));
       await tester.pumpAndSettle();
       expect(teardownCalled, isTrue);
+    });
+  });
+  group('P5.8: Platform View Z-Order Fix & Overlay Coordination Tests', () {
+    tearDown(() {
+      NativeGlassHostController.instance.setOverlayMode(MapOverlayMode.none);
+      AppGlassBackend.forceBackendForTesting = null;
+      AppGlassBackend.forcePlatformForTesting = null;
+    });
+
+    testWidgets('NativeGlassHostController manages active state across all overlay modes', (tester) async {
+      final controller = NativeGlassHostController.instance;
+      expect(controller.isOverlayActive, isFalse);
+      expect(controller.currentMode, equals(MapOverlayMode.none));
+
+      controller.setOverlayMode(MapOverlayMode.search);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.search));
+
+      controller.setOverlayMode(MapOverlayMode.drawer);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.drawer));
+
+      controller.setOverlayMode(MapOverlayMode.dialog);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.dialog));
+
+      controller.setOverlayMode(MapOverlayMode.reportSheet);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.reportSheet));
+
+      controller.setOverlayMode(MapOverlayMode.none);
+      expect(controller.isOverlayActive, isFalse);
+      expect(controller.currentMode, equals(MapOverlayMode.none));
+    });
+
+    testWidgets('A & C & D: Open search modal suspends native glass and renders search content topmost, dismissing restores glass', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('uiglass');
+      AppGlassBackend.forceBackendForTesting = null;
+
+      final controller = NativeGlassHostController.instance;
+      controller.setOverlayMode(MapOverlayMode.none);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                // In-map glass control
+                const Positioned(
+                  top: 50,
+                  left: 20,
+                  child: AppGlassSurface(
+                    variant: AppGlassVariant.prominent,
+                    child: Text('Map Glass Control'),
+                  ),
+                ),
+                // Tap button simulating search pill tap
+                Builder(
+                  builder: (ctx) => Positioned(
+                    bottom: 50,
+                    child: ElevatedButton(
+                      key: const Key('search_pill_btn'),
+                      onPressed: () {
+                        controller.setOverlayMode(MapOverlayMode.search);
+                        showModalBottomSheet(
+                          context: ctx,
+                          isScrollControlled: true,
+                          builder: (modalCtx) => Container(
+                            key: const Key('apple_search_modal_content'),
+                            height: 400,
+                            padding: const EdgeInsets.all(20),
+                            child: const Column(
+                              children: [
+                                Text('Bản Đồ Apple', style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text('Địa điểm đã lưu'),
+                                Text('Gần đây'),
+                              ],
+                            ),
+                          ),
+                        ).whenComplete(() {
+                          controller.setOverlayMode(MapOverlayMode.none);
+                        });
+                      },
+                      child: const Text('Search Pill'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Initially: Native platform view is present because overlay mode is none
+      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.text('Map Glass Control'), findsOneWidget);
+      expect(controller.isOverlayActive, isFalse);
+
+      // C: Tap search pill -> open search modal
+      await tester.tap(find.byKey(const Key('search_pill_btn')));
+      await tester.pumpAndSettle();
+
+      // Search modal text exists and is visible topmost
+      expect(find.byKey(const Key('apple_search_modal_content')), findsOneWidget);
+      expect(find.text('Bản Đồ Apple'), findsOneWidget);
+      expect(find.text('Địa điểm đã lưu'), findsOneWidget);
+      expect(find.text('Gần đây'), findsOneWidget);
+
+      // Native glass is suspended/lowered: UiKitView is NOT present during modal!
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.search));
+      expect(find.byType(UiKitView), findsNothing);
+      expect(find.byType(BackdropFilter), findsOneWidget); // Falls back to pure Flutter compositing below overlay
+
+      // D: Dismiss modal
+      Navigator.pop(tester.element(find.byKey(const Key('apple_search_modal_content'))));
+      await tester.pumpAndSettle();
+
+      // Modal is gone, native glass is restored!
+      expect(find.byKey(const Key('apple_search_modal_content')), findsNothing);
+      expect(controller.isOverlayActive, isFalse);
+      expect(controller.currentMode, equals(MapOverlayMode.none));
+      expect(find.byType(UiKitView), findsOneWidget);
+    });
+
+    testWidgets('B: Tap hamburger opens drawer with MapOverlayMode.drawer above all map glass', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('uiglass');
+      AppGlassBackend.forceBackendForTesting = null;
+
+      final controller = NativeGlassHostController.instance;
+      controller.setOverlayMode(MapOverlayMode.none);
+
+      final GlobalKey<ScaffoldState> scaffoldKey = GlobalKey<ScaffoldState>();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            key: scaffoldKey,
+            onDrawerChanged: (isOpen) => controller.setOverlayMode(isOpen ? MapOverlayMode.drawer : MapOverlayMode.none),
+            drawer: const Drawer(
+              key: Key('app_drawer_content'),
+              child: SafeArea(
+                child: Text('Apple Maps Navigation Drawer'),
+              ),
+            ),
+            body: Stack(
+              children: [
+                const Positioned(
+                  top: 50,
+                  left: 20,
+                  child: AppGlassSurface(
+                    variant: AppGlassVariant.prominent,
+                    child: Text('Underlying Glass View'),
+                  ),
+                ),
+                Positioned(
+                  top: 50,
+                  right: 20,
+                  child: IconButton(
+                    key: const Key('hamburger_btn'),
+                    icon: const Icon(Icons.menu),
+                    onPressed: () {
+                      controller.setOverlayMode(MapOverlayMode.drawer);
+                      scaffoldKey.currentState?.openDrawer();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(UiKitView), findsOneWidget);
+      expect(controller.isOverlayActive, isFalse);
+
+      // Tap hamburger
+      await tester.tap(find.byKey(const Key('hamburger_btn')));
+      await tester.pumpAndSettle();
+
+      // Drawer content exists and is visible
+      expect(find.byKey(const Key('app_drawer_content')), findsOneWidget);
+      expect(find.text('Apple Maps Navigation Drawer'), findsOneWidget);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.drawer));
+
+      // Native glass is unmounted / suspended so drawer is fully topmost
+      expect(find.byType(UiKitView), findsNothing);
+
+      // Close drawer
+      scaffoldKey.currentState?.closeDrawer();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('app_drawer_content')), findsNothing);
+      expect(controller.isOverlayActive, isFalse);
+      expect(find.byType(UiKitView), findsOneWidget);
+    });
+
+    testWidgets('E: Open report bottom sheet appears visibly and suspends native glass', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('uiglass');
+      AppGlassBackend.forceBackendForTesting = null;
+
+      final controller = NativeGlassHostController.instance;
+      controller.setOverlayMode(MapOverlayMode.none);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                const AppGlassSurface(child: Text('Map View')),
+                Builder(
+                  builder: (ctx) => ElevatedButton(
+                    key: const Key('report_btn'),
+                    onPressed: () {
+                      controller.setOverlayMode(MapOverlayMode.reportSheet);
+                      showModalBottomSheet(
+                        context: ctx,
+                        builder: (_) => const Text('Báo cáo sự cố: Tai nạn giao thông'),
+                      ).whenComplete(() {
+                        controller.setOverlayMode(MapOverlayMode.none);
+                      });
+                    },
+                    child: const Text('Report'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('report_btn')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Báo cáo sự cố: Tai nạn giao thông'), findsOneWidget);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.reportSheet));
+      expect(find.byType(UiKitView), findsNothing);
+
+      Navigator.pop(tester.element(find.text('Báo cáo sự cố: Tai nạn giao thông')));
+      await tester.pumpAndSettle();
+
+      expect(controller.isOverlayActive, isFalse);
+      expect(find.byType(UiKitView), findsOneWidget);
+    });
+
+    testWidgets('F: Location ambiguity confirmation dialog renders topmost above glass', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('uiglass');
+      AppGlassBackend.forceBackendForTesting = null;
+
+      final controller = NativeGlassHostController.instance;
+      controller.setOverlayMode(MapOverlayMode.none);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                const AppGlassSurface(child: Text('Active Map Glass')),
+                Builder(
+                  builder: (ctx) => ElevatedButton(
+                    key: const Key('ambiguity_btn'),
+                    onPressed: () {
+                      controller.setOverlayMode(MapOverlayMode.dialog);
+                      showDialog(
+                        context: ctx,
+                        builder: (dCtx) => AlertDialog(
+                          title: const Text('Có thể là địa điểm này'),
+                          content: const Text('Không thể xác nhận chính xác ghim.'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Dùng vị trí này')),
+                          ],
+                        ),
+                      ).whenComplete(() {
+                        controller.setOverlayMode(MapOverlayMode.none);
+                      });
+                    },
+                    child: const Text('Show Ambiguity'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('ambiguity_btn')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Có thể là địa điểm này'), findsOneWidget);
+      expect(find.text('Không thể xác nhận chính xác ghim.'), findsOneWidget);
+      expect(controller.isOverlayActive, isTrue);
+      expect(controller.currentMode, equals(MapOverlayMode.dialog));
+      expect(find.byType(UiKitView), findsNothing);
+
+      await tester.tap(find.text('Dùng vị trí này'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Có thể là địa điểm này'), findsNothing);
+      expect(controller.isOverlayActive, isFalse);
+      expect(find.byType(UiKitView), findsOneWidget);
     });
   });
 }

@@ -33,7 +33,8 @@ enum MapThemeMode {
 
 class MapScreen extends StatefulWidget {
   final VoidCallback? onOpenMenu;
-  const MapScreen({super.key, this.onOpenMenu});
+  final Widget? drawer;
+  const MapScreen({super.key, this.onOpenMenu, this.drawer});
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -149,7 +150,43 @@ class _MapLibreLineDrawer implements MapLineDrawer {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   RoutePresentationMode _lastRenderedMode = RoutePresentationMode.none;
+
+  void _setOverlayMode(MapOverlayMode mode) {
+    NativeGlassHostController.instance.setOverlayMode(mode);
+  }
+
+  Future<void> showLocationAmbiguityDialog(
+    BuildContext context, {
+    required String title,
+    required String message,
+    VoidCallback? onConfirm,
+  }) {
+    _setOverlayMode(MapOverlayMode.dialog);
+    return showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              onConfirm?.call();
+            },
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      ),
+    ).whenComplete(() {
+      _setOverlayMode(MapOverlayMode.none);
+    });
+  }
   int _lastRenderedPointsCount = 0;
   LatLng? _lastRenderedStartCoord;
   bool _showDebugOverlay = false;
@@ -594,6 +631,7 @@ class _MapScreenState extends State<MapScreen> {
 
   void _showUnverifiedGoogleConfirmationDialog(MapPlace candidatePlace, GoogleMapsResolvedLink? link) {
     if (!mounted) return;
+    _setOverlayMode(MapOverlayMode.dialog);
     showDialog(
       context: context,
       builder: (dialogCtx) {
@@ -701,7 +739,9 @@ class _MapScreenState extends State<MapScreen> {
           ],
         );
       },
-    );
+    ).whenComplete(() {
+      _setOverlayMode(MapOverlayMode.none);
+    });
   }
 
   void _onNavigationManagerChanged() {
@@ -1114,6 +1154,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _showReportIncidentDialog() {
+    _setOverlayMode(MapOverlayMode.reportSheet);
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1170,7 +1211,9 @@ class _MapScreenState extends State<MapScreen> {
           ],
         ),
       ),
-    );
+    ).whenComplete(() {
+      _setOverlayMode(MapOverlayMode.none);
+    });
   }
 
   // -------------------------------------------------------------
@@ -1198,6 +1241,11 @@ class _MapScreenState extends State<MapScreen> {
     final userPos = navManager.currentLocation ?? _userPosition;
 
     return Scaffold(
+      key: _scaffoldKey,
+      drawer: widget.drawer,
+      onDrawerChanged: (isOpen) {
+        _setOverlayMode(isOpen ? MapOverlayMode.drawer : MapOverlayMode.none);
+      },
       backgroundColor: const Color(0xFFF2F2F7),
       resizeToAvoidBottomInset: false,
       body: Stack(
@@ -1497,10 +1545,11 @@ class _MapScreenState extends State<MapScreen> {
             ),
             tooltip: 'Menu',
             onPressed: () {
+              _setOverlayMode(MapOverlayMode.drawer);
               if (widget.onOpenMenu != null) {
                 widget.onOpenMenu!();
               } else {
-                Scaffold.maybeOf(context)?.openDrawer();
+                _scaffoldKey.currentState?.openDrawer();
               }
             },
           ),
@@ -1814,6 +1863,7 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Search Modal Sheet (Screenshot 2)
   // -------------------------------------------------------------
   void _openAppleSearchModal() {
+    _setOverlayMode(MapOverlayMode.search);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1827,14 +1877,24 @@ class _MapScreenState extends State<MapScreen> {
             final results = isQueryMode ? _searchResults : _searchService.recentSearches;
 
             return DraggableScrollableSheet(
-              initialChildSize: 0.85,
+              initialChildSize: 0.65,
               maxChildSize: 0.95,
               minChildSize: 0.45,
               builder: (_, scrollController) {
+                final isDark = Theme.of(context).brightness == Brightness.dark;
                 return Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF2F2F7),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF1C1C1E).withOpacity(0.92)
+                        : const Color(0xFFF2F2F7).withOpacity(0.95),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.18),
+                        blurRadius: 30,
+                        offset: const Offset(0, -6),
+                      ),
+                    ],
                   ),
                   child: Column(
                     children: [
@@ -2364,6 +2424,7 @@ class _MapScreenState extends State<MapScreen> {
       },
     ).whenComplete(() {
       _activeModalSetState = null;
+      _setOverlayMode(MapOverlayMode.none);
     });
   }
 
@@ -3350,6 +3411,7 @@ class _MapScreenState extends State<MapScreen> {
   // Map Theme Picker Dialog
   // -------------------------------------------------------------
   void _showMapThemePicker() {
+    _setOverlayMode(MapOverlayMode.reportSheet);
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1E293B),
@@ -3391,7 +3453,9 @@ class _MapScreenState extends State<MapScreen> {
           ),
         );
       },
-    );
+    ).whenComplete(() {
+      _setOverlayMode(MapOverlayMode.none);
+    });
   }
 
   Widget _buildThemeOption({

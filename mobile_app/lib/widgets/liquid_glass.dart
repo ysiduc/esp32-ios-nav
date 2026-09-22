@@ -19,18 +19,66 @@ enum AppGlassVariant {
   danger,
 }
 
-/// Resolved runtime rendering backend for Liquid Glass (P5.7.1)
+/// Active navigation/map overlay presentation mode (P5.8)
+enum MapOverlayMode {
+  none,
+  search,
+  drawer,
+  dialog,
+  reportSheet,
+  placeDetails,
+}
+
+/// Controller coordinating overlay states and native glass host suspension (P5.8)
+class NativeGlassHostController extends ChangeNotifier {
+  static final NativeGlassHostController instance = NativeGlassHostController._internal();
+  NativeGlassHostController._internal();
+
+  static const MethodChannel _channel = MethodChannel('com.ysiduc.esp32_nav/glass_host');
+
+  MapOverlayMode _overlayMode = MapOverlayMode.none;
+  MapOverlayMode get overlayMode => _overlayMode;
+  MapOverlayMode get currentMode => _overlayMode;
+  bool get isOverlayActive => _overlayMode != MapOverlayMode.none;
+
+  void setOverlayMode(MapOverlayMode mode) {
+    if (_overlayMode == mode) return;
+    _overlayMode = mode;
+    notifyListeners();
+
+    try {
+      _channel.invokeMethod('setOverlayActive', isOverlayActive);
+    } catch (_) {
+      // Non-iOS or test environment fallback
+    }
+  }
+
+  @visibleForTesting
+  void resetForTesting() {
+    _overlayMode = MapOverlayMode.none;
+    notifyListeners();
+  }
+}
+
+/// Resolved runtime rendering backend for Liquid Glass (P5.7.1 & P5.8)
 enum AppGlassBackendType {
-  /// Native modern iOS Liquid Glass API (if exposed in iOS 26+ SDK)
-  nativeModern,
+  /// True Apple Liquid Glass API (iOS 26+ UIGlassEffect)
+  uiGlass,
+
+  /// Grouped Apple Liquid Glass container (iOS 26+ UIGlassContainerEffect)
+  uiGlassContainer,
 
   /// Native iOS UIKit UIVisualEffectView material with specular highlight edge
   nativeBlurFallback,
 
-  /// Pure Flutter BackdropFilter fallback for Android, Linux, desktop, web, or unit tests
+  /// Pure Flutter BackdropFilter fallback for Android, Linux, desktop, web, or active overlays
   flutterFallback,
 
   /// Solid high-contrast opaque surface when Reduce Transparency is enabled
+  opaqueAccessibility,
+
+  // Backwards compatibility alias
+  nativeModern,
   opaqueFallback,
 }
 
@@ -108,7 +156,7 @@ class AppGlassBackend {
   }) {
     // 1. Accessibility Fallback: Reduce Transparency ALWAYS forces opaque fallback (P5.7.1 & P5.7.2)
     if (isReduceTransparency) {
-      return AppGlassBackendType.opaqueFallback;
+      return AppGlassBackendType.opaqueAccessibility;
     }
 
     // 2. Synthetic backend override for unit testing specific visual branches
@@ -116,36 +164,48 @@ class AppGlassBackend {
       return forceBackendForTesting!;
     }
 
-    // 3. Platform & native capability detection
+    // 3. Z-Order Composition Guard: When a modal, drawer, or dialog is active,
+    // fallback to pure Flutter compositing so no native platform view occludes the overlay! (P5.8)
+    if (NativeGlassHostController.instance.isOverlayActive) {
+      return AppGlassBackendType.flutterFallback;
+    }
+
+    // 4. Platform & native capability detection
     final platform = forcePlatformForTesting ?? defaultTargetPlatform;
     if (kIsWeb) {
       return AppGlassBackendType.flutterFallback;
     }
     if (platform == TargetPlatform.iOS) {
-      // P5.7.2: Only return nativeModern if native Swift explicitly confirms modern Liquid Glass API.
-      // In current production on iOS 18 / Xcode 16 SDK, capability is always "native-blur-fallback".
-      if (AppAccessibilityService.instance.nativeGlassCapability == 'native-modern') {
-        return AppGlassBackendType.nativeModern;
+      final cap = AppAccessibilityService.instance.nativeGlassCapability;
+      if (cap == 'uiglass' || cap == 'native-modern') {
+        return AppGlassBackendType.uiGlass;
+      }
+      if (cap == 'uiglass-container') {
+        return AppGlassBackendType.uiGlassContainer;
       }
       return AppGlassBackendType.nativeBlurFallback;
     }
     return AppGlassBackendType.flutterFallback;
   }
 
-  /// Returns a human-readable telemetry string for debug overlay and field verification
+  /// Returns a human-readable telemetry string for debug overlay and field verification (P5.8)
   static String currentName(BuildContext context, [bool? isReduceTransparency]) {
     final effectiveReduceTransparency = isReduceTransparency ??
         AppAccessibilityService.instance.reduceTransparency;
     final type = resolve(context: context, isReduceTransparency: effectiveReduceTransparency);
     switch (type) {
+      case AppGlassBackendType.uiGlass:
       case AppGlassBackendType.nativeModern:
-        return 'native-modern';
+        return 'uiglass';
+      case AppGlassBackendType.uiGlassContainer:
+        return 'uiglass-container';
       case AppGlassBackendType.nativeBlurFallback:
         return 'native-blur-fallback';
       case AppGlassBackendType.flutterFallback:
-        return 'flutter';
+        return 'flutter-fallback';
+      case AppGlassBackendType.opaqueAccessibility:
       case AppGlassBackendType.opaqueFallback:
-        return 'opaque-fallback';
+        return 'opaque-accessibility';
     }
   }
 }
@@ -194,9 +254,12 @@ class AppGlassSurface extends StatelessWidget {
       return _buildSurface(context, reduceTransparency!);
     }
 
-    // Live reactive rebuild when iOS UIAccessibility.isReduceTransparencyEnabled changes (P5.7.2 Part A)
+    // Live reactive rebuild when accessibility setting or overlay mode changes (P5.7.2 & P5.8)
     return ListenableBuilder(
-      listenable: AppAccessibilityService.instance,
+      listenable: Listenable.merge([
+        AppAccessibilityService.instance,
+        NativeGlassHostController.instance,
+      ]),
       builder: (context, _) => _buildSurface(
         context,
         AppAccessibilityService.instance.reduceTransparency,
@@ -213,8 +276,9 @@ class AppGlassSurface extends StatelessWidget {
       isReduceTransparency: isReduceTransparency,
     );
 
-    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced (P5.7.1 Part 6)
-    if (backend == AppGlassBackendType.opaqueFallback) {
+    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced (P5.7.1 Part 6 & P5.8)
+    if (backend == AppGlassBackendType.opaqueAccessibility ||
+        backend == AppGlassBackendType.opaqueFallback) {
       Color solidBg;
       Color solidBorder;
 
@@ -311,8 +375,10 @@ class AppGlassSurface extends StatelessWidget {
         ),
     ];
 
-    // 2. REAL NATIVE LIQUID GLASS BACKEND (iOS UIKit UIVisualEffectView / Liquid Glass) (P5.7.1 Part 2)
-    if (backend == AppGlassBackendType.nativeModern ||
+    // 2. REAL NATIVE LIQUID GLASS BACKEND (iOS UIKit UIVisualEffectView / UIGlassEffect) (P5.7.1 & P5.8)
+    if (backend == AppGlassBackendType.uiGlass ||
+        backend == AppGlassBackendType.uiGlassContainer ||
+        backend == AppGlassBackendType.nativeModern ||
         backend == AppGlassBackendType.nativeBlurFallback) {
       return Container(
         margin: margin,

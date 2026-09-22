@@ -5,6 +5,7 @@ import '../services/navigation_manager.dart';
 import 'ble_screen.dart';
 import 'esp_preview_screen.dart';
 import 'map_screen.dart';
+import '../widgets/liquid_glass.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -37,6 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       key: _scaffoldKey,
       drawerEnableOpenDragGesture: _currentIndex == 0 && !navManager.isNavigating,
+      onDrawerChanged: (isOpen) => NativeGlassHostController.instance.setOverlayMode(
+        isOpen ? MapOverlayMode.drawer : MapOverlayMode.none,
+      ),
       drawer: _buildAppDrawer(context, bleService),
       body: IndexedStack(
         index: _currentIndex,
