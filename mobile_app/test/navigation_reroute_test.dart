@@ -377,5 +377,137 @@ void main() {
       expect(navManager.isNavigating, isFalse);
       expect(navManager.activeRoute, isNull);
     });
+    test('P5.5.1 Section 6: Reroute network failure triggers backoff cooldown and prevents spamming', () async {
+      mockRouter.nextRouteToReturn = null;
+      navManager.startNavigation(routeA);
+      DateTime t = DateTime(2026, 9, 22, 12, 0, 0);
+      final offRouteCoord = const LatLng(21.00041, 105.8010);
+
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+      expect(mockRouter.callCount, equals(0));
+
+      t = t.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(1));
+      expect(navManager.rerouteStatus, equals('failed'));
+      expect(navManager.rerouteRetryCount, equals(1));
+      expect(navManager.lastRerouteFailureAt, isNotNull);
+      expect(navManager.currentRerouteCooldown.inSeconds, equals(3));
+
+      // Sample at t + 1.0s (in 3s cooldown)
+      t = t.add(const Duration(seconds: 1));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(1));
+      expect(navManager.rerouteStatus, equals('cooldown'));
+
+      // Sample at t + 4.0s (elapsed 4.0s > 3.0s cooldown) -> retry 2
+      t = t.add(const Duration(seconds: 3));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(2));
+      expect(navManager.rerouteRetryCount, equals(2));
+      expect(navManager.currentRerouteCooldown.inSeconds, equals(6));
+    });
+
+    test('P5.5.1 Section 7: Reroute commit with identical point count & close start bumps routeRevision', () async {
+      navManager.startNavigation(routeA);
+      final initialRevision = navManager.routeRevision;
+
+      final closeStart = const LatLng(21.000004, 105.800004);
+      final routeB = NavRoute(
+        totalDistanceMeters: 800.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [closeStart, const LatLng(21.008, 105.808)],
+        steps: [],
+        summary: 'Route B',
+      );
+      mockRouter.nextRouteToReturn = routeB;
+
+      DateTime t = DateTime(2026, 9, 22, 12, 0, 0);
+      final offRouteCoord = const LatLng(21.00041, 105.8010);
+
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+      t = t.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t,
+      );
+
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(1));
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.routeRevision, greaterThan(initialRevision));
+      expect(navManager.rerouteStatus, equals('applied'));
+      expect(navManager.rerouteRetryCount, equals(0));
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.onRoute));
+    });
+
+    test('P5.5.1 Section 6: Recovery to onRoute resets reroute failure backoff', () async {
+      mockRouter.nextRouteToReturn = null;
+      navManager.startNavigation(routeA);
+      DateTime t = DateTime(2026, 9, 22, 12, 0, 0);
+      final offRouteCoord = const LatLng(21.00041, 105.8010);
+
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: t);
+      t = t.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: t);
+      await Future.delayed(Duration.zero);
+
+      expect(navManager.rerouteRetryCount, equals(1));
+      expect(navManager.rerouteStatus, equals('failed'));
+
+      // Vehicle steers back onto Route A (observation 1 starts recovery)
+      t = t.add(const Duration(seconds: 1));
+      navManager.updatePositionForTesting(startCoord, speedKmh: 35.0, heading: 90.0, horizontalAccuracy: 4.0, timestamp: t);
+
+      // Observation 2 (1.2s later completes recoveryDwellSeconds)
+      t = t.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(startCoord, speedKmh: 35.0, heading: 90.0, horizontalAccuracy: 4.0, timestamp: t);
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.onRoute));
+      expect(navManager.rerouteRetryCount, equals(0));
+      expect(navManager.lastRerouteFailureAt, isNull);
+      expect(navManager.rerouteStatus, equals('idle'));
+    });
   });
 }

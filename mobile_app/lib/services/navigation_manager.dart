@@ -85,11 +85,31 @@ class NavigationManager extends ChangeNotifier {
   NavRoute? get previewRoute => _previewRoute;
   void setPreviewRoute(NavRoute? route) {
     _previewRoute = route;
+    _routeRevision++;
     notifyListeners();
   }
 
   PhoneMediaService? get mediaService => _mediaService;
   int get currentStepIndex => _currentStepIndex;
+
+  // Route revision & generation (P5.5.1 Section 7)
+  int _routeRevision = 0;
+  int get routeRevision => _routeRevision;
+
+  DateTime? _lastLocationUpdateAt;
+
+  // Reroute retry backoff state (P5.5.1 Section 6)
+  int _rerouteRetryCount = 0;
+  int get rerouteRetryCount => _rerouteRetryCount;
+
+  DateTime? _lastRerouteFailureAt;
+  DateTime? get lastRerouteFailureAt => _lastRerouteFailureAt;
+
+  Duration get currentRerouteCooldown {
+    if (_rerouteRetryCount <= 0) return Duration.zero;
+    final seconds = math.min(30.0, 3.0 * math.pow(2.0, _rerouteRetryCount - 1));
+    return Duration(milliseconds: (seconds * 1000).round());
+  }
 
   // Location Getters
   LatLng? get rawLocation => _rawLocation;
@@ -277,6 +297,10 @@ class NavigationManager extends ChangeNotifier {
     stopNavigation();
     _enableBackgroundNavigation();
     _rerouteGeneration++;
+    _routeRevision++;
+    _rerouteRetryCount = 0;
+    _lastRerouteFailureAt = null;
+    _lastLocationUpdateAt = null;
     _activeRoute = route;
     _activeRouteGeometry = RouteGeometry(route.polylinePoints, steps: route.steps);
     // Freeze destination across all potential reroutes (Section 35)
@@ -347,6 +371,10 @@ class NavigationManager extends ChangeNotifier {
     stopNavigation();
     _enableBackgroundNavigation();
     _rerouteGeneration++;
+    _routeRevision++;
+    _rerouteRetryCount = 0;
+    _lastRerouteFailureAt = null;
+    _lastLocationUpdateAt = null;
     _activeRoute = route;
     _activeRouteGeometry = RouteGeometry(route.polylinePoints, steps: route.steps);
     _navigationDestination = route.polylinePoints.isNotEmpty ? route.polylinePoints.last : null;
@@ -441,6 +469,7 @@ class NavigationManager extends ChangeNotifier {
     _acceptedPhysicalLocation = newLocation;
 
     if (_activeRoute == null || _activeRouteGeometry == null) {
+      _lastLocationUpdateAt = sampleTime;
       onLocationChanged?.call(newLocation, effectiveHeading);
       notifyListeners();
       return;
@@ -459,12 +488,29 @@ class NavigationManager extends ChangeNotifier {
       _matchedLocation = matched.coordinate;
       _rawMatchedProgressMeters = matched.distanceAlongRouteMeters;
 
+      // PROGRESS ACCEPTANCE GATING (P5.5.1 Section 4)
+      // Guard against impossible forward jumps due to GPS noise or distant parallel route snapping
+      final deltaProgress = matched.distanceAlongRouteMeters - _displayProgressMeters;
+      bool acceptForwardProgress = true;
+      if (deltaProgress > 0 && _lastLocationUpdateAt != null) {
+        final deltaSeconds = math.max(0.1, sampleTime.difference(_lastLocationUpdateAt!).inMilliseconds / 1000.0);
+        final speedMps = _currentSpeedKmh / 3.6;
+        final maxPlausibleForwardJump = math.max(60.0, (speedMps * 1.5 + 35.0) * math.max(1.0, deltaSeconds));
+        if (deltaProgress > maxPlausibleForwardJump) {
+          acceptForwardProgress = false;
+        }
+      }
+
       // 2. MONOTONIC DISPLAY PROGRESS (Sections 12, 13)
-      // Display progress must NOT move backwards on GPS noise
-      _displayProgressMeters = math.max(_displayProgressMeters, matched.distanceAlongRouteMeters);
+      // Display progress must NOT move backwards on GPS noise, nor leap forward impossibly
+      if (acceptForwardProgress) {
+        _displayProgressMeters = math.max(_displayProgressMeters, matched.distanceAlongRouteMeters);
+      }
     } else {
       _matchedLocation = newLocation;
     }
+
+    _lastLocationUpdateAt = sampleTime;
 
     onLocationChanged?.call(currentLocation ?? newLocation, effectiveHeading);
 
@@ -553,13 +599,31 @@ class NavigationManager extends ChangeNotifier {
 
     if (decision.state == OffRouteState.suspected && suspectedAt == null) {
       suspectedAt = sampleTime;
-    } else if (decision.state == OffRouteState.onRoute) {
+    } else if (decision.recovered || decision.state == OffRouteState.onRoute) {
       suspectedAt = null;
       confirmedAt = null;
+      if (_rerouteRetryCount > 0) {
+        _rerouteRetryCount = 0;
+        _lastRerouteFailureAt = null;
+        if (_rerouteStatus != 'requesting') {
+          _rerouteStatus = 'idle';
+        }
+      }
     }
 
     if (decision.becameConfirmed || (decision.state == OffRouteState.confirmed && !_isRerouting)) {
       confirmedAt ??= sampleTime;
+
+      // Cooldown / Backoff check (P5.5.1 Section 6)
+      if (_lastRerouteFailureAt != null) {
+        final elapsedSinceFailure = sampleTime.difference(_lastRerouteFailureAt!);
+        if (elapsedSinceFailure < currentRerouteCooldown) {
+          _rerouteStatus = 'cooldown';
+          notifyListeners();
+          return;
+        }
+      }
+
       _triggerValhallaReroute(physicalLocation, sampleTime);
     }
   }
@@ -594,6 +658,7 @@ class NavigationManager extends ChangeNotifier {
         // ATOMIC COMMIT OF ROUTE B (Sections 40, 42)
         _activeRoute = newRoute;
         _activeRouteGeometry = RouteGeometry(newRoute.polylinePoints, steps: newRoute.steps);
+        _routeRevision++; // P5.5.1 Section 7: Force map screen to refresh Route B immediately
 
         final currentPhys = _acceptedPhysicalLocation ?? physicalLocation;
         final initProj = _activeRouteGeometry!.matchLocation(currentPhys);
@@ -616,6 +681,8 @@ class NavigationManager extends ChangeNotifier {
         _recentMatchedAdvanceMeters = 0.0;
         _isRerouting = false;
         _rerouteStatus = 'applied';
+        _rerouteRetryCount = 0;
+        _lastRerouteFailureAt = null;
         routeCommittedAt = DateTime.now();
 
         _updateRemainingMetrics();
@@ -625,12 +692,16 @@ class NavigationManager extends ChangeNotifier {
         // Reroute failure: keep Route A active, backoff (Section 43)
         _isRerouting = false;
         _rerouteStatus = 'failed';
+        _rerouteRetryCount++;
+        _lastRerouteFailureAt = requestTime;
         notifyListeners();
       }
     }).catchError((_) {
       if (generation == _rerouteGeneration) {
         _isRerouting = false;
         _rerouteStatus = 'failed';
+        _rerouteRetryCount++;
+        _lastRerouteFailureAt = requestTime;
         notifyListeners();
       }
     });
@@ -807,6 +878,10 @@ class NavigationManager extends ChangeNotifier {
     VoiceGuidanceService().resetNavigation();
     _disableBackgroundNavigation();
     _rerouteGeneration++;
+    _routeRevision++;
+    _rerouteRetryCount = 0;
+    _lastRerouteFailureAt = null;
+    _lastLocationUpdateAt = null;
     _isNavigating = false;
     _isSimulating = false;
     _isRerouting = false;

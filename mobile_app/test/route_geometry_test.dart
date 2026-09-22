@@ -177,5 +177,40 @@ void main() {
       expect(geom.maneuverBeginDistancesAlongRoute[2], closeTo(geom.cumulativeDistances[2], 1e-3));
       expect(geom.maneuverEndDistancesAlongRoute[2], closeTo(geom.totalDistanceMeters, 1e-3));
     });
+    test('matchLocation bounds candidate forward window, ignoring distant loops/overpasses', () {
+      // Loop route:
+      // p0 -> p1 (East 1000m)
+      // p1 -> p2 (North 1000m)
+      // p2 -> p3 (West 1000m)
+      // p3 -> p4 (South 1000m, passing 10m north of p0, total length ~4000m)
+      const p0 = LatLng(21.0000, 105.8000);
+      const p1 = LatLng(21.0000, 105.8100);
+      const p2 = LatLng(21.0100, 105.8100);
+      const p3 = LatLng(21.0100, 105.8000);
+      const p4 = LatLng(21.0001, 105.8000); // 11m north of p0
+
+      final geom = RouteGeometry([p0, p1, p2, p3, p4]);
+      expect(geom.totalDistanceMeters, greaterThan(3000.0));
+
+      // Vehicle is at start (p0)
+      final initialProj = geom.projectOnSegment(point: p0, segmentIndex: 0);
+      expect(initialProj.distanceAlongRouteMeters, equals(0.0));
+
+      // GPS sample at (21.0001, 105.8005): 11m north of p0.
+      // This point is right next to the final loop segment (segment 3: p3 -> p4),
+      // but 11m away from segment 0 (p0 -> p1).
+      const sample = LatLng(21.0001, 105.8005);
+
+      // matchLocation with continuity from initialProj must stay on segment 0
+      final matched = geom.matchLocation(
+        sample,
+        lastProjection: initialProj,
+        searchForwardMeters: 150.0,
+      );
+
+      expect(matched, isNotNull);
+      expect(matched!.segmentIndex, equals(0), reason: 'Must NOT jump 3000m ahead to distant loop segment');
+      expect(matched.distanceAlongRouteMeters, lessThan(150.0));
+    });
   });
 }

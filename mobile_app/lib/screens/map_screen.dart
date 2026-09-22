@@ -18,16 +18,12 @@ import '../services/google_link_controller.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/off_route_detector.dart';
+import '../services/route_render_controller.dart';
 import '../services/search_service.dart';
 import '../services/voice_guidance_service.dart';
 
 
-enum RoutePresentationMode {
-  none,
-  preview,
-  navigating,
-  arrived,
-}
+// RoutePresentationMode is imported from route_render_controller.dart
 
 enum MapThemeMode {
   streets,         // Apple Streets (clean light aesthetic)
@@ -42,6 +38,96 @@ class MapScreen extends StatefulWidget {
 
   @override
   State<MapScreen> createState() => _MapScreenState();
+}
+
+
+class _MapLibreLineDrawer implements MapLineDrawer {
+  final ml.MapLibreMapController? Function() getController;
+  _MapLibreLineDrawer(this.getController);
+
+  @override
+  Future<void> clearLines() async {
+    final ctrl = getController();
+    if (ctrl != null) {
+      await ctrl.clearLines();
+    }
+  }
+
+  @override
+  Future<void> drawActiveRoute({required List<LatLng> remainingPolyline}) async {
+    final ctrl = getController();
+    if (ctrl == null || remainingPolyline.length < 2) return;
+    final mlGeometry = remainingPolyline.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
+
+    // 1. Casing / Glow outline (Apple Maps Deep Blue Casing #0051B3)
+    await ctrl.addLine(
+      ml.LineOptions(
+        geometry: mlGeometry,
+        lineColor: '#0051B3',
+        lineWidth: 8.5,
+        lineOpacity: 0.9,
+        lineJoin: 'round',
+      ),
+    );
+
+    // 2. Core Apple Maps Vibrant Route Line (#007AFF)
+    await ctrl.addLine(
+      ml.LineOptions(
+        geometry: mlGeometry,
+        lineColor: '#007AFF',
+        lineWidth: 6.0,
+        lineOpacity: 1.0,
+        lineJoin: 'round',
+      ),
+    );
+  }
+
+  @override
+  Future<void> drawPreviewRoutes({
+    required List<LatLng> mainRoute,
+    required List<List<LatLng>> alternativeRoutes,
+  }) async {
+    final ctrl = getController();
+    if (ctrl == null) return;
+
+    // Draw alternative routes first in muted Apple slate
+    for (final altPoints in alternativeRoutes) {
+      if (altPoints.length >= 2) {
+        final altGeometry = altPoints.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
+        await ctrl.addLine(
+          ml.LineOptions(
+            geometry: altGeometry,
+            lineColor: '#8E8E93',
+            lineWidth: 5.5,
+            lineOpacity: 0.85,
+            lineJoin: 'round',
+          ),
+        );
+      }
+    }
+
+    if (mainRoute.length >= 2) {
+      final mlGeometry = mainRoute.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#0051B3',
+          lineWidth: 8.5,
+          lineOpacity: 0.9,
+          lineJoin: 'round',
+        ),
+      );
+      await ctrl.addLine(
+        ml.LineOptions(
+          geometry: mlGeometry,
+          lineColor: '#007AFF',
+          lineWidth: 6.0,
+          lineOpacity: 1.0,
+          lineJoin: 'round',
+        ),
+      );
+    }
+  }
 }
 
 class _MapScreenState extends State<MapScreen> {
@@ -114,9 +200,11 @@ class _MapScreenState extends State<MapScreen> {
   bool _isAutoCentering = true;
   Timer? _recenterTimer;
 
-  // P5.4.1.2 Section 29-32: Route redraw caching & throttled camera animation
-  int _routeGeometryUpdatesCount = 0;
-  int get routeGeometryUpdatesCount => _routeGeometryUpdatesCount;
+  // P5.5.1: Deterministic RouteRenderController
+  late final RouteRenderController _routeRenderController;
+  int _lastObservedRouteRevision = -1;
+  bool _lastObservedNavigating = false;
+  int get routeGeometryUpdatesCount => _routeRenderController.renderCount;
 
   DateTime _lastCameraAnimateTime = DateTime.fromMillisecondsSinceEpoch(0);
   bool _isCameraAnimating = false;
@@ -200,6 +288,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    _routeRenderController = RouteRenderController(_MapLibreLineDrawer(() => _mapController));
 
     _googleLinkController = GoogleLinkResolutionController(
       parser: _googleMapsParser,
@@ -215,6 +304,9 @@ class _MapScreenState extends State<MapScreen> {
     _isMuted = VoiceGuidanceService().isMuted;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
+      navManager.addListener(_onNavigationManagerChanged);
+      _lastObservedRouteRevision = navManager.routeRevision;
+      _lastObservedNavigating = navManager.isNavigating;
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
       }
@@ -281,106 +373,43 @@ class _MapScreenState extends State<MapScreen> {
     return RoutePresentationMode.none;
   }
 
-  /// Update route polyline on the MapLibre map using Apple Maps styling (P5.5 Sections 15 - 17)
-  Future<void> _updateRouteOnMap() async {
+  /// Update route polyline on MapLibre via deterministic RouteRenderController (P5.5.1 Section 3, 7)
+  Future<void> _updateRouteOnMap({bool forceRedraw = false}) async {
     final ctrl = _mapController;
     if (ctrl == null || !_mapReady) return;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final mode = _presentationMode;
-    List<LatLng> points = [];
+    List<LatLng> mainPoints = [];
+    List<List<LatLng>> altPoints = [];
 
     switch (mode) {
       case RoutePresentationMode.navigating:
-        points = navManager.remainingPolyline;
+        mainPoints = navManager.remainingPolyline;
         break;
       case RoutePresentationMode.preview:
         if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
-          points = _routes[_selectedRouteIndex].polylinePoints;
+          mainPoints = _routes[_selectedRouteIndex].polylinePoints;
+          for (int i = 0; i < _routes.length; i++) {
+            if (i != _selectedRouteIndex) {
+              altPoints.add(_routes[i].polylinePoints);
+            }
+          }
         }
         break;
       case RoutePresentationMode.arrived:
       case RoutePresentationMode.none:
-        points = [];
+        mainPoints = [];
         break;
     }
 
-    bool shouldUpdate = false;
-    if (points.isEmpty) {
-      shouldUpdate = _lastRenderedPointsCount > 0;
-    } else if (mode != _lastRenderedMode || points.length != _lastRenderedPointsCount) {
-      shouldUpdate = true;
-    } else if (_lastRenderedStartCoord != null) {
-      const distCalc = Distance();
-      final d = distCalc.as(LengthUnit.Meter, _lastRenderedStartCoord!, points.first);
-      if (d >= 2.5) {
-        shouldUpdate = true;
-      }
-    } else {
-      shouldUpdate = true;
-    }
-
-    if (!shouldUpdate) {
-      return;
-    }
-
-    _lastRenderedMode = mode;
-    _lastRenderedPointsCount = points.length;
-    _lastRenderedStartCoord = points.isNotEmpty ? points.first : null;
-    _routeGeometryUpdatesCount++;
-
-    try {
-      await ctrl.clearLines();
-      if (points.length < 2) return;
-
-      // Draw alternative routes first in muted Apple slate
-      if (mode == RoutePresentationMode.preview && _routes.length > 1) {
-        for (int i = 0; i < _routes.length; i++) {
-          if (i == _selectedRouteIndex) continue;
-          final altPoints = _routes[i].polylinePoints;
-          if (altPoints.length >= 2) {
-            final altGeometry = altPoints.map((p) => ml.LatLng(p.latitude, p.longitude)).toList();
-            await ctrl.addLine(
-              ml.LineOptions(
-                geometry: altGeometry,
-                lineColor: '#8E8E93',
-                lineWidth: 5.5,
-                lineOpacity: 0.85,
-                lineJoin: 'round',
-              ),
-            );
-          }
-        }
-      }
-
-      final mlGeometry = points
-          .map((p) => ml.LatLng(p.latitude, p.longitude))
-          .toList();
-
-      // 1. Casing / Glow outline (Apple Maps Deep Blue Casing #0051B3)
-      await ctrl.addLine(
-        ml.LineOptions(
-          geometry: mlGeometry,
-          lineColor: '#0051B3',
-          lineWidth: 8.5,
-          lineOpacity: 0.9,
-          lineJoin: 'round',
-        ),
-      );
-
-      // 2. Core Apple Maps Vibrant Route Line (#007AFF)
-      await ctrl.addLine(
-        ml.LineOptions(
-          geometry: mlGeometry,
-          lineColor: '#007AFF',
-          lineWidth: 6.0,
-          lineOpacity: 1.0,
-          lineJoin: 'round',
-        ),
-      );
-    } catch (e) {
-      debugPrint('Error drawing route on MapLibre: $e');
-    }
+    await _routeRenderController.submitRequest(
+      routeRevision: navManager.routeRevision,
+      mode: mode,
+      mainPoints: mainPoints,
+      altPoints: altPoints,
+      forceRedraw: forceRedraw,
+    );
   }
 
   /// Update native vector circle marker for destination pin in Apple Maps Orange
@@ -622,6 +651,19 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  void _onNavigationManagerChanged() {
+    if (!mounted) return;
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final rev = navManager.routeRevision;
+    final isNav = navManager.isNavigating;
+
+    if (rev != _lastObservedRouteRevision || isNav != _lastObservedNavigating) {
+      _lastObservedRouteRevision = rev;
+      _lastObservedNavigating = isNav;
+      _updateRouteOnMap(forceRedraw: true);
+    }
+  }
+
   @override
   void dispose() {
     _cameraCadenceTimer?.cancel();
@@ -629,6 +671,10 @@ class _MapScreenState extends State<MapScreen> {
     _recenterTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
+    try {
+      final navManager = Provider.of<NavigationManager>(context, listen: false);
+      navManager.removeListener(_onNavigationManagerChanged);
+    } catch (_) {}
     super.dispose();
   }
 
@@ -1504,11 +1550,19 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildDebugOverlay(EspStreamService streamService, NavigationManager navManager) {
+    final physicalLoc = navManager.acceptedPhysicalLocation ?? navManager.rawLocation;
+    final matchedLoc = navManager.matchedLocation;
+    final physicalRouteDist = (navManager.activeRouteGeometry?.nearestProjection(physicalLoc ?? const LatLng(0, 0))?.lateralDistanceMeters ?? 0.0);
+    final matchedLateralDist = (navManager.matchedProjection?.lateralDistanceMeters ?? 0.0);
+    final lastLatencyMs = (navManager.routeCommittedAt != null && navManager.requestStartedAt != null)
+        ? navManager.routeCommittedAt!.difference(navManager.requestStartedAt!).inMilliseconds
+        : null;
+
     return LiquidGlassContainer(
       radius: 16,
       blur: 24,
       padding: const EdgeInsets.all(12),
-      width: 220,
+      width: 240,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1534,18 +1588,23 @@ class _MapScreenState extends State<MapScreen> {
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),
             const Text(
-              'NAV ENGINE (P5.5)',
+              'NAV ENGINE (P5.5.1)',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFFFF9500)),
             ),
             const SizedBox(height: 4),
             Text('GPS acc: ${navManager.horizontalAccuracy.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
-            Text('Physical route dist: ${(navManager.activeRouteGeometry?.nearestProjection(navManager.acceptedPhysicalLocation ?? navManager.rawLocation ?? const LatLng(0, 0))?.lateralDistanceMeters ?? 0.0).toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
-            Text('Matched lateral: ${(navManager.matchedProjection?.lateralDistanceMeters ?? 0.0).toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            if (physicalLoc != null)
+              Text('Phys: ${physicalLoc.latitude.toStringAsFixed(5)}, ${physicalLoc.longitude.toStringAsFixed(5)}', style: const TextStyle(fontSize: 10, color: Colors.black87)),
+            if (matchedLoc != null)
+              Text('Match: ${matchedLoc.latitude.toStringAsFixed(5)}, ${matchedLoc.longitude.toStringAsFixed(5)}', style: const TextStyle(fontSize: 10, color: Colors.black87)),
+            Text('Physical route dist: ${physicalRouteDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('Matched lateral: ${matchedLateralDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
             Text('Progress: ${navManager.displayProgressMeters.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11)),
             Text('Route remain: ${navManager.remainingTotalDistance >= 1000 ? "${(navManager.remainingTotalDistance / 1000).toStringAsFixed(1)}km" : "${navManager.remainingTotalDistance.toStringAsFixed(0)}m"}', style: const TextStyle(fontSize: 11)),
             Text('OffRoute: ${navManager.lastOffRouteDecision?.state.name ?? "onRoute"}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: navManager.lastOffRouteDecision?.state == OffRouteState.confirmed ? Colors.red : (navManager.lastOffRouteDecision?.state == OffRouteState.suspected ? Colors.orange : Colors.green))),
             Text('Reason: ${navManager.lastOffRouteDecision?.reason.name ?? "none"}', style: const TextStyle(fontSize: 11)),
-            Text('Reroute: ${navManager.rerouteStatus}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Reroute: ${navManager.rerouteStatus} (gen ${navManager.rerouteGeneration}, rev ${navManager.routeRevision})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Latency: ${lastLatencyMs != null ? "${lastLatencyMs}ms" : "--"}', style: const TextStyle(fontSize: 11)),
           ],
         ],
       ),

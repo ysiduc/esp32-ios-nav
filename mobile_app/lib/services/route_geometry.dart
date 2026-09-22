@@ -301,10 +301,11 @@ class RouteGeometry {
     if (bestLocalProj == null) return globalNearest;
 
     // If global nearest is substantially better than local (e.g., jump over sharp turn or detour),
-    // and global is not backwards by more than 30m:
+    // and global is not backwards by more than 30m nor jumping beyond forward search window:
     final globalDeltaAlong = globalNearest.distanceAlongRouteMeters - currentDistAlong;
     if (globalNearest.lateralDistanceMeters < bestLocalProj.lateralDistanceMeters * 0.5 &&
-        globalDeltaAlong > -30.0) {
+        globalDeltaAlong > -30.0 &&
+        globalDeltaAlong <= searchForwardMeters) {
       return globalNearest;
     }
 

@@ -173,5 +173,80 @@ void main() {
       expect(navManager.displayProgressMeters, closeTo(30.0, 1.5));
       expect(navManager.rawLocation, equals(coord70));
     });
+    test('P5.5.1 Section 8: GPS jitter sequence (30 -> 28 -> 32 -> 29 -> 40)', () {
+      navManager.startNavigation(testRoute);
+      final geom = navManager.activeRouteGeometry!;
+
+      final jitterTargets = [30.0, 28.0, 32.0, 29.0, 40.0];
+      final expectedProgress = [30.0, 30.0, 32.0, 32.0, 40.0];
+
+      DateTime baseTime = DateTime(2026, 9, 22, 12, 0, 0);
+
+      for (int i = 0; i < jitterTargets.length; i++) {
+        final targetD = jitterTargets[i];
+        final coord = geom.coordinateAtDistance(targetD)!;
+        baseTime = baseTime.add(const Duration(seconds: 1));
+
+        navManager.updatePositionForTesting(
+          coord,
+          speedKmh: 30.0,
+          heading: 90.0,
+          horizontalAccuracy: 4.0,
+          timestamp: baseTime,
+        );
+
+        expect(
+          navManager.displayProgressMeters,
+          closeTo(expectedProgress[i], 1.5),
+          reason: 'At step $i target $targetD expected ${expectedProgress[i]}',
+        );
+
+        // First point of remainingPolyline must be at or ahead of expected progress
+        final remaining = navManager.remainingPolyline;
+        final expectedCoord = geom.coordinateAtDistance(expectedProgress[i])!;
+        expect(remaining.first.longitude, greaterThanOrEqualTo(expectedCoord.longitude - 1e-5));
+      }
+    });
+
+    test('P5.5.1 Section 4: Impossible forward jump rejection (300m jump in 1s rejected)', () {
+      const pStart = LatLng(21.000, 105.800);
+      const pEnd = LatLng(21.000, 105.810);
+      final longGeom = RouteGeometry([pStart, pEnd]);
+      final longRoute = NavRoute(
+        totalDistanceMeters: longGeom.totalDistanceMeters,
+        totalDurationSeconds: 120.0,
+        polylinePoints: [pStart, pEnd],
+        steps: [],
+        summary: 'Long test road',
+      );
+
+      navManager.startNavigation(longRoute);
+      final t0 = DateTime(2026, 9, 22, 12, 0, 0);
+
+      // Normal progress at 50m
+      final coord50 = longGeom.coordinateAtDistance(50.0)!;
+      navManager.updatePositionForTesting(
+        coord50,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t0,
+      );
+      expect(navManager.displayProgressMeters, closeTo(50.0, 1.5));
+
+      // 1.0s later, noisy GPS reading snaps to 500m ahead
+      final t1 = t0.add(const Duration(seconds: 1));
+      final coord500 = longGeom.coordinateAtDistance(500.0)!;
+      navManager.updatePositionForTesting(
+        coord500,
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t1,
+      );
+
+      // Must NOT allow 450m jump in 1 second at 30km/h!
+      expect(navManager.displayProgressMeters, closeTo(50.0, 1.5));
+    });
   });
 }
