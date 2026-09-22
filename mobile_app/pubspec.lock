@@ -571,10 +571,9 @@ packages:
   maplibre_gl:
     dependency: "direct main"
     description:
-      name: maplibre_gl
-      sha256: cd0adf2da87149cab556ac70977783d6dcb3bd73b17a5583cc8366a5aafa46f8
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/maplibre_gl"
+      relative: true
+    source: path
     version: "0.21.0"
   maplibre_gl_platform_interface:
     dependency: transitive

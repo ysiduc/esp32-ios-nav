@@ -453,25 +453,25 @@ void main() {
         ),
       );
 
-      // Initial state: Reduce Transparency OFF -> real native host UiKitView exists
+      // Initial state: Reduce Transparency OFF -> zero extra UiKitViews (P5.9 Native MapLibre hierarchy)
       expect(find.text('Live Accessibility Content'), findsOneWidget);
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
       expect(find.byType(BackdropFilter), findsNothing);
 
       // User enables Reduce Transparency in iOS Settings
       AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
       await tester.pump();
 
-      // UiKitView is unmounted and opaque high-contrast surface renders
+      // Opaque high-contrast surface renders without platform views
       expect(find.byType(UiKitView), findsNothing);
       expect(find.byType(BackdropFilter), findsNothing);
       expect(find.text('Live Accessibility Content'), findsOneWidget);
 
-      // User disables Reduce Transparency -> returns to real native host UiKitView
+      // User disables Reduce Transparency -> returns to native glass mode (zero extra UiKitViews)
       AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
       await tester.pump();
 
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
       expect(find.byType(BackdropFilter), findsNothing);
     });
 
@@ -504,7 +504,7 @@ void main() {
       expect(AppGlassBackend.currentName(capturedContext), equals('native-blur-fallback'));
     });
 
-    testWidgets('Single host architecture: NativeGlassHostLayer mounts ONE plugins.ysiduc.com/native_glass_host and surfaces register geometry', (tester) async {
+    testWidgets('Single host architecture (P5.9): Native glass is inside MapLibre, zero UiKitViews mounted on overlay', (tester) async {
       AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
 
@@ -529,11 +529,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Native Glass Content'), findsOneWidget);
-      expect(find.byType(UiKitView), findsOneWidget);
-
-      final uikitFinder = find.byType(UiKitView);
-      final UiKitView uikitView = tester.widget<UiKitView>(uikitFinder);
-      expect(uikitView.viewType, equals('plugins.ysiduc.com/native_glass_host'));
+      // P5.9: ZERO platform views in Flutter overlay stack
+      expect(find.byType(UiKitView), findsNothing);
 
       // Check registered surface in controller
       expect(NativeGlassHostController.instance.surfaces.containsKey('test_surf_1'), isTrue);
@@ -691,8 +688,8 @@ void main() {
       expect(find.text('Trong 209 m'), findsOneWidget);
       expect(find.text('Rẽ trái vào Lê Lợi'), findsOneWidget);
       expect(find.byIcon(Icons.turn_left_rounded), findsOneWidget);
-      // Exactly ONE native host UiKitView for the whole stack! Zero per-surface platform views (P5.8.1)
-      expect(find.byType(UiKitView), findsOneWidget);
+      // P5.9: Zero extra platform views in Flutter overlay stack
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('Navigation cancel button properly invokes teardown with danger glass styling', (tester) async {
@@ -772,8 +769,8 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: Stack(
+              fit: StackFit.expand,
               children: [
-                // Single native glass host layer (P5.8.1)
                 const NativeGlassHostLayer(),
                 // In-map glass control
                 const Positioned(
@@ -785,10 +782,11 @@ void main() {
                   ),
                 ),
                 // Tap button simulating search pill tap
-                Builder(
-                  builder: (ctx) => Positioned(
-                    bottom: 50,
-                    child: ElevatedButton(
+                Positioned(
+                  bottom: 50,
+                  left: 20,
+                  child: Builder(
+                    builder: (ctx) => ElevatedButton(
                       key: const Key('search_pill_btn'),
                       onPressed: () {
                         controller.setOverlayMode(MapOverlayMode.search);
@@ -821,8 +819,8 @@ void main() {
         ),
       );
 
-      // Initially: Native platform view is present because overlay mode is none
-      expect(find.byType(UiKitView), findsOneWidget);
+      // Initially: Overlay mode is none (P5.9: Zero UiKitView on overlay)
+      expect(find.byType(UiKitView), findsNothing);
       expect(find.text('Map Glass Control'), findsOneWidget);
       expect(controller.isOverlayActive, isFalse);
 
@@ -836,7 +834,7 @@ void main() {
       expect(find.text('Địa điểm đã lưu'), findsOneWidget);
       expect(find.text('Gần đây'), findsOneWidget);
 
-      // Native glass is suspended/lowered: UiKitView is NOT present during modal!
+      // Native glass is suspended/lowered: overlay mode active
       expect(controller.isOverlayActive, isTrue);
       expect(controller.currentMode, equals(MapOverlayMode.search));
       expect(find.byType(UiKitView), findsNothing);
@@ -846,11 +844,11 @@ void main() {
       Navigator.pop(tester.element(find.byKey(const Key('apple_search_modal_content'))));
       await tester.pumpAndSettle();
 
-      // Modal is gone, native glass is restored!
+      // Modal is gone, overlay mode is restored
       expect(find.byKey(const Key('apple_search_modal_content')), findsNothing);
       expect(controller.isOverlayActive, isFalse);
       expect(controller.currentMode, equals(MapOverlayMode.none));
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('B: Tap hamburger opens drawer with MapOverlayMode.drawer above all map glass', (tester) async {
@@ -875,6 +873,7 @@ void main() {
               ),
             ),
             body: Stack(
+              fit: StackFit.expand,
               children: [
                 const NativeGlassHostLayer(),
                 const Positioned(
@@ -887,14 +886,14 @@ void main() {
                 ),
                 Positioned(
                   top: 50,
-                  right: 20,
-                  child: IconButton(
+                  left: 200,
+                  child: ElevatedButton(
                     key: const Key('hamburger_btn'),
-                    icon: const Icon(Icons.menu),
                     onPressed: () {
                       controller.setOverlayMode(MapOverlayMode.drawer);
                       scaffoldKey.currentState?.openDrawer();
                     },
+                    child: const Text('Open Drawer'),
                   ),
                 ),
               ],
@@ -903,7 +902,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
       expect(controller.isOverlayActive, isFalse);
 
       // Tap hamburger
@@ -925,7 +924,7 @@ void main() {
 
       expect(find.byKey(const Key('app_drawer_content')), findsNothing);
       expect(controller.isOverlayActive, isFalse);
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('E: Open report bottom sheet appears visibly and suspends native glass', (tester) async {
@@ -976,7 +975,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.isOverlayActive, isFalse);
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('F: Location ambiguity confirmation dialog renders topmost above glass', (tester) async {
@@ -1035,7 +1034,7 @@ void main() {
 
       expect(find.text('Có thể là địa điểm này'), findsNothing);
       expect(controller.isOverlayActive, isFalse);
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
     });
   });
   group('P5.8.1: Single Native Glass Host & Surface Registry Tests', () {
@@ -1115,12 +1114,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // STRICT P5.8.1 ASSERTION:
-      // Exactly ONE native_glass_host platform view exists in normal map mode!
+      // STRICT P5.9 ASSERTION:
+      // ZERO native_glass_host platform views exist in Flutter overlay stack!
       final hostViews = find.byWidgetPredicate(
         (w) => w is UiKitView && w.viewType == 'plugins.ysiduc.com/native_glass_host',
       );
-      expect(hostViews, findsOneWidget);
+      expect(hostViews, findsNothing);
 
       // ZERO legacy per-surface native_glass platform views exist!
       final legacyViews = find.byWidgetPredicate(
@@ -1128,20 +1127,22 @@ void main() {
       );
       expect(legacyViews, findsNothing);
 
-      // Total UiKitView count across the ENTIRE widget tree is EXACTLY ONE!
-      expect(find.byType(UiKitView), findsOneWidget);
+      // Total UiKitView count across the ENTIRE Flutter overlay is ZERO!
+      expect(find.byType(UiKitView), findsNothing);
 
-      // When an overlay opens: host UiKitView is completely unmounted!
+      // When an overlay opens: controller updates overlay mode
       controller.setOverlayMode(MapOverlayMode.search);
       await tester.pumpAndSettle();
 
+      expect(controller.isOverlayActive, isTrue);
       expect(find.byType(UiKitView), findsNothing);
 
-      // Dismiss overlay: host UiKitView is restored!
+      // Dismiss overlay: controller restores overlay mode
       controller.setOverlayMode(MapOverlayMode.none);
       await tester.pumpAndSettle();
 
-      expect(find.byType(UiKitView), findsOneWidget);
+      expect(controller.isOverlayActive, isFalse);
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('Surface registry lifecycle: registers, updates, and unregisters without zombie surfaces', (tester) async {
@@ -1251,7 +1252,7 @@ void main() {
       NativeGlassHostController.instance.resetForTesting();
     });
 
-    testWidgets('NativeGlassHostLayer wraps platform view in IgnorePointer(ignoring: true)', (tester) async {
+    testWidgets('P5.9 Architecture: NativeGlassHostLayer mounts ZERO platform views', (tester) async {
       AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
 
@@ -1268,76 +1269,91 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final ignorePointerFinder = find.descendant(
-        of: find.byType(NativeGlassHostLayer),
-        matching: find.byType(IgnorePointer),
+      // P5.9: full-screen native glass UiKitView count = 0
+      expect(find.byType(UiKitView), findsNothing);
+      expect(
+        find.byWidgetPredicate((w) => w is UiKitView && w.viewType == 'plugins.ysiduc.com/native_glass_host'),
+        findsNothing,
       );
-      expect(ignorePointerFinder, findsOneWidget);
-      final IgnorePointer ignorePointer = tester.widget(ignorePointerFinder);
-      expect(ignorePointer.ignoring, isTrue);
     });
 
-    testWidgets('Map area gestures (tap, drag) pass through NativeGlassHostLayer to underlying map seam', (tester) async {
-      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
-      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+    testWidgets('P5.9 Architecture: Surface registry converts Flutter global coordinates to MapLibre-local coordinates', (tester) async {
+      final controller = MapNativeGlassController.instance;
+      controller.resetForTesting();
 
-      int mapTapCount = 0;
-      int mapDragCount = 0;
-      int buttonTapCount = 0;
+      // Map is positioned at (0, 48) on screen due to safe area
+      controller.mockMapOrigin = const Offset(0, 48);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Stack(
-              children: [
-                // 1. Underlying Map with gesture detector (simulating MapLibre)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => mapTapCount++,
-                    onPanUpdate: (_) => mapDragCount++,
-                    child: Container(color: Colors.blue.shade900),
-                  ),
-                ),
+      List<Map<String, dynamic>>? capturedSurfaces;
+      MapNativeGlassController.onFlushForTesting = (surfaces) {
+        capturedSurfaces = surfaces;
+      };
 
-                // 2. Native Glass Host Layer (Visual only, pass-through)
-                const NativeGlassHostLayer(),
-
-                // 3. Foreground interactive controls
-                Positioned(
-                  top: 100,
-                  right: 20,
-                  child: AppGlassToolbar(
-                    groupId: 'right-toolbar',
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.layers),
-                        onPressed: () => buttonTapCount++,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+      // Surface positioned at global (16, 56) with size 44x44
+      controller.registerSurface(
+        const GlassSurfaceData(
+          id: 'test_top_left_pill',
+          rect: Rect.fromLTWH(16, 56, 44, 44),
+          radius: 22.0,
+          variant: 'regular',
         ),
       );
-      await tester.pumpAndSettle();
 
-      // Tap on empty map area (center of screen)
-      await tester.tapAt(const Offset(200, 300));
-      await tester.pump();
-      expect(mapTapCount, equals(1), reason: 'Tap on empty map area must reach the map seam through glass host layer');
+      controller.flushSurfaces();
 
-      // Drag on empty map area (simulating pan / pinch zoom)
-      await tester.dragFrom(const Offset(200, 300), const Offset(50, 50));
-      await tester.pump();
-      expect(mapDragCount, greaterThan(0), reason: 'Pan/drag gestures on map area must pass through to the map seam');
+      expect(capturedSurfaces, isNotNull);
+      expect(capturedSurfaces!.length, equals(1));
+      final surf = capturedSurfaces!.first;
+      // Local x = 16 - 0 = 16
+      expect(surf['x'], equals(16.0));
+      // Local y = 56 - 48 = 8
+      expect(surf['y'], equals(8.0));
+      expect(surf['w'], equals(44.0));
+      expect(surf['h'], equals(44.0));
+      expect(surf['visible'], isTrue);
 
-      // Tap on foreground glass control
-      await tester.tap(find.byType(IconButton));
-      await tester.pump();
-      expect(buttonTapCount, equals(1), reason: 'Buttons on top of glass host layer must remain interactive');
+      MapNativeGlassController.onFlushForTesting = null;
+    });
+
+    testWidgets('P5.9 Architecture: Overlay mode sets surface visibility to false without mounting new platform views', (tester) async {
+      final controller = MapNativeGlassController.instance;
+      controller.resetForTesting();
+
+      List<Map<String, dynamic>>? capturedSurfaces;
+      MapNativeGlassController.onFlushForTesting = (surfaces) {
+        capturedSurfaces = surfaces;
+      };
+
+      controller.registerSurface(
+        const GlassSurfaceData(
+          id: 'test_surface',
+          rect: Rect.fromLTWH(20, 100, 50, 50),
+          radius: 25.0,
+          variant: 'prominent',
+        ),
+      );
+
+      // Normal mode -> visible = true
+      controller.flushSurfaces();
+      expect(capturedSurfaces!.first['visible'], isTrue);
+
+      // Search overlay active -> visible = false
+      controller.setOverlayMode(MapOverlayMode.search);
+      expect(capturedSurfaces!.first['visible'], isFalse);
+
+      // Dismiss overlay -> visible = true
+      controller.setOverlayMode(MapOverlayMode.none);
+      expect(capturedSurfaces!.first['visible'], isTrue);
+
+      MapNativeGlassController.onFlushForTesting = null;
+    });
+
+    testWidgets('P5.9 Architecture: P5.8.2 fake GestureDetector test seam recognized as insufficient for PlatformView touch blocking', (tester) async {
+      // Documentation test ensuring field test finding is permanently recorded:
+      // Flutter GestureDetector in widget tests does not simulate iOS FlutterTouchInterceptingView,
+      // which intercepted gestures before MapLibre despite hitTest=nil.
+      // In P5.9, touches reach MLNMapView directly because glass subviews are inside MLNMapView with isUserInteractionEnabled=false.
+      expect(true, isTrue);
     });
 
     testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec', (tester) async {

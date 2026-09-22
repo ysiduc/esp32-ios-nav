@@ -1,3 +1,4 @@
+import 'dart:ui';
 import '../widgets/liquid_glass.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:async';
@@ -151,10 +152,11 @@ class _MapLibreLineDrawer implements MapLineDrawer {
 
 class _MapScreenState extends State<MapScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey _mapKey = GlobalKey();
   RoutePresentationMode _lastRenderedMode = RoutePresentationMode.none;
 
   void _setOverlayMode(MapOverlayMode mode) {
-    NativeGlassHostController.instance.setOverlayMode(mode);
+    MapNativeGlassController.instance.setOverlayMode(mode);
   }
 
   Future<void> showLocationAmbiguityDialog(
@@ -435,6 +437,7 @@ class _MapScreenState extends State<MapScreen> {
   void _onMapCreated(ml.MapLibreMapController controller) {
     _mapController = controller;
     _mapReady = true;
+    MapNativeGlassController.instance.attachMap(controller, _mapKey);
 
     // Move camera to user position
     final navManager = Provider.of<NavigationManager>(context, listen: false);
@@ -764,6 +767,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    MapNativeGlassController.instance.detachMap();
     _routeRenderCadenceTimer?.cancel();
     _cameraCadenceTimer?.cancel();
     _debounceTimer?.cancel();
@@ -1251,9 +1255,10 @@ class _MapScreenState extends State<MapScreen> {
       body: Stack(
         children: [
           // -----------------------------------------------------------
-          // 1. MapLibre Native Vector Map (60fps GPU-rendered)
+          // 1. MapLibre Native Vector Map (60fps GPU-rendered, P5.9)
           // -----------------------------------------------------------
           ml.MapLibreMap(
+            key: _mapKey,
             styleString: _buildMaplibreStyleString(),
             initialCameraPosition: ml.CameraPosition(
               target: ml.LatLng(userPos.latitude, userPos.longitude),
@@ -1278,11 +1283,6 @@ class _MapScreenState extends State<MapScreen> {
             zoomGesturesEnabled: true,
             tiltGesturesEnabled: true,
           ),
-
-          // -----------------------------------------------------------
-          // 1b. Single Native Glass Host Layer (P5.8.1 Architecture)
-          // -----------------------------------------------------------
-          const NativeGlassHostLayer(),
 
           // -----------------------------------------------------------
           // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
@@ -1888,19 +1888,26 @@ class _MapScreenState extends State<MapScreen> {
               maxChildSize: 0.95,
               minChildSize: 0.45,
               builder: (_, scrollController) {
-                return Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF2F2F7).withOpacity(0.95),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.12),
-                        blurRadius: 28,
-                        offset: const Offset(0, -6),
+                return ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF2F2F7).withOpacity(0.80),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                        border: Border(
+                          top: BorderSide(color: Colors.white.withOpacity(0.60), width: 0.5),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.12),
+                            blurRadius: 28,
+                            offset: const Offset(0, -6),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  child: Column(
+                      child: Column(
                     children: [
                       // Top Drag Handle
                       Center(
@@ -2419,6 +2426,8 @@ class _MapScreenState extends State<MapScreen> {
                               ),
                       ),
                     ],
+                  ),
+                    ),
                   ),
                 );
               },

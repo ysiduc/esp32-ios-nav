@@ -1,3 +1,4 @@
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -170,12 +171,10 @@ class GlassSurfaceData {
   int get hashCode => Object.hash(id, rect, radius, variant, isSelected, tint, groupId);
 }
 
-/// Controller coordinating overlay states and native glass host surface registry (P5.8 & P5.8.1)
-class NativeGlassHostController extends ChangeNotifier {
-  static final NativeGlassHostController instance = NativeGlassHostController._internal();
-  NativeGlassHostController._internal();
-
-  static const MethodChannel _channel = MethodChannel('com.ysiduc.esp32_nav/glass_host');
+/// Controller coordinating native Liquid Glass surfaces inside MapLibre native view (P5.9 Architecture)
+class MapNativeGlassController extends ChangeNotifier {
+  static final MapNativeGlassController instance = MapNativeGlassController._internal();
+  MapNativeGlassController._internal();
 
   MapOverlayMode _overlayMode = MapOverlayMode.none;
   MapOverlayMode get overlayMode => _overlayMode;
@@ -185,25 +184,46 @@ class NativeGlassHostController extends ChangeNotifier {
   final Map<String, GlassSurfaceData> _surfaces = {};
   Map<String, GlassSurfaceData> get surfaces => Map.unmodifiable(_surfaces);
 
+  ml.MapLibreMapController? _mapController;
+  GlobalKey? _mapKey;
+
+  /// Global origin offset of MapLibre view, for testing and coordinate translation
+  Offset? _mockMapOrigin;
+  @visibleForTesting
+  set mockMapOrigin(Offset? origin) => _mockMapOrigin = origin;
+
   bool _flushScheduled = false;
 
   @visibleForTesting
   static void Function(List<Map<String, dynamic>>)? onFlushForTesting;
 
+  void attachMap(ml.MapLibreMapController controller, [GlobalKey? mapKey]) {
+    _mapController = controller;
+    _mapKey = mapKey;
+    flushSurfaces();
+  }
+
+  void detachMap() {
+    _mapController = null;
+    _mapKey = null;
+  }
+
+  Offset get mapGlobalOrigin {
+    if (_mockMapOrigin != null) return _mockMapOrigin!;
+    if (_mapKey?.currentContext != null) {
+      final box = _mapKey!.currentContext!.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) {
+        return box.localToGlobal(Offset.zero);
+      }
+    }
+    return Offset.zero;
+  }
+
   void setOverlayMode(MapOverlayMode mode) {
     if (_overlayMode == mode) return;
     _overlayMode = mode;
     notifyListeners();
-
-    try {
-      _channel.invokeMethod('setOverlayActive', isOverlayActive);
-    } catch (_) {
-      // Non-iOS or test environment fallback
-    }
-
-    if (!isOverlayActive) {
-      flushSurfaces();
-    }
+    flushSurfaces();
   }
 
   void registerSurface(GlassSurfaceData surface) {
@@ -235,13 +255,26 @@ class NativeGlassHostController extends ChangeNotifier {
   }
 
   void flushSurfaces() {
-    final payload = _surfaces.values.map((s) => s.toMap()).toList();
+    final origin = mapGlobalOrigin;
+    final payload = _surfaces.values.map((s) {
+      final localRect = s.rect.shift(-origin);
+      return {
+        'id': s.id,
+        'x': localRect.left,
+        'y': localRect.top,
+        'w': localRect.width,
+        'h': localRect.height,
+        'radius': s.radius,
+        'variant': s.variant,
+        'isSelected': s.isSelected,
+        if (s.tint != null) 'tint': s.tint,
+        if (s.groupId != null) 'groupId': s.groupId,
+        'visible': !isOverlayActive,
+      };
+    }).toList();
+
     onFlushForTesting?.call(payload);
-    try {
-      _channel.invokeMethod('updateSurfaces', payload);
-    } catch (_) {
-      // Non-iOS or test environment fallback
-    }
+    _mapController?.updateGlassSurfaces(payload);
   }
 
   @visibleForTesting
@@ -249,52 +282,26 @@ class NativeGlassHostController extends ChangeNotifier {
     _overlayMode = MapOverlayMode.none;
     _surfaces.clear();
     _flushScheduled = false;
+    _mapController = null;
+    _mapKey = null;
+    _mockMapOrigin = null;
     notifyListeners();
   }
 }
 
-/// Single Native Glass Host platform view component (P5.8.1)
-/// Placed in MapScreen Stack between MapLibre and Flutter controls.
-/// Only ONE instance exists in normal map mode.
+/// Backwards compatibility alias for P5.8 code
+typedef NativeGlassHostController = MapNativeGlassController;
+
+/// Deprecated stub for P5.8 NativeGlassHostLayer (P5.9 Architecture).
+/// Liquid Glass is now rendered directly inside MapLibre native view hierarchy.
+/// This widget returns SizedBox.shrink() and mounts ZERO platform views.
+@Deprecated('Liquid Glass is integrated directly into MapLibre view in P5.9. Do not mount NativeGlassHostLayer.')
 class NativeGlassHostLayer extends StatelessWidget {
   const NativeGlassHostLayer({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        NativeGlassHostController.instance,
-        AppAccessibilityService.instance,
-      ]),
-      builder: (context, _) {
-        final isOverlayActive = NativeGlassHostController.instance.isOverlayActive;
-        final isReduceTransparency = AppAccessibilityService.instance.reduceTransparency;
-        final backend = AppGlassBackend.resolve(
-          context: context,
-          isReduceTransparency: isReduceTransparency,
-        );
-
-        final isNativeActive = (backend == AppGlassBackendType.uiGlass ||
-                backend == AppGlassBackendType.uiGlassContainer ||
-                backend == AppGlassBackendType.nativeBlurFallback) &&
-            !isOverlayActive;
-
-        if (!isNativeActive) {
-          return const SizedBox.shrink();
-        }
-
-        return const Positioned.fill(
-          child: IgnorePointer(
-            ignoring: true,
-            child: UiKitView(
-              viewType: 'plugins.ysiduc.com/native_glass_host',
-              creationParamsCodec: StandardMessageCodec(),
-              hitTestBehavior: PlatformViewHitTestBehavior.transparent,
-            ),
-          ),
-        );
-      },
-    );
+    return const SizedBox.shrink();
   }
 }
 
