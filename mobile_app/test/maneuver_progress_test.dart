@@ -243,5 +243,182 @@ void main() {
       expect(trimmed.first.longitude, closeTo(at120m.longitude, 0.0001));
       expect(trimmed.length, lessThan(initialLength));
     });
+    test('P5.7 Part A: Pipeline from Valhalla type to NavStep, authoritative maneuver, and bannerTurnIcon', () {
+      // 1. Start Generic (type 1)
+      final stepStartGeneric = NavStep(
+        stepIndex: 0,
+        instruction: 'Khởi hành trên Phố Huế',
+        streetName: 'Phố Huế',
+        distanceMeters: 200.0,
+        durationSeconds: 30.0,
+        coordinate: p0,
+        maneuverTypeStr: 'depart',
+        maneuverModifier: 'straight',
+        valhallaType: 1,
+      );
+      expect(stepStartGeneric.maneuverType, equals(ManeuverType.depart));
+      expect(stepStartGeneric.icon, equals(Icons.navigation_rounded));
+
+      // 2. StartRight (type 2)
+      final stepStartRight = NavStep(
+        stepIndex: 0,
+        instruction: 'Khởi hành chếch sang phải vào Trần Khát Chân',
+        streetName: 'Trần Khát Chân',
+        distanceMeters: 200.0,
+        durationSeconds: 30.0,
+        coordinate: p0,
+        maneuverTypeStr: 'depart',
+        maneuverModifier: 'slight right',
+        valhallaType: 2,
+      );
+      expect(stepStartRight.maneuverType, equals(ManeuverType.slightRight));
+      expect(stepStartRight.icon, equals(Icons.turn_slight_right_rounded));
+
+      // 3. StartLeft (type 3)
+      final stepStartLeft = NavStep(
+        stepIndex: 0,
+        instruction: 'Khởi hành chếch sang trái vào Đại Cồ Việt',
+        streetName: 'Đại Cồ Việt',
+        distanceMeters: 200.0,
+        durationSeconds: 30.0,
+        coordinate: p0,
+        maneuverTypeStr: 'depart',
+        maneuverModifier: 'slight left',
+        valhallaType: 3,
+      );
+      expect(stepStartLeft.maneuverType, equals(ManeuverType.slightLeft));
+      expect(stepStartLeft.icon, equals(Icons.turn_slight_left_rounded));
+
+      // 4. Normal Right (type 10)
+      final stepRight = NavStep(
+        stepIndex: 1,
+        instruction: 'Rẽ phải vào Phố Huế',
+        streetName: 'Phố Huế',
+        distanceMeters: 150.0,
+        durationSeconds: 20.0,
+        coordinate: p1,
+        maneuverTypeStr: 'turn',
+        maneuverModifier: 'right',
+        valhallaType: 10,
+      );
+      expect(stepRight.maneuverType, equals(ManeuverType.turnRight));
+      expect(stepRight.icon, equals(Icons.turn_right_rounded));
+
+      // 5. Normal Left (type 15)
+      final stepLeft = NavStep(
+        stepIndex: 1,
+        instruction: 'Rẽ trái vào Bà Triệu',
+        streetName: 'Bà Triệu',
+        distanceMeters: 209.0,
+        durationSeconds: 25.0,
+        coordinate: p1,
+        maneuverTypeStr: 'turn',
+        maneuverModifier: 'left',
+        valhallaType: 15,
+      );
+      expect(stepLeft.maneuverType, equals(ManeuverType.turnLeft));
+      expect(stepLeft.icon, equals(Icons.turn_left_rounded));
+
+      // 6. Sharp Right (type 11) & Sharp Left (type 14)
+      final stepSharpRight = NavStep(
+        stepIndex: 1,
+        instruction: 'Rẽ ngoặt sang phải',
+        streetName: '',
+        distanceMeters: 100.0,
+        durationSeconds: 15.0,
+        coordinate: p1,
+        maneuverTypeStr: 'turn',
+        maneuverModifier: 'sharp right',
+        valhallaType: 11,
+      );
+      expect(stepSharpRight.maneuverType, equals(ManeuverType.sharpRight));
+      expect(stepSharpRight.icon, equals(Icons.turn_sharp_right_rounded));
+
+      final stepSharpLeft = NavStep(
+        stepIndex: 1,
+        instruction: 'Rẽ ngoặt sang trái',
+        streetName: '',
+        distanceMeters: 100.0,
+        durationSeconds: 15.0,
+        coordinate: p1,
+        maneuverTypeStr: 'turn',
+        maneuverModifier: 'sharp left',
+        valhallaType: 14,
+      );
+      expect(stepSharpLeft.maneuverType, equals(ManeuverType.sharpLeft));
+      expect(stepSharpLeft.icon, equals(Icons.turn_sharp_left_rounded));
+
+      // 7. U-Turn (type 12 / 13)
+      final stepUturn = NavStep(
+        stepIndex: 1,
+        instruction: 'Quay đầu xe',
+        streetName: '',
+        distanceMeters: 100.0,
+        durationSeconds: 15.0,
+        coordinate: p1,
+        maneuverTypeStr: 'turn',
+        maneuverModifier: 'u-turn',
+        valhallaType: 12,
+      );
+      expect(stepUturn.maneuverType, equals(ManeuverType.uTurn));
+      expect(stepUturn.icon, equals(Icons.u_turn_left_rounded));
+    });
+
+    test('P5.7 Part A: 209m before normal left maneuver -> banner displays left icon, text, and distance from same authoritative step', () {
+      final customRoute = NavRoute(
+        totalDistanceMeters: 500.0,
+        totalDurationSeconds: 120.0,
+        polylinePoints: polyline,
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Khởi hành đi thẳng',
+            streetName: 'Đường Khởi Hành',
+            distanceMeters: 100.0,
+            durationSeconds: 15.0,
+            coordinate: p0,
+            maneuverTypeStr: 'depart',
+            maneuverModifier: 'straight',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+            valhallaType: 1,
+          ),
+          NavStep(
+            stepIndex: 1,
+            instruction: 'Rẽ trái vào Phố Huế',
+            streetName: 'Phố Huế',
+            distanceMeters: 400.0,
+            durationSeconds: 105.0,
+            coordinate: p1,
+            maneuverTypeStr: 'turn',
+            maneuverModifier: 'left',
+            beginShapeIndex: 1,
+            endShapeIndex: 4,
+            valhallaType: 15,
+          ),
+        ],
+        summary: 'Tuyến rẽ trái 209m',
+      );
+
+      navManager.startNavigation(customRoute);
+
+      // Vehicle is at start; upcoming authoritative maneuver is Step 1 (Left turn)
+      expect(navManager.currentStepIndex, equals(0));
+      expect(navManager.authoritativeCurrentManeuver, isNotNull);
+      expect(navManager.authoritativeCurrentManeuver!.stepIndex, equals(1));
+      expect(navManager.authoritativeStepIndex, equals(1));
+      expect(navManager.authoritativeValhallaType, equals(15));
+      expect(navManager.authoritativeManeuverTypeStr, equals('turn'));
+      expect(navManager.authoritativeManeuverModifier, equals('left'));
+      expect(navManager.authoritativeBeginShapeIndex, equals(1));
+
+      // Icon MUST be left turn (turn_left_rounded), NOT navigation_rounded!
+      expect(navManager.bannerTurnIcon, equals(Icons.turn_left_rounded));
+      expect(navManager.bannerInstruction, equals('Rẽ trái vào Phố Huế'));
+
+      // Both instruction, turn icon and distance point to Step 1
+      final expectedDist = navManager.activeRouteGeometry!.maneuverBeginDistancesAlongRoute[1];
+      expect(navManager.distanceToNextManeuver, closeTo(expectedDist, 1.0));
+    });
   });
 }

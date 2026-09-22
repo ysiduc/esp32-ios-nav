@@ -529,5 +529,85 @@ void main() {
       expect(drawer.drawActiveRouteCallCount, 2, reason: 'Must redraw when secondary route arrives');
       expect(drawer.lastDrawnSecondaryPolyline, equals(secondary));
     });
+    test('P5.7 Part B: clearAndInvalidate cancels in-flight draw and guarantees empty map', () async {
+      final drawer = MockMapLineDrawer();
+      final controller = RouteRenderController(drawer);
+
+      drawer.drawDelay = const Duration(milliseconds: 60);
+      final drawStarted = Completer<void>();
+      drawer.onDrawStarted = drawStarted;
+
+      // Submit a navigation render request
+      final renderFuture = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: [const LatLng(21.0, 105.0), const LatLng(21.1, 105.1)],
+        forceRedraw: true,
+      );
+
+      // Wait until drawer has started drawing
+      await drawStarted.future;
+      expect(controller.isRendering, isTrue);
+
+      // Hard cancel while draw is in progress
+      final cancelFuture = controller.clearAndInvalidate();
+
+      // Wait for both to complete
+      await Future.wait([renderFuture, cancelFuture]);
+
+      // Controller state must be none and map must be clean
+      expect(controller.isRendering, isFalse);
+      expect(controller.lastRenderedMode, equals(RoutePresentationMode.none));
+      expect(drawer.clearLinesCallCount, greaterThanOrEqualTo(2));
+      expect(controller.hasPendingRequest, isFalse);
+    });
+
+    test('P5.7 Part B: clearAndInvalidate while renderer is in clear phase guarantees clean state', () async {
+      final drawer = MockMapLineDrawer();
+      final controller = RouteRenderController(drawer);
+
+      drawer.clearDelay = const Duration(milliseconds: 50);
+      final clearStarted = Completer<void>();
+      drawer.onClearStarted = clearStarted;
+
+      final renderFuture = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: [const LatLng(21.0, 105.0), const LatLng(21.1, 105.1)],
+        forceRedraw: true,
+      );
+
+      await clearStarted.future;
+      expect(controller.isRendering, isTrue);
+
+      final cancelFuture = controller.clearAndInvalidate();
+      await Future.wait([renderFuture, cancelFuture]);
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.lastRenderedMode, equals(RoutePresentationMode.none));
+    });
+
+    test('P5.7 Part B: Rapid cancel/start/cancel sequence results in guaranteed empty map', () async {
+      final drawer = MockMapLineDrawer();
+      final controller = RouteRenderController(drawer);
+
+      // Rapid flurry of requests
+      controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: [const LatLng(21.0, 105.0), const LatLng(21.1, 105.1)],
+      );
+      controller.clearAndInvalidate();
+      controller.submitRequest(
+        routeRevision: 2,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: [const LatLng(21.0, 105.0), const LatLng(21.2, 105.2)],
+      );
+      await controller.clearAndInvalidate();
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.lastRenderedMode, equals(RoutePresentationMode.none));
+      expect(controller.hasPendingRequest, isFalse);
+    });
   });
 }

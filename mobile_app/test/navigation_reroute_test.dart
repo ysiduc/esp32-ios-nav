@@ -1164,5 +1164,38 @@ void main() {
           reason: 'renderRevision must increment on fallback to notify MapScreen immediately');
       expect(navManager.activeRoute, equals(routeB));
     });
+    test('P5.7 Part B: Cancel navigation while primary reroute is in-flight drops late Route B', () async {
+      navManager.startNavigation(multiRoute);
+
+      final primComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      expect(navManager.isRerouting, isTrue);
+
+      // User cancels navigation while primary Route B is in-flight
+      navManager.stopNavigation();
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+
+      // Late Route B arrives
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [],
+        summary: 'Route B',
+      );
+      primComp.complete(routeB);
+      await pumpEventQueue();
+
+      // Generation guard ensures Route B is discarded and navigation remains stopped
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+      expect(navManager.remainingPolyline, isEmpty);
+      expect(navManager.rerouteStatus, equals('idle'));
+    });
   });
 }

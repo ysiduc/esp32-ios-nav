@@ -716,9 +716,10 @@ class _MapScreenState extends State<MapScreen> {
       _lastObservedNavigating = isNav;
       if (!isNav) {
         _routes = [];
-        _routeRenderController.reset();
+        _routeRenderController.clearAndInvalidate();
+      } else {
+        _throttledUpdateRouteOnMap(forceRedraw: true);
       }
-      _throttledUpdateRouteOnMap(forceRedraw: true);
     }
   }
 
@@ -1658,6 +1659,8 @@ class _MapScreenState extends State<MapScreen> {
               Text('Match: ${matchedLoc.latitude.toStringAsFixed(5)}, ${matchedLoc.longitude.toStringAsFixed(5)}', style: const TextStyle(fontSize: 10, color: Colors.black87)),
             Text('Step: #${navManager.authoritativeCurrentManeuver?.stepIndex ?? 0} (${navManager.authoritativeCurrentManeuver?.maneuverType.name ?? "none"})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
             Text('Modifier: ${navManager.authoritativeCurrentManeuver?.maneuverModifier ?? "none"}', style: const TextStyle(fontSize: 11)),
+            Text('Maneuver raw: type=${navManager.authoritativeValhallaType ?? "none"}, str=${navManager.authoritativeManeuverTypeStr ?? "none"}, mod=${navManager.authoritativeManeuverModifier ?? "none"}', style: const TextStyle(fontSize: 10)),
+            Text('Authoritative: idx=${navManager.authoritativeStepIndex ?? "none"}, shapeIdx=${navManager.authoritativeBeginShapeIndex ?? "none"}, dist=${navManager.distanceToNextManeuver.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
             Text('Heading Δ: ${navManager.headingDeltaVsRouteDegrees?.toStringAsFixed(0) ?? "--"}° (WrongWay: ${navManager.isWrongWayDivergence ? "YES" : "NO"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: navManager.isWrongWayDivergence ? Colors.red : Colors.black87)),
             Text('Primary: gen ${navManager.rerouteGeneration} (${navManager.rerouteStatus})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
             Text('Secondary: gen ${navManager.secondaryRerouteGeneration} (${navManager.secondaryRerouteStatus}, active: ${navManager.secondaryPolyline.isNotEmpty ? "YES" : "NO"})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
@@ -3374,20 +3377,21 @@ class _MapScreenState extends State<MapScreen> {
                     GestureDetector(
                       onTap: () async {
                         _routeRenderCadenceTimer?.cancel();
+                        _cameraCadenceTimer?.cancel();
                         _routes = [];
                         _selectedRouteIndex = 0;
-                        _routeRenderController.reset();
                         navManager.stopNavigation();
                         navManager.setPreviewRoute(null);
-                        await _updateRouteOnMap(forceRedraw: true);
-                        await _mapController?.clearLines();
+                        await _routeRenderController.clearAndInvalidate();
                         await _mapController?.clearCircles();
-                        setState(() {
-                          _viewMode = 0;
-                          _routes = [];
-                          _selectedPlace = null;
-                          _isDrivingZoomOverview = false;
-                        });
+                        if (mounted) {
+                          setState(() {
+                            _viewMode = 0;
+                            _routes = [];
+                            _selectedPlace = null;
+                            _isDrivingZoomOverview = false;
+                          });
+                        }
                         _updateDestinationMarker();
                         final pos = navManager.currentLocation ?? _userPosition;
                         _mapController?.animateCamera(

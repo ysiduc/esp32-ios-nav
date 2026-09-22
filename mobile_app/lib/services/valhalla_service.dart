@@ -102,6 +102,7 @@ class ValhallaService implements RoutingService {
           maneuverModifier: _mapValhallaTypeToModifier(valhallaType),
           beginShapeIndex: shapeIndex,
           endShapeIndex: endShapeIndex,
+          valhallaType: valhallaType,
         ));
       }
 

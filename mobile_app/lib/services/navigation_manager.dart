@@ -247,6 +247,16 @@ class NavigationManager extends ChangeNotifier {
     return authoritativeCurrentManeuver?.icon ?? Icons.arrow_upward_rounded;
   }
 
+  // P5.7 Part A: Raw maneuver telemetry
+  int? get authoritativeStepIndex {
+    if (_activeRoute == null || _activeRoute!.steps.isEmpty) return null;
+    return math.min(_currentStepIndex + 1, _activeRoute!.steps.length - 1);
+  }
+  int? get authoritativeValhallaType => authoritativeCurrentManeuver?.valhallaType;
+  String? get authoritativeManeuverTypeStr => authoritativeCurrentManeuver?.maneuverTypeStr;
+  String? get authoritativeManeuverModifier => authoritativeCurrentManeuver?.maneuverModifier;
+  int? get authoritativeBeginShapeIndex => authoritativeCurrentManeuver?.beginShapeIndex;
+
   NavigationManager({
     required this.bleService,
     PhoneMediaService? mediaService,

@@ -32,6 +32,7 @@ class NavStep {
   final int? beginShapeIndex;
   final int? endShapeIndex;
   final double? beginDistanceAlongRoute;
+  final int? valhallaType;
 
   NavStep({
     required this.stepIndex,
@@ -45,6 +46,7 @@ class NavStep {
     this.beginShapeIndex,
     this.endShapeIndex,
     this.beginDistanceAlongRoute,
+    this.valhallaType,
   });
 
   NavStep copyWith({
@@ -59,6 +61,7 @@ class NavStep {
     int? beginShapeIndex,
     int? endShapeIndex,
     double? beginDistanceAlongRoute,
+    int? valhallaType,
   }) {
     return NavStep(
       stepIndex: stepIndex ?? this.stepIndex,
@@ -72,18 +75,33 @@ class NavStep {
       beginShapeIndex: beginShapeIndex ?? this.beginShapeIndex,
       endShapeIndex: endShapeIndex ?? this.endShapeIndex,
       beginDistanceAlongRoute: beginDistanceAlongRoute ?? this.beginDistanceAlongRoute,
+      valhallaType: valhallaType ?? this.valhallaType,
     );
   }
 
   /// Convert OSRM / Valhalla maneuver type & modifier to ManeuverType enum
   ManeuverType get maneuverType {
     if (maneuverTypeStr == 'arrive') return ManeuverType.arrive;
-    if (maneuverTypeStr == 'depart') return ManeuverType.depart;
     if (maneuverTypeStr == 'roundabout' || maneuverTypeStr == 'rotary') {
       return ManeuverType.roundabout;
     }
 
-    final mod = '${maneuverModifier ?? ''} $maneuverTypeStr'.toLowerCase();
+    final rawMod = (maneuverModifier ?? '').toLowerCase().trim();
+
+    // P5.7 Part A: If depart has an explicit directional modifier (right/left/u-turn), honor direction
+    if (maneuverTypeStr == 'depart') {
+      if (rawMod.contains('sharp right')) return ManeuverType.sharpRight;
+      if (rawMod.contains('slight right')) return ManeuverType.slightRight;
+      if (rawMod.contains('right')) return ManeuverType.turnRight;
+      if (rawMod.contains('sharp left')) return ManeuverType.sharpLeft;
+      if (rawMod.contains('slight left')) return ManeuverType.slightLeft;
+      if (rawMod.contains('left')) return ManeuverType.turnLeft;
+      if (rawMod.contains('uturn') || rawMod.contains('u-turn')) return ManeuverType.uTurn;
+      // Generic depart (no directional modifier or straight) returns depart
+      return ManeuverType.depart;
+    }
+
+    final mod = '$rawMod $maneuverTypeStr'.toLowerCase();
     if (mod.contains('sharp right')) return ManeuverType.sharpRight;
     if (mod.contains('slight right')) return ManeuverType.slightRight;
     if (mod.contains('right')) return ManeuverType.turnRight;

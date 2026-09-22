@@ -205,6 +205,39 @@ class RouteRenderController {
     }
   }
 
+  /// Hard barrier that cancels and invalidates all current and queued renders,
+  /// waits for any in-flight drawer operation to conclude, and executes a guaranteed
+  /// final clearLines() to ensure MapLibre has zero remaining lines.
+  Future<void> clearAndInvalidate() async {
+    // 1. Invalidate all past and queued generations
+    _latestSubmittedGeneration++;
+    _pendingRequest = null;
+    _lastRenderedRouteRevision = -1;
+    _lastRenderedMode = RoutePresentationMode.none;
+    _lastRenderedPointsCount = 0;
+    _lastRenderedAltPointsCount = 0;
+    _lastRenderedStartCoord = null;
+
+    // 2. If a drain operation is currently running, wait for it to finish its current cycle
+    final activeDrain = _currentDrainCompleter;
+    if (_isRendering && activeDrain != null) {
+      try {
+        await activeDrain.future;
+      } catch (_) {}
+    }
+
+    // 3. Guaranteed final barrier: execute clean clearLines on drawer
+    try {
+      await _drawer.clearLines();
+    } catch (_) {}
+
+    // 4. Double ensure controller state is fully reset
+    _pendingRequest = null;
+    _lastRenderedPointsCount = 0;
+    _lastRenderedAltPointsCount = 0;
+    _lastRenderedMode = RoutePresentationMode.none;
+  }
+
   /// Resets state when leaving navigation or clearing map.
   /// Bumps _latestSubmittedGeneration to invalidate and abort any in-flight renders.
   void reset() {
