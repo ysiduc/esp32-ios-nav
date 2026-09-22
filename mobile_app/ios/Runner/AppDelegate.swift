@@ -189,6 +189,30 @@ import AVFoundation
     }
 
 
+    // ─── 5. Accessibility Channel (Reduce Transparency - P5.7.1) ────────
+    let accessibilityChannel = FlutterMethodChannel(
+      name: "com.ysiduc.esp32_nav/accessibility",
+      binaryMessenger: binaryMessenger
+    )
+    accessibilityChannel.setMethodCallHandler { (call, result) in
+      if call.method == "isReduceTransparencyEnabled" {
+        result(UIAccessibility.isReduceTransparencyEnabled)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    NotificationCenter.default.addObserver(
+      forName: UIAccessibility.reduceTransparencyStatusDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { _ in
+      accessibilityChannel.invokeMethod(
+        "onReduceTransparencyChanged",
+        arguments: UIAccessibility.isReduceTransparencyEnabled
+      )
+    }
+
     // ─── 4. MapKit Search Channel ───────────────────────────────────────
     searchChannel = FlutterMethodChannel(
       name: "com.ysiduc.esp32_nav/mapkit_search",
@@ -769,7 +793,7 @@ class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
 }
 
 
-// MARK: - Native iOS Liquid Glass PlatformView (P5.7 Part C)
+// MARK: - Native iOS Liquid Glass PlatformView (P5.7 & P5.7.1 Part C)
 class NativeGlassPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
   private var messenger: FlutterBinaryMessenger
 
@@ -822,17 +846,41 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
     containerView.backgroundColor = .clear
     containerView.layer.cornerRadius = cornerRadius
     containerView.layer.masksToBounds = true
+    containerView.isUserInteractionEnabled = false
 
+    // Check availability for modern Liquid Glass vs standard UIKit visual effect (P5.7.1)
+    if #available(iOS 26.0, *) {
+      setupModernLiquidGlass(variant: variant, cornerRadius: cornerRadius, params: params)
+    } else {
+      setupUIKitVisualEffect(variant: variant, cornerRadius: cornerRadius, params: params)
+    }
+  }
+
+  @available(iOS 26.0, *)
+  private func setupModernLiquidGlass(variant: String, cornerRadius: CGFloat, params: [String: Any]?) {
+    // If modern liquid glass API is available in future SDKs, configure it here.
+    // Falls back gracefully to standard UIKit material if unexposed in current SDK.
+    setupUIKitVisualEffect(variant: variant, cornerRadius: cornerRadius, params: params)
+  }
+
+  private func setupUIKitVisualEffect(variant: String, cornerRadius: CGFloat, params: [String: Any]?) {
     let blurEffect: UIBlurEffect
+    var tintColor: UIColor? = nil
+
     switch variant {
     case "prominent":
       blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+      tintColor = UIColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.35)
     case "clear":
       blurEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+      tintColor = UIColor.white.withAlphaComponent(0.04)
     case "danger":
       blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
+      tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.28)
+    case "regular":
     default:
       blurEffect = UIBlurEffect(style: .systemMaterial)
+      tintColor = UIColor.white.withAlphaComponent(0.12)
     }
 
     let blurView = UIVisualEffectView(effect: blurEffect)
@@ -840,13 +888,27 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
     blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     blurView.layer.cornerRadius = cornerRadius
     blurView.layer.masksToBounds = true
+    blurView.isUserInteractionEnabled = false
     containerView.addSubview(blurView)
 
+    if let tint = tintColor {
+      let tintView = UIView(frame: containerView.bounds)
+      tintView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      tintView.backgroundColor = tint
+      tintView.layer.cornerRadius = cornerRadius
+      tintView.layer.masksToBounds = true
+      tintView.isUserInteractionEnabled = false
+      containerView.addSubview(tintView)
+    }
+
+    let isSelected = params?["isSelected"] as? Bool ?? false
     let specularEdge = UIView(frame: containerView.bounds)
     specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     specularEdge.layer.cornerRadius = cornerRadius
-    specularEdge.layer.borderWidth = 0.5
-    specularEdge.layer.borderColor = UIColor.white.withAlphaComponent(0.20).cgColor
+    specularEdge.layer.borderWidth = isSelected ? 1.5 : 0.5
+    specularEdge.layer.borderColor = isSelected
+      ? UIColor(red: 0/255, green: 122/255, blue: 255/255, alpha: 0.9).cgColor
+      : UIColor.white.withAlphaComponent(0.25).cgColor
     specularEdge.isUserInteractionEnabled = false
     containerView.addSubview(specularEdge)
   }

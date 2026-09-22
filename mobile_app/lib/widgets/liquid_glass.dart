@@ -1,7 +1,10 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 
-/// Design system variants for Liquid Glass components (P5.7 Part D)
+/// Design system variants for Liquid Glass components (P5.7 & P5.7.1)
 enum AppGlassVariant {
   /// Balanced frosted diffusion with specular edge (default)
   regular,
@@ -16,8 +19,108 @@ enum AppGlassVariant {
   danger,
 }
 
-/// Base adaptive Liquid Glass material container (P5.7 Part C & D)
-/// Inspired by iOS native glass surfaces, UIKit UIGlassEffect, and liquid glass aesthetics.
+/// Resolved runtime rendering backend for Liquid Glass (P5.7.1)
+enum AppGlassBackendType {
+  /// Native modern iOS Liquid Glass API (if exposed in iOS 26+ SDK)
+  nativeModern,
+
+  /// Native iOS UIKit UIVisualEffectView material with specular highlight edge
+  nativeBlurFallback,
+
+  /// Pure Flutter BackdropFilter fallback for Android, Linux, desktop, web, or unit tests
+  flutterFallback,
+
+  /// Solid high-contrast opaque surface when Reduce Transparency is enabled
+  opaqueFallback,
+}
+
+/// Global service providing iOS UIAccessibility.isReduceTransparencyEnabled state (P5.7.1 Part 6)
+class AppAccessibilityService extends ChangeNotifier {
+  static final AppAccessibilityService instance = AppAccessibilityService._internal();
+
+  AppAccessibilityService._internal() {
+    _init();
+  }
+
+  static const MethodChannel _channel = MethodChannel('com.ysiduc.esp32_nav/accessibility');
+  bool _reduceTransparency = false;
+
+  bool get reduceTransparency => _reduceTransparency;
+
+  Future<void> _init() async {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onReduceTransparencyChanged') {
+        if (call.arguments is bool) {
+          _reduceTransparency = call.arguments as bool;
+          notifyListeners();
+        }
+      }
+    });
+
+    try {
+      final res = await _channel.invokeMethod<bool>('isReduceTransparencyEnabled');
+      if (res != null) {
+        _reduceTransparency = res;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Non-iOS or test environment fallback
+    }
+  }
+
+  @visibleForTesting
+  void setReduceTransparencyForTesting(bool value) {
+    _reduceTransparency = value;
+    notifyListeners();
+  }
+}
+
+/// Helper and telemetry provider for Liquid Glass backend selection (P5.7.1 Part 5)
+class AppGlassBackend {
+  @visibleForTesting
+  static AppGlassBackendType? forceBackendForTesting;
+
+  /// Resolves the active rendering backend based on platform and accessibility settings
+  static AppGlassBackendType resolve({
+    required BuildContext context,
+    required bool isReduceTransparency,
+  }) {
+    if (forceBackendForTesting != null) {
+      return forceBackendForTesting!;
+    }
+    if (isReduceTransparency) {
+      return AppGlassBackendType.opaqueFallback;
+    }
+    if (kIsWeb) {
+      return AppGlassBackendType.flutterFallback;
+    }
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      return AppGlassBackendType.nativeBlurFallback;
+    }
+    return AppGlassBackendType.flutterFallback;
+  }
+
+  /// Returns a human-readable telemetry string for debug overlay and field verification
+  static String currentName(BuildContext context, [bool? isReduceTransparency]) {
+    final effectiveReduceTransparency = isReduceTransparency ??
+        AppAccessibilityService.instance.reduceTransparency;
+    final type = resolve(context: context, isReduceTransparency: effectiveReduceTransparency);
+    switch (type) {
+      case AppGlassBackendType.nativeModern:
+        return 'native-modern';
+      case AppGlassBackendType.nativeBlurFallback:
+        return 'native-blur-fallback';
+      case AppGlassBackendType.flutterFallback:
+        return 'flutter';
+      case AppGlassBackendType.opaqueFallback:
+        return 'opaque-fallback';
+    }
+  }
+}
+
+/// Base adaptive Liquid Glass material container (P5.7 & P5.7.1)
+/// Features real native iOS platform view backend (UiKitView) with Flutter content on top,
+/// and automatic Flutter BackdropFilter fallback for other platforms.
 class AppGlassSurface extends StatelessWidget {
   final Widget child;
   final AppGlassVariant variant;
@@ -56,19 +159,16 @@ class AppGlassSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final mediaQuery = MediaQuery.of(context);
-    final isReduceTransparency = reduceTransparency ?? mediaQuery.accessibleNavigation;
-    final isReduceMotion = mediaQuery.disableAnimations;
+    final isReduceTransparency = reduceTransparency ??
+        AppAccessibilityService.instance.reduceTransparency;
 
-    // Resolve blur radius
-    final effectiveBlur = blur ?? (
-      variant == AppGlassVariant.prominent ? 24.0 :
-      variant == AppGlassVariant.clear ? 12.0 :
-      variant == AppGlassVariant.danger ? 16.0 : 18.0
+    final backend = AppGlassBackend.resolve(
+      context: context,
+      isReduceTransparency: isReduceTransparency,
     );
 
-    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced
-    if (isReduceTransparency) {
+    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced (P5.7.1 Part 6)
+    if (backend == AppGlassBackendType.opaqueFallback) {
       Color solidBg;
       Color solidBorder;
 
@@ -116,97 +216,32 @@ class AppGlassSurface extends StatelessWidget {
       );
     }
 
-    // 2. Liquid Glass Frost & Gradient Shading
-    LinearGradient bgGradient;
+    // Determine default specular border color
     Color defaultBorderColor;
-
     switch (variant) {
       case AppGlassVariant.prominent:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  const Color(0xFF1E293B).withOpacity(0.92),
-                  const Color(0xFF0F172A).withOpacity(0.96),
-                ]
-              : [
-                  Colors.white.withOpacity(0.94),
-                  const Color(0xFFF8FAFC).withOpacity(0.90),
-                ],
-        );
         defaultBorderColor = isDark
             ? Colors.white.withOpacity(0.24)
             : Colors.white.withOpacity(0.85);
         break;
 
       case AppGlassVariant.clear:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  Colors.white.withOpacity(0.12),
-                  const Color(0xFF0F172A).withOpacity(0.08),
-                ]
-              : [
-                  Colors.white.withOpacity(0.45),
-                  Colors.white.withOpacity(0.18),
-                ],
-        );
         defaultBorderColor = isDark
             ? Colors.white.withOpacity(0.20)
             : Colors.white.withOpacity(0.60);
         break;
 
       case AppGlassVariant.danger:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  const Color(0xFFEF4444).withOpacity(0.26),
-                  const Color(0xFF991B1B).withOpacity(0.20),
-                ]
-              : [
-                  const Color(0xFFFEE2E2).withOpacity(0.88),
-                  const Color(0xFFFECACA).withOpacity(0.72),
-                ],
-        );
         defaultBorderColor = isDark
             ? const Color(0xFFF87171).withOpacity(0.40)
             : const Color(0xFFEF4444).withOpacity(0.35);
         break;
 
       case AppGlassVariant.regular:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          stops: const [0.0, 0.5, 1.0],
-          colors: isDark
-              ? [
-                  Colors.white.withOpacity(0.18),
-                  const Color(0xFF1E293B).withOpacity(0.12),
-                  const Color(0xFF0F172A).withOpacity(0.15),
-                ]
-              : [
-                  Colors.white.withOpacity(isSelected ? 0.60 : 0.50),
-                  Colors.white.withOpacity(isSelected ? 0.35 : 0.25),
-                  Colors.white.withOpacity(isSelected ? 0.22 : 0.15),
-                ],
-        );
         defaultBorderColor = isDark
             ? Colors.white.withOpacity(0.28)
             : Colors.white.withOpacity(0.65);
         break;
-    }
-
-    if (tint != null) {
-      bgGradient = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: bgGradient.colors.map((c) => Color.alphaBlend(tint!, c)).toList(),
-      );
     }
 
     final defaultBorder = Border.all(
@@ -230,6 +265,136 @@ class AppGlassSurface extends StatelessWidget {
         ),
     ];
 
+    // 2. REAL NATIVE LIQUID GLASS BACKEND (iOS UIKit UIVisualEffectView / Liquid Glass) (P5.7.1 Part 2)
+    if (backend == AppGlassBackendType.nativeModern ||
+        backend == AppGlassBackendType.nativeBlurFallback) {
+      return Container(
+        margin: margin,
+        width: width,
+        height: height,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: Stack(
+            fit: StackFit.passthrough,
+            children: [
+              // Native iOS platform view as the background material layer
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: true,
+                  child: UiKitView(
+                    viewType: 'plugins.ysiduc.com/native_glass',
+                    creationParams: {
+                      'variant': variant.name,
+                      'radius': radius,
+                      'isSelected': isSelected,
+                      if (tint != null) 'tint': tint!.value,
+                    },
+                    creationParamsCodec: const StandardMessageCodec(),
+                    hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+                  ),
+                ),
+              ),
+              // Flutter content container layered over native glass
+              Container(
+                padding: padding,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(radius),
+                  border: border ?? defaultBorder,
+                  boxShadow: shadows,
+                ),
+                child: child,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 3. FLUTTER BACKDROP FILTER FALLBACK (Android / Web / Linux / Tests) (P5.7.1 Part 5)
+    final effectiveBlur = blur ?? (
+      variant == AppGlassVariant.prominent ? 24.0 :
+      variant == AppGlassVariant.clear ? 12.0 :
+      variant == AppGlassVariant.danger ? 16.0 : 18.0
+    );
+
+    LinearGradient bgGradient;
+    switch (variant) {
+      case AppGlassVariant.prominent:
+        bgGradient = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? [
+                  const Color(0xFF1E293B).withOpacity(0.92),
+                  const Color(0xFF0F172A).withOpacity(0.96),
+                ]
+              : [
+                  Colors.white.withOpacity(0.94),
+                  const Color(0xFFF8FAFC).withOpacity(0.90),
+                ],
+        );
+        break;
+
+      case AppGlassVariant.clear:
+        bgGradient = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? [
+                  Colors.white.withOpacity(0.12),
+                  const Color(0xFF0F172A).withOpacity(0.08),
+                ]
+              : [
+                  Colors.white.withOpacity(0.45),
+                  Colors.white.withOpacity(0.18),
+                ],
+        );
+        break;
+
+      case AppGlassVariant.danger:
+        bgGradient = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? [
+                  const Color(0xFFEF4444).withOpacity(0.26),
+                  const Color(0xFF991B1B).withOpacity(0.20),
+                ]
+              : [
+                  const Color(0xFFFEE2E2).withOpacity(0.88),
+                  const Color(0xFFFECACA).withOpacity(0.72),
+                ],
+        );
+        break;
+
+      case AppGlassVariant.regular:
+        bgGradient = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          stops: const [0.0, 0.5, 1.0],
+          colors: isDark
+              ? [
+                  Colors.white.withOpacity(0.18),
+                  const Color(0xFF1E293B).withOpacity(0.12),
+                  const Color(0xFF0F172A).withOpacity(0.15),
+                ]
+              : [
+                  Colors.white.withOpacity(isSelected ? 0.60 : 0.50),
+                  Colors.white.withOpacity(isSelected ? 0.35 : 0.25),
+                  Colors.white.withOpacity(isSelected ? 0.22 : 0.15),
+                ],
+        );
+        break;
+    }
+
+    if (tint != null) {
+      bgGradient = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: bgGradient.colors.map((c) => Color.alphaBlend(tint!, c)).toList(),
+      );
+    }
+
     Widget content = Container(
       width: width,
       height: height,
@@ -242,16 +407,6 @@ class AppGlassSurface extends StatelessWidget {
       ),
       child: child,
     );
-
-    if (isReduceMotion || effectiveBlur <= 0.0) {
-      return Container(
-        margin: margin,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius),
-          child: content,
-        ),
-      );
-    }
 
     return Container(
       margin: margin,
@@ -320,7 +475,7 @@ class AppGlassPill extends StatelessWidget {
   }
 }
 
-/// Interactive Liquid Glass Button with spring scale compression (P5.7 Part D)
+/// Interactive Liquid Glass Button with tactile spring compression (P5.7 Part D & P5.7.1)
 class AppGlassButton extends StatefulWidget {
   final Widget icon;
   final VoidCallback? onTap;
@@ -391,6 +546,8 @@ class _AppGlassButtonState extends State<AppGlassButton> with SingleTickerProvid
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final r = widget.radius ?? (widget.size / 2);
+    // Reduce Motion only disables scale animation, does NOT disable glass (P5.7.1 Part 6)
+    final isReduceMotion = MediaQuery.disableAnimationsOf(context);
 
     Widget btn = GestureDetector(
       onTapDown: _handleTapDown,
@@ -401,7 +558,7 @@ class _AppGlassButtonState extends State<AppGlassButton> with SingleTickerProvid
       child: AnimatedBuilder(
         animation: _scaleAnimation,
         builder: (context, child) => Transform.scale(
-          scale: MediaQuery.disableAnimationsOf(context) ? 1.0 : _scaleAnimation.value,
+          scale: isReduceMotion ? 1.0 : _scaleAnimation.value,
           child: child,
         ),
         child: AppGlassSurface(
@@ -437,7 +594,7 @@ class _AppGlassButtonState extends State<AppGlassButton> with SingleTickerProvid
   }
 }
 
-/// Unified Liquid Glass Toolbar grouping multiple controls with a single glass backdrop (P5.7 Part D)
+/// Unified Liquid Glass Toolbar grouping multiple controls with a single glass backdrop (P5.7 Part D & P5.7.1 Part 7)
 class AppGlassToolbar extends StatelessWidget {
   final List<Widget> children;
   final Axis axis;
@@ -530,6 +687,7 @@ class AppGlassBottomBar extends StatelessWidget {
 // Backwards compatibility layer for legacy components
 // ─────────────────────────────────────────────────────────────────────────────
 
+typedef NativeAdaptiveGlassSurface = AppGlassSurface;
 typedef GlassSurface = AppGlassSurface;
 typedef LiquidGlassContainer = AppGlassSurface;
 typedef LiquidGlassCapsule = AppGlassPill;

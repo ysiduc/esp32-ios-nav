@@ -1,7 +1,6 @@
 import '../widgets/liquid_glass.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:async';
-import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1295,29 +1294,36 @@ class _MapScreenState extends State<MapScreen> {
             Positioned(
               right: 16,
               top: 130,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+              child: AppGlassToolbar(
+                width: 44,
+                radius: 22,
                 children: [
-                  _buildCircularGlassButton(
-                    icon: Icons.alt_route_rounded,
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                    icon: const Icon(Icons.alt_route_rounded, color: Colors.black87, size: 22),
                     tooltip: 'Toàn cảnh lộ trình',
-                    onTap: _fitCameraToCurrentRoute,
+                    onPressed: _fitCameraToCurrentRoute,
                   ),
-                  const SizedBox(height: 12),
-                  _buildCircularGlassButton(
-                    icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                  const AppGlassToolbarDivider(),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                    icon: Icon(_isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded, color: Colors.black87, size: 22),
                     tooltip: _isMuted ? 'Bật âm thanh' : 'Tắt âm thanh',
-                    onTap: () {
+                    onPressed: () {
                       final voice = VoiceGuidanceService();
                       voice.toggleMute();
                       setState(() => _isMuted = voice.isMuted);
                     },
                   ),
-                  const SizedBox(height: 12),
-                  _buildCircularGlassButton(
-                    icon: Icons.chat_bubble_outline_rounded,
+                  const AppGlassToolbarDivider(),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                    icon: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.black87, size: 22),
                     tooltip: 'Báo cáo sự cố',
-                    onTap: _showReportIncidentDialog,
+                    onPressed: _showReportIncidentDialog,
                   ),
                 ],
               ),
@@ -1642,6 +1648,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
           const SizedBox(height: 6),
           Text('Transport: ${streamService.activeJpegTransport.name}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text('Glass backend: ${AppGlassBackend.currentName(context)}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF5E5CE6))),
           Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Render FPS: ${streamService.renderFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
@@ -3184,35 +3191,17 @@ class _MapScreenState extends State<MapScreen> {
         // Arrow Zoom In / Zoom Out button placed strictly ABOVE the red 'X' button!
         Padding(
           padding: const EdgeInsets.only(right: 20, bottom: 10),
-          child: GestureDetector(
-            onTap: () => _toggleDrivingZoom(navManager),
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.92),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+          child: Tooltip(
+            message: 'Thu/Phóng lộ trình',
+            child: AppGlassButton(
+              size: 44,
+              variant: AppGlassVariant.regular,
+              icon: Icon(
+                _isDrivingZoomOverview ? Icons.near_me_rounded : Icons.navigation_rounded,
+                color: const Color(0xFF007AFF),
+                size: 24,
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(22),
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                  child: Center(
-                    child: Icon(
-                      _isDrivingZoomOverview ? Icons.near_me_rounded : Icons.navigation_rounded,
-                      color: const Color(0xFF007AFF),
-                      size: 24,
-                    ),
-                  ),
-                ),
-              ),
+              onTap: () => _toggleDrivingZoom(navManager),
             ),
           ),
         ),

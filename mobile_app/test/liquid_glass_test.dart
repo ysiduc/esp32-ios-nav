@@ -41,7 +41,7 @@ void main() {
       expect(find.text('Dark Glass'), findsOneWidget);
     });
 
-    testWidgets('LiquidGlassContainer respects reduced motion by disabling BackdropFilter', (tester) async {
+    testWidgets('LiquidGlassContainer retains glass under reduced motion while disabling animations', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: MediaQuery(
@@ -58,7 +58,8 @@ void main() {
       );
 
       expect(find.text('Reduced Motion'), findsOneWidget);
-      expect(find.byType(BackdropFilter), findsNothing);
+      // P5.7.1 Part 6: Reduce Motion does NOT remove blur/transparency
+      expect(find.byType(BackdropFilter), findsOneWidget);
     });
 
     testWidgets('LiquidGlassButton responds to user tap and selected state', (tester) async {
@@ -207,17 +208,17 @@ void main() {
     });
 
     testWidgets('AppGlassSurface respects Reduce Transparency with high-contrast opaque fallback', (tester) async {
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
+      addTearDown(() => AppAccessibilityService.instance.setReduceTransparencyForTesting(false));
+
       await tester.pumpWidget(
-        MaterialApp(
-          home: MediaQuery(
-            data: const MediaQueryData(accessibleNavigation: true),
-            child: Scaffold(
-              body: Column(
-                children: [
-                  AppGlassSurface(variant: AppGlassVariant.prominent, child: Text('No Blur Prominent')),
-                  AppGlassSurface(variant: AppGlassVariant.danger, child: Text('No Blur Danger')),
-                ],
-              ),
+        const MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                AppGlassSurface(variant: AppGlassVariant.prominent, child: Text('No Blur Prominent')),
+                AppGlassSurface(variant: AppGlassVariant.danger, child: Text('No Blur Danger')),
+              ],
             ),
           ),
         ),
@@ -225,8 +226,9 @@ void main() {
 
       expect(find.text('No Blur Prominent'), findsOneWidget);
       expect(find.text('No Blur Danger'), findsOneWidget);
-      // When accessibleNavigation is true, BackdropFilter is NOT created
+      // P5.7.1 Part 6: When reduceTransparency is active, BackdropFilter is disabled
       expect(find.byType(BackdropFilter), findsNothing);
+      expect(find.byType(UiKitView), findsNothing);
     });
 
     testWidgets('AppGlassPill handles tap callback and displays child', (tester) async {
@@ -418,6 +420,218 @@ void main() {
 
       expect(find.text('ESP32 Live'), findsOneWidget);
       expect(find.text('ESP32 Off'), findsOneWidget);
+    });
+  });
+
+  group('P5.7.1: Real Native Liquid Glass Backend & Accessibility Tests', () {
+    tearDown(() {
+      AppGlassBackend.forceBackendForTesting = null;
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
+    });
+
+    testWidgets('iOS native backend creates real UiKitView with plugins.ysiduc.com/native_glass and correct params', (tester) async {
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AppGlassSurface(
+              variant: AppGlassVariant.prominent,
+              radius: 28.0,
+              isSelected: true,
+              child: Text('Native Glass Content'),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Native Glass Content'), findsOneWidget);
+      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsNothing);
+
+      final uikitFinder = find.byType(UiKitView);
+      final UiKitView uikitView = tester.widget<UiKitView>(uikitFinder);
+      expect(uikitView.viewType, equals('plugins.ysiduc.com/native_glass'));
+
+      final params = uikitView.creationParams as Map<dynamic, dynamic>;
+      expect(params['variant'], equals('prominent'));
+      expect(params['radius'], equals(28.0));
+      expect(params['isSelected'], isTrue);
+    });
+
+    testWidgets('Unsupported platforms and default testing environment use Flutter BackdropFilter fallback', (tester) async {
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.flutterFallback;
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AppGlassSurface(
+              variant: AppGlassVariant.regular,
+              radius: 20.0,
+              child: Text('Flutter Fallback Content'),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Flutter Fallback Content'), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(find.byType(UiKitView), findsNothing);
+    });
+
+    testWidgets('Glass backend telemetry reports exact active state string', (tester) async {
+      late BuildContext capturedContext;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (ctx) {
+                capturedContext = ctx;
+                return const Text('Telemetry');
+              },
+            ),
+          ),
+        ),
+      );
+
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeModern;
+      expect(AppGlassBackend.currentName(capturedContext), equals('native-modern'));
+
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
+      expect(AppGlassBackend.currentName(capturedContext), equals('native-blur-fallback'));
+
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.flutterFallback;
+      expect(AppGlassBackend.currentName(capturedContext), equals('flutter'));
+
+      AppGlassBackend.forceBackendForTesting = null;
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
+      expect(AppGlassBackend.currentName(capturedContext), equals('opaque-fallback'));
+    });
+
+    testWidgets('Right-side driving toolbar contains exactly ONE glass surface for all 3 buttons', (tester) async {
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.flutterFallback;
+      int altTapped = 0;
+      int soundTapped = 0;
+      int reportTapped = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AppGlassToolbar(
+              width: 44,
+              radius: 22,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.alt_route_rounded),
+                  onPressed: () => altTapped++,
+                ),
+                const AppGlassToolbarDivider(),
+                IconButton(
+                  icon: const Icon(Icons.volume_up_rounded),
+                  onPressed: () => soundTapped++,
+                ),
+                const AppGlassToolbarDivider(),
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline_rounded),
+                  onPressed: () => reportTapped++,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Verify that across all 3 buttons, exactly ONE glass surface (and ONE BackdropFilter) is instantiated (P5.7.1 Part 9)
+      expect(find.byType(AppGlassToolbar), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(find.byType(AppGlassToolbarDivider), findsNWidgets(2));
+
+      await tester.tap(find.byIcon(Icons.alt_route_rounded));
+      await tester.pumpAndSettle();
+      expect(altTapped, equals(1));
+
+      await tester.tap(find.byIcon(Icons.volume_up_rounded));
+      await tester.pumpAndSettle();
+      expect(soundTapped, equals(1));
+
+      await tester.tap(find.byIcon(Icons.chat_bubble_outline_rounded));
+      await tester.pumpAndSettle();
+      expect(reportTapped, equals(1));
+    });
+
+    testWidgets('Top banner renders authoritative maneuver icon, distance and street atop native glass', (tester) async {
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AppGlassSurface(
+              variant: AppGlassVariant.prominent,
+              radius: 24,
+              child: Row(
+                children: [
+                  AppGlassSurface(
+                    variant: AppGlassVariant.clear,
+                    radius: 24,
+                    width: 48,
+                    height: 48,
+                    child: Center(
+                      child: Icon(Icons.turn_left_rounded, color: Colors.white, size: 28),
+                    ),
+                  ),
+                  SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Trong 209 m'),
+                      Text('Rẽ trái vào Lê Lợi'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Trong 209 m'), findsOneWidget);
+      expect(find.text('Rẽ trái vào Lê Lợi'), findsOneWidget);
+      expect(find.byIcon(Icons.turn_left_rounded), findsOneWidget);
+      // Outermost container is a native UiKitView
+      expect(find.byType(UiKitView), findsNWidgets(2));
+    });
+
+    testWidgets('Navigation cancel button properly invokes teardown with danger glass styling', (tester) async {
+      bool teardownCalled = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AppGlassBottomBar(
+              radius: 36,
+              child: Row(
+                children: [
+                  const Text('18:00'),
+                  const Text('15 phút'),
+                  AppGlassButton(
+                    variant: AppGlassVariant.danger,
+                    size: 44,
+                    icon: const Icon(Icons.close_rounded, color: Colors.white, size: 22),
+                    tooltip: 'Kết thúc dẫn đường',
+                    onTap: () => teardownCalled = true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byTooltip('Kết thúc dẫn đường'), findsOneWidget);
+      await tester.tap(find.byType(AppGlassButton));
+      await tester.pumpAndSettle();
+      expect(teardownCalled, isTrue);
     });
   });
 }
