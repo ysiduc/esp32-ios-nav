@@ -878,6 +878,8 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
       blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
       tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.28)
     case "regular":
+      blurEffect = UIBlurEffect(style: .systemMaterial)
+      tintColor = UIColor.white.withAlphaComponent(0.12)
     default:
       blurEffect = UIBlurEffect(style: .systemMaterial)
       tintColor = UIColor.white.withAlphaComponent(0.12)
