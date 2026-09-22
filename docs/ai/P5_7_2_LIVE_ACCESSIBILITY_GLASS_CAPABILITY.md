@@ -6,7 +6,7 @@
 **Execution Scope:** Production Flutter App Only (`ESP32Nav-Flutter-PRODUCTION.ipa`)  
 **Commit 1 (Implementation):** `49a9b004c36b7ba6c52fd7a8cad7e30036e38431` (`fix(ui): P5.7.2 rebuild glass live and report real backend capability`)  
 **Commit 2 (iOS Build Fix):** `43a7c588a0019abf116e1c82a3d335f8935866f1` (`fix(ios): move reduceTransparencyObserver deinit into AppDelegate class`)  
-**Commit 3 (Docs & Evidence):** `pending` (`docs: record P5.7.2 glass accessibility evidence`)  
+**Commit 3 (Docs & Evidence):** `e20522ff6cf50953c3065b262a63ae84180425a7` (`docs: record P5.7.2 glass accessibility evidence`)  
 **CI Run ID:** `35753795985`  
 **Flutter Test Count:** 165 passed (increased from 163 in P5.7.1, 157 in P5.7)  
 **Field Test Status:** `MANUAL FIELD PENDING` (physical iPhone validation required)  
