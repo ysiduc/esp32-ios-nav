@@ -86,17 +86,17 @@ jobs:
             exit 1
           fi
           echo "✅ Found App at: $APP_PATH"
-          rm -rf Payload esp32_nav_native_app.ipa
+          rm -rf Payload ESP32Nav-Native-REFERENCE.ipa
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          zip -r -y -q esp32_nav_native_app.ipa Payload/
-          ls -lh esp32_nav_native_app.ipa
+          zip -r -y -q ESP32Nav-Native-REFERENCE.ipa Payload/
+          ls -lh ESP32Nav-Native-REFERENCE.ipa
 
       - name: 9. Upload Native IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32_nav_native_ios_ipa
-          path: mobile_app/ios_native/esp32_nav_native_app.ipa
+          name: ESP32Nav-Native-REFERENCE-ipa
+          path: mobile_app/ios_native/ESP32Nav-Native-REFERENCE.ipa
           retention-days: 14
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -133,9 +133,10 @@ jobs:
           flutter config --no-enable-swift-package-manager
           flutter pub get
 
-      - name: 4b. Run Flutter Unit Tests
+      - name: 4b. Run Flutter Analyzer & Unit Tests
         working-directory: mobile_app
         run: |
+          flutter analyze --no-fatal-infos
           flutter test --reporter expanded
 
       - name: 5. Pod install
@@ -170,17 +171,17 @@ jobs:
           fi
 
           echo "✅ Found Runner.app at: $APP_PATH"
-          rm -rf Payload esp32_nav_flutter_app.ipa
+          rm -rf Payload ESP32Nav-Flutter-PRODUCTION.ipa
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/Runner.app
-          zip -r -y -q esp32_nav_flutter_app.ipa Payload/
-          ls -lh esp32_nav_flutter_app.ipa
+          zip -r -y -q ESP32Nav-Flutter-PRODUCTION.ipa Payload/
+          ls -lh ESP32Nav-Flutter-PRODUCTION.ipa
 
       - name: 8. Upload Flutter IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32_nav_flutter_ios_ipa
-          path: mobile_app/esp32_nav_flutter_app.ipa
+          name: ESP32Nav-Flutter-PRODUCTION-ipa
+          path: mobile_app/ESP32Nav-Flutter-PRODUCTION.ipa
           retention-days: 14
 
   # ═══════════════════════════════════════════════════════════════════════════

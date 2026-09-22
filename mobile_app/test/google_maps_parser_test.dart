@@ -149,7 +149,7 @@ void main() {
 
       expect(place, isNotNull);
       // The coordinate of the final MapPlace must remain EXACTLY what was passed!
-      expect(place!.coordinate.latitude, 21.028511);
+      expect(place!.coordinate, equals(exactPoint));
       expect(place.coordinate.longitude, 105.854212);
     });
   });

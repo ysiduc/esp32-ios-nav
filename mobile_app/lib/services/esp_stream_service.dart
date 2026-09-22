@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
-import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'esp_raster_map_renderer.dart';
 import 'navigation_manager.dart';

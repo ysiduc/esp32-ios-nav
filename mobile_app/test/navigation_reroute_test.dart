@@ -1,0 +1,381 @@
+import 'dart:async';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:mobile_app/models/route_model.dart';
+import 'package:mobile_app/services/ble_service.dart';
+import 'package:mobile_app/services/navigation_manager.dart';
+import 'package:mobile_app/services/off_route_detector.dart';
+import 'package:mobile_app/services/route_geometry.dart';
+import 'package:mobile_app/services/routing_service.dart';
+
+class MockRoutingService implements RoutingService {
+  int callCount = 0;
+  String? lastCosting;
+  LatLng? lastStart;
+  LatLng? lastDestination;
+  Completer<NavRoute?>? pendingCompleter;
+
+  NavRoute? nextRouteToReturn;
+
+  @override
+  Future<NavRoute?> calculateSingleRoute(
+    LatLng start,
+    LatLng destination, {
+    String costing = 'motorcycle',
+  }) {
+    callCount++;
+    lastCosting = costing;
+    lastStart = start;
+    lastDestination = destination;
+
+    if (pendingCompleter != null) {
+      return pendingCompleter!.future;
+    }
+    return Future.value(nextRouteToReturn);
+  }
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('Navigation Reroute Tests (P5.5 Sections 21 - 44, 54 - 57, 60, 62, 63)', () {
+    late NavigationManager navManager;
+    late BleService bleService;
+    late MockRoutingService mockRouter;
+
+    // Planned Route A: starts at (21.000, 105.800) and heads East to (21.000, 105.810) (~1000m)
+    const startCoord = LatLng(21.000, 105.800);
+    const destCoord = LatLng(21.000, 105.810);
+    final routeAPoints = [startCoord, destCoord];
+
+    late NavRoute routeA;
+
+    setUp(() {
+      bleService = BleService();
+      mockRouter = MockRoutingService();
+      navManager = NavigationManager(
+        bleService: bleService,
+        routingService: mockRouter,
+      );
+
+      final geomA = RouteGeometry(routeAPoints);
+      routeA = NavRoute(
+        totalDistanceMeters: geomA.totalDistanceMeters,
+        totalDurationSeconds: 120.0,
+        polylinePoints: routeAPoints,
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Đi về hướng Đông',
+            streetName: 'Đường A',
+            distanceMeters: geomA.totalDistanceMeters,
+            durationSeconds: 120.0,
+            coordinate: startCoord,
+            maneuverTypeStr: 'depart',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+        ],
+        summary: 'Tuyến đường A',
+      );
+    });
+
+    tearDown(() {
+      navManager.dispose();
+    });
+
+    test('Section 54: Exact field regression from user screenshot (bends away, separation <45m)', () async {
+      navManager.startNavigation(routeA);
+      final startTime = DateTime(2026, 9, 22, 8, 0, 0);
+
+      // In the real defect: vehicle leaves route onto a parallel road separated by only 18m (< 45m).
+      // Old detector checked distance to vertices with >45m threshold and NEVER rerouted!
+      // New detector must detect moderate deviation, confirm, and trigger Valhalla motorcycle reroute.
+      const parallelCoord = LatLng(21.00016, 105.803); // ~18m North of Route A
+
+      // Sample at t0: triggers suspicion
+      navManager.updatePositionForTesting(
+        parallelCoord,
+        speedKmh: 30.0, // ~8.3 m/s
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: startTime,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.suspected));
+      expect(mockRouter.callCount, equals(0));
+
+      // Advance synthetic time by 2.2 seconds (exceeds moderate deviation dwell of 2.0s)
+      final tConfirm = startTime.add(const Duration(milliseconds: 2600));
+      navManager.updatePositionForTesting(
+        const LatLng(21.00016, 105.8035),
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: tConfirm,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.confirmed));
+      expect(navManager.isRerouting, isTrue);
+      // Confirmed within bounded moving latency (~2.2s)!
+      expect(mockRouter.callCount, equals(1));
+      expect(mockRouter.lastCosting, equals('motorcycle'));
+    });
+
+    test('Section 55: Parallel road test (12m apart, speed 8m/s, acc 4m -> confirmed, 1 reroute)', () async {
+      navManager.startNavigation(routeA);
+      final t0 = DateTime(2026, 9, 22, 9, 0, 0);
+
+      // 12m separation (0.000108 lat is ~12.0m)
+      const pWrong = LatLng(21.000108, 105.802);
+
+      navManager.updatePositionForTesting(
+        pWrong,
+        speedKmh: 28.8, // 8.0 m/s
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t0,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.suspected));
+      expect(navManager.lastOffRouteDecision?.reason, equals(OffRouteReason.persistentModerateLateralDeviation));
+      expect(mockRouter.callCount, equals(0));
+
+      // After 2.1s: confirmed!
+      final t1 = t0.add(const Duration(milliseconds: 2100));
+      navManager.updatePositionForTesting(
+        const LatLng(21.000108, 105.8025),
+        speedKmh: 28.8,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t1,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.confirmed));
+      expect(mockRouter.callCount, equals(1));
+      expect(mockRouter.lastCosting, equals('motorcycle'));
+    });
+
+    test('Section 56: Poor GPS parallel test (12m apart, accuracy 15m -> no instant reroute)', () {
+      navManager.startNavigation(routeA);
+      final t0 = DateTime(2026, 9, 22, 9, 0, 0);
+      const pWrong = LatLng(21.000108, 105.802);
+
+      // Accuracy 15m: moderate threshold = max(10, 15 * 1.5) = 22.5m
+      navManager.updatePositionForTesting(
+        pWrong,
+        speedKmh: 28.8,
+        heading: 90.0,
+        horizontalAccuracy: 15.0,
+        timestamp: t0,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.onRoute));
+      expect(mockRouter.callCount, equals(0));
+    });
+
+    test('Section 57: Cross-street wrong turn test (90° turn -> reroute in ~1.0-1.5s)', () async {
+      navManager.startNavigation(routeA);
+      final t0 = DateTime(2026, 9, 22, 9, 0, 0);
+
+      // Vehicle turns 90° South onto cross street at (21.000, 105.804)
+      const turnCoord = LatLng(20.99988, 105.804); // ~13m South, heading 180°
+
+      navManager.updatePositionForTesting(
+        turnCoord,
+        speedKmh: 36.0, // 10 m/s
+        heading: 180.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t0,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.suspected));
+      expect(navManager.lastOffRouteDecision?.reason, equals(OffRouteReason.courseDivergence));
+
+      // After 1.1 seconds: confirmed fast track!
+      final t1 = t0.add(const Duration(milliseconds: 1100));
+      navManager.updatePositionForTesting(
+        const LatLng(20.99975, 105.804),
+        speedKmh: 36.0,
+        heading: 180.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t1,
+      );
+
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.confirmed));
+      expect(mockRouter.callCount, equals(1));
+    });
+
+    test('Section 60: Sharp turn test (correct 90° planned turn -> matcher advances, no false reroute)', () {
+      // Planned route with a sharp 90° turn: East then North
+      const p0 = LatLng(21.000, 105.800);
+      const pTurn = LatLng(21.000, 105.805); // Turn point
+      const pEnd = LatLng(21.005, 105.805); // North
+      final sharpRoute = NavRoute(
+        totalDistanceMeters: 1000.0,
+        totalDurationSeconds: 120.0,
+        polylinePoints: [p0, pTurn, pEnd],
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Đi thẳng',
+            streetName: 'Đường 1',
+            distanceMeters: 500,
+            durationSeconds: 60,
+            coordinate: p0,
+            maneuverTypeStr: 'depart',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+          NavStep(
+            stepIndex: 1,
+            instruction: 'Rẽ trái lên Đường 2',
+            streetName: 'Đường 2',
+            distanceMeters: 500,
+            durationSeconds: 60,
+            coordinate: pTurn,
+            maneuverTypeStr: 'turn left',
+            beginShapeIndex: 1,
+            endShapeIndex: 2,
+          ),
+        ],
+        summary: 'Góc rẽ vuông',
+      );
+
+      navManager.startNavigation(sharpRoute);
+
+      // Advance vehicle right through the turn point and onto the North segment
+      navManager.updatePositionForTesting(
+        const LatLng(21.001, 105.805), // On segment 2 going North
+        speedKmh: 25.0,
+        heading: 0.0, // North
+        horizontalAccuracy: 4.0,
+      );
+
+      // Matcher should advance to segment 1 (going North)
+      expect(navManager.matchedProjection?.segmentIndex, equals(1));
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.onRoute));
+      expect(mockRouter.callCount, equals(0)); // NO false reroute!
+    });
+
+    test('Section 62: Reroute atomicity test (pending route keeps trimming, Route B commits atomically)', () async {
+      navManager.startNavigation(routeA);
+      
+      // Setup pending completer for reroute request
+      final completer = Completer<NavRoute?>();
+      mockRouter.pendingCompleter = completer;
+
+      // Trigger off-route to start reroute
+      final t0 = DateTime(2026, 9, 22, 10, 0, 0);
+      navManager.updatePositionForTesting(
+        const LatLng(21.0004, 105.803), // 44m off route (strong deviation)
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t0,
+      );
+      final t1 = t0.add(const Duration(milliseconds: 1100));
+      navManager.updatePositionForTesting(
+        const LatLng(21.00045, 105.8035),
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t1,
+      );
+
+      // Reroute request is in flight!
+      expect(navManager.isRerouting, isTrue);
+      expect(navManager.rerouteStatus, equals('requesting'));
+      expect(mockRouter.callCount, equals(1));
+
+      // While reroute is in flight: Route A MUST remain active and keep trimming! (Section 40, 41)
+      expect(navManager.activeRoute, equals(routeA));
+
+      // Vehicle continues moving along
+      final prevProgress = navManager.displayProgressMeters;
+      navManager.updatePositionForTesting(
+        const LatLng(21.00045, 105.8050),
+        speedKmh: 30.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+        timestamp: t1.add(const Duration(seconds: 1)),
+      );
+
+      expect(navManager.activeRoute, equals(routeA));
+      expect(navManager.isRerouting, isTrue);
+      expect(navManager.displayProgressMeters, greaterThanOrEqualTo(prevProgress));
+
+      // Now create Route B (calculated by Valhalla to the same frozen destination)
+      const bStart = LatLng(21.00045, 105.8050);
+      final routeBPoints = [bStart, destCoord];
+      final geomB = RouteGeometry(routeBPoints);
+      final routeB = NavRoute(
+        totalDistanceMeters: geomB.totalDistanceMeters,
+        totalDurationSeconds: 90.0,
+        polylinePoints: routeBPoints,
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Tiếp tục lộ trình mới',
+            streetName: 'Đường Mới',
+            distanceMeters: geomB.totalDistanceMeters,
+            durationSeconds: 90.0,
+            coordinate: bStart,
+            maneuverTypeStr: 'depart',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+        ],
+        summary: 'Lộ trình mới B',
+      );
+
+      // Resolve Route B
+      completer.complete(routeB);
+      await pumpEventQueue();
+
+      // ATOMIC REPLACEMENT VERIFICATION (Section 42):
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.isRerouting, isFalse);
+      expect(navManager.rerouteStatus, equals('applied'));
+      expect(navManager.navigationDestination, equals(destCoord)); // Destination frozen!
+      expect(navManager.currentStepIndex, equals(0));
+      expect(navManager.remainingPolyline.isNotEmpty, isTrue);
+      expect(navManager.lastOffRouteDecision?.state, equals(OffRouteState.onRoute));
+    });
+
+    test('Section 63: Production motorcycle reroute uses Valhalla, not Mapbox', () async {
+      navManager.startNavigation(routeA);
+
+      // Trigger reroute
+      navManager.triggerRerouteForTesting(const LatLng(21.0002, 105.802));
+      expect(mockRouter.callCount, equals(1));
+      expect(mockRouter.lastCosting, equals('motorcycle'));
+
+      // Assert router is RoutingService (Valhalla stack) and costing is motorcycle
+      expect(mockRouter.lastCosting, isNot(equals('bike')));
+      expect(mockRouter.lastCosting, isNot(equals('bicycle')));
+      expect(mockRouter.lastCosting, isNot(equals('auto')));
+    });
+
+    test('Generation guard: late reroute response does not overwrite stopped navigation', () async {
+      navManager.startNavigation(routeA);
+      final completer = Completer<NavRoute?>();
+      mockRouter.pendingCompleter = completer;
+
+      navManager.triggerRerouteForTesting(const LatLng(21.0002, 105.802));
+      expect(navManager.isRerouting, isTrue);
+
+      // User stops navigation while reroute is in flight
+      navManager.stopNavigation();
+      expect(navManager.isNavigating, isFalse);
+
+      // Late response returns
+      completer.complete(routeA);
+      await pumpEventQueue();
+
+      // Navigation remains stopped, not revived by stale response!
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+    });
+  });
+}

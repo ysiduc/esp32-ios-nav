@@ -17,8 +17,17 @@ import '../services/google_maps_parser.dart';
 import '../services/google_link_controller.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
+import '../services/off_route_detector.dart';
 import '../services/search_service.dart';
 import '../services/voice_guidance_service.dart';
+
+
+enum RoutePresentationMode {
+  none,
+  preview,
+  navigating,
+  arrived,
+}
 
 enum MapThemeMode {
   streets,         // Apple Streets (clean light aesthetic)
@@ -36,6 +45,9 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  RoutePresentationMode _lastRenderedMode = RoutePresentationMode.none;
+  int _lastRenderedPointsCount = 0;
+  LatLng? _lastRenderedStartCoord;
   bool _showDebugOverlay = false;
 
   ml.MapLibreMapController? _mapController;
@@ -56,11 +68,11 @@ class _MapScreenState extends State<MapScreen> {
   String _transportMode = 'bike'; // Default to Motorcycle in Vietnam
   bool _isLoadingRoutes = false;
   bool _isSearching = false;
+  int _googleLinkGeneration = 0;
   bool _isAutocompleteRefreshing = false;
   bool _isResolvingGoogleLink = false;
   String? _googleLinkStatusText;
   int _searchGeneration = 0;
-  int _googleLinkGeneration = 0;
   StateSetter? _activeModalSetState;
 
   void _updateSearchUIState(VoidCallback fn) {
@@ -103,7 +115,6 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _recenterTimer;
 
   // P5.4.1.2 Section 29-32: Route redraw caching & throttled camera animation
-  String? _lastRenderedRouteKey;
   int _routeGeometryUpdatesCount = 0;
   int get routeGeometryUpdatesCount => _routeGeometryUpdatesCount;
 
@@ -210,9 +221,11 @@ class _MapScreenState extends State<MapScreen> {
 
       // Hook navigation position update callback to continuously center vehicle with 3D perspective
       navManager.onLocationChanged = (loc, heading) {
-        if (mounted && navManager.isNavigating && _isAutoCentering) {
-          // P5.4.1.2 Section 30 & 32: Throttled camera animation, no line rebuilding on GPS ticks
-          _throttledAnimateCamera(loc, heading);
+        if (mounted && navManager.isNavigating) {
+          if (_isAutoCentering) {
+            _throttledAnimateCamera(loc, heading);
+          }
+          _updateRouteOnMap();
         }
       };
 
@@ -254,35 +267,74 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  /// Update route polyline on the MapLibre map using Apple Maps styling
+  RoutePresentationMode get _presentationMode {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    if (navManager.isNavigating && navManager.activeRoute != null) {
+      if (navManager.remainingTotalDistance <= 10.0 &&
+          navManager.currentStepIndex >= (navManager.activeRoute!.steps.length - 1)) {
+        return RoutePresentationMode.arrived;
+      }
+      return RoutePresentationMode.navigating;
+    } else if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
+      return RoutePresentationMode.preview;
+    }
+    return RoutePresentationMode.none;
+  }
+
+  /// Update route polyline on the MapLibre map using Apple Maps styling (P5.5 Sections 15 - 17)
   Future<void> _updateRouteOnMap() async {
     final ctrl = _mapController;
     if (ctrl == null || !_mapReady) return;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final mode = _presentationMode;
     List<LatLng> points = [];
-    if (navManager.isNavigating && navManager.activeRoute != null) {
-      points = navManager.activeRoute!.polylinePoints;
-    } else if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
-      points = _routes[_selectedRouteIndex].polylinePoints;
+
+    switch (mode) {
+      case RoutePresentationMode.navigating:
+        points = navManager.remainingPolyline;
+        break;
+      case RoutePresentationMode.preview:
+        if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
+          points = _routes[_selectedRouteIndex].polylinePoints;
+        }
+        break;
+      case RoutePresentationMode.arrived:
+      case RoutePresentationMode.none:
+        points = [];
+        break;
     }
 
-    // P5.4.1.2 Section 28-31: Guard against redundant clearLines() & addLine() when geometry unchanged
-    final currentKey = points.isEmpty
-        ? 'empty'
-        : '${points.length}_${points.first.latitude}_${points.first.longitude}_${points.last.latitude}_${points.last.longitude}_${_routes.length}_$_selectedRouteIndex';
-    if (currentKey == _lastRenderedRouteKey) {
+    bool shouldUpdate = false;
+    if (points.isEmpty) {
+      shouldUpdate = _lastRenderedPointsCount > 0;
+    } else if (mode != _lastRenderedMode || points.length != _lastRenderedPointsCount) {
+      shouldUpdate = true;
+    } else if (_lastRenderedStartCoord != null) {
+      const distCalc = Distance();
+      final d = distCalc.as(LengthUnit.Meter, _lastRenderedStartCoord!, points.first);
+      if (d >= 2.5) {
+        shouldUpdate = true;
+      }
+    } else {
+      shouldUpdate = true;
+    }
+
+    if (!shouldUpdate) {
       return;
     }
-    _lastRenderedRouteKey = currentKey;
+
+    _lastRenderedMode = mode;
+    _lastRenderedPointsCount = points.length;
+    _lastRenderedStartCoord = points.isNotEmpty ? points.first : null;
     _routeGeometryUpdatesCount++;
 
     try {
       await ctrl.clearLines();
       if (points.length < 2) return;
 
-      // Draw alternative routes first in muted Apple slate (Screenshot 4)
-      if (!navManager.isNavigating && _routes.length > 1) {
+      // Draw alternative routes first in muted Apple slate
+      if (mode == RoutePresentationMode.preview && _routes.length > 1) {
         for (int i = 0; i < _routes.length; i++) {
           if (i == _selectedRouteIndex) continue;
           final altPoints = _routes[i].polylinePoints;
@@ -1092,7 +1144,7 @@ class _MapScreenState extends State<MapScreen> {
             Positioned(
               left: 16,
               top: 72,
-              child: _buildDebugOverlay(streamService),
+              child: _buildDebugOverlay(streamService, navManager),
             ),
 
           // -----------------------------------------------------------
@@ -1451,12 +1503,12 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildDebugOverlay(EspStreamService streamService) {
+  Widget _buildDebugOverlay(EspStreamService streamService, NavigationManager navManager) {
     return LiquidGlassContainer(
       radius: 16,
       blur: 24,
       padding: const EdgeInsets.all(12),
-      width: 200,
+      width: 220,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1465,7 +1517,7 @@ class _MapScreenState extends State<MapScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                'STREAM TELEMETRY',
+                'TELEMETRY & FIELD DIAG',
                 style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF007AFF)),
               ),
               GestureDetector(
@@ -1478,118 +1530,28 @@ class _MapScreenState extends State<MapScreen> {
           Text('Transport: ${streamService.activeJpegTransport.name}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Render FPS: ${streamService.renderFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
-          Text('Target FPS: ${streamService.effectiveTargetFps}', style: const TextStyle(fontSize: 11)),
-          Text('Snapshot age: ${streamService.snapshotAgeMs} ms', style: const TextStyle(fontSize: 11)),
-          Text('JPEG size: ${streamService.frameSizeKb} KB', style: const TextStyle(fontSize: 11)),
-          Text('ACK latency: ${streamService.ackLatencyMs} ms', style: const TextStyle(fontSize: 11)),
-          Text('BLE duration: ${streamService.bleTransferMs} ms', style: const TextStyle(fontSize: 11)),
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
-        ],
-      ),
-    );
-  }
-
-  // Apple Maps Top-Left 3-line Menu Button
-  // -------------------------------------------------------------
-  Widget _buildMenuButton(BuildContext context, BleService bleService) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          if (widget.onOpenMenu != null) {
-            widget.onOpenMenu!();
-          } else {
-            Scaffold.maybeOf(context)?.openDrawer();
-          }
-        },
-        borderRadius: BorderRadius.circular(22),
-        child: Container(
-          width: 42,
-          height: 42,
-          decoration: BoxDecoration(
-            color: Colors.white.withAlpha(240),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(25),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-            border: Border.all(
-              color: bleService.isConnected ? const Color(0xFF007AFF) : Colors.black12,
-              width: 1.2,
+          if (navManager.isNavigating) ...[
+            const Divider(height: 12, thickness: 0.5),
+            const Text(
+              'NAV ENGINE (P5.5)',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFFFF9500)),
             ),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              const Icon(
-                Icons.menu_rounded,
-                color: Color(0xFF1C1C1E),
-                size: 22,
-              ),
-              if (bleService.isConnected)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: bleService.isWifiConnected ? const Color(0xFF05FFA1) : const Color(0xFF007AFF),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // -------------------------------------------------------------
-  // Apple Maps Weather Pill (Screenshot 1)
-  // -------------------------------------------------------------
-  Widget _buildAppleWeatherPill() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.90),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.black.withOpacity(0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.cloudy_snowing, color: Color(0xFF007AFF), size: 16),
-          SizedBox(width: 6),
-          Text(
-            '27°',
-            style: TextStyle(
-              color: Colors.black87,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              letterSpacing: -0.2,
-            ),
-          ),
+            const SizedBox(height: 4),
+            Text('GPS acc: ${navManager.horizontalAccuracy.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('Physical route dist: ${(navManager.activeRouteGeometry?.nearestProjection(navManager.acceptedPhysicalLocation ?? navManager.rawLocation ?? const LatLng(0, 0))?.lateralDistanceMeters ?? 0.0).toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('Matched lateral: ${(navManager.matchedProjection?.lateralDistanceMeters ?? 0.0).toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('Progress: ${navManager.displayProgressMeters.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11)),
+            Text('Route remain: ${navManager.remainingTotalDistance >= 1000 ? "${(navManager.remainingTotalDistance / 1000).toStringAsFixed(1)}km" : "${navManager.remainingTotalDistance.toStringAsFixed(0)}m"}', style: const TextStyle(fontSize: 11)),
+            Text('OffRoute: ${navManager.lastOffRouteDecision?.state.name ?? "onRoute"}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: navManager.lastOffRouteDecision?.state == OffRouteState.confirmed ? Colors.red : (navManager.lastOffRouteDecision?.state == OffRouteState.suspected ? Colors.orange : Colors.green))),
+            Text('Reason: ${navManager.lastOffRouteDecision?.reason.name ?? "none"}', style: const TextStyle(fontSize: 11)),
+            Text('Reroute: ${navManager.rerouteStatus}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
         ],
       ),
     );
   }
 
-  // -------------------------------------------------------------
-  // Apple Maps Right Floating Buttons (Screenshot 1 & 4)
-  // -------------------------------------------------------------
   Widget _buildCircularGlassButton({
     required IconData icon,
     Color? iconColor,
@@ -2988,7 +2950,13 @@ class _MapScreenState extends State<MapScreen> {
     final street = step?.streetName ?? 'Tiếp tục đi thẳng';
     final icon = step?.icon ?? Icons.straight_rounded;
 
-    return Container(
+    return GestureDetector(
+      onTap: () {
+        if (kDebugMode) {
+          setState(() => _showDebugOverlay = !_showDebugOverlay);
+        }
+      },
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1C1E).withOpacity(0.96),
@@ -3044,6 +3012,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

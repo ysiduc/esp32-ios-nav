@@ -29,6 +29,9 @@ class NavStep {
   final LatLng coordinate;
   final String maneuverTypeStr;
   final String? maneuverModifier;
+  final int? beginShapeIndex;
+  final int? endShapeIndex;
+  final double? beginDistanceAlongRoute;
 
   NavStep({
     required this.stepIndex,
@@ -39,7 +42,38 @@ class NavStep {
     required this.coordinate,
     required this.maneuverTypeStr,
     this.maneuverModifier,
+    this.beginShapeIndex,
+    this.endShapeIndex,
+    this.beginDistanceAlongRoute,
   });
+
+  NavStep copyWith({
+    int? stepIndex,
+    String? instruction,
+    String? streetName,
+    double? distanceMeters,
+    double? durationSeconds,
+    LatLng? coordinate,
+    String? maneuverTypeStr,
+    String? maneuverModifier,
+    int? beginShapeIndex,
+    int? endShapeIndex,
+    double? beginDistanceAlongRoute,
+  }) {
+    return NavStep(
+      stepIndex: stepIndex ?? this.stepIndex,
+      instruction: instruction ?? this.instruction,
+      streetName: streetName ?? this.streetName,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      coordinate: coordinate ?? this.coordinate,
+      maneuverTypeStr: maneuverTypeStr ?? this.maneuverTypeStr,
+      maneuverModifier: maneuverModifier ?? this.maneuverModifier,
+      beginShapeIndex: beginShapeIndex ?? this.beginShapeIndex,
+      endShapeIndex: endShapeIndex ?? this.endShapeIndex,
+      beginDistanceAlongRoute: beginDistanceAlongRoute ?? this.beginDistanceAlongRoute,
+    );
+  }
 
   /// Convert OSRM / Valhalla maneuver type & modifier to ManeuverType enum
   ManeuverType get maneuverType {

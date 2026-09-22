@@ -1,5 +1,12 @@
 # ESP32 iOS Navigation & ANCS Notifications
 
+> [!IMPORTANT]
+> **Production Application vs Reference Implementation (P5.5):**
+> - The deployable user application is **`mobile_app` Flutter IPA** (`ESP32Nav-Flutter-PRODUCTION.ipa`, ~12 MB).
+> - `ios_native/` is a reference and test implementation and is **not** the field-tested installed application.
+> - All production navigation features (RouteGeometry, point-to-segment projection, continuous trimming, multi-signal off-route detector, and Valhalla motorcycle rerouting) operate inside `mobile_app/lib/`.
+
+
 Hệ thống điều hướng chỉ đường Turn-by-Turn tích hợp bản đồ **OpenStreetMap / OpenFreeMap** và hiển thị thông báo cuộc gọi, tin nhắn từ iPhone lên màn hình **ESP32** (hỗ trợ phát triển và build trên **Arch Linux** không cần máy Mac).
 
 ---

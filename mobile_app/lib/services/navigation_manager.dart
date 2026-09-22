@@ -1,23 +1,24 @@
-import 'background_navigation_coordinator.dart';
-import 'voice_guidance_service.dart';
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/esp_payload.dart';
 import '../models/route_model.dart';
+import 'background_navigation_coordinator.dart';
 import 'ble_service.dart';
-import 'mapbox_directions_service.dart';
+import 'off_route_detector.dart';
 import 'phone_media_service.dart';
+import 'route_geometry.dart';
+import 'routing_service.dart';
+import 'valhalla_service.dart';
+import 'voice_guidance_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
-  bool _disposed = false;
-  final MapboxDirectionsService _directionsService = MapboxDirectionsService();
+  final RoutingService _routingService;
   PhoneMediaService? _mediaService;
+  bool _disposed = false;
 
   // Active navigation state
   bool _isNavigating = false;
@@ -26,14 +27,46 @@ class NavigationManager extends ChangeNotifier {
   NavRoute? _activeRoute;
   NavRoute? _previewRoute;
   int _currentStepIndex = 0;
-  LatLng? _currentLocation;
+
+  // Explicit Location Concepts (P5.5 Sections 8, 9, 10, 11)
+  LatLng? _rawLocation;
+  LatLng? _acceptedPhysicalLocation;
+  RouteProjection? _matchedProjection;
+  LatLng? _matchedLocation;
+  double _horizontalAccuracy = 5.0;
+
   double _currentSpeedKmh = 0.0;
   double _currentHeading = 0.0;
   double _distanceToNextManeuver = 0.0;
   double _remainingTotalDistance = 0.0;
   int _currentBattery = 85;
   int _remainingEtaMinutes = 0;
-  int _consecutiveOffRouteCount = 0;
+
+  // Authoritative Route Geometry & Progress (P5.5 Sections 4, 7, 12, 13, 14)
+  RouteGeometry? _activeRouteGeometry;
+  double _rawMatchedProgressMeters = 0.0;
+  double _displayProgressMeters = 0.0;
+  LatLng? _navigationDestination;
+
+  // Off-Route Detector & Reroute Engine (P5.5 Sections 19 - 44)
+  final OffRouteDetector _offRouteDetector;
+  OffRouteDecision? _lastOffRouteDecision;
+  int _rerouteGeneration = 0;
+  String _rerouteStatus = 'idle'; // idle, requesting, applied, failed
+
+  // Reroute Latency Diagnostics (P5.5 Section 66)
+  DateTime? suspectedAt;
+  DateTime? confirmedAt;
+  DateTime? requestStartedAt;
+  DateTime? routeReceivedAt;
+  DateTime? routeCommittedAt;
+
+  // Rolling travel vs matched advance for stuck matcher detection (P5.5 Section 27)
+  double _recentPhysicalTravelMeters = 0.0;
+  double _recentMatchedAdvanceMeters = 0.0;
+  LatLng? _previousPhysicalCoordinate;
+  double _previousMatchedProgress = 0.0;
+  DateTime? _lastRollingResetAt;
 
   StreamSubscription<Position>? _positionStream;
   Timer? _blePushTimer;
@@ -54,23 +87,55 @@ class NavigationManager extends ChangeNotifier {
     _previewRoute = route;
     notifyListeners();
   }
+
   PhoneMediaService? get mediaService => _mediaService;
   int get currentStepIndex => _currentStepIndex;
-  LatLng? get currentLocation => _currentLocation;
+
+  // Location Getters
+  LatLng? get rawLocation => _rawLocation;
+  LatLng? get acceptedPhysicalLocation => _acceptedPhysicalLocation;
+  RouteProjection? get matchedProjection => _matchedProjection;
+  LatLng? get matchedLocation => _matchedLocation;
+  LatLng? get currentLocation => _matchedLocation ?? _acceptedPhysicalLocation ?? _rawLocation;
+  double get horizontalAccuracy => _horizontalAccuracy;
+
+  // Progress Getters
+  RouteGeometry? get activeRouteGeometry => _activeRouteGeometry;
+  double get rawMatchedProgressMeters => _rawMatchedProgressMeters;
+  double get displayProgressMeters => _displayProgressMeters;
+  LatLng? get navigationDestination => _navigationDestination;
+
+  // Diagnostics Getters
+  OffRouteDecision? get lastOffRouteDecision => _lastOffRouteDecision;
+  String get rerouteStatus => _rerouteStatus;
+  int get rerouteGeneration => _rerouteGeneration;
+
+  /// Authoritative remaining polyline starting directly from _displayProgressMeters (Section 14).
+  /// Passed vertices are promptly stripped; the first coordinate represents displayProgress.
+  List<LatLng> get remainingPolyline {
+    if (_activeRouteGeometry == null) {
+      return _activeRoute?.polylinePoints ?? const [];
+    }
+    return _activeRouteGeometry!.trimmedPolyline(_displayProgressMeters);
+  }
+
   double get currentSpeedKmh => _currentSpeedKmh;
   double get currentHeading => _currentHeading;
   double get effectiveHeading {
     if (_currentHeading > 0.0 && _currentSpeedKmh >= 3.0) {
       return _currentHeading;
     }
+    if (_matchedProjection != null) {
+      return _matchedProjection!.routeBearingDegrees;
+    }
     final targetRoute = _activeRoute ?? _previewRoute;
-    if (targetRoute != null && targetRoute.polylinePoints.length >= 2 && _currentLocation != null) {
+    if (targetRoute != null && targetRoute.polylinePoints.length >= 2 && currentLocation != null) {
       const distanceCalc = Distance();
       final points = targetRoute.polylinePoints;
       int closestIdx = 0;
       double minD = double.infinity;
       for (int i = 0; i < points.length; i++) {
-        final d = distanceCalc.as(LengthUnit.Meter, _currentLocation!, points[i]);
+        final d = distanceCalc.as(LengthUnit.Meter, currentLocation!, points[i]);
         if (d < minD) {
           minD = d;
           closestIdx = i;
@@ -84,6 +149,7 @@ class NavigationManager extends ChangeNotifier {
     }
     return _currentHeading;
   }
+
   double get distanceToNextManeuver => _distanceToNextManeuver;
   double get remainingTotalDistance => _remainingTotalDistance;
   int get remainingEtaMinutes => _remainingEtaMinutes;
@@ -95,7 +161,13 @@ class NavigationManager extends ChangeNotifier {
     return _activeRoute!.steps[_currentStepIndex];
   }
 
-  NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
+  NavigationManager({
+    required this.bleService,
+    PhoneMediaService? mediaService,
+    RoutingService? routingService,
+    OffRouteDetector? offRouteDetector,
+  })  : _routingService = routingService ?? ValhallaService(),
+        _offRouteDetector = offRouteDetector ?? OffRouteDetector() {
     _initGps();
     _startIdleHeartbeat();
     bleService.getBatteryLevel().then((b) => _currentBattery = b);
@@ -154,35 +226,43 @@ class NavigationManager extends ChangeNotifier {
       if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         final lastPos = await Geolocator.getLastKnownPosition();
         if (lastPos != null) {
-          _currentLocation = LatLng(lastPos.latitude, lastPos.longitude);
+          _rawLocation = LatLng(lastPos.latitude, lastPos.longitude);
+          _acceptedPhysicalLocation = _rawLocation;
           if (!_disposed) notifyListeners();
         }
 
-        // P5.4.1.2 Section 34: Lower-power location profile when browsing/searching
         _positionStream?.cancel();
         final settings = _buildLocationSettings(
           accuracy: LocationAccuracy.medium,
           distanceFilter: 10,
         );
         _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
-          _currentLocation = LatLng(pos.latitude, pos.longitude);
+          final loc = LatLng(pos.latitude, pos.longitude);
+          _rawLocation = loc;
           _currentSpeedKmh = pos.speed * 3.6;
           _currentHeading = pos.heading;
+          _horizontalAccuracy = pos.accuracy;
+
           if (_isNavigating) {
-            _updateUserPosition(_currentLocation!, _currentSpeedKmh, _currentHeading);
+            updateUserPositionWithAccuracy(
+              loc,
+              _currentSpeedKmh,
+              _currentHeading,
+              horizontalAccuracy: pos.accuracy,
+              timestamp: pos.timestamp,
+            );
           } else {
+            _acceptedPhysicalLocation = loc;
             notifyListeners();
           }
         });
       }
     } catch (_) {
-      // Default fallback (Hanoi)
-      _currentLocation ??= const LatLng(21.0285, 105.8542);
+      _rawLocation ??= const LatLng(21.0285, 105.8542);
+      _acceptedPhysicalLocation ??= _rawLocation;
       if (!_disposed) notifyListeners();
     }
   }
-
-  static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
 
   void _enableBackgroundNavigation() {
     BackgroundNavigationCoordinator.instance.updateState(isNavigating: true);
@@ -196,26 +276,58 @@ class NavigationManager extends ChangeNotifier {
   void startNavigation(NavRoute route) {
     stopNavigation();
     _enableBackgroundNavigation();
+    _rerouteGeneration++;
     _activeRoute = route;
+    _activeRouteGeometry = RouteGeometry(route.polylinePoints, steps: route.steps);
+    // Freeze destination across all potential reroutes (Section 35)
+    _navigationDestination = route.polylinePoints.isNotEmpty ? route.polylinePoints.last : null;
+
+    final beginDists = _activeRouteGeometry!.maneuverBeginDistancesAlongRoute;
+    if (beginDists.length > 1) {
+      _distanceToNextManeuver = beginDists[1];
+    } else {
+      _distanceToNextManeuver = _activeRouteGeometry!.totalDistanceMeters;
+    }
+
     _isNavigating = true;
     _isSimulating = false;
     _isRerouting = false;
+    _rerouteStatus = 'idle';
     _currentStepIndex = 0;
-    _consecutiveOffRouteCount = 0;
+    _displayProgressMeters = 0.0;
+    _rawMatchedProgressMeters = 0.0;
+    _recentPhysicalTravelMeters = 0.0;
+    _recentMatchedAdvanceMeters = 0.0;
+    _previousPhysicalCoordinate = null;
+    _previousMatchedProgress = 0.0;
+    _lastRollingResetAt = DateTime.now();
+
+    suspectedAt = null;
+    confirmedAt = null;
+    requestStartedAt = null;
+    routeReceivedAt = null;
+    routeCommittedAt = null;
+
+    _offRouteDetector.reset();
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
 
     // Start location tracking with iOS background execution enabled
     final locationSettings = _buildLocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 2, // 2 meters
+      distanceFilter: 2,
     );
 
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
-      _updateUserPosition(LatLng(pos.latitude, pos.longitude), pos.speed * 3.6, pos.heading);
+      updateUserPositionWithAccuracy(
+        LatLng(pos.latitude, pos.longitude),
+        pos.speed * 3.6,
+        pos.heading,
+        horizontalAccuracy: pos.accuracy,
+        timestamp: pos.timestamp,
+      );
     });
 
-    // Start periodic BLE push timer (every 1.2 seconds)
     _blePushTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
       _sendCurrentPayloadToEsp32();
     });
@@ -223,7 +335,6 @@ class NavigationManager extends ChangeNotifier {
     notifyListeners();
     _sendCurrentPayloadToEsp32();
 
-    // Voice announcement
     VoiceGuidanceService().announceTripStart(
       route.title.isNotEmpty ? route.title : (currentStep?.streetName ?? 'Điểm đến'),
       route.totalDistanceMeters / 1000.0,
@@ -235,19 +346,27 @@ class NavigationManager extends ChangeNotifier {
   void startSimulation(NavRoute route) {
     stopNavigation();
     _enableBackgroundNavigation();
+    _rerouteGeneration++;
     _activeRoute = route;
+    _activeRouteGeometry = RouteGeometry(route.polylinePoints, steps: route.steps);
+    _navigationDestination = route.polylinePoints.isNotEmpty ? route.polylinePoints.last : null;
+
     _isNavigating = true;
     _isSimulating = true;
     _isRerouting = false;
+    _rerouteStatus = 'idle';
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
-    _currentSpeedKmh = 38.0; // 38 km/h mock speed
-    _consecutiveOffRouteCount = 0;
+    _displayProgressMeters = 0.0;
+    _rawMatchedProgressMeters = 0.0;
+    _currentSpeedKmh = 38.0;
 
     final polyline = route.polylinePoints;
     if (polyline.isEmpty) return;
 
-    _currentLocation = polyline.first;
+    _rawLocation = polyline.first;
+    _acceptedPhysicalLocation = _rawLocation;
+    _matchedLocation = _rawLocation;
     _updateRemainingMetrics();
 
     _simulationTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
@@ -255,8 +374,7 @@ class NavigationManager extends ChangeNotifier {
         _simulatedPolylineIndex++;
         final nextCoord = polyline[_simulatedPolylineIndex];
 
-        // Calculate heading
-        final prevCoord = _currentLocation ?? nextCoord;
+        final prevCoord = currentLocation ?? nextCoord;
         const distanceCalculator = Distance();
         final dist = distanceCalculator.as(LengthUnit.Meter, prevCoord, nextCoord);
 
@@ -265,9 +383,13 @@ class NavigationManager extends ChangeNotifier {
           heading = distanceCalculator.bearing(prevCoord, nextCoord);
         }
 
-        _updateUserPosition(nextCoord, 42.0, heading);
+        updateUserPositionWithAccuracy(
+          nextCoord,
+          42.0,
+          heading,
+          horizontalAccuracy: 5.0,
+        );
       } else {
-        // Reached destination in simulation
         timer.cancel();
         _currentStepIndex = _activeRoute!.steps.length - 1;
         _distanceToNextManeuver = 0.0;
@@ -286,7 +408,6 @@ class NavigationManager extends ChangeNotifier {
 
     notifyListeners();
 
-    // Voice announcement for simulation
     VoiceGuidanceService().announceTripStart(
       route.title.isNotEmpty ? route.title : (currentStep?.streetName ?? 'Điểm đến'),
       route.totalDistanceMeters / 1000.0,
@@ -294,131 +415,247 @@ class NavigationManager extends ChangeNotifier {
     );
   }
 
-  void _updateUserPosition(LatLng newLocation, double speedKmh, double heading) {
-    _currentLocation = newLocation;
+  /// Core location update pipeline handling accuracy gating, map matching,
+  /// monotonic progress tracking, step boundary advancement, and multi-signal off-route evaluation.
+  void updateUserPositionWithAccuracy(
+    LatLng newLocation,
+    double speedKmh,
+    double heading, {
+    double horizontalAccuracy = 5.0,
+    DateTime? timestamp,
+  }) {
+    final sampleTime = timestamp ?? DateTime.now();
+    _rawLocation = newLocation;
+    _horizontalAccuracy = horizontalAccuracy;
     _currentSpeedKmh = speedKmh.clamp(0.0, 160.0);
     _currentHeading = heading;
 
-    onLocationChanged?.call(newLocation, heading);
+    // GPS ACCURACY GATING (Section 10)
+    // During active navigation, reject highly unreliable samples (accuracy > 20m)
+    // from forcing route progress or off-route confirmation.
+    if (_isNavigating && !_isSimulating && horizontalAccuracy > 20.0) {
+      notifyListeners();
+      return;
+    }
 
-    if (_activeRoute == null || _activeRoute!.steps.isEmpty) return;
+    _acceptedPhysicalLocation = newLocation;
 
-    // Measure distance to current step maneuver point
-    const distanceCalculator = Distance();
-    final targetStep = _activeRoute!.steps[_currentStepIndex];
-    _distanceToNextManeuver = distanceCalculator.as(
-      LengthUnit.Meter,
+    if (_activeRoute == null || _activeRouteGeometry == null) {
+      onLocationChanged?.call(newLocation, effectiveHeading);
+      notifyListeners();
+      return;
+    }
+
+    final geom = _activeRouteGeometry!;
+
+    // 1. ROUTE MATCHING (Sections 6, 8, 11)
+    final matched = geom.matchLocation(
       newLocation,
-      targetStep.coordinate,
+      lastProjection: _matchedProjection,
     );
 
-    // If within 25m of current step, advance to next step
-    if (_distanceToNextManeuver <= 25.0 && _currentStepIndex < _activeRoute!.steps.length - 1) {
-      _currentStepIndex++;
-      final nextStep = _activeRoute!.steps[_currentStepIndex];
-      _distanceToNextManeuver = distanceCalculator.as(
-        LengthUnit.Meter,
-        newLocation,
-        nextStep.coordinate,
-      );
+    if (matched != null) {
+      _matchedProjection = matched;
+      _matchedLocation = matched.coordinate;
+      _rawMatchedProgressMeters = matched.distanceAlongRouteMeters;
+
+      // 2. MONOTONIC DISPLAY PROGRESS (Sections 12, 13)
+      // Display progress must NOT move backwards on GPS noise
+      _displayProgressMeters = math.max(_displayProgressMeters, matched.distanceAlongRouteMeters);
+    } else {
+      _matchedLocation = newLocation;
     }
 
-    // Check for off-route condition (Auto-Rerouting)
-    if (!_isSimulating && !_isRerouting) {
-      _checkOffRouteAndReroute(newLocation);
+    onLocationChanged?.call(currentLocation ?? newLocation, effectiveHeading);
+
+    // 3. ADVANCE MANEUVER STEPS BASED ON ROUTE PROGRESS (Sections 45 - 48)
+    if (_activeRoute!.steps.isNotEmpty) {
+      final beginDists = geom.maneuverBeginDistancesAlongRoute;
+      while (_currentStepIndex < _activeRoute!.steps.length - 1 &&
+          _currentStepIndex + 1 < beginDists.length &&
+          _displayProgressMeters >= beginDists[_currentStepIndex + 1]) {
+        _currentStepIndex++;
+      }
+
+      if (_currentStepIndex + 1 < beginDists.length) {
+        _distanceToNextManeuver =
+            math.max(0.0, beginDists[_currentStepIndex + 1] - _displayProgressMeters);
+      } else {
+        _distanceToNextManeuver =
+            math.max(0.0, geom.totalDistanceMeters - _displayProgressMeters);
+      }
     }
 
+    // 4. OFF-ROUTE EVALUATION (Sections 19 - 31)
+    if (!_isSimulating) {
+      _evaluateOffRoute(newLocation, sampleTime);
+    }
+
+    // 5. UPDATE REMAINING METRICS (Sections 49, 50)
     _updateRemainingMetrics();
 
     // Voice announcement check for turns & maneuvers
-    final activeStep = _activeRoute!.steps[_currentStepIndex];
-    VoiceGuidanceService().checkAndAnnounceManeuver(
-      step: activeStep,
-      distanceMeters: _distanceToNextManeuver,
-      stepIndex: _currentStepIndex,
-    );
+    if (_currentStepIndex < _activeRoute!.steps.length) {
+      final activeStep = _activeRoute!.steps[_currentStepIndex];
+      VoiceGuidanceService().checkAndAnnounceManeuver(
+        step: activeStep,
+        distanceMeters: _distanceToNextManeuver,
+        stepIndex: _currentStepIndex,
+      );
+    }
 
     notifyListeners();
   }
 
-  /// Automatically recalculate route if user deviates more than 45m from polyline
-  void _checkOffRouteAndReroute(LatLng location) async {
-    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty) return;
+  void _evaluateOffRoute(LatLng physicalLocation, DateTime sampleTime) {
+    if (_activeRouteGeometry == null) return;
+    final geom = _activeRouteGeometry!;
 
-    const distanceCalculator = Distance();
-    double minDistanceToPolyline = double.infinity;
+    // Pure Euclidean nearest projection to route for physical distance evidence (Section 20)
+    final physicalNearest = geom.nearestProjection(physicalLocation);
 
-    for (final point in _activeRoute!.polylinePoints) {
-      final d = distanceCalculator.as(LengthUnit.Meter, location, point);
-      if (d < minDistanceToPolyline) {
-        minDistanceToPolyline = d;
-      }
+    // Rolling window update for stuck matcher detection (Section 27)
+    if (_previousPhysicalCoordinate != null) {
+      final dPhysical = RouteGeometry.distanceBetween(_previousPhysicalCoordinate!, physicalLocation);
+      _recentPhysicalTravelMeters += dPhysical;
+      final dAdvance = math.max(0.0, _displayProgressMeters - _previousMatchedProgress);
+      _recentMatchedAdvanceMeters += dAdvance;
+    }
+    _previousPhysicalCoordinate = physicalLocation;
+    _previousMatchedProgress = _displayProgressMeters;
+
+    final now = sampleTime;
+    _lastRollingResetAt ??= now;
+    if (now.difference(_lastRollingResetAt!).inSeconds >= 10 || _recentPhysicalTravelMeters > 100.0) {
+      _recentPhysicalTravelMeters = 0.0;
+      _recentMatchedAdvanceMeters = 0.0;
+      _lastRollingResetAt = now;
     }
 
-    if (minDistanceToPolyline > 45.0) {
-      _consecutiveOffRouteCount++;
-      if (_consecutiveOffRouteCount >= 2) {
-        _isRerouting = true;
-        VoiceGuidanceService().announceReroute();
-        notifyListeners();
+    final isMatcherStuck = _recentPhysicalTravelMeters >= 30.0 && _recentMatchedAdvanceMeters < 5.0;
 
-        final destination = _activeRoute!.polylinePoints.last;
-        final newRoute = await _directionsService.calculateRoute(location, destination, profile: 'bike');
+    final observation = OffRouteObservation(
+      timestamp: sampleTime,
+      matchedProjectionLateralDistanceMeters: _matchedProjection?.lateralDistanceMeters ?? 0.0,
+      rawPhysicalRouteDistanceMeters: physicalNearest?.lateralDistanceMeters ?? 0.0,
+      horizontalAccuracyMeters: _horizontalAccuracy,
+      speedMetersPerSecond: _currentSpeedKmh / 3.6,
+      courseDegrees: effectiveHeading,
+      routeBearingDegrees: _matchedProjection?.routeBearingDegrees ?? physicalNearest?.routeBearingDegrees,
+      distanceAlongRouteMeters: _displayProgressMeters,
+      physicalTravelMeters: _recentPhysicalTravelMeters,
+      matchedAdvanceMeters: _recentMatchedAdvanceMeters,
+      isMatcherStuck: isMatcherStuck,
+    );
 
-        if (newRoute != null && _isNavigating) {
-          _activeRoute = newRoute;
-          _currentStepIndex = 0;
-          _consecutiveOffRouteCount = 0;
-          _updateRemainingMetrics();
-          _sendCurrentPayloadToEsp32();
-        }
-        _isRerouting = false;
-        notifyListeners();
-      }
-    } else {
-      _consecutiveOffRouteCount = 0;
+    final decision = _offRouteDetector.evaluate(observation);
+    _lastOffRouteDecision = decision;
+
+    if (decision.state == OffRouteState.suspected && suspectedAt == null) {
+      suspectedAt = sampleTime;
+    } else if (decision.state == OffRouteState.onRoute) {
+      suspectedAt = null;
+      confirmedAt = null;
+    }
+
+    if (decision.becameConfirmed || (decision.state == OffRouteState.confirmed && !_isRerouting)) {
+      confirmedAt ??= sampleTime;
+      _triggerValhallaReroute(physicalLocation, sampleTime);
     }
   }
 
-  void _updateRemainingMetrics() {
-    if (_activeRoute == null || _currentLocation == null) return;
+  /// Triggers single-flight Valhalla motorcycle reroute (Sections 32 - 44).
+  /// Route A remains active and continues to progress and trim until Route B succeeds.
+  void _triggerValhallaReroute(LatLng physicalLocation, DateTime requestTime) {
+    if (_isRerouting || !_isNavigating || _navigationDestination == null) {
+      return;
+    }
 
-    final points = _activeRoute!.polylinePoints;
-    if (points.isEmpty) return;
+    _isRerouting = true;
+    _rerouteStatus = 'requesting';
+    requestStartedAt = requestTime;
+    final generation = ++_rerouteGeneration;
 
-    const distanceCalculator = Distance();
+    VoiceGuidanceService().announceReroute();
+    notifyListeners();
 
-    // In simulation mode, polyline progress index is already tracked
-    int closestIdx = _isSimulating ? _simulatedPolylineIndex : 0;
+    _routingService.calculateSingleRoute(
+      physicalLocation,
+      _navigationDestination!,
+      costing: 'motorcycle',
+    ).then((newRoute) {
+      routeReceivedAt = DateTime.now();
 
-    if (!_isSimulating) {
-      // Find the closest polyline point to user location
-      double minDist = double.infinity;
-      for (int i = 0; i < points.length; i++) {
-        final d = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[i]);
-        if (d < minDist) {
-          minDist = d;
-          closestIdx = i;
-        }
+      if (_disposed || !_isNavigating || generation != _rerouteGeneration) {
+        return;
       }
-    }
 
-    // Accumulate actual road polyline distance from closest point to end
-    double polylineDist = 0.0;
-    for (int i = closestIdx; i < points.length - 1; i++) {
-      polylineDist += distanceCalculator.as(LengthUnit.Meter, points[i], points[i + 1]);
-    }
-    final distToClosest = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[closestIdx]);
-    _remainingTotalDistance = distToClosest + polylineDist;
+      if (newRoute != null && newRoute.polylinePoints.length >= 2) {
+        // ATOMIC COMMIT OF ROUTE B (Sections 40, 42)
+        _activeRoute = newRoute;
+        _activeRouteGeometry = RouteGeometry(newRoute.polylinePoints, steps: newRoute.steps);
 
-    // Calculate accurate ETA based on initial route duration proportion
-    final totalMeters = _activeRoute!.totalDistanceMeters;
-    if (totalMeters > 0 && _activeRoute!.totalDurationSeconds > 0) {
-      final ratio = (_remainingTotalDistance / totalMeters).clamp(0.0, 1.0);
-      _remainingEtaMinutes = ((_activeRoute!.totalDurationSeconds / 60.0) * ratio).round().clamp(1, 999);
+        final currentPhys = _acceptedPhysicalLocation ?? physicalLocation;
+        final initProj = _activeRouteGeometry!.matchLocation(currentPhys);
+        _matchedProjection = initProj;
+        _matchedLocation = initProj?.coordinate ?? currentPhys;
+        _rawMatchedProgressMeters = initProj?.distanceAlongRouteMeters ?? 0.0;
+        _displayProgressMeters = _rawMatchedProgressMeters;
+
+        _currentStepIndex = 0;
+        _offRouteDetector.reset();
+        _lastOffRouteDecision = OffRouteDecision(
+          state: OffRouteState.onRoute,
+          becameConfirmed: false,
+          recovered: true,
+          reason: OffRouteReason.none,
+          lateralDistanceMeters: initProj?.lateralDistanceMeters ?? 0.0,
+          activeThresholdMeters: 15.0,
+        );
+        _recentPhysicalTravelMeters = 0.0;
+        _recentMatchedAdvanceMeters = 0.0;
+        _isRerouting = false;
+        _rerouteStatus = 'applied';
+        routeCommittedAt = DateTime.now();
+
+        _updateRemainingMetrics();
+        notifyListeners();
+        _sendCurrentPayloadToEsp32();
+      } else {
+        // Reroute failure: keep Route A active, backoff (Section 43)
+        _isRerouting = false;
+        _rerouteStatus = 'failed';
+        notifyListeners();
+      }
+    }).catchError((_) {
+      if (generation == _rerouteGeneration) {
+        _isRerouting = false;
+        _rerouteStatus = 'failed';
+        notifyListeners();
+      }
+    });
+  }
+
+  void _updateRemainingMetrics() {
+    if (_activeRoute == null) return;
+
+    if (_activeRouteGeometry != null) {
+      _remainingTotalDistance =
+          math.max(0.0, _activeRouteGeometry!.totalDistanceMeters - _displayProgressMeters);
+
+      final totalMeters = _activeRouteGeometry!.totalDistanceMeters;
+      if (totalMeters > 0 && _activeRoute!.totalDurationSeconds > 0) {
+        final ratio = (_remainingTotalDistance / totalMeters).clamp(0.0, 1.0);
+        _remainingEtaMinutes =
+            ((_activeRoute!.totalDurationSeconds / 60.0) * ratio).round().clamp(1, 999);
+      } else {
+        final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 32.0;
+        _remainingEtaMinutes =
+            ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
+      }
     } else {
-      final speed = _currentSpeedKmh > 5 ? _currentSpeedKmh : 32.0;
-      _remainingEtaMinutes = ((_remainingTotalDistance / 1000.0) / speed * 60.0).round().clamp(1, 999);
+      _remainingTotalDistance = _activeRoute!.totalDistanceMeters;
+      _remainingEtaMinutes = (_activeRoute!.totalDurationSeconds / 60.0).round().clamp(1, 999);
     }
   }
 
@@ -437,23 +674,20 @@ class NavigationManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Construct and transmit the payload to ESP32
   void _sendCurrentPayloadToEsp32() {
     _pushNavigationDataToBle();
   }
 
   /// Compute upcoming route waypoints rotated to vehicle heading
-  /// Returns List of [dx, dy] relative to vehicle where forward is +y and right is +x
   List<List<int>> computeUpcomingRoutePoints() {
     final upcomingPts = <List<int>>[];
-    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty || _currentLocation == null) {
+    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty || currentLocation == null) {
       return upcomingPts;
     }
 
-    final curLoc = _currentLocation!;
-    final points = _activeRoute!.polylinePoints;
+    final curLoc = currentLocation!;
+    final points = remainingPolyline.isNotEmpty ? remainingPolyline : _activeRoute!.polylinePoints;
 
-    // 1. Find index of closest waypoint on route to current vehicle location
     int closestIdx = 0;
     double minDistanceSq = double.infinity;
     for (int i = 0; i < points.length; i++) {
@@ -466,17 +700,14 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
-    // 2. Rotate to align with vehicle heading so ahead is always UP on handlebars
     final hRad = effectiveHeading * (math.pi / 180.0);
     final cosH = math.cos(hRad);
     final sinH = math.sin(hRad);
     final cosLat = math.cos(curLoc.latitude * (math.pi / 180.0));
 
-    // Adaptive scale so upcoming maneuver fits perfectly in the upper middle of the display
     final dist = distanceToNextManeuver;
     final scale = dist <= 120 ? 0.70 : (dist <= 300 ? 0.48 : 0.32);
 
-    // Anchor point: Vehicle on the road itself [0, 0]
     final roadAnchor = points[closestIdx];
     upcomingPts.add([0, 0]);
 
@@ -485,16 +716,12 @@ class NavigationManager extends ChangeNotifier {
       final dNorth = (pt.latitude - roadAnchor.latitude) * 111139.0;
       final dEast = (pt.longitude - roadAnchor.longitude) * 111139.0 * cosLat;
 
-      // Coordinate transformation:
-      // xRel (right) = dEast * cos(H) - dNorth * sin(H)
-      // yRel (forward) = dNorth * cos(H) + dEast * sin(H)
       final xRel = dEast * cosH - dNorth * sinH;
       final yRel = dNorth * cosH + dEast * sinH;
 
       final sx = (xRel * scale).round().clamp(-125, 125);
       final sy = (yRel * scale).round().clamp(-125, 125);
 
-      // Only track points advancing forward or sideways, not backwards behind handlebars
       if (sy < -5 && upcomingPts.length > 1) continue;
 
       final last = upcomingPts.last;
@@ -527,8 +754,8 @@ class NavigationManager extends ChangeNotifier {
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _currentStepIndex,
       totalSteps: _activeRoute!.steps.length,
-      latitude: _currentLocation?.latitude,
-      longitude: _currentLocation?.longitude,
+      latitude: currentLocation?.latitude,
+      longitude: currentLocation?.longitude,
       heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
@@ -541,7 +768,6 @@ class NavigationManager extends ChangeNotifier {
     bleService.sendNavPayload(payload);
   }
 
-  /// Transmit preview / standby telemetry to ESP32 so display shows Clock, ysiduc & Song when not navigating
   void sendPreviewPayloadToEsp32() {
     if (!bleService.isConnected && !bleService.isWifiConnected) return;
     final now = DateTime.now();
@@ -556,12 +782,14 @@ class NavigationManager extends ChangeNotifier {
       distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
       totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
       etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
-      streetName: _isNavigating ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '') : 'SAN SANG',
+      streetName: _isNavigating
+          ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '')
+          : 'SAN SANG',
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _isNavigating ? _currentStepIndex : 0,
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
-      latitude: _currentLocation?.latitude,
-      longitude: _currentLocation?.longitude,
+      latitude: currentLocation?.latitude,
+      longitude: currentLocation?.longitude,
       heading: effectiveHeading.round(),
       routePoints: upcomingPts.isNotEmpty ? upcomingPts : null,
       currentClock: curClock,
@@ -578,38 +806,67 @@ class NavigationManager extends ChangeNotifier {
   void stopNavigation() {
     VoiceGuidanceService().resetNavigation();
     _disableBackgroundNavigation();
+    _rerouteGeneration++;
     _isNavigating = false;
     _isSimulating = false;
     _isRerouting = false;
-    _activeRoute = null; // Clear active route so minimap returns to standby mode!
-    _previewRoute = null; // Also clear preview route to completely remove old route
+    _rerouteStatus = 'idle';
+    _activeRoute = null;
+    _previewRoute = null;
+    _activeRouteGeometry = null;
+    _navigationDestination = null;
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
+    _displayProgressMeters = 0.0;
+    _rawMatchedProgressMeters = 0.0;
     _distanceToNextManeuver = 0.0;
     _remainingTotalDistance = 0.0;
     _remainingEtaMinutes = 0;
+    _offRouteDetector.reset();
+
     _positionStream?.cancel();
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();
 
-    // P5.4.1.2 Section 34: Resume lower-power browsing GPS stream when navigation stops
     try {
       final settings = _buildLocationSettings(
         accuracy: LocationAccuracy.medium,
         distanceFilter: 10,
       );
       _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
-        _currentLocation = LatLng(pos.latitude, pos.longitude);
+        _rawLocation = LatLng(pos.latitude, pos.longitude);
+        _acceptedPhysicalLocation = _rawLocation;
         _currentSpeedKmh = pos.speed * 3.6;
         _currentHeading = pos.heading;
+        _horizontalAccuracy = pos.accuracy;
         notifyListeners();
       });
     } catch (_) {}
 
-    // Send standby idle dashboard packet to ESP32
     sendPreviewPayloadToEsp32();
-
     notifyListeners();
+  }
+
+  @visibleForTesting
+  void updatePositionForTesting(
+    LatLng location, {
+    double speedKmh = 30.0,
+    double heading = 0.0,
+    double horizontalAccuracy = 5.0,
+    DateTime? timestamp,
+  }) {
+    updateUserPositionWithAccuracy(
+      location,
+      speedKmh,
+      heading,
+      horizontalAccuracy: horizontalAccuracy,
+      timestamp: timestamp,
+    );
+  }
+
+  @visibleForTesting
+  void triggerRerouteForTesting(LatLng origin, {DateTime? timestamp}) {
+    _triggerValhallaReroute(origin, timestamp ?? DateTime.now());
   }
 
   @override

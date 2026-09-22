@@ -17,7 +17,6 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
 
   final TextEditingController _wifiSsidController = TextEditingController(text: 'iPhone');
   final TextEditingController _wifiPassController = TextEditingController();
-  bool _obscureWifiPass = true;
 
   @override
   void initState() {

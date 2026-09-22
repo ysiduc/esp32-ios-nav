@@ -2,9 +2,20 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../models/route_model.dart';
+import 'routing_service.dart';
 
-class ValhallaService {
+class ValhallaService implements RoutingService {
   // Public Valhalla Server (or your self-hosted server: http://localhost:8002/route)
+
+  @override
+  Future<NavRoute?> calculateSingleRoute(
+    LatLng start,
+    LatLng destination, {
+    String costing = 'motorcycle',
+  }) {
+    return calculateRoute(start, destination, costing: costing);
+  }
+
   static const String _valhallaBaseUrl = 'https://valhalla1.openstreetmap.de';
 
   /// Calculate Turn-by-Turn Route using Valhalla Routing Engine
@@ -73,6 +84,7 @@ class ValhallaService {
         // Maneuver Type code mapping (Valhalla maneuver types 1..38)
         final valhallaType = m['type'] as int? ?? 0;
         final shapeIndex = m['begin_shape_index'] as int? ?? 0;
+        final endShapeIndex = m['end_shape_index'] as int?;
         final coord = (shapeIndex < polylinePoints.length)
             ? polylinePoints[shapeIndex]
             : (polylinePoints.isNotEmpty ? polylinePoints.last : start);
@@ -88,6 +100,8 @@ class ValhallaService {
           coordinate: coord,
           maneuverTypeStr: mappedTypeStr,
           maneuverModifier: _mapValhallaTypeToModifier(valhallaType),
+          beginShapeIndex: shapeIndex,
+          endShapeIndex: endShapeIndex,
         ));
       }
 
