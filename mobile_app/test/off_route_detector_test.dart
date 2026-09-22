@@ -286,5 +286,115 @@ void main() {
       ));
       expect(dec2.state, equals(OffRouteState.confirmed));
     });
+  
+    test('P5.6.1 Gap A Test A: Centerline wrong-way at 0.5m lateral distance confirms off-route after dwell', () {
+      final t0 = baseTime;
+      // Vehicle exactly on centerline (0.5m), but heading opposite (delta = 180°) at 8 m/s
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 0.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec0.state, equals(OffRouteState.suspected));
+      expect(dec0.reason, equals(OffRouteReason.wrongWayDivergence));
+
+      // After 0.9s (> 0.8s dwell)
+      final t1 = t0.add(const Duration(milliseconds: 900));
+      final dec1 = detector.evaluate(OffRouteObservation(
+        timestamp: t1,
+        rawPhysicalRouteDistanceMeters: 0.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec1.state, equals(OffRouteState.confirmed));
+      expect(dec1.becameConfirmed, isTrue);
+      expect(dec1.reason, equals(OffRouteReason.wrongWayDivergence));
+    });
+
+    test('P5.6.1 Gap A Test B: Centerline wrong-way at 1.5m lateral distance and 170° heading delta confirms', () {
+      final t0 = baseTime;
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 1.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 260.0,
+        routeBearingDegrees: 90.0, // 170° difference
+      ));
+      expect(dec0.state, equals(OffRouteState.suspected));
+
+      final t1 = t0.add(const Duration(milliseconds: 900));
+      final dec1 = detector.evaluate(OffRouteObservation(
+        timestamp: t1,
+        rawPhysicalRouteDistanceMeters: 1.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 260.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec1.state, equals(OffRouteState.confirmed));
+    });
+
+    test('P5.6.1 Gap A Test C: Very low speed (0.5 m/s) does NOT fast-confirm wrong-way', () {
+      final t0 = baseTime;
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 0.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 0.5, // Below 3.0 m/s threshold
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec0.state, equals(OffRouteState.onRoute));
+      expect(dec0.reason, equals(OffRouteReason.none));
+    });
+
+    test('P5.6.1 Gap A Test D: Poor GPS accuracy (30m) does NOT fast-confirm wrong-way', () {
+      final t0 = baseTime;
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 0.5,
+        horizontalAccuracyMeters: 30.0, // Poor accuracy > 20m
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+      ));
+      expect(dec0.state, equals(OffRouteState.onRoute));
+      expect(dec0.reason, equals(OffRouteReason.none));
+    });
+
+    test('P5.6.1 Gap A Test E: Legitimate U-turn maneuver zone suppresses wrong-way false reroute', () {
+      final t0 = baseTime;
+      // In planned U-turn zone, heading reverses 180° as expected
+      final dec0 = detector.evaluate(OffRouteObservation(
+        timestamp: t0,
+        rawPhysicalRouteDistanceMeters: 0.5,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+        isPlannedUturnZone: true,
+      ));
+      expect(dec0.state, equals(OffRouteState.onRoute));
+      expect(dec0.reason, equals(OffRouteReason.none));
+
+      // 1 second later, still inside planned U-turn zone
+      final t1 = t0.add(const Duration(seconds: 1));
+      final dec1 = detector.evaluate(OffRouteObservation(
+        timestamp: t1,
+        rawPhysicalRouteDistanceMeters: 0.8,
+        horizontalAccuracyMeters: 4.0,
+        speedMetersPerSecond: 8.0,
+        courseDegrees: 270.0,
+        routeBearingDegrees: 90.0,
+        isPlannedUturnZone: true,
+      ));
+      expect(dec1.state, equals(OffRouteState.onRoute));
+    });
   });
 }

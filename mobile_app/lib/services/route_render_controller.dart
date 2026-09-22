@@ -63,6 +63,11 @@ class RouteRenderController {
   int _lastRenderedPointsCount = 0;
   int get lastRenderedPointsCount => _lastRenderedPointsCount;
 
+  int _lastRenderedAltPointsCount = 0;
+  int get lastRenderedAltPointsCount => _lastRenderedAltPointsCount;
+
+  bool get hasPendingRequest => _pendingRequest != null;
+
   LatLng? _lastRenderedStartCoord;
   LatLng? get lastRenderedStartCoord => _lastRenderedStartCoord;
 
@@ -82,12 +87,16 @@ class RouteRenderController {
     required int routeRevision,
     required RoutePresentationMode mode,
     required List<LatLng> points,
+    List<List<LatLng>> altPoints = const [],
     bool forceRedraw = false,
   }) {
     if (forceRedraw) return true;
-    // Section 7: Route revision change must ALWAYS trigger update
+    // Route revision change must ALWAYS trigger update
     if (routeRevision != _lastRenderedRouteRevision) return true;
     if (mode != _lastRenderedMode) return true;
+
+    final altCount = altPoints.fold<int>(0, (sum, l) => sum + l.length);
+    if (altCount != _lastRenderedAltPointsCount) return true;
 
     if (points.isEmpty) {
       return _lastRenderedPointsCount > 0;
@@ -118,6 +127,7 @@ class RouteRenderController {
       routeRevision: routeRevision,
       mode: mode,
       points: mainPoints,
+      altPoints: altPoints,
       forceRedraw: forceRedraw,
     )) {
       return;
@@ -152,11 +162,6 @@ class RouteRenderController {
       try {
         await _drawer.clearLines();
 
-        // If superseded while clearing lines, abort drawing stale lines
-        if (req.generation < _latestSubmittedGeneration) {
-          continue;
-        }
-
         if (req.mode == RoutePresentationMode.navigating) {
           if (req.mainPoints.length >= 2) {
             final sec = req.altPoints.isNotEmpty ? req.altPoints.first : null;
@@ -174,7 +179,8 @@ class RouteRenderController {
           }
         }
 
-        // Check again if superseded while drawing
+        // P5.6.1 Section 8: Render transaction is an atomic unit (clearLines + drawActiveRoute).
+        // Check if superseded during the transaction. If so, loop continues to execute newest request.
         if (req.generation < _latestSubmittedGeneration) {
           continue;
         }
@@ -183,6 +189,7 @@ class RouteRenderController {
         _lastRenderedRouteRevision = req.routeRevision;
         _lastRenderedMode = req.mode;
         _lastRenderedPointsCount = req.mainPoints.length;
+        _lastRenderedAltPointsCount = req.altPoints.fold<int>(0, (sum, l) => sum + l.length);
         _lastRenderedStartCoord = req.mainPoints.isNotEmpty ? req.mainPoints.first : null;
         _renderCount++;
       } catch (_) {
@@ -205,6 +212,7 @@ class RouteRenderController {
     _lastRenderedRouteRevision = -1;
     _lastRenderedMode = RoutePresentationMode.none;
     _lastRenderedPointsCount = 0;
+    _lastRenderedAltPointsCount = 0;
     _lastRenderedStartCoord = null;
     _pendingRequest = null;
   }

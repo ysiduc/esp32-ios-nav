@@ -458,7 +458,7 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     await _routeRenderController.submitRequest(
-      routeRevision: navManager.routeRevision,
+      routeRevision: navManager.renderRevision,
       mode: mode,
       mainPoints: mainPoints,
       altPoints: altPoints,
@@ -1659,8 +1659,9 @@ class _MapScreenState extends State<MapScreen> {
             Text('Step: #${navManager.authoritativeCurrentManeuver?.stepIndex ?? 0} (${navManager.authoritativeCurrentManeuver?.maneuverType.name ?? "none"})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
             Text('Modifier: ${navManager.authoritativeCurrentManeuver?.maneuverModifier ?? "none"}', style: const TextStyle(fontSize: 11)),
             Text('Heading Δ: ${navManager.headingDeltaVsRouteDegrees?.toStringAsFixed(0) ?? "--"}° (WrongWay: ${navManager.isWrongWayDivergence ? "YES" : "NO"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: navManager.isWrongWayDivergence ? Colors.red : Colors.black87)),
-            Text('Secondary route: ${navManager.secondaryPolyline.isNotEmpty ? "YES" : "NO"}', style: const TextStyle(fontSize: 11)),
-            Text('Renders count: ${_routeRenderController.renderCount}', style: const TextStyle(fontSize: 11)),
+            Text('Primary: gen ${navManager.rerouteGeneration} (${navManager.rerouteStatus})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Secondary: gen ${navManager.secondaryRerouteGeneration} (${navManager.secondaryRerouteStatus}, active: ${navManager.secondaryPolyline.isNotEmpty ? "YES" : "NO"})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Render: ${_routeRenderController.latestSubmittedGeneration}s/${_routeRenderController.latestCommittedGeneration}c (pending: ${_routeRenderController.hasPendingRequest ? "YES" : "NO"}, renders: ${_routeRenderController.renderCount})', style: const TextStyle(fontSize: 11)),
             Text('Physical route dist: ${physicalRouteDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
             Text('Matched lateral: ${matchedLateralDist.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
             Text('Progress: ${navManager.displayProgressMeters.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11)),

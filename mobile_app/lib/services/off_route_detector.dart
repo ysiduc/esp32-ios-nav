@@ -13,6 +13,7 @@ class OffRouteObservation {
   final double physicalTravelMeters;
   final double matchedAdvanceMeters;
   final bool isMatcherStuck;
+  final bool isPlannedUturnZone;
 
   double get lateralDistanceMeters => matchedProjectionLateralDistanceMeters;
   double get rawNearestRouteDistanceMeters => rawPhysicalRouteDistanceMeters;
@@ -29,6 +30,7 @@ class OffRouteObservation {
     this.physicalTravelMeters = 0.0,
     this.matchedAdvanceMeters = 0.0,
     this.isMatcherStuck = false,
+    this.isPlannedUturnZone = false,
   });
 }
 
@@ -156,18 +158,20 @@ class OffRouteDetector {
         ? angularDifferenceDegrees(observation.courseDegrees!, observation.routeBearingDegrees!)
         : null;
 
-    final isWrongWay = diffAngle != null &&
+    final isWrongWay = !observation.isPlannedUturnZone &&
+        diffAngle != null &&
         diffAngle >= config.wrongWayMismatchAngleDegrees &&
-        observation.horizontalAccuracyMeters <= 20.0;
+        observation.horizontalAccuracyMeters <= 20.0 &&
+        observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond;
 
     switch (_state) {
       case OffRouteState.onRoute:
         bool suspicionTriggered = false;
         OffRouteReason initialReason = OffRouteReason.none;
 
-        // Signal W: Wrong-way movement fast track (P5.6 Section 3)
-        // User moving opposite to route bearing escalates even inside corridor (>= 3m)
-        if (isWrongWay && physicalDistance >= 3.0) {
+        // Signal W: Wrong-way movement fast track (P5.6.1 Gap A)
+        // User moving opposite to route bearing escalates even directly on centerline (< 3m)
+        if (isWrongWay) {
           suspicionTriggered = true;
           initialReason = OffRouteReason.wrongWayDivergence;
         }
@@ -347,8 +351,9 @@ class OffRouteDetector {
     required double moderateThreshold,
     required double enterThreshold,
   }) {
-    // 0. Wrong-way fast track (P5.6 Section 3: angle >= 120 deg while moving)
-    if (observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
+    // 0. Wrong-way fast track (P5.6.1 Gap A: angle >= 120 deg while moving, not in U-turn zone)
+    if (!observation.isPlannedUturnZone &&
+        observation.speedMetersPerSecond >= config.minSpeedForCourseMetersPerSecond &&
         observation.horizontalAccuracyMeters <= 20.0 &&
         observation.courseDegrees != null &&
         observation.courseDegrees! >= 0.0 &&

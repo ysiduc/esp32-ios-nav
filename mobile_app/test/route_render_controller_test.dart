@@ -86,7 +86,7 @@ void main() {
       expect(drawer.lastDrawnActivePolyline, route1);
     });
 
-    test('Stale render race: Gen 1 in clearLines, Gen 2 requested -> Gen 1 draw aborted, Gen 2 commits', () async {
+    test('P5.6.1 Section 8: Render transaction is atomic unit: Gen 1 clears and draws without mid-channel abort, Gen 2 commits', () async {
       final drawer = MockMapLineDrawer();
       drawer.clearDelay = const Duration(milliseconds: 50);
       final controller = RouteRenderController(drawer);
@@ -121,11 +121,10 @@ void main() {
 
       await Future.wait([fut1, fut2]);
 
-      // Gen 1 detected it was superseded (gen 1 < latestSubmitted 2), so drawActiveRoute was NOT called for Gen 1.
-      // Gen 2 executed and committed.
+      // Under atomic render transaction, Gen 1 draws its lines rather than leaving map blank, Gen 2 commits newest state.
       expect(controller.latestCommittedGeneration, 2);
       expect(drawer.lastDrawnActivePolyline, route2);
-      expect(drawer.drawActiveRouteCallCount, 1); // Only Gen 2 drew lines!
+      expect(drawer.drawActiveRouteCallCount, 2);
     });
 
     test('Coalescing intermediate states: Updates 1, 2, 3 in rapid succession -> only latest update 3 runs', () async {
@@ -398,6 +397,137 @@ void main() {
       expect(controller.isRendering, isFalse);
       expect(controller.latestCommittedGeneration, 10);
       expect(drawer.lastDrawnActivePolyline.first.latitude, closeTo(21.0009, 0.00001));
+    });
+  
+    test('P5.6.1 Section 9 Scenario A: High platform latency (clear 180ms, draw 120ms) with 100ms GPS does not starve', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.clearDelay = const Duration(milliseconds: 18); // Scaled 10x for fast CI test execution
+      drawer.drawDelay = const Duration(milliseconds: 12);
+      final controller = RouteRenderController(drawer);
+
+      final futures = <Future<void>>[];
+      for (int i = 1; i <= 20; i++) {
+        final pts = [
+          LatLng(21.0 + i * 0.0001, 105.0 + i * 0.0001),
+          const LatLng(21.05, 105.05),
+        ];
+        futures.add(controller.submitRequest(
+          routeRevision: 1,
+          mode: RoutePresentationMode.navigating,
+          mainPoints: pts,
+        ));
+        await Future.delayed(const Duration(milliseconds: 10));
+      }
+
+      await Future.wait(futures);
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.hasPendingRequest, isFalse);
+      expect(drawer.drawActiveRouteCallCount, greaterThanOrEqualTo(2), reason: 'Must not be starved into 0 draws');
+      expect(controller.latestCommittedGeneration, 20);
+      expect(drawer.lastDrawnActivePolyline.first.latitude, closeTo(21.0020, 0.00001));
+    });
+
+    test('P5.6.1 Section 9 Scenario B: Update every 25ms (clear 30ms, draw 20ms) avoids endless clear loop', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.clearDelay = const Duration(milliseconds: 30);
+      drawer.drawDelay = const Duration(milliseconds: 20);
+      final controller = RouteRenderController(drawer);
+
+      final futures = <Future<void>>[];
+      for (int i = 1; i <= 10; i++) {
+        final pts = [
+          LatLng(21.0 + i * 0.0002, 105.0 + i * 0.0002),
+          const LatLng(21.05, 105.05),
+        ];
+        futures.add(controller.submitRequest(
+          routeRevision: 1,
+          mode: RoutePresentationMode.navigating,
+          mainPoints: pts,
+        ));
+        await Future.delayed(const Duration(milliseconds: 25));
+      }
+
+      await Future.wait(futures);
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.hasPendingRequest, isFalse);
+      expect(drawer.drawActiveRouteCallCount, greaterThanOrEqualTo(2));
+      expect(controller.latestCommittedGeneration, 10);
+      expect(drawer.lastDrawnActivePolyline.first.latitude, closeTo(21.0020, 0.00001));
+    });
+
+    test('P5.6.1 Section 9 Scenario C: Stop navigation during active render leaves map cleanly empty', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.clearDelay = const Duration(milliseconds: 40);
+      drawer.drawDelay = const Duration(milliseconds: 40);
+      drawer.onDrawStarted = Completer<void>();
+      final controller = RouteRenderController(drawer);
+
+      final pts = [
+        const LatLng(21.0, 105.0),
+        const LatLng(21.05, 105.05),
+      ];
+
+      final f1 = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: pts,
+      );
+
+      await drawer.onDrawStarted!.future;
+
+      // User cancels navigation during draw
+      controller.reset();
+      final f2 = controller.submitRequest(
+        routeRevision: 2,
+        mode: RoutePresentationMode.none,
+        mainPoints: [],
+        forceRedraw: true,
+      );
+
+      await Future.wait([f1, f2]);
+
+      expect(controller.isRendering, isFalse);
+      expect(controller.lastRenderedMode, RoutePresentationMode.none);
+      expect(controller.lastRenderedPointsCount, 0);
+    });
+
+    test('P5.6.1 Section 10: Primary unchanged, secondary async result arrives triggers immediate redraw', () async {
+      final drawer = MockMapLineDrawer();
+      final controller = RouteRenderController(drawer);
+
+      final primary = [
+        const LatLng(21.0, 105.0),
+        const LatLng(21.1, 105.1),
+      ];
+
+      // Initial render: Primary only (Secondary null / empty)
+      await controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: primary,
+        altPoints: [],
+      );
+
+      expect(drawer.drawActiveRouteCallCount, 1);
+      expect(drawer.lastDrawnSecondaryPolyline, isNull);
+
+      // Async secondary arrives later: primary points identical, but altPoints has secondary
+      final secondary = [
+        const LatLng(21.0, 105.0),
+        const LatLng(21.02, 105.02),
+      ];
+
+      await controller.submitRequest(
+        routeRevision: 2, // renderRevision bumped
+        mode: RoutePresentationMode.navigating,
+        mainPoints: primary,
+        altPoints: [secondary],
+      );
+
+      expect(drawer.drawActiveRouteCallCount, 2, reason: 'Must redraw when secondary route arrives');
+      expect(drawer.lastDrawnSecondaryPolyline, equals(secondary));
     });
   });
 }

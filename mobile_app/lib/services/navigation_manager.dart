@@ -54,6 +54,9 @@ class NavigationManager extends ChangeNotifier {
   OffRouteDecision? _lastOffRouteDecision;
   int _rerouteGeneration = 0;
   String _rerouteStatus = 'idle'; // idle, requesting, applied, failed
+  int _secondaryRerouteGeneration = 0;
+  String _secondaryRerouteStatus = 'none'; // none, requesting, applied, fallback, failed
+  int _secondaryRouteRevision = 0;
 
   // Reroute Latency Diagnostics (P5.5 Section 66 & P5.5.2)
   DateTime? suspectedAt;
@@ -98,6 +101,10 @@ class NavigationManager extends ChangeNotifier {
   // Route revision & generation (P5.5.1 Section 7)
   int _routeRevision = 0;
   int get routeRevision => _routeRevision;
+  int get secondaryRerouteGeneration => _secondaryRerouteGeneration;
+  String get secondaryRerouteStatus => _secondaryRerouteStatus;
+  int get secondaryRouteRevision => _secondaryRouteRevision;
+  int get renderRevision => _routeRevision + _secondaryRouteRevision;
 
   DateTime? _lastLocationUpdateAt;
 
@@ -643,6 +650,21 @@ class NavigationManager extends ChangeNotifier {
 
     final isMatcherStuck = _recentPhysicalTravelMeters >= 30.0 && _recentMatchedAdvanceMeters < 5.0;
 
+    bool isPlannedUturnZone = false;
+    final curManeuver = authoritativeCurrentManeuver;
+    if (curManeuver != null) {
+      final mType = curManeuver.maneuverType.name.toLowerCase();
+      final mTypeStr = curManeuver.maneuverTypeStr.toLowerCase();
+      final mMod = (curManeuver.maneuverModifier ?? '').toLowerCase();
+      if (mType.contains('u-turn') || mType.contains('uturn') ||
+          mTypeStr.contains('u-turn') || mTypeStr.contains('uturn') ||
+          mMod.contains('u-turn') || mMod.contains('uturn')) {
+        if (_distanceToNextManeuver <= 70.0) {
+          isPlannedUturnZone = true;
+        }
+      }
+    }
+
     final observation = OffRouteObservation(
       timestamp: sampleTime,
       matchedProjectionLateralDistanceMeters: _matchedProjection?.lateralDistanceMeters ?? 0.0,
@@ -655,6 +677,7 @@ class NavigationManager extends ChangeNotifier {
       physicalTravelMeters: _recentPhysicalTravelMeters,
       matchedAdvanceMeters: _recentMatchedAdvanceMeters,
       isMatcherStuck: isMatcherStuck,
+      isPlannedUturnZone: isPlannedUturnZone,
     );
 
     final decision = _offRouteDetector.evaluate(observation);
@@ -694,6 +717,90 @@ class NavigationManager extends ChangeNotifier {
 
   /// Triggers single-flight Valhalla motorcycle reroute (Sections 32 - 44).
   /// Route A remains active and continues to progress and trim until Route B succeeds.
+  /// Asynchronously calculates secondary rejoin route from vehicle to old route (P5.6.1 Sections 4 - 6).
+  /// Primary route direct-to-destination NEVER waits for secondary.
+  void _calculateSecondaryRejoin(LatLng physicalLocation, List<LatLng> oldRemaining) {
+    if (oldRemaining.length < 2) {
+      _secondaryRerouteStatus = 'none';
+      return;
+    }
+
+    final secGen = ++_secondaryRerouteGeneration;
+    _secondaryRerouteStatus = 'requesting';
+
+    // Find candidate rejoin point on old remaining route (~80-150m ahead of vehicle)
+    int rejoinIndex = 0;
+    double accumulated = 0.0;
+    const distCalc = Distance();
+    for (int i = 0; i < oldRemaining.length - 1; i++) {
+      accumulated += distCalc.as(LengthUnit.Meter, oldRemaining[i], oldRemaining[i + 1]);
+      if (accumulated >= 80.0) {
+        rejoinIndex = i + 1;
+        break;
+      }
+    }
+    if (rejoinIndex == 0 && oldRemaining.length > 2) {
+      rejoinIndex = oldRemaining.length ~/ 2;
+    }
+
+    if (rejoinIndex >= oldRemaining.length - 1) {
+      // Rejoin candidate reached the end/destination; keep remaining geometry as reference without redundant network call
+      _secondaryRoute = NavRoute(
+        totalDistanceMeters: 0,
+        totalDurationSeconds: 0,
+        polylinePoints: oldRemaining,
+        steps: const [],
+        summary: 'Lộ trình cũ',
+      );
+      _secondaryRerouteStatus = 'fallback';
+      _secondaryRouteRevision++;
+      return;
+    }
+
+    final rejoinTarget = oldRemaining[rejoinIndex];
+
+    _routingService.calculateSingleRoute(
+      physicalLocation,
+      rejoinTarget,
+      costing: 'motorcycle',
+    ).then((rejoinRoute) {
+      if (_disposed || !_isNavigating || secGen != _secondaryRerouteGeneration) {
+        return;
+      }
+
+      if (rejoinRoute != null && rejoinRoute.polylinePoints.length >= 2) {
+        final remainingTail = oldRemaining.sublist(math.min(rejoinIndex, oldRemaining.length - 1));
+        final combinedPoints = <LatLng>[
+          ...rejoinRoute.polylinePoints,
+          ...remainingTail,
+        ];
+
+        _secondaryRoute = NavRoute(
+          totalDistanceMeters: rejoinRoute.totalDistanceMeters,
+          totalDurationSeconds: rejoinRoute.totalDurationSeconds,
+          polylinePoints: combinedPoints,
+          steps: const [],
+          summary: 'Đường nối về lộ trình cũ',
+        );
+        _secondaryRerouteStatus = 'applied';
+        _secondaryRouteRevision++;
+        notifyListeners();
+      } else {
+        // Fallback: preserve old remaining route
+        _secondaryRerouteStatus = 'fallback';
+        _secondaryRouteRevision++;
+        notifyListeners();
+      }
+    }).catchError((_) {
+      if (_disposed || !_isNavigating || secGen != _secondaryRerouteGeneration) {
+        return;
+      }
+      _secondaryRerouteStatus = 'failed';
+      _secondaryRouteRevision++;
+      notifyListeners();
+    });
+  }
+
   void _triggerValhallaReroute(LatLng physicalLocation, DateTime requestTime) {
     if (_isRerouting || !_isNavigating || _navigationDestination == null) {
       return;
@@ -706,6 +813,9 @@ class NavigationManager extends ChangeNotifier {
 
     VoiceGuidanceService().announceReroute();
     notifyListeners();
+
+    // Snapshot old remaining route for secondary rejoin calculation (P5.6.1 Gap B)
+    final frozenOldRemaining = List<LatLng>.from(remainingPolyline);
 
     _routingService.calculateSingleRoute(
       physicalLocation,
@@ -721,23 +831,27 @@ class NavigationManager extends ChangeNotifier {
       if (newRoute != null && newRoute.polylinePoints.length >= 2) {
         routeReceivedAt = completionTime;
 
-        // P5.6 BUG F: Preserve remaining portion of old route as secondary reference route
-        if (_activeRoute != null && _activeRouteGeometry != null) {
+        // ATOMIC COMMIT OF ROUTE B (Sections 40, 42) - PRIMARY ALWAYS WINS (Section 6)
+        final currentPhys = _acceptedPhysicalLocation ?? physicalLocation;
+        _activeRoute = newRoute;
+
+        // Initialize secondary route with old remaining and launch async rejoin (P5.6.1 Sections 4 - 6)
+        if (frozenOldRemaining.length >= 2) {
           _secondaryRoute = NavRoute(
-            totalDistanceMeters: _activeRoute!.totalDistanceMeters,
-            totalDurationSeconds: _activeRoute!.totalDurationSeconds,
-            polylinePoints: remainingPolyline,
+            totalDistanceMeters: 0,
+            totalDurationSeconds: 0,
+            polylinePoints: frozenOldRemaining,
             steps: const [],
             summary: 'Lộ trình cũ',
           );
+          _secondaryRouteRevision++;
+          _calculateSecondaryRejoin(currentPhys, frozenOldRemaining);
+        } else {
+          _secondaryRoute = null;
+          _secondaryRerouteStatus = 'none';
         }
-
-        // ATOMIC COMMIT OF ROUTE B (Sections 40, 42)
-        _activeRoute = newRoute;
         _activeRouteGeometry = RouteGeometry(newRoute.polylinePoints, steps: newRoute.steps);
         _routeRevision++; // P5.5.1 Section 7: Force map screen to refresh Route B immediately
-
-        final currentPhys = _acceptedPhysicalLocation ?? physicalLocation;
         final initProj = _activeRouteGeometry!.matchLocation(currentPhys);
         _matchedProjection = initProj;
         _matchedLocation = initProj?.coordinate ?? currentPhys;
@@ -960,7 +1074,9 @@ class NavigationManager extends ChangeNotifier {
     VoiceGuidanceService().resetNavigation();
     _disableBackgroundNavigation();
     _rerouteGeneration++;
+    _secondaryRerouteGeneration++;
     _routeRevision++;
+    _secondaryRouteRevision++;
     _rerouteRetryCount = 0;
     _lastRerouteFailureAt = null;
     _lastLocationUpdateAt = null;
@@ -968,6 +1084,7 @@ class NavigationManager extends ChangeNotifier {
     _isSimulating = false;
     _isRerouting = false;
     _rerouteStatus = 'idle';
+    _secondaryRerouteStatus = 'none';
     _activeRoute = null;
     _previewRoute = null;
     _secondaryRoute = null;

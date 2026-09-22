@@ -14,8 +14,11 @@ class MockRoutingService implements RoutingService {
   LatLng? lastStart;
   LatLng? lastDestination;
   Completer<NavRoute?>? pendingCompleter;
+  Completer<NavRoute?>? primaryCompleter;
+  Completer<NavRoute?>? secondaryCompleter;
 
   NavRoute? nextRouteToReturn;
+  NavRoute? secondaryRouteToReturn;
 
   @override
   Future<NavRoute?> calculateSingleRoute(
@@ -28,6 +31,16 @@ class MockRoutingService implements RoutingService {
     lastStart = start;
     lastDestination = destination;
 
+    final isDest = (destination.latitude == 21.000 && destination.longitude == 105.810);
+    if (isDest && primaryCompleter != null) {
+      return primaryCompleter!.future;
+    }
+    if (!isDest && secondaryCompleter != null) {
+      return secondaryCompleter!.future;
+    }
+    if (!isDest && secondaryRouteToReturn != null) {
+      return Future.value(secondaryRouteToReturn);
+    }
     if (pendingCompleter != null) {
       return pendingCompleter!.future;
     }
@@ -775,6 +788,167 @@ void main() {
       expect(navManager.authoritativeCurrentManeuver, isNull);
       expect(navManager.authoritativeCurrentManeuver, isNull);
       expect(navManager.bannerInstruction, equals('Tiếp tục đi thẳng'));
+    });
+  
+    final multiRoute = NavRoute(
+      totalDistanceMeters: 1000.0,
+      totalDurationSeconds: 120.0,
+      polylinePoints: [
+        startCoord,
+        const LatLng(21.000, 105.803),
+        const LatLng(21.000, 105.806),
+        destCoord,
+      ],
+      steps: [],
+      summary: 'Multi route A',
+    );
+
+    test('P5.6.1 Gap B & Section 5: Secondary rejoin route connects vehicle to old route and updates secondaryPolyline', () async {
+      navManager.startNavigation(multiRoute);
+
+      final primComp = Completer<NavRoute?>();
+      final secComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+      mockRouter.secondaryCompleter = secComp;
+
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      expect(mockRouter.callCount, equals(1), reason: 'Primary request launched first');
+
+      // Primary Route B direct to destination arrives
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Lộ trình mới B',
+            streetName: 'Đường B',
+            distanceMeters: 700.0,
+            durationSeconds: 80.0,
+            coordinate: vehiclePos,
+            maneuverTypeStr: 'depart',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+        ],
+        summary: 'Primary Route B',
+      );
+
+      primComp.complete(routeB);
+      await pumpEventQueue();
+
+      // Primary commits immediately; secondary rejoin launched in background
+      expect(navManager.activeRoute, equals(routeB));
+      expect(mockRouter.callCount, equals(2), reason: 'Secondary rejoin request launched on commit');
+      expect(navManager.secondaryRerouteStatus, equals('requesting'));
+
+      // Secondary rejoin arrives connecting vehiclePos to rejoin point on route A
+      final rejoinTarget = LatLng(21.000, 105.805);
+      final rejoinRoute = NavRoute(
+        totalDistanceMeters: 150.0,
+        totalDurationSeconds: 20.0,
+        polylinePoints: [vehiclePos, const LatLng(21.0002, 105.804), rejoinTarget],
+        steps: [],
+        summary: 'Rejoin path',
+      );
+
+      secComp.complete(rejoinRoute);
+      await pumpEventQueue();
+
+      // Secondary route updated to start from vehicle
+      expect(navManager.secondaryRerouteStatus, equals('applied'));
+      expect(navManager.secondaryPolyline.first, equals(vehiclePos));
+      expect(navManager.secondaryPolyline.contains(destCoord), isTrue);
+      // Primary is unchanged!
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.bannerInstruction, equals('Lộ trình mới B'));
+    });
+
+    test('P5.6.1 Gap B: Secondary rejoin failure falls back to old remaining route without breaking primary', () async {
+      navManager.startNavigation(multiRoute);
+
+      final primComp = Completer<NavRoute?>();
+      final secComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+      mockRouter.secondaryCompleter = secComp;
+
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [],
+        summary: 'Route B',
+      );
+
+      primComp.complete(routeB);
+      await pumpEventQueue();
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.secondaryRerouteStatus, equals('requesting'));
+
+      // Rejoin route calculation returns null (e.g. no viable rejoin path)
+      secComp.complete(null);
+      await pumpEventQueue();
+
+      expect(navManager.secondaryRerouteStatus, equals('fallback'));
+      expect(navManager.secondaryPolyline.isNotEmpty, isTrue);
+      expect(navManager.activeRoute, equals(routeB));
+    });
+
+    test('P5.6.1 Section 11: Cancel navigation invalidates pending secondary request and prevents late restoration', () async {
+      navManager.startNavigation(multiRoute);
+
+      final primComp = Completer<NavRoute?>();
+      final secComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+      mockRouter.secondaryCompleter = secComp;
+
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [],
+        summary: 'Route B',
+      );
+      primComp.complete(routeB);
+      await pumpEventQueue();
+
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.secondaryRerouteStatus, equals('requesting'));
+
+      // User cancels navigation while secondary is in-flight
+      navManager.stopNavigation();
+
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+      expect(navManager.secondaryRoute, isNull);
+      expect(navManager.secondaryPolyline, isEmpty);
+
+      // Late secondary response arrives after cancellation
+      final lateRejoinRoute = NavRoute(
+        totalDistanceMeters: 200,
+        totalDurationSeconds: 30,
+        polylinePoints: [vehiclePos, const LatLng(21.0, 105.805)],
+        steps: [],
+        summary: 'Late rejoin',
+      );
+      secComp.complete(lateRejoinRoute);
+      await pumpEventQueue();
+
+      // Generation guard ensures late response is discarded and state remains completely empty
+      expect(navManager.isNavigating, isFalse);
+      expect(navManager.activeRoute, isNull);
+      expect(navManager.secondaryRoute, isNull);
+      expect(navManager.secondaryPolyline, isEmpty);
+      expect(navManager.secondaryRerouteStatus, equals('none'));
     });
   });
 }
