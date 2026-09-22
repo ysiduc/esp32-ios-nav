@@ -431,7 +431,7 @@ void main() {
       AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('native-blur-fallback');
     });
 
-    testWidgets('Live Reduce Transparency switch dynamically rebuilds AppGlassSurface without parent rebuild', (tester) async {
+    testWidgets('Live Reduce Transparency switch dynamically rebuilds AppGlassSurface and NativeGlassHostLayer', (tester) async {
       // Force iOS environment with Reduce Transparency OFF initially
       AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
       AppGlassBackend.forceBackendForTesting = null;
@@ -440,31 +440,36 @@ void main() {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: AppGlassSurface(
-              radius: 20.0,
-              child: Text('Live Accessibility Content'),
+            body: Stack(
+              children: [
+                NativeGlassHostLayer(),
+                AppGlassSurface(
+                  radius: 20.0,
+                  child: Text('Live Accessibility Content'),
+                ),
+              ],
             ),
           ),
         ),
       );
 
-      // Initial state: Reduce Transparency OFF -> real native UiKitView exists
+      // Initial state: Reduce Transparency OFF -> real native host UiKitView exists
       expect(find.text('Live Accessibility Content'), findsOneWidget);
       expect(find.byType(UiKitView), findsOneWidget);
       expect(find.byType(BackdropFilter), findsNothing);
 
-      // User enables Reduce Transparency in iOS Settings -> notification triggers onReduceTransparencyChanged
+      // User enables Reduce Transparency in iOS Settings
       AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
-      await tester.pump(); // No pumpWidget! Direct rebuild via ListenableBuilder (P5.7.2 Part A & B)
+      await tester.pump();
 
-      // UiKitView and BackdropFilter are removed, opaque high-contrast surface renders
+      // UiKitView is unmounted and opaque high-contrast surface renders
       expect(find.byType(UiKitView), findsNothing);
       expect(find.byType(BackdropFilter), findsNothing);
       expect(find.text('Live Accessibility Content'), findsOneWidget);
 
-      // User disables Reduce Transparency -> returns to real native UiKitView
+      // User disables Reduce Transparency -> returns to real native host UiKitView
       AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
-      await tester.pump(); // No pumpWidget!
+      await tester.pump();
 
       expect(find.byType(UiKitView), findsOneWidget);
       expect(find.byType(BackdropFilter), findsNothing);
@@ -499,34 +504,43 @@ void main() {
       expect(AppGlassBackend.currentName(capturedContext), equals('native-blur-fallback'));
     });
 
-    testWidgets('iOS native backend creates real UiKitView with plugins.ysiduc.com/native_glass and correct params', (tester) async {
+    testWidgets('Single host architecture: NativeGlassHostLayer mounts ONE plugins.ysiduc.com/native_glass_host and surfaces register geometry', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeBlurFallback;
 
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: AppGlassSurface(
-              variant: AppGlassVariant.prominent,
-              radius: 28.0,
-              isSelected: true,
-              child: Text('Native Glass Content'),
+            body: Stack(
+              children: [
+                NativeGlassHostLayer(),
+                AppGlassSurface(
+                  surfaceId: 'test_surf_1',
+                  variant: AppGlassVariant.prominent,
+                  radius: 28.0,
+                  isSelected: true,
+                  child: Text('Native Glass Content'),
+                ),
+              ],
             ),
           ),
         ),
       );
+      await tester.pumpAndSettle();
 
       expect(find.text('Native Glass Content'), findsOneWidget);
       expect(find.byType(UiKitView), findsOneWidget);
-      expect(find.byType(BackdropFilter), findsNothing);
 
       final uikitFinder = find.byType(UiKitView);
       final UiKitView uikitView = tester.widget<UiKitView>(uikitFinder);
-      expect(uikitView.viewType, equals('plugins.ysiduc.com/native_glass'));
+      expect(uikitView.viewType, equals('plugins.ysiduc.com/native_glass_host'));
 
-      final params = uikitView.creationParams as Map<dynamic, dynamic>;
-      expect(params['variant'], equals('prominent'));
-      expect(params['radius'], equals(28.0));
-      expect(params['isSelected'], isTrue);
+      // Check registered surface in controller
+      expect(NativeGlassHostController.instance.surfaces.containsKey('test_surf_1'), isTrue);
+      final surf = NativeGlassHostController.instance.surfaces['test_surf_1']!;
+      expect(surf.radius, equals(28.0));
+      expect(surf.variant, equals('prominent'));
+      expect(surf.isSelected, isTrue);
     });
 
     testWidgets('Unsupported platforms and default testing environment use Flutter BackdropFilter fallback', (tester) async {
@@ -639,31 +653,36 @@ void main() {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: AppGlassSurface(
-              variant: AppGlassVariant.prominent,
-              radius: 24,
-              child: Row(
-                children: [
-                  AppGlassSurface(
-                    variant: AppGlassVariant.clear,
-                    radius: 24,
-                    width: 48,
-                    height: 48,
-                    child: Center(
-                      child: Icon(Icons.turn_left_rounded, color: Colors.white, size: 28),
-                    ),
-                  ),
-                  SizedBox(width: 14),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+            body: Stack(
+              children: [
+                NativeGlassHostLayer(),
+                AppGlassSurface(
+                  variant: AppGlassVariant.prominent,
+                  radius: 24,
+                  child: Row(
                     children: [
-                      Text('Trong 209 m'),
-                      Text('Rẽ trái vào Lê Lợi'),
+                      AppGlassSurface(
+                        variant: AppGlassVariant.clear,
+                        radius: 24,
+                        width: 48,
+                        height: 48,
+                        child: Center(
+                          child: Icon(Icons.turn_left_rounded, color: Colors.white, size: 28),
+                        ),
+                      ),
+                      SizedBox(width: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Trong 209 m'),
+                          Text('Rẽ trái vào Lê Lợi'),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -672,8 +691,8 @@ void main() {
       expect(find.text('Trong 209 m'), findsOneWidget);
       expect(find.text('Rẽ trái vào Lê Lợi'), findsOneWidget);
       expect(find.byIcon(Icons.turn_left_rounded), findsOneWidget);
-      // Outermost container is a native UiKitView
-      expect(find.byType(UiKitView), findsNWidgets(2));
+      // Exactly ONE native host UiKitView for the whole stack! Zero per-surface platform views (P5.8.1)
+      expect(find.byType(UiKitView), findsOneWidget);
     });
 
     testWidgets('Navigation cancel button properly invokes teardown with danger glass styling', (tester) async {
@@ -754,6 +773,8 @@ void main() {
           home: Scaffold(
             body: Stack(
               children: [
+                // Single native glass host layer (P5.8.1)
+                const NativeGlassHostLayer(),
                 // In-map glass control
                 const Positioned(
                   top: 50,
@@ -855,6 +876,7 @@ void main() {
             ),
             body: Stack(
               children: [
+                const NativeGlassHostLayer(),
                 const Positioned(
                   top: 50,
                   left: 20,
@@ -919,6 +941,7 @@ void main() {
           home: Scaffold(
             body: Stack(
               children: [
+                const NativeGlassHostLayer(),
                 const AppGlassSurface(child: Text('Map View')),
                 Builder(
                   builder: (ctx) => ElevatedButton(
@@ -969,6 +992,7 @@ void main() {
           home: Scaffold(
             body: Stack(
               children: [
+                const NativeGlassHostLayer(),
                 const AppGlassSurface(child: Text('Active Map Glass')),
                 Builder(
                   builder: (ctx) => ElevatedButton(
@@ -1012,6 +1036,211 @@ void main() {
       expect(find.text('Có thể là địa điểm này'), findsNothing);
       expect(controller.isOverlayActive, isFalse);
       expect(find.byType(UiKitView), findsOneWidget);
+    });
+  });
+  group('P5.8.1: Single Native Glass Host & Surface Registry Tests', () {
+    tearDown(() {
+      NativeGlassHostController.instance.resetForTesting();
+      AppGlassBackend.forceBackendForTesting = null;
+      AppGlassBackend.forcePlatformForTesting = null;
+    });
+
+    testWidgets('Strict platform view count: Multiple glass controls share EXACTLY ONE native host UiKitView and ZERO per-surface UiKitViews', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlass;
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('uiglass');
+
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                // The ONE and ONLY native glass host
+                const NativeGlassHostLayer(),
+
+                // Control 1: Top Search Capsule
+                const Positioned(
+                  top: 20,
+                  left: 16,
+                  right: 16,
+                  child: AppGlassSurface(
+                    surfaceId: 'search_pill',
+                    child: Text('Search Pill'),
+                  ),
+                ),
+
+                // Control 2: Right Toolbar (3 buttons inside AppGlassToolbar with groupId)
+                Positioned(
+                  top: 100,
+                  right: 16,
+                  child: AppGlassToolbar(
+                    groupId: 'right-toolbar',
+                    children: [
+                      IconButton(icon: const Icon(Icons.alt_route), onPressed: () {}),
+                      const AppGlassToolbarDivider(),
+                      IconButton(icon: const Icon(Icons.volume_up), onPressed: () {}),
+                      const AppGlassToolbarDivider(),
+                      IconButton(icon: const Icon(Icons.report), onPressed: () {}),
+                    ],
+                  ),
+                ),
+
+                // Control 3: Recenter Button
+                const Positioned(
+                  bottom: 120,
+                  right: 16,
+                  child: AppGlassSurface(
+                    surfaceId: 'recenter_btn',
+                    child: Icon(Icons.navigation),
+                  ),
+                ),
+
+                // Control 4: Bottom Driving HUD
+                const Positioned(
+                  bottom: 20,
+                  left: 16,
+                  right: 16,
+                  child: AppGlassSurface(
+                    surfaceId: 'bottom_dock',
+                    child: Text('ETA 18:00 - 15 min'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // STRICT P5.8.1 ASSERTION:
+      // Exactly ONE native_glass_host platform view exists in normal map mode!
+      final hostViews = find.byWidgetPredicate(
+        (w) => w is UiKitView && w.viewType == 'plugins.ysiduc.com/native_glass_host',
+      );
+      expect(hostViews, findsOneWidget);
+
+      // ZERO legacy per-surface native_glass platform views exist!
+      final legacyViews = find.byWidgetPredicate(
+        (w) => w is UiKitView && w.viewType == 'plugins.ysiduc.com/native_glass',
+      );
+      expect(legacyViews, findsNothing);
+
+      // Total UiKitView count across the ENTIRE widget tree is EXACTLY ONE!
+      expect(find.byType(UiKitView), findsOneWidget);
+
+      // When an overlay opens: host UiKitView is completely unmounted!
+      controller.setOverlayMode(MapOverlayMode.search);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(UiKitView), findsNothing);
+
+      // Dismiss overlay: host UiKitView is restored!
+      controller.setOverlayMode(MapOverlayMode.none);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(UiKitView), findsOneWidget);
+    });
+
+    testWidgets('Surface registry lifecycle: registers, updates, and unregisters without zombie surfaces', (tester) async {
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      List<Map<String, dynamic>>? latestPayload;
+      NativeGlassHostController.onFlushForTesting = (payload) {
+        latestPayload = payload;
+      };
+
+      // 1. Register surfaces A, B, C
+      const surfA = GlassSurfaceData(
+        id: 'surf_A',
+        rect: Rect.fromLTWH(10, 20, 100, 40),
+        radius: 20,
+        variant: 'regular',
+      );
+      const surfB = GlassSurfaceData(
+        id: 'surf_B',
+        rect: Rect.fromLTWH(10, 80, 50, 50),
+        radius: 25,
+        variant: 'prominent',
+        groupId: 'right-toolbar',
+      );
+      const surfC = GlassSurfaceData(
+        id: 'surf_C',
+        rect: Rect.fromLTWH(10, 150, 200, 60),
+        radius: 16,
+        variant: 'danger',
+      );
+
+      controller.registerSurface(surfA);
+      controller.registerSurface(surfB);
+      controller.registerSurface(surfC);
+      controller.flushSurfaces();
+
+      expect(controller.surfaces.length, equals(3));
+      expect(latestPayload?.length, equals(3));
+
+      // 2. Update surface B geometry
+      const surfBUpdated = GlassSurfaceData(
+        id: 'surf_B',
+        rect: Rect.fromLTWH(10, 90, 50, 50),
+        radius: 25,
+        variant: 'prominent',
+        groupId: 'right-toolbar',
+      );
+      controller.updateSurface(surfBUpdated);
+      controller.flushSurfaces();
+
+      expect(controller.surfaces.length, equals(3));
+      expect(controller.surfaces['surf_B']?.rect.top, equals(90));
+
+      // 3. Unregister surface C (simulating widget dispose)
+      controller.unregisterSurface('surf_C');
+      controller.flushSurfaces();
+
+      expect(controller.surfaces.length, equals(2));
+      expect(controller.surfaces.containsKey('surf_C'), isFalse);
+      expect(latestPayload?.any((s) => s['id'] == 'surf_C'), isFalse);
+
+      NativeGlassHostController.onFlushForTesting = null;
+    });
+
+    testWidgets('Grouped toolbar assigns groupId right-toolbar to surface registry', (tester) async {
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = AppGlassBackendType.uiGlassContainer;
+
+      final controller = NativeGlassHostController.instance;
+      controller.resetForTesting();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                const NativeGlassHostLayer(),
+                Positioned(
+                  top: 50,
+                  right: 16,
+                  child: AppGlassToolbar(
+                    groupId: 'right-toolbar',
+                    children: [
+                      IconButton(icon: const Icon(Icons.navigation), onPressed: () {}),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify that the registered surface has groupId == 'right-toolbar'
+      expect(controller.surfaces.isNotEmpty, isTrue);
+      final toolbarSurface = controller.surfaces.values.first;
+      expect(toolbarSurface.groupId, equals('right-toolbar'));
     });
   });
 }

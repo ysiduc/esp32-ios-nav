@@ -1280,6 +1280,11 @@ class _MapScreenState extends State<MapScreen> {
           ),
 
           // -----------------------------------------------------------
+          // 1b. Single Native Glass Host Layer (P5.8.1 Architecture)
+          // -----------------------------------------------------------
+          const NativeGlassHostLayer(),
+
+          // -----------------------------------------------------------
           // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
           // -----------------------------------------------------------
           if (!isDriving)
@@ -1343,6 +1348,7 @@ class _MapScreenState extends State<MapScreen> {
               right: 16,
               top: 130,
               child: AppGlassToolbar(
+                groupId: 'right-toolbar',
                 width: 44,
                 radius: 22,
                 children: [
@@ -1593,6 +1599,7 @@ class _MapScreenState extends State<MapScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         LiquidGlassContainer(
+          groupId: 'right-toolbar',
           radius: 22,
           blur: 20,
           width: 46,

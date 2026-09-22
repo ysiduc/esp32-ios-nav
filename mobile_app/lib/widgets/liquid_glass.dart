@@ -29,7 +29,57 @@ enum MapOverlayMode {
   placeDetails,
 }
 
-/// Controller coordinating overlay states and native glass host suspension (P5.8)
+/// Representation of a registered glass surface geometry and style (P5.8.1)
+class GlassSurfaceData {
+  final String id;
+  final Rect rect;
+  final double radius;
+  final String variant;
+  final bool isSelected;
+  final int? tint;
+  final String? groupId;
+
+  const GlassSurfaceData({
+    required this.id,
+    required this.rect,
+    required this.radius,
+    required this.variant,
+    this.isSelected = false,
+    this.tint,
+    this.groupId,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'x': rect.left,
+    'y': rect.top,
+    'w': rect.width,
+    'h': rect.height,
+    'radius': radius,
+    'variant': variant,
+    'isSelected': isSelected,
+    if (tint != null) 'tint': tint,
+    if (groupId != null) 'groupId': groupId,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GlassSurfaceData &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          rect == other.rect &&
+          radius == other.radius &&
+          variant == other.variant &&
+          isSelected == other.isSelected &&
+          tint == other.tint &&
+          groupId == other.groupId;
+
+  @override
+  int get hashCode => Object.hash(id, rect, radius, variant, isSelected, tint, groupId);
+}
+
+/// Controller coordinating overlay states and native glass host surface registry (P5.8 & P5.8.1)
 class NativeGlassHostController extends ChangeNotifier {
   static final NativeGlassHostController instance = NativeGlassHostController._internal();
   NativeGlassHostController._internal();
@@ -41,6 +91,14 @@ class NativeGlassHostController extends ChangeNotifier {
   MapOverlayMode get currentMode => _overlayMode;
   bool get isOverlayActive => _overlayMode != MapOverlayMode.none;
 
+  final Map<String, GlassSurfaceData> _surfaces = {};
+  Map<String, GlassSurfaceData> get surfaces => Map.unmodifiable(_surfaces);
+
+  bool _flushScheduled = false;
+
+  @visibleForTesting
+  static void Function(List<Map<String, dynamic>>)? onFlushForTesting;
+
   void setOverlayMode(MapOverlayMode mode) {
     if (_overlayMode == mode) return;
     _overlayMode = mode;
@@ -51,12 +109,101 @@ class NativeGlassHostController extends ChangeNotifier {
     } catch (_) {
       // Non-iOS or test environment fallback
     }
+
+    if (!isOverlayActive) {
+      flushSurfaces();
+    }
+  }
+
+  void registerSurface(GlassSurfaceData surface) {
+    final existing = _surfaces[surface.id];
+    if (existing != null && existing == surface) {
+      return;
+    }
+    _surfaces[surface.id] = surface;
+    _scheduleFlush();
+  }
+
+  void updateSurface(GlassSurfaceData surface) {
+    registerSurface(surface);
+  }
+
+  void unregisterSurface(String id) {
+    if (_surfaces.remove(id) != null) {
+      _scheduleFlush();
+    }
+  }
+
+  void _scheduleFlush() {
+    if (_flushScheduled) return;
+    _flushScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _flushScheduled = false;
+      flushSurfaces();
+    });
+  }
+
+  void flushSurfaces() {
+    final payload = _surfaces.values.map((s) => s.toMap()).toList();
+    onFlushForTesting?.call(payload);
+    try {
+      _channel.invokeMethod('updateSurfaces', payload);
+    } catch (_) {
+      // Non-iOS or test environment fallback
+    }
   }
 
   @visibleForTesting
   void resetForTesting() {
     _overlayMode = MapOverlayMode.none;
+    _surfaces.clear();
+    _flushScheduled = false;
     notifyListeners();
+  }
+}
+
+/// Single Native Glass Host platform view component (P5.8.1)
+/// Placed in MapScreen Stack between MapLibre and Flutter controls.
+/// Only ONE instance exists in normal map mode.
+class NativeGlassHostLayer extends StatelessWidget {
+  const NativeGlassHostLayer({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        NativeGlassHostController.instance,
+        AppAccessibilityService.instance,
+      ]),
+      builder: (context, _) {
+        final isOverlayActive = NativeGlassHostController.instance.isOverlayActive;
+        final isReduceTransparency = AppAccessibilityService.instance.reduceTransparency;
+        final backend = AppGlassBackend.resolve(
+          context: context,
+          isReduceTransparency: isReduceTransparency,
+        );
+
+        final isNativeActive = (backend == AppGlassBackendType.uiGlass ||
+                backend == AppGlassBackendType.uiGlassContainer ||
+                backend == AppGlassBackendType.nativeBlurFallback) &&
+            !isOverlayActive;
+
+        if (!isNativeActive) {
+          return const SizedBox.shrink();
+        }
+
+        return const Positioned.fill(
+          child: IgnorePointer(
+            ignoring: true,
+            child: UiKitView(
+              viewType: 'plugins.ysiduc.com/native_glass_host',
+              creationParamsCodec: StandardMessageCodec(),
+              hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -213,7 +360,7 @@ class AppGlassBackend {
 /// Base adaptive Liquid Glass material container (P5.7 & P5.7.1)
 /// Features real native iOS platform view backend (UiKitView) with Flutter content on top,
 /// and automatic Flutter BackdropFilter fallback for other platforms.
-class AppGlassSurface extends StatelessWidget {
+class AppGlassSurface extends StatefulWidget {
   final Widget child;
   final AppGlassVariant variant;
   final double radius;
@@ -228,6 +375,8 @@ class AppGlassSurface extends StatelessWidget {
   final bool isSelected;
   final Color? selectedBorderColor;
   final bool? reduceTransparency;
+  final String? groupId;
+  final String? surfaceId;
 
   const AppGlassSurface({
     super.key,
@@ -245,16 +394,73 @@ class AppGlassSurface extends StatelessWidget {
     this.isSelected = false,
     this.selectedBorderColor,
     this.reduceTransparency,
+    this.groupId,
+    this.surfaceId,
   });
 
   @override
+  State<AppGlassSurface> createState() => _AppGlassSurfaceState();
+}
+
+class _AppGlassSurfaceState extends State<AppGlassSurface> {
+  static int _idCounter = 0;
+  late final String _id;
+
+  @override
+  void initState() {
+    super.initState();
+    _id = widget.surfaceId ?? 'surf_${++_idCounter}_${identityHashCode(this)}';
+    _scheduleLayoutRegistration();
+  }
+
+  @override
+  void didUpdateWidget(covariant AppGlassSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.radius != widget.radius ||
+        oldWidget.variant != widget.variant ||
+        oldWidget.isSelected != widget.isSelected ||
+        oldWidget.tint != widget.tint ||
+        oldWidget.groupId != widget.groupId ||
+        oldWidget.width != widget.width ||
+        oldWidget.height != widget.height) {
+      _scheduleLayoutRegistration();
+    }
+  }
+
+  @override
+  void dispose() {
+    NativeGlassHostController.instance.unregisterSurface(_id);
+    super.dispose();
+  }
+
+  void _scheduleLayoutRegistration() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final renderBox = context.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
+        final offset = renderBox.localToGlobal(Offset.zero);
+        final rect = offset & renderBox.size;
+        NativeGlassHostController.instance.registerSurface(
+          GlassSurfaceData(
+            id: _id,
+            rect: rect,
+            radius: widget.radius,
+            variant: widget.variant.name,
+            isSelected: widget.isSelected,
+            tint: widget.tint?.value,
+            groupId: widget.groupId,
+          ),
+        );
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // If caller explicitly passed an override, respect it directly without subscription
-    if (reduceTransparency != null) {
-      return _buildSurface(context, reduceTransparency!);
+    if (widget.reduceTransparency != null) {
+      return _buildSurface(context, widget.reduceTransparency!);
     }
 
-    // Live reactive rebuild when accessibility setting or overlay mode changes (P5.7.2 & P5.8)
     return ListenableBuilder(
       listenable: Listenable.merge([
         AppAccessibilityService.instance,
@@ -276,13 +482,13 @@ class AppGlassSurface extends StatelessWidget {
       isReduceTransparency: isReduceTransparency,
     );
 
-    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced (P5.7.1 Part 6 & P5.8)
+    // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced
     if (backend == AppGlassBackendType.opaqueAccessibility ||
         backend == AppGlassBackendType.opaqueFallback) {
       Color solidBg;
       Color solidBorder;
 
-      switch (variant) {
+      switch (widget.variant) {
         case AppGlassVariant.prominent:
           solidBg = isDark ? const Color(0xFF0F172A) : Colors.white;
           solidBorder = isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1);
@@ -298,23 +504,23 @@ class AppGlassSurface extends StatelessWidget {
           break;
       }
 
-      if (tint != null) {
-        solidBg = Color.alphaBlend(tint!, solidBg);
+      if (widget.tint != null) {
+        solidBg = Color.alphaBlend(widget.tint!, solidBg);
       }
 
       return Container(
-        margin: margin,
-        width: width,
-        height: height,
-        padding: padding,
+        margin: widget.margin,
+        width: widget.width,
+        height: widget.height,
+        padding: widget.padding,
         decoration: BoxDecoration(
           color: solidBg,
-          borderRadius: BorderRadius.circular(radius),
-          border: border ?? Border.all(
-            color: isSelected ? (selectedBorderColor ?? const Color(0xFF007AFF)) : solidBorder,
-            width: isSelected ? 1.5 : 1.0,
+          borderRadius: BorderRadius.circular(widget.radius),
+          border: widget.border ?? Border.all(
+            color: widget.isSelected ? (widget.selectedBorderColor ?? const Color(0xFF007AFF)) : solidBorder,
+            width: widget.isSelected ? 1.5 : 1.0,
           ),
-          boxShadow: customShadow ?? [
+          boxShadow: widget.customShadow ?? [
             BoxShadow(
               color: Colors.black.withOpacity(isDark ? 0.3 : 0.1),
               blurRadius: 12,
@@ -322,13 +528,13 @@ class AppGlassSurface extends StatelessWidget {
             ),
           ],
         ),
-        child: child,
+        child: widget.child,
       );
     }
 
     // Determine default specular border color
     Color defaultBorderColor;
-    switch (variant) {
+    switch (widget.variant) {
       case AppGlassVariant.prominent:
         defaultBorderColor = isDark
             ? Colors.white.withOpacity(0.24)
@@ -355,185 +561,114 @@ class AppGlassSurface extends StatelessWidget {
     }
 
     final defaultBorder = Border.all(
-      color: isSelected
-          ? (selectedBorderColor ?? const Color(0xFF007AFF))
+      color: widget.isSelected
+          ? (widget.selectedBorderColor ?? const Color(0xFF007AFF))
           : defaultBorderColor,
-      width: isSelected ? 1.5 : 1.0,
+      width: widget.isSelected ? 1.5 : 1.0,
     );
 
-    final shadows = customShadow ?? [
+    final shadows = widget.customShadow ?? [
       BoxShadow(
         color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
         blurRadius: 16,
         offset: const Offset(0, 4),
       ),
-      if (isSelected)
+      if (widget.isSelected)
         BoxShadow(
-          color: (selectedBorderColor ?? const Color(0xFF007AFF)).withOpacity(0.35),
+          color: (widget.selectedBorderColor ?? const Color(0xFF007AFF)).withOpacity(0.35),
           blurRadius: 12,
           spreadRadius: 1,
         ),
     ];
 
-    // 2. REAL NATIVE LIQUID GLASS BACKEND (iOS UIKit UIVisualEffectView / UIGlassEffect) (P5.7.1 & P5.8)
+    // 2. REAL NATIVE LIQUID GLASS BACKEND (P5.8.1 Single Host Architecture)
+    // The native glass material is rendered on the single NativeGlassHostLayer behind Flutter UI.
+    // AppGlassSurface registers its layout rect with NativeGlassHostController and renders
+    // foreground Flutter content with crisp borders and shadows, WITHOUT instantiating any UiKitView!
     if (backend == AppGlassBackendType.uiGlass ||
         backend == AppGlassBackendType.uiGlassContainer ||
         backend == AppGlassBackendType.nativeModern ||
         backend == AppGlassBackendType.nativeBlurFallback) {
+      _scheduleLayoutRegistration();
       return Container(
-        margin: margin,
-        width: width,
-        height: height,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius),
-          child: Stack(
-            fit: StackFit.passthrough,
-            children: [
-              // Native iOS platform view as the background material layer
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: true,
-                  child: UiKitView(
-                    viewType: 'plugins.ysiduc.com/native_glass',
-                    creationParams: {
-                      'variant': variant.name,
-                      'radius': radius,
-                      'isSelected': isSelected,
-                      if (tint != null) 'tint': tint!.value,
-                    },
-                    creationParamsCodec: const StandardMessageCodec(),
-                    hitTestBehavior: PlatformViewHitTestBehavior.transparent,
-                  ),
-                ),
-              ),
-              // Flutter content container layered over native glass
-              Container(
-                padding: padding,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(radius),
-                  border: border ?? defaultBorder,
-                  boxShadow: shadows,
-                ),
-                child: child,
-              ),
-            ],
-          ),
+        margin: widget.margin,
+        width: widget.width,
+        height: widget.height,
+        padding: widget.padding,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(widget.radius),
+          border: widget.border ?? defaultBorder,
+          boxShadow: shadows,
         ),
+        child: widget.child,
       );
     }
 
-    // 3. FLUTTER BACKDROP FILTER FALLBACK (Android / Web / Linux / Tests) (P5.7.1 Part 5)
-    final effectiveBlur = blur ?? (
-      variant == AppGlassVariant.prominent ? 24.0 :
-      variant == AppGlassVariant.clear ? 12.0 :
-      variant == AppGlassVariant.danger ? 16.0 : 18.0
+    // 3. FLUTTER BACKDROP FILTER FALLBACK (Android / Web / Linux / Tests / Active Overlays)
+    final effectiveBlur = widget.blur ?? (
+      widget.variant == AppGlassVariant.prominent ? 24.0 :
+      widget.variant == AppGlassVariant.clear ? 12.0 :
+      widget.variant == AppGlassVariant.danger ? 16.0 : 18.0
     );
 
-    LinearGradient bgGradient;
-    switch (variant) {
+    Color fillColor;
+    switch (widget.variant) {
       case AppGlassVariant.prominent:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  const Color(0xFF1E293B).withOpacity(0.92),
-                  const Color(0xFF0F172A).withOpacity(0.96),
-                ]
-              : [
-                  Colors.white.withOpacity(0.94),
-                  const Color(0xFFF8FAFC).withOpacity(0.90),
-                ],
-        );
+        fillColor = isDark
+            ? const Color(0xFF1E293B).withOpacity(0.65)
+            : Colors.white.withOpacity(0.85);
         break;
 
       case AppGlassVariant.clear:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  Colors.white.withOpacity(0.12),
-                  const Color(0xFF0F172A).withOpacity(0.08),
-                ]
-              : [
-                  Colors.white.withOpacity(0.45),
-                  Colors.white.withOpacity(0.18),
-                ],
-        );
+        fillColor = isDark
+            ? Colors.black.withOpacity(0.25)
+            : Colors.white.withOpacity(0.30);
         break;
 
       case AppGlassVariant.danger:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? [
-                  const Color(0xFFEF4444).withOpacity(0.26),
-                  const Color(0xFF991B1B).withOpacity(0.20),
-                ]
-              : [
-                  const Color(0xFFFEE2E2).withOpacity(0.88),
-                  const Color(0xFFFECACA).withOpacity(0.72),
-                ],
-        );
+        fillColor = isDark
+            ? const Color(0xFFEF4444).withOpacity(0.35)
+            : const Color(0xFFEF4444).withOpacity(0.20);
         break;
 
       case AppGlassVariant.regular:
-        bgGradient = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          stops: const [0.0, 0.5, 1.0],
-          colors: isDark
-              ? [
-                  Colors.white.withOpacity(0.18),
-                  const Color(0xFF1E293B).withOpacity(0.12),
-                  const Color(0xFF0F172A).withOpacity(0.15),
-                ]
-              : [
-                  Colors.white.withOpacity(isSelected ? 0.60 : 0.50),
-                  Colors.white.withOpacity(isSelected ? 0.35 : 0.25),
-                  Colors.white.withOpacity(isSelected ? 0.22 : 0.15),
-                ],
-        );
+        fillColor = isDark
+            ? const Color(0xFF0F172A).withOpacity(0.55)
+            : Colors.white.withOpacity(0.65);
         break;
     }
 
-    if (tint != null) {
-      bgGradient = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: bgGradient.colors.map((c) => Color.alphaBlend(tint!, c)).toList(),
-      );
+    if (widget.tint != null) {
+      fillColor = Color.alphaBlend(widget.tint!, fillColor);
     }
 
-    Widget content = Container(
-      width: width,
-      height: height,
-      padding: padding,
+    return Container(
+      margin: widget.margin,
+      width: widget.width,
+      height: widget.height,
       decoration: BoxDecoration(
-        gradient: bgGradient,
-        borderRadius: BorderRadius.circular(radius),
-        border: border ?? defaultBorder,
+        borderRadius: BorderRadius.circular(widget.radius),
         boxShadow: shadows,
       ),
-      child: child,
-    );
-
-    return Container(
-      margin: margin,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
+        borderRadius: BorderRadius.circular(widget.radius),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
-          child: content,
+          child: Container(
+            padding: widget.padding,
+            decoration: BoxDecoration(
+              color: fillColor,
+              borderRadius: BorderRadius.circular(widget.radius),
+              border: widget.border ?? defaultBorder,
+            ),
+            child: widget.child,
+          ),
         ),
       ),
     );
   }
 }
 
-/// Floating Liquid Glass Pill (P5.7 Part D)
 class AppGlassPill extends StatelessWidget {
   final Widget child;
   final AppGlassVariant variant;
@@ -717,6 +852,7 @@ class AppGlassToolbar extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
   final Color? tint;
+  final String? groupId;
 
   const AppGlassToolbar({
     super.key,
@@ -729,11 +865,13 @@ class AppGlassToolbar extends StatelessWidget {
     this.padding = const EdgeInsets.all(4.0),
     this.margin,
     this.tint,
+    this.groupId,
   });
 
   @override
   Widget build(BuildContext context) {
     return AppGlassSurface(
+      groupId: groupId ?? 'right-toolbar',
       variant: variant,
       radius: radius,
       width: width,

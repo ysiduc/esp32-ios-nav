@@ -949,6 +949,38 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
     return containerView
   }
 
+  static func createGlassContainerView(
+    cornerRadius: CGFloat
+  ) -> UIView {
+    let container = UIView()
+    container.backgroundColor = .clear
+    container.layer.cornerRadius = cornerRadius
+    container.layer.masksToBounds = true
+    container.isUserInteractionEnabled = false
+
+    if isGlassContainerAvailable, #available(iOS 26.0, *) {
+      if let containerEffectClass = NSClassFromString("UIGlassContainerEffect") as? UIVisualEffect.Type {
+        let effect = containerEffectClass.init()
+        let effectView = UIVisualEffectView(effect: effect)
+        effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        effectView.layer.cornerRadius = cornerRadius
+        effectView.layer.masksToBounds = true
+        effectView.isUserInteractionEnabled = false
+        container.addSubview(effectView)
+        return container
+      }
+    }
+
+    let blurEffect = UIBlurEffect(style: .systemMaterial)
+    let effectView = UIVisualEffectView(effect: blurEffect)
+    effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    effectView.layer.cornerRadius = cornerRadius
+    effectView.layer.masksToBounds = true
+    effectView.isUserInteractionEnabled = false
+    container.addSubview(effectView)
+    return container
+  }
+
   static func createGlassEffectView(
     variant: String,
     cornerRadius: CGFloat,
@@ -1052,6 +1084,7 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
   private static var activeHosts: [NativeGlassHostPlatformView] = []
   private var containerView: UIView
   private var surfaceViews: [String: UIView] = [:]
+  private var groupContainers: [String: UIView] = [:]
 
   static func setOverlayActive(_ active: Bool) {
     for host in activeHosts {
@@ -1077,15 +1110,6 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
     super.init()
     NativeGlassHostPlatformView.activeHosts.append(self)
 
-    if #available(iOS 26.0, *), let containerEffectClass = NSClassFromString("UIGlassContainerEffect") as? UIVisualEffect.Type {
-      let containerEffect = containerEffectClass.init()
-      let effectView = UIVisualEffectView(effect: containerEffect)
-      effectView.frame = containerView.bounds
-      effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      effectView.isUserInteractionEnabled = false
-      containerView.addSubview(effectView)
-    }
-
     if let params = args as? [String: Any], let surfaces = params["surfaces"] as? [[String: Any]] {
       applySurfaces(surfaces)
     }
@@ -1101,10 +1125,22 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
 
   private func applySurfaces(_ surfaces: [[String: Any]]) {
     var seenIds = Set<String>()
+    var groupSurfaces: [String: [[String: Any]]] = [:]
+    var ungroupedSurfaces: [[String: Any]] = []
+
     for surf in surfaces {
       guard let id = surf["id"] as? String else { continue }
       seenIds.insert(id)
+      if let groupId = surf["groupId"] as? String, !groupId.isEmpty {
+        groupSurfaces[groupId, default: []].append(surf)
+      } else {
+        ungroupedSurfaces.append(surf)
+      }
+    }
 
+    // 1. Process ungrouped independent surfaces
+    for surf in ungroupedSurfaces {
+      guard let id = surf["id"] as? String else { continue }
       let x = CGFloat(surf["x"] as? Double ?? 0.0)
       let y = CGFloat(surf["y"] as? Double ?? 0.0)
       let w = CGFloat(surf["w"] as? Double ?? 0.0)
@@ -1114,16 +1150,97 @@ class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
       let isSelected = surf["isSelected"] as? Bool ?? false
       let frame = CGRect(x: x, y: y, width: w, height: h)
 
+      var tintColor: UIColor? = nil
+      if let tintVal = surf["tint"] as? Int64 {
+        let a = CGFloat((tintVal >> 24) & 0xFF) / 255.0
+        let r = CGFloat((tintVal >> 16) & 0xFF) / 255.0
+        let g = CGFloat((tintVal >> 8) & 0xFF) / 255.0
+        let b = CGFloat(tintVal & 0xFF) / 255.0
+        tintColor = UIColor(red: r, green: g, blue: b, alpha: a)
+      }
+
       if let existing = surfaceViews[id] {
         existing.frame = frame
       } else {
-        let view = NativeGlassPlatformView.createGlassEffectView(variant: variant, cornerRadius: radius, isSelected: isSelected)
+        let view = NativeGlassPlatformView.createGlassEffectView(
+          variant: variant,
+          cornerRadius: radius,
+          isSelected: isSelected,
+          tintColorOverride: tintColor
+        )
         view.frame = frame
         containerView.addSubview(view)
         surfaceViews[id] = view
       }
     }
 
+    // 2. Process grouped surfaces (e.g. right-toolbar with UIGlassContainerEffect)
+    var seenGroups = Set<String>()
+    for (groupId, groupList) in groupSurfaces {
+      seenGroups.insert(groupId)
+
+      var minX = CGFloat.infinity, minY = CGFloat.infinity
+      var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
+      for s in groupList {
+        let x = CGFloat(s["x"] as? Double ?? 0.0)
+        let y = CGFloat(s["y"] as? Double ?? 0.0)
+        let w = CGFloat(s["w"] as? Double ?? 0.0)
+        let h = CGFloat(s["h"] as? Double ?? 0.0)
+        minX = min(minX, x)
+        minY = min(minY, y)
+        maxX = max(maxX, x + w)
+        maxY = max(maxY, y + h)
+      }
+      let groupFrame = CGRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
+
+      let groupContainer: UIView
+      if let existingGroup = groupContainers[groupId] {
+        existingGroup.frame = groupFrame
+        groupContainer = existingGroup
+      } else {
+        groupContainer = NativeGlassPlatformView.createGlassContainerView(cornerRadius: 22.0)
+        groupContainer.frame = groupFrame
+        containerView.addSubview(groupContainer)
+        groupContainers[groupId] = groupContainer
+      }
+
+      for s in groupList {
+        guard let id = s["id"] as? String else { continue }
+        let x = CGFloat(s["x"] as? Double ?? 0.0)
+        let y = CGFloat(s["y"] as? Double ?? 0.0)
+        let w = CGFloat(s["w"] as? Double ?? 0.0)
+        let h = CGFloat(s["h"] as? Double ?? 0.0)
+        let radius = CGFloat(s["radius"] as? Double ?? 20.0)
+        let variant = s["variant"] as? String ?? "regular"
+        let isSelected = s["isSelected"] as? Bool ?? false
+        let relFrame = CGRect(x: x - minX, y: y - minY, width: w, height: h)
+
+        if let existing = surfaceViews[id] {
+          existing.frame = relFrame
+        } else {
+          let view = NativeGlassPlatformView.createGlassEffectView(
+            variant: variant,
+            cornerRadius: radius,
+            isSelected: isSelected
+          )
+          view.frame = relFrame
+          if let effectView = groupContainer.subviews.compactMap({ $0 as? UIVisualEffectView }).first {
+            effectView.contentView.addSubview(view)
+          } else {
+            groupContainer.addSubview(view)
+          }
+          surfaceViews[id] = view
+        }
+      }
+    }
+
+    // 3. Remove stale groups
+    for (groupId, groupView) in groupContainers where !seenGroups.contains(groupId) {
+      groupView.removeFromSuperview()
+      groupContainers.removeValue(forKey: groupId)
+    }
+
+    // 4. Remove stale individual surface views
     for (id, view) in surfaceViews where !seenIds.contains(id) {
       view.removeFromSuperview()
       surfaceViews.removeValue(forKey: id)
