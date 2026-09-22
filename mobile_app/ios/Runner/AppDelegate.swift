@@ -320,6 +320,13 @@ import AVFoundation
   private func fetchCurrentNowPlaying(completion: @escaping ([String: Any]) -> Void) {
     MediaRemoteObserver.shared.fetchNowPlaying(completion: completion)
   }
+
+  deinit {
+    if let obs = reduceTransparencyObserver {
+      NotificationCenter.default.removeObserver(obs)
+      reduceTransparencyObserver = nil
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -803,12 +810,6 @@ class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
     return results
   }
 
-  deinit {
-    if let obs = reduceTransparencyObserver {
-      NotificationCenter.default.removeObserver(obs)
-      reduceTransparencyObserver = nil
-    }
-  }
 }
 
 
