@@ -102,7 +102,12 @@ Scaffold (key: _scaffoldKey, onDrawerChanged: coordinator)
 - Runner: `runs-on: macos-26`.
 - Xcode: `Xcode 26.6 (Build 17F113)`.
 - SDK: `iPhoneOS 26.5`.
-- Production Artifact: `ESP32Nav-Flutter-PRODUCTION.ipa`.
+- Workflow Run ID: `35760152712` (Workflow: `Build iOS IPA Packages`, Branch: `main`, Status: `SUCCESS`).
+- Production Artifact: `ESP32Nav-Flutter-PRODUCTION.ipa` (Job ID: `106855884487`).
+- Firmware Artifact: `esp32_firmware_bin` (Job ID: `106855884810`).
+- Commits:
+  - Code: `35af811` - `fix(ui): P5.8.1 wire single native glass host into production`
+  - Report: `24cca71` - `docs: record P5.8.1 single glass host integration evidence`
 
 ---
 
