@@ -3,8 +3,9 @@
 **Branch:** `main`  
 **Execution Scope:** Production Flutter App Only (`ESP32Nav-Flutter-PRODUCTION.ipa`)  
 **Commit 1 (Real Native Glass & Accessibility):** `0c599bab4ebd139f34649731069acc4aa6560031` (`fix(ui): P5.7.1 wire real native adaptive glass backend`)  
-**Commit 2 (Docs & Evidence):** `pending` (`docs: record P5.7.1 native glass integration evidence`)  
-**CI Run ID:** `35750272698`  
+**Commit 2 (Docs & Evidence):** `30fee0fa471aa5a3ba2e831613eb5dafe155a024` (`docs: record P5.7.1 native glass integration evidence`)  
+**Commit 3 (iOS Build Fix):** `0be1299300db4afff053e26dcb2e28c3fabb5f77` (`fix(ios): resolve Swift switch case syntax in NativeGlassPlatformView`)  
+**CI Run ID:** `35751207430`  
 **Flutter Test Count:** 163 passed (increased from 157 baseline in P5.7)  
 **Field Test Status:** `MANUAL FIELD PENDING` (iPhone physical validation required)
 
