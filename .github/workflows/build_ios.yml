@@ -104,12 +104,22 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   build-flutter-ios:
     name: Compile Flutter iOS IPA
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
 
     steps:
       - name: 1. Checkout
         uses: actions/checkout@v4
+
+      - name: 1b. Verify Xcode & SDK Version
+        run: |
+          if [ -d "/Applications/Xcode_26.6.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_26.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: 2. Setup Flutter
         uses: subosito/flutter-action@v2

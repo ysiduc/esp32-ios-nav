@@ -13,6 +13,7 @@ import AVFoundation
   private var locationChannel: FlutterMethodChannel?
   private var searchChannel: FlutterMethodChannel?
   private var accessibilityChannel: FlutterMethodChannel?
+  private var glassHostChannel: FlutterMethodChannel?
   private var reduceTransparencyObserver: NSObjectProtocol?
   private var isChannelSetup = false
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -31,6 +32,10 @@ import AVFoundation
       registrar?.register(
         NativeGlassPlatformViewFactory(messenger: controller.binaryMessenger),
         withId: "plugins.ysiduc.com/native_glass"
+      )
+      registrar?.register(
+        NativeGlassHostPlatformViewFactory(messenger: controller.binaryMessenger),
+        withId: "plugins.ysiduc.com/native_glass_host"
       )
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -191,7 +196,7 @@ import AVFoundation
     }
 
 
-    // ─── 5. Accessibility Channel (Reduce Transparency & Glass Capability - P5.7.1 & P5.7.2) ──
+    // ─── 5. Accessibility Channel (Reduce Transparency & Glass Capability - P5.7.1, P5.7.2 & P5.8) ──
     accessibilityChannel = FlutterMethodChannel(
       name: "com.ysiduc.esp32_nav/accessibility",
       binaryMessenger: binaryMessenger
@@ -201,9 +206,35 @@ import AVFoundation
       case "isReduceTransparencyEnabled":
         result(UIAccessibility.isReduceTransparencyEnabled)
       case "getGlassCapability":
-        // P5.7.2: In current SDK/implementation, UIVisualEffectView fallback is used.
-        // Returns "native-blur-fallback".
-        result("native-blur-fallback")
+        // P5.8: Honest capability reporting: "uiglass-container", "uiglass" when available, else "native-blur-fallback"
+        if NativeGlassPlatformView.isGlassContainerAvailable {
+          result("uiglass-container")
+        } else if NativeGlassPlatformView.isTrueGlassAvailable {
+          result("uiglass")
+        } else {
+          result("native-blur-fallback")
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // ─── 6. Native Glass Host Channel (P5.8) ──────────────────────────
+    glassHostChannel = FlutterMethodChannel(
+      name: "com.ysiduc.esp32_nav/glass_host",
+      binaryMessenger: binaryMessenger
+    )
+    glassHostChannel?.setMethodCallHandler { (call, result) in
+      switch call.method {
+      case "setOverlayActive":
+        let active = call.arguments as? Bool ?? false
+        NativeGlassHostPlatformView.setOverlayActive(active)
+        result(nil)
+      case "updateSurfaces":
+        if let surfaces = call.arguments as? [[String: Any]] {
+          NativeGlassHostPlatformView.updateSurfaces(surfaces)
+        }
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -813,7 +844,8 @@ class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
 }
 
 
-// MARK: - Native iOS Liquid Glass PlatformView (P5.7 & P5.7.1 Part C)
+// MARK: - Native iOS Liquid Glass PlatformView & Host (P5.7, P5.7.1 & P5.8)
+
 class NativeGlassPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
   private var messenger: FlutterBinaryMessenger
 
@@ -840,8 +872,198 @@ class NativeGlassPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
   }
 }
 
+class NativeGlassHostPlatformViewFactory: NSObject, FlutterPlatformViewFactory {
+  private var messenger: FlutterBinaryMessenger
+
+  init(messenger: FlutterBinaryMessenger) {
+    self.messenger = messenger
+    super.init()
+  }
+
+  func create(
+    withFrame frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?
+  ) -> FlutterPlatformView {
+    return NativeGlassHostPlatformView(
+      frame: frame,
+      viewIdentifier: viewId,
+      arguments: args,
+      binaryMessenger: messenger
+    )
+  }
+
+  public func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+    return FlutterStandardMessageCodec.sharedInstance()
+  }
+}
+
 class NativeGlassPlatformView: NSObject, FlutterPlatformView {
   private var containerView: UIView
+
+  static var isTrueGlassAvailable: Bool {
+    if #available(iOS 26.0, *) {
+      return NSClassFromString("UIGlassEffect") != nil
+    }
+    return false
+  }
+
+  static var isGlassContainerAvailable: Bool {
+    if #available(iOS 26.0, *) {
+      return NSClassFromString("UIGlassContainerEffect") != nil
+    }
+    return false
+  }
+
+  init(
+    frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?,
+    binaryMessenger: FlutterBinaryMessenger?
+  ) {
+    let params = args as? [String: Any]
+    let variant = params?["variant"] as? String ?? "regular"
+    let cornerRadius = CGFloat(params?["radius"] as? Double ?? 20.0)
+    let isSelected = params?["isSelected"] as? Bool ?? false
+
+    var tintColor: UIColor? = nil
+    if let tintVal = params?["tint"] as? Int64 {
+      let a = CGFloat((tintVal >> 24) & 0xFF) / 255.0
+      let r = CGFloat((tintVal >> 16) & 0xFF) / 255.0
+      let g = CGFloat((tintVal >> 8) & 0xFF) / 255.0
+      let b = CGFloat(tintVal & 0xFF) / 255.0
+      tintColor = UIColor(red: r, green: g, blue: b, alpha: a)
+    }
+
+    containerView = NativeGlassPlatformView.createGlassEffectView(
+      variant: variant,
+      cornerRadius: cornerRadius,
+      isSelected: isSelected,
+      tintColorOverride: tintColor
+    )
+    containerView.frame = frame
+    super.init()
+  }
+
+  func view() -> UIView {
+    return containerView
+  }
+
+  static func createGlassEffectView(
+    variant: String,
+    cornerRadius: CGFloat,
+    isSelected: Bool,
+    tintColorOverride: UIColor? = nil
+  ) -> UIView {
+    let container = UIView()
+    container.backgroundColor = .clear
+    container.layer.cornerRadius = cornerRadius
+    container.layer.masksToBounds = true
+    container.isUserInteractionEnabled = false
+
+    if isTrueGlassAvailable, #available(iOS 26.0, *) {
+      // True Apple Liquid Glass (iOS 26+ / WWDC25 API)
+      if let glassEffectClass = NSClassFromString("UIGlassEffect") as? UIVisualEffect.Type {
+        let effect = glassEffectClass.init()
+        let effectView = UIVisualEffectView(effect: effect)
+        effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        effectView.layer.cornerRadius = cornerRadius
+        effectView.layer.masksToBounds = true
+        effectView.isUserInteractionEnabled = false
+        container.addSubview(effectView)
+      } else {
+        setupUIKitVisualEffect(in: container, variant: variant, cornerRadius: cornerRadius, tintColorOverride: tintColorOverride)
+      }
+    } else {
+      setupUIKitVisualEffect(in: container, variant: variant, cornerRadius: cornerRadius, tintColorOverride: tintColorOverride)
+    }
+
+    // Specular highlight border
+    let specularEdge = UIView()
+    specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    specularEdge.layer.cornerRadius = cornerRadius
+    specularEdge.layer.borderWidth = isSelected ? 1.5 : 0.5
+    specularEdge.layer.borderColor = isSelected
+      ? UIColor(red: 0/255, green: 122/255, blue: 255/255, alpha: 0.9).cgColor
+      : UIColor.white.withAlphaComponent(0.25).cgColor
+    specularEdge.isUserInteractionEnabled = false
+    container.addSubview(specularEdge)
+
+    return container
+  }
+
+  static func setupUIKitVisualEffect(
+    in container: UIView,
+    variant: String,
+    cornerRadius: CGFloat,
+    tintColorOverride: UIColor? = nil
+  ) {
+    let blurEffect: UIBlurEffect
+    var tintColor: UIColor? = tintColorOverride
+
+    switch variant {
+    case "prominent":
+      blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+      if tintColor == nil {
+        tintColor = UIColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.35)
+      }
+    case "clear":
+      blurEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+      if tintColor == nil {
+        tintColor = UIColor.white.withAlphaComponent(0.04)
+      }
+    case "danger":
+      blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
+      if tintColor == nil {
+        tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.28)
+      }
+    case "regular":
+      blurEffect = UIBlurEffect(style: .systemMaterial)
+      if tintColor == nil {
+        tintColor = UIColor.white.withAlphaComponent(0.12)
+      }
+    default:
+      blurEffect = UIBlurEffect(style: .systemMaterial)
+      if tintColor == nil {
+        tintColor = UIColor.white.withAlphaComponent(0.12)
+      }
+    }
+
+    let blurView = UIVisualEffectView(effect: blurEffect)
+    blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    blurView.layer.cornerRadius = cornerRadius
+    blurView.layer.masksToBounds = true
+    blurView.isUserInteractionEnabled = false
+    container.addSubview(blurView)
+
+    if let tint = tintColor {
+      let tintView = UIView()
+      tintView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      tintView.backgroundColor = tint
+      tintView.layer.cornerRadius = cornerRadius
+      tintView.layer.masksToBounds = true
+      tintView.isUserInteractionEnabled = false
+      container.addSubview(tintView)
+    }
+  }
+}
+
+class NativeGlassHostPlatformView: NSObject, FlutterPlatformView {
+  private static var activeHosts: [NativeGlassHostPlatformView] = []
+  private var containerView: UIView
+  private var surfaceViews: [String: UIView] = [:]
+
+  static func setOverlayActive(_ active: Bool) {
+    for host in activeHosts {
+      host.containerView.isHidden = active
+    }
+  }
+
+  static func updateSurfaces(_ surfaces: [[String: Any]]) {
+    for host in activeHosts {
+      host.applySurfaces(surfaces)
+    }
+  }
 
   init(
     frame: CGRect,
@@ -850,88 +1072,61 @@ class NativeGlassPlatformView: NSObject, FlutterPlatformView {
     binaryMessenger: FlutterBinaryMessenger?
   ) {
     containerView = UIView(frame: frame)
+    containerView.backgroundColor = .clear
+    containerView.isUserInteractionEnabled = false
     super.init()
-    setupNativeGlass(arguments: args)
+    NativeGlassHostPlatformView.activeHosts.append(self)
+
+    if #available(iOS 26.0, *), let containerEffectClass = NSClassFromString("UIGlassContainerEffect") as? UIVisualEffect.Type {
+      let containerEffect = containerEffectClass.init()
+      let effectView = UIVisualEffectView(effect: containerEffect)
+      effectView.frame = containerView.bounds
+      effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+      effectView.isUserInteractionEnabled = false
+      containerView.addSubview(effectView)
+    }
+
+    if let params = args as? [String: Any], let surfaces = params["surfaces"] as? [[String: Any]] {
+      applySurfaces(surfaces)
+    }
+  }
+
+  deinit {
+    NativeGlassHostPlatformView.activeHosts.removeAll { $0 === self }
   }
 
   func view() -> UIView {
     return containerView
   }
 
-  private func setupNativeGlass(arguments: Any?) {
-    let params = arguments as? [String: Any]
-    let variant = params?["variant"] as? String ?? "regular"
-    let cornerRadius = CGFloat(params?["radius"] as? Double ?? 20.0)
+  private func applySurfaces(_ surfaces: [[String: Any]]) {
+    var seenIds = Set<String>()
+    for surf in surfaces {
+      guard let id = surf["id"] as? String else { continue }
+      seenIds.insert(id)
 
-    containerView.backgroundColor = .clear
-    containerView.layer.cornerRadius = cornerRadius
-    containerView.layer.masksToBounds = true
-    containerView.isUserInteractionEnabled = false
+      let x = CGFloat(surf["x"] as? Double ?? 0.0)
+      let y = CGFloat(surf["y"] as? Double ?? 0.0)
+      let w = CGFloat(surf["w"] as? Double ?? 0.0)
+      let h = CGFloat(surf["h"] as? Double ?? 0.0)
+      let radius = CGFloat(surf["radius"] as? Double ?? 20.0)
+      let variant = surf["variant"] as? String ?? "regular"
+      let isSelected = surf["isSelected"] as? Bool ?? false
+      let frame = CGRect(x: x, y: y, width: w, height: h)
 
-    // Check availability for modern Liquid Glass vs standard UIKit visual effect (P5.7.1)
-    if #available(iOS 26.0, *) {
-      setupModernLiquidGlass(variant: variant, cornerRadius: cornerRadius, params: params)
-    } else {
-      setupUIKitVisualEffect(variant: variant, cornerRadius: cornerRadius, params: params)
-    }
-  }
-
-  @available(iOS 26.0, *)
-  private func setupModernLiquidGlass(variant: String, cornerRadius: CGFloat, params: [String: Any]?) {
-    // If modern liquid glass API is available in future SDKs, configure it here.
-    // Falls back gracefully to standard UIKit material if unexposed in current SDK.
-    setupUIKitVisualEffect(variant: variant, cornerRadius: cornerRadius, params: params)
-  }
-
-  private func setupUIKitVisualEffect(variant: String, cornerRadius: CGFloat, params: [String: Any]?) {
-    let blurEffect: UIBlurEffect
-    var tintColor: UIColor? = nil
-
-    switch variant {
-    case "prominent":
-      blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
-      tintColor = UIColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.35)
-    case "clear":
-      blurEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-      tintColor = UIColor.white.withAlphaComponent(0.04)
-    case "danger":
-      blurEffect = UIBlurEffect(style: .systemThinMaterialDark)
-      tintColor = UIColor(red: 220/255, green: 38/255, blue: 38/255, alpha: 0.28)
-    case "regular":
-      blurEffect = UIBlurEffect(style: .systemMaterial)
-      tintColor = UIColor.white.withAlphaComponent(0.12)
-    default:
-      blurEffect = UIBlurEffect(style: .systemMaterial)
-      tintColor = UIColor.white.withAlphaComponent(0.12)
+      if let existing = surfaceViews[id] {
+        existing.frame = frame
+      } else {
+        let view = NativeGlassPlatformView.createGlassEffectView(variant: variant, cornerRadius: radius, isSelected: isSelected)
+        view.frame = frame
+        containerView.addSubview(view)
+        surfaceViews[id] = view
+      }
     }
 
-    let blurView = UIVisualEffectView(effect: blurEffect)
-    blurView.frame = containerView.bounds
-    blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    blurView.layer.cornerRadius = cornerRadius
-    blurView.layer.masksToBounds = true
-    blurView.isUserInteractionEnabled = false
-    containerView.addSubview(blurView)
-
-    if let tint = tintColor {
-      let tintView = UIView(frame: containerView.bounds)
-      tintView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      tintView.backgroundColor = tint
-      tintView.layer.cornerRadius = cornerRadius
-      tintView.layer.masksToBounds = true
-      tintView.isUserInteractionEnabled = false
-      containerView.addSubview(tintView)
+    for (id, view) in surfaceViews where !seenIds.contains(id) {
+      view.removeFromSuperview()
+      surfaceViews.removeValue(forKey: id)
     }
-
-    let isSelected = params?["isSelected"] as? Bool ?? false
-    let specularEdge = UIView(frame: containerView.bounds)
-    specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    specularEdge.layer.cornerRadius = cornerRadius
-    specularEdge.layer.borderWidth = isSelected ? 1.5 : 0.5
-    specularEdge.layer.borderColor = isSelected
-      ? UIColor(red: 0/255, green: 122/255, blue: 255/255, alpha: 0.9).cgColor
-      : UIColor.white.withAlphaComponent(0.25).cgColor
-    specularEdge.isUserInteractionEnabled = false
-    containerView.addSubview(specularEdge)
   }
 }
