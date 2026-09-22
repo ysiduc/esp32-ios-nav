@@ -628,9 +628,9 @@ class NavigationManager extends ChangeNotifier {
     if (decision.becameConfirmed || (decision.state == OffRouteState.confirmed && !_isRerouting)) {
       confirmedAt ??= sampleTime;
 
-      // Cooldown / Backoff check (P5.5.1 Section 6)
+      // Cooldown / Backoff check (P5.5.1 Section 6, P5.5.2)
       if (_lastRerouteFailureAt != null) {
-        final elapsedSinceFailure = sampleTime.difference(_lastRerouteFailureAt!);
+        final elapsedSinceFailure = nowProvider().difference(_lastRerouteFailureAt!);
         if (elapsedSinceFailure < currentRerouteCooldown) {
           _rerouteStatus = 'cooldown';
           notifyListeners();

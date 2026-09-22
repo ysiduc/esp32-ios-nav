@@ -485,8 +485,9 @@ void main() {
 
     test('P5.5.1 Section 6: Recovery to onRoute resets reroute failure backoff', () async {
       mockRouter.nextRouteToReturn = null;
-      navManager.startNavigation(routeA);
       DateTime t = DateTime(2026, 9, 22, 12, 0, 0);
+      navManager.nowProvider = () => t;
+      navManager.startNavigation(routeA);
       final offRouteCoord = const LatLng(21.00041, 105.8010);
 
       navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: t);
