@@ -2086,7 +2086,6 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
         }
     }
 }
-}
 
 extension String {
     func deletingPrefix(_ prefix: String) -> String {
