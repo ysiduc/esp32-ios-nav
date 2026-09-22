@@ -221,7 +221,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // P5.5.1 & P5.6: Deterministic RouteRenderController
   late final RouteRenderController _routeRenderController;
-  int _lastObservedRouteRevision = -1;
+  int _lastObservedRenderRevision = -1;
   bool _lastObservedNavigating = false;
   int get routeGeometryUpdatesCount => _routeRenderController.renderCount;
 
@@ -356,7 +356,7 @@ class _MapScreenState extends State<MapScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       navManager.addListener(_onNavigationManagerChanged);
-      _lastObservedRouteRevision = navManager.routeRevision;
+      _lastObservedRenderRevision = navManager.renderRevision;
       _lastObservedNavigating = navManager.isNavigating;
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
@@ -708,11 +708,11 @@ class _MapScreenState extends State<MapScreen> {
   void _onNavigationManagerChanged() {
     if (!mounted) return;
     final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final rev = navManager.routeRevision;
+    final rev = navManager.renderRevision;
     final isNav = navManager.isNavigating;
 
-    if (rev != _lastObservedRouteRevision || isNav != _lastObservedNavigating) {
-      _lastObservedRouteRevision = rev;
+    if (rev != _lastObservedRenderRevision || isNav != _lastObservedNavigating) {
+      _lastObservedRenderRevision = rev;
       _lastObservedNavigating = isNav;
       if (!isNav) {
         _routes = [];

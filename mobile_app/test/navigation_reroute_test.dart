@@ -1,3 +1,4 @@
+import 'package:mobile_app/services/route_render_controller.dart';
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
@@ -45,6 +46,38 @@ class MockRoutingService implements RoutingService {
       return pendingCompleter!.future;
     }
     return Future.value(nextRouteToReturn);
+  }
+}
+
+class MockMapLineDrawer implements MapLineDrawer {
+  int clearLinesCallCount = 0;
+  int drawActiveRouteCallCount = 0;
+  int drawPreviewRoutesCallCount = 0;
+
+  List<LatLng> lastDrawnActivePolyline = [];
+  List<LatLng>? lastDrawnSecondaryPolyline;
+
+  @override
+  Future<void> clearLines() async {
+    clearLinesCallCount++;
+  }
+
+  @override
+  Future<void> drawActiveRoute({
+    required List<LatLng> remainingPolyline,
+    List<LatLng>? secondaryPolyline,
+  }) async {
+    drawActiveRouteCallCount++;
+    lastDrawnActivePolyline = List.unmodifiable(remainingPolyline);
+    lastDrawnSecondaryPolyline = secondaryPolyline != null ? List.unmodifiable(secondaryPolyline) : null;
+  }
+
+  @override
+  Future<void> drawPreviewRoutes({
+    required List<LatLng> mainRoute,
+    required List<List<LatLng>> alternativeRoutes,
+  }) async {
+    drawPreviewRoutesCallCount++;
   }
 }
 
@@ -949,6 +982,187 @@ void main() {
       expect(navManager.secondaryRoute, isNull);
       expect(navManager.secondaryPolyline, isEmpty);
       expect(navManager.secondaryRerouteStatus, equals('none'));
+    });
+
+    test('P5.6.2: Primary Route B rendered, zero GPS updates, async secondary arrives -> renderRevision bumps, map-render triggered, secondary appears, primary unchanged', () async {
+      final mockDrawer = MockMapLineDrawer();
+      final renderController = RouteRenderController(mockDrawer);
+
+      // Start navigation with initial multiRoute
+      navManager.startNavigation(multiRoute);
+      await pumpEventQueue();
+
+      // Vehicle is at vehiclePos along the route
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.updatePositionForTesting(
+        vehiclePos,
+        speedKmh: 0.0,
+        heading: 90.0,
+        horizontalAccuracy: 4.0,
+      );
+
+      // Wire up observer logic identical to MapScreen._onNavigationManagerChanged
+      int lastObservedRenderRevision = navManager.renderRevision;
+      bool lastObservedNavigating = navManager.isNavigating;
+      int mapRenderCallbackCount = 0;
+
+      void onNavigationManagerChanged() {
+        final rev = navManager.renderRevision;
+        final isNav = navManager.isNavigating;
+
+        if (rev != lastObservedRenderRevision || isNav != lastObservedNavigating) {
+          lastObservedRenderRevision = rev;
+          lastObservedNavigating = isNav;
+
+          if (!isNav) {
+            renderController.reset();
+          }
+
+          mapRenderCallbackCount++;
+          renderController.submitRequest(
+            routeRevision: rev,
+            mode: isNav ? RoutePresentationMode.navigating : RoutePresentationMode.none,
+            mainPoints: navManager.remainingPolyline,
+            altPoints: navManager.secondaryPolyline.length >= 2 ? [navManager.secondaryPolyline] : [],
+            forceRedraw: true,
+          );
+        }
+      }
+
+      navManager.addListener(onNavigationManagerChanged);
+
+      final primComp = Completer<NavRoute?>();
+      final secComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+      mockRouter.secondaryCompleter = secComp;
+
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      // Primary Route B arrives & commits
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [
+          NavStep(
+            stepIndex: 0,
+            instruction: 'Lộ trình mới B',
+            streetName: 'Đường B',
+            distanceMeters: 700.0,
+            durationSeconds: 80.0,
+            coordinate: vehiclePos,
+            maneuverTypeStr: 'depart',
+            beginShapeIndex: 0,
+            endShapeIndex: 1,
+          ),
+        ],
+        summary: 'Primary Route B',
+      );
+
+      primComp.complete(routeB);
+      await pumpEventQueue();
+
+      // Primary Route B has committed and rendered
+      expect(navManager.activeRoute, equals(routeB));
+      expect(mockDrawer.lastDrawnActivePolyline, equals(routeB.polylinePoints));
+      final revAfterPrimaryCommit = navManager.renderRevision;
+      final renderCountAfterPrimaryCommit = mapRenderCallbackCount;
+      final drawCountAfterPrimaryCommit = mockDrawer.drawActiveRouteCallCount;
+
+      final snapshotInstruction = navManager.bannerInstruction;
+      final snapshotStep = navManager.authoritativeCurrentManeuver;
+      final snapshotRemainingDistance = navManager.remainingTotalDistance;
+      final snapshotRemainingEta = navManager.remainingEtaMinutes;
+
+      expect(snapshotInstruction, equals('Lộ trình mới B'));
+      expect(snapshotStep?.instruction, equals('Lộ trình mới B'));
+
+      // ZERO GPS updates sent (navManager.updateLocation NOT called!)
+
+      // Secondary rejoin arrives asynchronously connecting vehicle to route A
+      final rejoinTarget = LatLng(21.000, 105.805);
+      final rejoinRoute = NavRoute(
+        totalDistanceMeters: 150.0,
+        totalDurationSeconds: 20.0,
+        polylinePoints: [vehiclePos, const LatLng(21.0002, 105.804), rejoinTarget],
+        steps: [],
+        summary: 'Rejoin path',
+      );
+
+      secComp.complete(rejoinRoute);
+      await pumpEventQueue();
+
+      // EXPECTATIONS:
+      // 1. renderRevision increased
+      expect(navManager.renderRevision, greaterThan(revAfterPrimaryCommit),
+          reason: 'renderRevision must increment when secondary rejoin completes');
+
+      // 2. Map-render callback/request was triggered immediately without GPS updates
+      expect(mapRenderCallbackCount, greaterThan(renderCountAfterPrimaryCommit),
+          reason: 'MapScreen observer must trigger map render immediately upon secondary completion');
+      expect(mockDrawer.drawActiveRouteCallCount, greaterThan(drawCountAfterPrimaryCommit),
+          reason: 'MapLineDrawer must draw updated routes');
+
+      // 3. Secondary pale route appears on map
+      expect(mockDrawer.lastDrawnSecondaryPolyline, isNotNull,
+          reason: 'Secondary route must be drawn on map');
+      expect(mockDrawer.lastDrawnSecondaryPolyline!.first, equals(vehiclePos),
+          reason: 'Secondary route starts at vehicle position');
+      expect(mockDrawer.lastDrawnSecondaryPolyline!.contains(destCoord), isTrue,
+          reason: 'Secondary route preserves tail to destination');
+
+      // 4. Primary route is unchanged
+      expect(navManager.activeRoute, equals(routeB),
+          reason: 'Primary active route must remain Route B');
+      expect(mockDrawer.lastDrawnActivePolyline, equals(routeB.polylinePoints),
+          reason: 'Main drawn polyline must remain Route B');
+
+      // 5. Guidance/ETA/step unchanged
+      expect(navManager.bannerInstruction, equals(snapshotInstruction));
+      expect(navManager.authoritativeCurrentManeuver, equals(snapshotStep));
+      expect(navManager.remainingTotalDistance, equals(snapshotRemainingDistance));
+      expect(navManager.remainingEtaMinutes, equals(snapshotRemainingEta));
+
+      navManager.removeListener(onNavigationManagerChanged);
+    });
+
+    test('P5.6.2: Secondary throws exception but old remaining exists -> status fallback, secondaryPolyline is not empty', () async {
+      navManager.startNavigation(multiRoute);
+
+      final primComp = Completer<NavRoute?>();
+      final secComp = Completer<NavRoute?>();
+      mockRouter.primaryCompleter = primComp;
+      mockRouter.secondaryCompleter = secComp;
+
+      const vehiclePos = LatLng(21.0005, 105.803);
+      navManager.triggerRerouteForTesting(vehiclePos);
+
+      final routeB = NavRoute(
+        totalDistanceMeters: 700.0,
+        totalDurationSeconds: 80.0,
+        polylinePoints: [vehiclePos, destCoord],
+        steps: [],
+        summary: 'Route B',
+      );
+
+      primComp.complete(routeB);
+      await pumpEventQueue();
+      expect(navManager.activeRoute, equals(routeB));
+      expect(navManager.secondaryRerouteStatus, equals('requesting'));
+      final revBeforeSecException = navManager.renderRevision;
+
+      // Secondary rejoin throws an exception (e.g. Valhalla network timeout)
+      secComp.completeError(Exception('Network timeout during secondary rejoin'));
+      await pumpEventQueue();
+
+      expect(navManager.secondaryRerouteStatus, equals('fallback'),
+          reason: 'When secondary rejoin throws exception, status must be fallback if old remaining exists');
+      expect(navManager.secondaryPolyline.isNotEmpty, isTrue,
+          reason: 'secondaryPolyline must not be empty');
+      expect(navManager.secondaryPolyline.length, greaterThanOrEqualTo(2));
+      expect(navManager.renderRevision, greaterThan(revBeforeSecException),
+          reason: 'renderRevision must increment on fallback to notify MapScreen immediately');
+      expect(navManager.activeRoute, equals(routeB));
     });
   });
 }

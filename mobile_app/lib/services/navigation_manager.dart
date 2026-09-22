@@ -786,8 +786,21 @@ class NavigationManager extends ChangeNotifier {
         _secondaryRouteRevision++;
         notifyListeners();
       } else {
-        // Fallback: preserve old remaining route
-        _secondaryRerouteStatus = 'fallback';
+        // Fallback: preserve old remaining route if available
+        if (_secondaryRoute != null && _secondaryRoute!.polylinePoints.isNotEmpty) {
+          _secondaryRerouteStatus = 'fallback';
+        } else if (oldRemaining.isNotEmpty) {
+          _secondaryRoute = NavRoute(
+            totalDistanceMeters: 0,
+            totalDurationSeconds: 0,
+            polylinePoints: oldRemaining,
+            steps: const [],
+            summary: 'Lộ trình cũ',
+          );
+          _secondaryRerouteStatus = 'fallback';
+        } else {
+          _secondaryRerouteStatus = 'failed';
+        }
         _secondaryRouteRevision++;
         notifyListeners();
       }
@@ -795,7 +808,20 @@ class NavigationManager extends ChangeNotifier {
       if (_disposed || !_isNavigating || secGen != _secondaryRerouteGeneration) {
         return;
       }
-      _secondaryRerouteStatus = 'failed';
+      if (_secondaryRoute != null && _secondaryRoute!.polylinePoints.isNotEmpty) {
+        _secondaryRerouteStatus = 'fallback';
+      } else if (oldRemaining.isNotEmpty) {
+        _secondaryRoute = NavRoute(
+          totalDistanceMeters: 0,
+          totalDurationSeconds: 0,
+          polylinePoints: oldRemaining,
+          steps: const [],
+          summary: 'Lộ trình cũ',
+        );
+        _secondaryRerouteStatus = 'fallback';
+      } else {
+        _secondaryRerouteStatus = 'failed';
+      }
       _secondaryRouteRevision++;
       notifyListeners();
     });
