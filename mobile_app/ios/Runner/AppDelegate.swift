@@ -12,6 +12,8 @@ import AVFoundation
   private var callChannel: FlutterMethodChannel?
   private var locationChannel: FlutterMethodChannel?
   private var searchChannel: FlutterMethodChannel?
+  private var accessibilityChannel: FlutterMethodChannel?
+  private var reduceTransparencyObserver: NSObjectProtocol?
   private var isChannelSetup = false
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -189,25 +191,35 @@ import AVFoundation
     }
 
 
-    // ─── 5. Accessibility Channel (Reduce Transparency - P5.7.1) ────────
-    let accessibilityChannel = FlutterMethodChannel(
+    // ─── 5. Accessibility Channel (Reduce Transparency & Glass Capability - P5.7.1 & P5.7.2) ──
+    accessibilityChannel = FlutterMethodChannel(
       name: "com.ysiduc.esp32_nav/accessibility",
       binaryMessenger: binaryMessenger
     )
-    accessibilityChannel.setMethodCallHandler { (call, result) in
-      if call.method == "isReduceTransparencyEnabled" {
+    accessibilityChannel?.setMethodCallHandler { (call, result) in
+      switch call.method {
+      case "isReduceTransparencyEnabled":
         result(UIAccessibility.isReduceTransparencyEnabled)
-      } else {
+      case "getGlassCapability":
+        // P5.7.2: In current SDK/implementation, UIVisualEffectView fallback is used.
+        // Returns "native-blur-fallback".
+        result("native-blur-fallback")
+      default:
         result(FlutterMethodNotImplemented)
       }
     }
 
-    NotificationCenter.default.addObserver(
+    if let existing = reduceTransparencyObserver {
+      NotificationCenter.default.removeObserver(existing)
+      reduceTransparencyObserver = nil
+    }
+
+    reduceTransparencyObserver = NotificationCenter.default.addObserver(
       forName: UIAccessibility.reduceTransparencyStatusDidChangeNotification,
       object: nil,
       queue: .main
-    ) { _ in
-      accessibilityChannel.invokeMethod(
+    ) { [weak self] _ in
+      self?.accessibilityChannel?.invokeMethod(
         "onReduceTransparencyChanged",
         arguments: UIAccessibility.isReduceTransparencyEnabled
       )
@@ -789,6 +801,13 @@ class MapKitSearchBridge: NSObject, MKLocalSearchCompleterDelegate {
       ])
     }
     return results
+  }
+
+  deinit {
+    if let obs = reduceTransparencyObserver {
+      NotificationCenter.default.removeObserver(obs)
+      reduceTransparencyObserver = nil
+    }
   }
 }
 

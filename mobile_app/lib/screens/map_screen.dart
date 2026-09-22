@@ -1648,7 +1648,13 @@ class _MapScreenState extends State<MapScreen> {
           ),
           const SizedBox(height: 6),
           Text('Transport: ${streamService.activeJpegTransport.name}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-          Text('Glass backend: ${AppGlassBackend.currentName(context)}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF5E5CE6))),
+          ListenableBuilder(
+            listenable: AppAccessibilityService.instance,
+            builder: (context, _) => Text(
+              'Glass backend: ${AppGlassBackend.currentName(context)}',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF5E5CE6)),
+            ),
+          ),
           Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Render FPS: ${streamService.renderFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),

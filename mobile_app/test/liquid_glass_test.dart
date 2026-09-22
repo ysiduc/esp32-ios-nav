@@ -423,10 +423,80 @@ void main() {
     });
   });
 
-  group('P5.7.1: Real Native Liquid Glass Backend & Accessibility Tests', () {
+  group('P5.7.1 & P5.7.2: Real Native Liquid Glass Backend & Accessibility Tests', () {
     tearDown(() {
       AppGlassBackend.forceBackendForTesting = null;
+      AppGlassBackend.forcePlatformForTesting = null;
       AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('native-blur-fallback');
+    });
+
+    testWidgets('Live Reduce Transparency switch dynamically rebuilds AppGlassSurface without parent rebuild', (tester) async {
+      // Force iOS environment with Reduce Transparency OFF initially
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppGlassBackend.forceBackendForTesting = null;
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AppGlassSurface(
+              radius: 20.0,
+              child: Text('Live Accessibility Content'),
+            ),
+          ),
+        ),
+      );
+
+      // Initial state: Reduce Transparency OFF -> real native UiKitView exists
+      expect(find.text('Live Accessibility Content'), findsOneWidget);
+      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsNothing);
+
+      // User enables Reduce Transparency in iOS Settings -> notification triggers onReduceTransparencyChanged
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(true);
+      await tester.pump(); // No pumpWidget! Direct rebuild via ListenableBuilder (P5.7.2 Part A & B)
+
+      // UiKitView and BackdropFilter are removed, opaque high-contrast surface renders
+      expect(find.byType(UiKitView), findsNothing);
+      expect(find.byType(BackdropFilter), findsNothing);
+      expect(find.text('Live Accessibility Content'), findsOneWidget);
+
+      // User disables Reduce Transparency -> returns to real native UiKitView
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
+      await tester.pump(); // No pumpWidget!
+
+      expect(find.byType(UiKitView), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsNothing);
+    });
+
+    testWidgets('Production resolver on iOS with current capability=blur resolves to native-blur-fallback', (tester) async {
+      late BuildContext capturedContext;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (ctx) {
+                capturedContext = ctx;
+                return const Text('Resolver Context');
+              },
+            ),
+          ),
+        ),
+      );
+
+      // Verify production resolver behavior without test overrides (P5.7.2 Part C & D)
+      AppGlassBackend.forceBackendForTesting = null;
+      AppGlassBackend.forcePlatformForTesting = TargetPlatform.iOS;
+      AppAccessibilityService.instance.setReduceTransparencyForTesting(false);
+      AppAccessibilityService.instance.setNativeGlassCapabilityForTesting('native-blur-fallback');
+
+      final backend = AppGlassBackend.resolve(
+        context: capturedContext,
+        isReduceTransparency: false,
+      );
+      expect(backend, equals(AppGlassBackendType.nativeBlurFallback));
+      expect(AppGlassBackend.currentName(capturedContext), equals('native-blur-fallback'));
     });
 
     testWidgets('iOS native backend creates real UiKitView with plugins.ysiduc.com/native_glass and correct params', (tester) async {
@@ -494,6 +564,7 @@ void main() {
         ),
       );
 
+      // Synthetic test state representing future SDK support (not production on iOS 18 / Xcode 16)
       AppGlassBackend.forceBackendForTesting = AppGlassBackendType.nativeModern;
       expect(AppGlassBackend.currentName(capturedContext), equals('native-modern'));
 

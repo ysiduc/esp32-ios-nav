@@ -34,7 +34,7 @@ enum AppGlassBackendType {
   opaqueFallback,
 }
 
-/// Global service providing iOS UIAccessibility.isReduceTransparencyEnabled state (P5.7.1 Part 6)
+/// Global service providing iOS UIAccessibility.isReduceTransparencyEnabled state and native glass capability (P5.7.1 & P5.7.2)
 class AppAccessibilityService extends ChangeNotifier {
   static final AppAccessibilityService instance = AppAccessibilityService._internal();
 
@@ -44,8 +44,10 @@ class AppAccessibilityService extends ChangeNotifier {
 
   static const MethodChannel _channel = MethodChannel('com.ysiduc.esp32_nav/accessibility');
   bool _reduceTransparency = false;
+  String _nativeGlassCapability = 'native-blur-fallback';
 
   bool get reduceTransparency => _reduceTransparency;
+  String get nativeGlassCapability => _nativeGlassCapability;
 
   Future<void> _init() async {
     _channel.setMethodCallHandler((call) async {
@@ -66,6 +68,16 @@ class AppAccessibilityService extends ChangeNotifier {
     } catch (_) {
       // Non-iOS or test environment fallback
     }
+
+    try {
+      final cap = await _channel.invokeMethod<String>('getGlassCapability');
+      if (cap != null && cap.isNotEmpty) {
+        _nativeGlassCapability = cap;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Non-iOS or test environment fallback
+    }
   }
 
   @visibleForTesting
@@ -73,28 +85,48 @@ class AppAccessibilityService extends ChangeNotifier {
     _reduceTransparency = value;
     notifyListeners();
   }
+
+  @visibleForTesting
+  void setNativeGlassCapabilityForTesting(String value) {
+    _nativeGlassCapability = value;
+    notifyListeners();
+  }
 }
 
-/// Helper and telemetry provider for Liquid Glass backend selection (P5.7.1 Part 5)
+/// Helper and telemetry provider for Liquid Glass backend selection (P5.7.1 Part 5 & P5.7.2)
 class AppGlassBackend {
   @visibleForTesting
   static AppGlassBackendType? forceBackendForTesting;
+
+  @visibleForTesting
+  static TargetPlatform? forcePlatformForTesting;
 
   /// Resolves the active rendering backend based on platform and accessibility settings
   static AppGlassBackendType resolve({
     required BuildContext context,
     required bool isReduceTransparency,
   }) {
-    if (forceBackendForTesting != null) {
-      return forceBackendForTesting!;
-    }
+    // 1. Accessibility Fallback: Reduce Transparency ALWAYS forces opaque fallback (P5.7.1 & P5.7.2)
     if (isReduceTransparency) {
       return AppGlassBackendType.opaqueFallback;
     }
+
+    // 2. Synthetic backend override for unit testing specific visual branches
+    if (forceBackendForTesting != null) {
+      return forceBackendForTesting!;
+    }
+
+    // 3. Platform & native capability detection
+    final platform = forcePlatformForTesting ?? defaultTargetPlatform;
     if (kIsWeb) {
       return AppGlassBackendType.flutterFallback;
     }
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
+    if (platform == TargetPlatform.iOS) {
+      // P5.7.2: Only return nativeModern if native Swift explicitly confirms modern Liquid Glass API.
+      // In current production on iOS 18 / Xcode 16 SDK, capability is always "native-blur-fallback".
+      if (AppAccessibilityService.instance.nativeGlassCapability == 'native-modern') {
+        return AppGlassBackendType.nativeModern;
+      }
       return AppGlassBackendType.nativeBlurFallback;
     }
     return AppGlassBackendType.flutterFallback;
@@ -157,10 +189,24 @@ class AppGlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // If caller explicitly passed an override, respect it directly without subscription
+    if (reduceTransparency != null) {
+      return _buildSurface(context, reduceTransparency!);
+    }
+
+    // Live reactive rebuild when iOS UIAccessibility.isReduceTransparencyEnabled changes (P5.7.2 Part A)
+    return ListenableBuilder(
+      listenable: AppAccessibilityService.instance,
+      builder: (context, _) => _buildSurface(
+        context,
+        AppAccessibilityService.instance.reduceTransparency,
+      ),
+    );
+  }
+
+  Widget _buildSurface(BuildContext context, bool isReduceTransparency) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final isReduceTransparency = reduceTransparency ??
-        AppAccessibilityService.instance.reduceTransparency;
 
     final backend = AppGlassBackend.resolve(
       context: context,
