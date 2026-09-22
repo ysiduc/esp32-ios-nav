@@ -381,6 +381,7 @@ void main() {
       mockRouter.nextRouteToReturn = null;
       navManager.startNavigation(routeA);
       DateTime t = DateTime(2026, 9, 22, 12, 0, 0);
+      navManager.nowProvider = () => t;
       final offRouteCoord = const LatLng(21.00041, 105.8010);
 
       navManager.updatePositionForTesting(
@@ -508,6 +509,163 @@ void main() {
       expect(navManager.rerouteRetryCount, equals(0));
       expect(navManager.lastRerouteFailureAt, isNull);
       expect(navManager.rerouteStatus, equals('idle'));
+    });
+    test('P5.5.2 Section 4 & 5: Slow network failure anchors backoff cooldown to actual completion time', () async {
+      DateTime syntheticTime = DateTime(2026, 9, 22, 12, 0, 0);
+      navManager.nowProvider = () => syntheticTime;
+
+      final completer = Completer<NavRoute?>();
+      mockRouter.pendingCompleter = completer;
+
+      navManager.startNavigation(routeA);
+      final offRouteCoord = const LatLng(21.00041, 105.8010);
+
+      // T0: suspected
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+      expect(mockRouter.callCount, equals(0));
+
+      // T0 + 1.2s: confirmed off-route -> Valhalla request starts
+      syntheticTime = syntheticTime.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+
+      expect(mockRouter.callCount, equals(1));
+      expect(navManager.isRerouting, isTrue);
+      expect(navManager.rerouteStatus, equals('requesting'));
+      expect(navManager.requestStartedAt, equals(syntheticTime));
+
+      final requestStartTime = syntheticTime;
+
+      // Single-flight during slow request: send more GPS updates at T0+2s, T0+3s, T0+5s
+      for (int i = 2; i <= 5; i++) {
+        syntheticTime = requestStartTime.add(Duration(seconds: i));
+        navManager.updatePositionForTesting(
+          offRouteCoord,
+          speedKmh: 35.0,
+          heading: 0.0,
+          horizontalAccuracy: 4.0,
+          timestamp: syntheticTime,
+        );
+        expect(mockRouter.callCount, equals(1), reason: 'Must not dispatch second request while first is in-flight');
+      }
+
+      // Now at T0 + 7.0s: Valhalla request completes with failure (null)
+      syntheticTime = requestStartTime.add(const Duration(seconds: 7));
+      completer.complete(null);
+      await Future.delayed(Duration.zero);
+
+      // Verify failure state anchored to T0 + 7s
+      expect(navManager.isRerouting, isFalse);
+      expect(navManager.rerouteStatus, equals('failed'));
+      expect(navManager.rerouteRetryCount, equals(1));
+      expect(navManager.rerouteFailedAt, equals(syntheticTime));
+      expect(navManager.lastRerouteFailureAt, equals(syntheticTime));
+      expect(navManager.currentRerouteCooldown.inSeconds, equals(3));
+
+      // At T0 + 8.0s (1s after failure): still in 3s cooldown
+      syntheticTime = requestStartTime.add(const Duration(seconds: 8));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(1), reason: 'Cooldown must prevent request at 1s after failure');
+      expect(navManager.rerouteStatus, equals('cooldown'));
+
+      // At T0 + 9.9s (2.9s after failure): still in cooldown
+      syntheticTime = requestStartTime.add(const Duration(milliseconds: 9900));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+      await Future.delayed(Duration.zero);
+      expect(mockRouter.callCount, equals(1));
+
+      // Reset mock router completer for attempt 2
+      mockRouter.pendingCompleter = null;
+      mockRouter.nextRouteToReturn = null;
+
+      // At T0 + 10.1s (3.1s after failure > 3.0s cooldown): second request permitted!
+      syntheticTime = requestStartTime.add(const Duration(milliseconds: 10100));
+      navManager.updatePositionForTesting(
+        offRouteCoord,
+        speedKmh: 35.0,
+        heading: 0.0,
+        horizontalAccuracy: 4.0,
+        timestamp: syntheticTime,
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(2), reason: 'Must permit retry 2 once 3.0s cooldown after failure elapses');
+      expect(navManager.rerouteRetryCount, equals(2));
+      expect(navManager.currentRerouteCooldown.inSeconds, equals(6));
+    });
+
+    test('P5.5.2 Section 4: Slow network Exception/Timeout anchors backoff cooldown to actual completion time', () async {
+      DateTime syntheticTime = DateTime(2026, 9, 22, 12, 0, 0);
+      navManager.nowProvider = () => syntheticTime;
+
+      final completer = Completer<NavRoute?>();
+      mockRouter.pendingCompleter = completer;
+
+      navManager.startNavigation(routeA);
+      final offRouteCoord = const LatLng(21.00041, 105.8010);
+
+      // T0: suspected
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: syntheticTime);
+
+      // T0 + 1.2s: confirmed
+      syntheticTime = syntheticTime.add(const Duration(milliseconds: 1200));
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: syntheticTime);
+
+      expect(mockRouter.callCount, equals(1));
+      final requestStartTime = syntheticTime;
+
+      // Network times out at T0 + 7s throwing Exception
+      syntheticTime = requestStartTime.add(const Duration(seconds: 7));
+      completer.completeError(TimeoutException('Valhalla timeout after 7s'));
+      await Future.delayed(Duration.zero);
+
+      expect(navManager.isRerouting, isFalse);
+      expect(navManager.rerouteStatus, equals('failed'));
+      expect(navManager.rerouteRetryCount, equals(1));
+      expect(navManager.rerouteFailedAt, equals(syntheticTime));
+
+      // At T0 + 8.5s: 1.5s after error, in cooldown
+      syntheticTime = requestStartTime.add(const Duration(milliseconds: 8500));
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: syntheticTime);
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(1));
+      expect(navManager.rerouteStatus, equals('cooldown'));
+
+      // At T0 + 10.1s: > 3.0s cooldown elapsed, second attempt triggered
+      mockRouter.pendingCompleter = null;
+      mockRouter.nextRouteToReturn = null;
+      syntheticTime = requestStartTime.add(const Duration(milliseconds: 10100));
+      navManager.updatePositionForTesting(offRouteCoord, speedKmh: 35.0, heading: 0.0, horizontalAccuracy: 4.0, timestamp: syntheticTime);
+      await Future.delayed(Duration.zero);
+
+      expect(mockRouter.callCount, equals(2));
+      expect(navManager.rerouteRetryCount, equals(2));
     });
   });
 }

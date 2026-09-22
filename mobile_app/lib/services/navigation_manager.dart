@@ -54,12 +54,14 @@ class NavigationManager extends ChangeNotifier {
   int _rerouteGeneration = 0;
   String _rerouteStatus = 'idle'; // idle, requesting, applied, failed
 
-  // Reroute Latency Diagnostics (P5.5 Section 66)
+  // Reroute Latency Diagnostics (P5.5 Section 66 & P5.5.2)
   DateTime? suspectedAt;
   DateTime? confirmedAt;
   DateTime? requestStartedAt;
   DateTime? routeReceivedAt;
+  DateTime? rerouteFailedAt;
   DateTime? routeCommittedAt;
+  DateTime Function() nowProvider = DateTime.now;
 
   // Rolling travel vs matched advance for stuck matcher detection (P5.5 Section 27)
   double _recentPhysicalTravelMeters = 0.0;
@@ -109,6 +111,14 @@ class NavigationManager extends ChangeNotifier {
     if (_rerouteRetryCount <= 0) return Duration.zero;
     final seconds = math.min(30.0, 3.0 * math.pow(2.0, _rerouteRetryCount - 1));
     return Duration(milliseconds: (seconds * 1000).round());
+  }
+
+  double get rerouteCooldownRemainingSeconds {
+    if (_rerouteStatus != 'cooldown' || _lastRerouteFailureAt == null) return 0.0;
+    final now = nowProvider();
+    final elapsed = now.difference(_lastRerouteFailureAt!).inMilliseconds / 1000.0;
+    final totalSec = currentRerouteCooldown.inMilliseconds / 1000.0;
+    return math.max(0.0, totalSec - elapsed);
   }
 
   // Location Getters
@@ -186,8 +196,10 @@ class NavigationManager extends ChangeNotifier {
     PhoneMediaService? mediaService,
     RoutingService? routingService,
     OffRouteDetector? offRouteDetector,
+    DateTime Function()? nowProvider,
   })  : _routingService = routingService ?? ValhallaService(),
-        _offRouteDetector = offRouteDetector ?? OffRouteDetector() {
+        _offRouteDetector = offRouteDetector ?? OffRouteDetector(),
+        nowProvider = nowProvider ?? DateTime.now {
     _initGps();
     _startIdleHeartbeat();
     bleService.getBatteryLevel().then((b) => _currentBattery = b);
@@ -330,6 +342,7 @@ class NavigationManager extends ChangeNotifier {
     confirmedAt = null;
     requestStartedAt = null;
     routeReceivedAt = null;
+    rerouteFailedAt = null;
     routeCommittedAt = null;
 
     _offRouteDetector.reset();
@@ -452,7 +465,7 @@ class NavigationManager extends ChangeNotifier {
     double horizontalAccuracy = 5.0,
     DateTime? timestamp,
   }) {
-    final sampleTime = timestamp ?? DateTime.now();
+    final sampleTime = timestamp ?? nowProvider();
     _rawLocation = newLocation;
     _horizontalAccuracy = horizontalAccuracy;
     _currentSpeedKmh = speedKmh.clamp(0.0, 160.0);
@@ -605,6 +618,7 @@ class NavigationManager extends ChangeNotifier {
       if (_rerouteRetryCount > 0) {
         _rerouteRetryCount = 0;
         _lastRerouteFailureAt = null;
+        rerouteFailedAt = null;
         if (_rerouteStatus != 'requesting') {
           _rerouteStatus = 'idle';
         }
@@ -648,13 +662,14 @@ class NavigationManager extends ChangeNotifier {
       _navigationDestination!,
       costing: 'motorcycle',
     ).then((newRoute) {
-      routeReceivedAt = DateTime.now();
+      final completionTime = nowProvider();
 
       if (_disposed || !_isNavigating || generation != _rerouteGeneration) {
         return;
       }
 
       if (newRoute != null && newRoute.polylinePoints.length >= 2) {
+        routeReceivedAt = completionTime;
         // ATOMIC COMMIT OF ROUTE B (Sections 40, 42)
         _activeRoute = newRoute;
         _activeRouteGeometry = RouteGeometry(newRoute.polylinePoints, steps: newRoute.steps);
@@ -683,25 +698,29 @@ class NavigationManager extends ChangeNotifier {
         _rerouteStatus = 'applied';
         _rerouteRetryCount = 0;
         _lastRerouteFailureAt = null;
-        routeCommittedAt = DateTime.now();
+        rerouteFailedAt = null;
+        routeCommittedAt = completionTime;
 
         _updateRemainingMetrics();
         notifyListeners();
         _sendCurrentPayloadToEsp32();
       } else {
-        // Reroute failure: keep Route A active, backoff (Section 43)
+        // Reroute failure: anchor cooldown to actual completion time (P5.5.2)
         _isRerouting = false;
         _rerouteStatus = 'failed';
         _rerouteRetryCount++;
-        _lastRerouteFailureAt = requestTime;
+        _lastRerouteFailureAt = completionTime;
+        rerouteFailedAt = completionTime;
         notifyListeners();
       }
     }).catchError((_) {
       if (generation == _rerouteGeneration) {
+        final errorTime = nowProvider();
         _isRerouting = false;
         _rerouteStatus = 'failed';
         _rerouteRetryCount++;
-        _lastRerouteFailureAt = requestTime;
+        _lastRerouteFailureAt = errorTime;
+        rerouteFailedAt = errorTime;
         notifyListeners();
       }
     });
@@ -897,6 +916,12 @@ class NavigationManager extends ChangeNotifier {
     _distanceToNextManeuver = 0.0;
     _remainingTotalDistance = 0.0;
     _remainingEtaMinutes = 0;
+    suspectedAt = null;
+    confirmedAt = null;
+    requestStartedAt = null;
+    routeReceivedAt = null;
+    rerouteFailedAt = null;
+    routeCommittedAt = null;
     _offRouteDetector.reset();
 
     _positionStream?.cancel();

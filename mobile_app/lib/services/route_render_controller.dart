@@ -193,8 +193,10 @@ class RouteRenderController {
     }
   }
 
-  /// Resets state when leaving navigation or clearing map
+  /// Resets state when leaving navigation or clearing map.
+  /// Bumps _latestSubmittedGeneration to invalidate and abort any in-flight renders.
   void reset() {
+    _latestSubmittedGeneration++;
     _lastRenderedRouteRevision = -1;
     _lastRenderedMode = RoutePresentationMode.none;
     _lastRenderedPointsCount = 0;

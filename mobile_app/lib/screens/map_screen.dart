@@ -1588,7 +1588,7 @@ class _MapScreenState extends State<MapScreen> {
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),
             const Text(
-              'NAV ENGINE (P5.5.1)',
+              'NAV ENGINE (P5.5.2)',
               style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFFFF9500)),
             ),
             const SizedBox(height: 4),
@@ -1603,7 +1603,12 @@ class _MapScreenState extends State<MapScreen> {
             Text('Route remain: ${navManager.remainingTotalDistance >= 1000 ? "${(navManager.remainingTotalDistance / 1000).toStringAsFixed(1)}km" : "${navManager.remainingTotalDistance.toStringAsFixed(0)}m"}', style: const TextStyle(fontSize: 11)),
             Text('OffRoute: ${navManager.lastOffRouteDecision?.state.name ?? "onRoute"}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: navManager.lastOffRouteDecision?.state == OffRouteState.confirmed ? Colors.red : (navManager.lastOffRouteDecision?.state == OffRouteState.suspected ? Colors.orange : Colors.green))),
             Text('Reason: ${navManager.lastOffRouteDecision?.reason.name ?? "none"}', style: const TextStyle(fontSize: 11)),
-            Text('Reroute: ${navManager.rerouteStatus} (gen ${navManager.rerouteGeneration}, rev ${navManager.routeRevision})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            if (navManager.rerouteStatus == 'cooldown')
+              Text('Reroute: cooldown (${navManager.rerouteCooldownRemainingSeconds.toStringAsFixed(1)}s, retry ${navManager.rerouteRetryCount})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.orange))
+            else
+              Text('Reroute: ${navManager.rerouteStatus} (gen ${navManager.rerouteGeneration}, rev ${navManager.routeRevision})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            if (navManager.rerouteRetryCount > 0 && navManager.rerouteStatus != 'cooldown')
+              Text('Retries: ${navManager.rerouteRetryCount}', style: const TextStyle(fontSize: 11)),
             Text('Latency: ${lastLatencyMs != null ? "${lastLatencyMs}ms" : "--"}', style: const TextStyle(fontSize: 11)),
           ],
         ],

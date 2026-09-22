@@ -21,7 +21,9 @@ class MockMapLineDrawer implements MapLineDrawer {
   @override
   Future<void> clearLines() async {
     clearLinesCallCount++;
-    onClearStarted?.complete();
+    if (onClearStarted != null && !onClearStarted!.isCompleted) {
+      onClearStarted!.complete();
+    }
     if (clearDelay > Duration.zero) {
       await Future.delayed(clearDelay);
     }
@@ -31,7 +33,9 @@ class MockMapLineDrawer implements MapLineDrawer {
   Future<void> drawActiveRoute({required List<LatLng> remainingPolyline}) async {
     drawActiveRouteCallCount++;
     lastDrawnActivePolyline = List.unmodifiable(remainingPolyline);
-    onDrawStarted?.complete();
+    if (onDrawStarted != null && !onDrawStarted!.isCompleted) {
+      onDrawStarted!.complete();
+    }
     if (drawDelay > Duration.zero) {
       await Future.delayed(drawDelay);
     }
@@ -219,6 +223,110 @@ void main() {
       expect(drawer.drawActiveRouteCallCount, 1); // No new lines added
       expect(controller.lastRenderedPointsCount, 0);
       expect(controller.lastRenderedMode, RoutePresentationMode.arrived);
+    });
+    test('P5.5.2 Section 6: Stale render race: Gen 1 in drawActiveRoute, Gen 2 requested -> Gen 1 commit aborted, Gen 2 commits', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.drawDelay = const Duration(milliseconds: 50);
+      drawer.onDrawStarted = Completer<void>();
+      final controller = RouteRenderController(drawer);
+
+      final route1 = [
+        const LatLng(21.000, 105.000),
+        const LatLng(21.001, 105.001),
+      ];
+      final route2 = [
+        const LatLng(21.002, 105.002),
+        const LatLng(21.003, 105.003),
+      ];
+
+      // Submit Gen 1 (enters drawActiveRoute)
+      final fut1 = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: route1,
+      );
+
+      // Wait until Gen 1 has started drawing
+      await drawer.onDrawStarted!.future;
+      expect(controller.isRendering, isTrue);
+
+      // Submit Gen 2 while Gen 1 is actively inside drawActiveRoute delay
+      final fut2 = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: route2,
+      );
+
+      await Future.wait([fut1, fut2]);
+
+      // Gen 1 detected it was superseded after drawActiveRoute and skipped commit.
+      // Gen 2 then cleared lines and committed its geometry.
+      expect(controller.latestCommittedGeneration, 2);
+      expect(drawer.lastDrawnActivePolyline, route2);
+      expect(controller.isRendering, isFalse);
+    });
+
+    test('P5.5.2 Section 7: Reset invalidates in-flight render and prevents stale geometry commit', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.drawDelay = const Duration(milliseconds: 50);
+      drawer.onDrawStarted = Completer<void>();
+      final controller = RouteRenderController(drawer);
+
+      final route1 = [
+        const LatLng(21.000, 105.000),
+        const LatLng(21.001, 105.001),
+      ];
+
+      final fut1 = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: route1,
+      );
+
+      await drawer.onDrawStarted!.future;
+
+      // Reset called while Gen 1 is in flight
+      controller.reset();
+
+      await fut1;
+
+      // Gen 1 was aborted by reset() generation bump
+      expect(controller.latestCommittedGeneration, 0);
+      expect(controller.lastRenderedMode, RoutePresentationMode.none);
+      expect(controller.lastRenderedPointsCount, 0);
+      expect(controller.isRendering, isFalse);
+    });
+
+    test('P5.5.2 Section 7: Stop navigation mode none supersedes pending render leaving map empty', () async {
+      final drawer = MockMapLineDrawer();
+      drawer.clearDelay = const Duration(milliseconds: 40);
+      final controller = RouteRenderController(drawer);
+
+      final route1 = [
+        const LatLng(21.000, 105.000),
+        const LatLng(21.001, 105.001),
+      ];
+
+      final fut1 = controller.submitRequest(
+        routeRevision: 1,
+        mode: RoutePresentationMode.navigating,
+        mainPoints: route1,
+      );
+
+      // Navigation stops: mode none requested immediately
+      final fut2 = controller.submitRequest(
+        routeRevision: 2,
+        mode: RoutePresentationMode.none,
+        mainPoints: [],
+        forceRedraw: true,
+      );
+
+      await Future.wait([fut1, fut2]);
+
+      expect(controller.latestCommittedGeneration, 2);
+      expect(controller.lastRenderedMode, RoutePresentationMode.none);
+      expect(controller.lastRenderedPointsCount, 0);
+      expect(controller.isRendering, isFalse);
     });
   });
 }
