@@ -1356,13 +1356,16 @@ void main() {
       expect(true, isTrue);
     });
 
-    testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec', (tester) async {
+    testWidgets('AppleGlassTokens conforms to light, airy, translucent Apple Maps spec (P6.2 unified liquid glass)', (tester) async {
       expect(AppleGlassTokens.blurLight, equals(16.0));
       expect(AppleGlassTokens.blurRegular, equals(20.0));
       expect(AppleGlassTokens.blurProminent, equals(24.0));
       expect(AppleGlassTokens.blurSheet, equals(30.0));
 
-      expect(AppleGlassTokens.fillSheet.opacity, closeTo(0.95, 0.02));
+      // P6.2: Search sheet no longer uses 0.95 opaque sheet fill
+      expect(AppleGlassTokens.fillSheet.opacity, isNot(closeTo(0.95, 0.05)));
+      expect(AppleGlassTokens.fillSheet.opacity, closeTo(0.38, 0.05));
+      expect(AppleGlassTokens.fillToolbar.opacity, closeTo(0.38, 0.05));
       expect(AppleGlassTokens.radiusSheet, equals(24.0));
       expect(AppleGlassTokens.radiusToolbar, equals(23.0));
 

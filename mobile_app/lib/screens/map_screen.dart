@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:ui';
 import '../widgets/liquid_glass.dart';
 import 'package:flutter/rendering.dart';
@@ -169,6 +170,100 @@ class _MapLibreLineDrawer implements MapLineDrawer {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  bool get _isDarkMap =>
+      _currentTheme == MapThemeMode.dark ||
+      _currentTheme == MapThemeMode.navigationNight ||
+      _currentTheme == MapThemeMode.satellite ||
+      (mounted && Theme.of(context).brightness == Brightness.dark);
+
+  String _getEffectivePlaceName(MapPlace place) {
+    final saved = _searchService.findSavedPlace(place);
+    if (saved != null && saved.name.trim().isNotEmpty && saved.name != 'Vị trí Google Maps') {
+      return saved.name.trim();
+    }
+    if (place.name.trim().isNotEmpty && place.name != 'Vị trí Google Maps') {
+      return place.name.trim();
+    }
+    if (place.displayName.trim().isNotEmpty) {
+      final firstPart = place.displayName.split(',').first.trim();
+      if (firstPart.isNotEmpty && firstPart != 'Vị trí Google Maps') return firstPart;
+    }
+    if (place.name.trim().isNotEmpty) {
+      return place.name.trim();
+    }
+    return 'Địa điểm đã chọn';
+  }
+
+  Widget _buildRecentPlaceAvatar(MapPlace p, bool isDark) {
+    final nameLower = p.name.toLowerCase();
+    final dispLower = p.displayName.toLowerCase();
+    final catLower = (p.category ?? '').toLowerCase();
+
+    Color bgColor;
+    Color iconColor;
+    IconData iconData;
+
+    if (nameLower.contains('nhà') || nameLower.contains('home') || catLower.contains('home')) {
+      bgColor = isDark ? const Color(0xFF007AFF).withOpacity(0.30) : const Color(0xFFE5F1FF);
+      iconColor = const Color(0xFF007AFF);
+      iconData = Icons.home_rounded;
+    } else if (nameLower.contains('công ty') || nameLower.contains('work') || nameLower.contains('office') || catLower.contains('work')) {
+      bgColor = isDark ? const Color(0xFF5E5CE6).withOpacity(0.30) : const Color(0xFFEEEEFF);
+      iconColor = const Color(0xFF5E5CE6);
+      iconData = Icons.work_rounded;
+    } else if (nameLower.contains('ngân hàng') || nameLower.contains('bank') || nameLower.contains('atm') || dispLower.contains('ngân hàng')) {
+      bgColor = isDark ? const Color(0xFF34C759).withOpacity(0.30) : const Color(0xFFE8F8EE);
+      iconColor = const Color(0xFF34C759);
+      iconData = Icons.account_balance_rounded;
+    } else if (nameLower.contains('trường') || nameLower.contains('school') || nameLower.contains('university') || dispLower.contains('trường')) {
+      bgColor = isDark ? const Color(0xFF32ADE6).withOpacity(0.30) : const Color(0xFFE5F7FF);
+      iconColor = const Color(0xFF007AFF);
+      iconData = Icons.school_rounded;
+    } else if (nameLower.contains('chợ') || nameLower.contains('siêu thị') || nameLower.contains('mart') || nameLower.contains('shop')) {
+      bgColor = isDark ? const Color(0xFFFF9500).withOpacity(0.30) : const Color(0xFFFFF4E5);
+      iconColor = const Color(0xFFFF9500);
+      iconData = Icons.shopping_bag_rounded;
+    } else if (p.isCustomSaved || _searchService.findSavedPlace(p) != null) {
+      bgColor = isDark ? const Color(0xFF007AFF).withOpacity(0.25) : const Color(0xFFE5F1FF);
+      iconColor = const Color(0xFF007AFF);
+      iconData = Icons.star_rounded;
+    } else {
+      bgColor = isDark ? Colors.white.withOpacity(0.12) : const Color(0xFFE5E5EA);
+      iconColor = isDark ? Colors.white70 : const Color(0xFF636366);
+      iconData = Icons.pin_drop_rounded;
+    }
+
+    return CircleAvatar(
+      radius: 19,
+      backgroundColor: bgColor,
+      child: Icon(iconData, color: iconColor, size: 20),
+    );
+  }
+
+  Point<num>? _destinationScreenPoint;
+
+  Future<void> _updateDestinationScreenPoint() async {
+    final ctrl = _mapController;
+    if (ctrl == null || !_mapReady || _selectedPlace == null) {
+      if (_destinationScreenPoint != null && mounted) {
+        setState(() => _destinationScreenPoint = null);
+      }
+      return;
+    }
+    try {
+      final pt = ml.LatLng(
+        _selectedPlace!.coordinate.latitude,
+        _selectedPlace!.coordinate.longitude,
+      );
+      final screenPt = await ctrl.toScreenLocation(pt);
+      if (mounted) {
+        setState(() {
+          _destinationScreenPoint = screenPt;
+        });
+      }
+    } catch (_) {}
+  }
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey _mapKey = GlobalKey();
   RoutePresentationMode _lastRenderedMode = RoutePresentationMode.none;
@@ -577,6 +672,7 @@ class _MapScreenState extends State<MapScreen> {
     if (ctrl == null || !_mapReady) return;
     try {
       await ctrl.clearCircles();
+      await ctrl.clearSymbols();
       if (_selectedPlace != null) {
         final pt = ml.LatLng(
           _selectedPlace!.coordinate.latitude,
@@ -604,7 +700,22 @@ class _MapScreenState extends State<MapScreen> {
             circleStrokeColor: '#FFFFFF',
           ),
         );
+
+        // Native GPU vector symbol label
+        final effectiveName = _getEffectivePlaceName(_selectedPlace!);
+        await ctrl.addSymbol(
+          ml.SymbolOptions(
+            geometry: pt,
+            textField: effectiveName,
+            textSize: 13.0,
+            textColor: _isDarkMap ? '#FFFFFF' : '#1C1C1E',
+            textHaloColor: _isDarkMap ? '#1C222E' : '#FFFFFF',
+            textHaloWidth: 2.5,
+            textOffset: const Offset(0, 1.8),
+          ),
+        );
       }
+      _updateDestinationScreenPoint();
     } catch (e) {
       debugPrint('Error updating destination marker on MapLibre: $e');
     }
@@ -1518,6 +1629,7 @@ class _MapScreenState extends State<MapScreen> {
             },
             onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
             onMapLongClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
+            onCameraIdle: () => _updateDestinationScreenPoint(),
             trackCameraPosition: true,
             compassEnabled: false,
             myLocationEnabled: true,
@@ -1784,24 +1896,20 @@ class _MapScreenState extends State<MapScreen> {
   // Liquid Glass Floating Controls (P5.4.1.3 Sections 36-45, 64)
   // ─────────────────────────────────────────────────────────────
   Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
+    final isDark = _isDarkMap;
     return Container(
       width: 48,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.85),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
+      decoration: MapOverlayGlassStyle.decoration(
+        isDark: isDark,
+        radius: 24,
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          filter: ImageFilter.blur(
+            sigmaX: MapOverlayGlassStyle.blurSigma,
+            sigmaY: MapOverlayGlassStyle.blurSigma,
+          ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
@@ -1810,11 +1918,19 @@ class _MapScreenState extends State<MapScreen> {
                 IconButton(
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 22),
+                  icon: Icon(
+                    Icons.layers_rounded,
+                    color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                    size: 22,
+                  ),
                   tooltip: 'Đổi nền bản đồ',
                   onPressed: _showMapThemePicker,
                 ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+                Container(
+                  width: 26,
+                  height: 0.5,
+                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+                ),
                 IconButton(
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
@@ -1822,13 +1938,19 @@ class _MapScreenState extends State<MapScreen> {
                   tooltip: 'Hướng Bắc',
                   onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
                 ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+                Container(
+                  width: 26,
+                  height: 0.5,
+                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+                ),
                 IconButton(
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
                   icon: Icon(
-                    _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-                    color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+                    _transportMode == 'bike' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+                    color: _transportMode == 'bike'
+                        ? const Color(0xFF007AFF)
+                        : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
                     size: 22,
                   ),
                   tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
@@ -1841,32 +1963,23 @@ class _MapScreenState extends State<MapScreen> {
                     }
                   },
                 ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
                 Container(
-                  width: 40,
-                  height: 40,
-                  margin: const EdgeInsets.symmetric(vertical: 2),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
+                  width: 26,
+                  height: 0.5,
+                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+                ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  icon: Icon(
+                    _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
+                    color: _isAutoCentering
+                        ? const Color(0xFF007AFF)
+                        : (isDark ? Colors.white70 : const Color(0xFF8E8E93)),
+                    size: 22,
                   ),
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                    icon: Icon(
-                      _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
-                      color: const Color(0xFF007AFF),
-                      size: 22,
-                    ),
-                    tooltip: 'Vị trí hiện tại',
-                    onPressed: () {
-                      if (isDriving) {
-                        _recenterToVehicle();
-                      } else {
-                        _recenterToUser();
-                      }
-                    },
-                  ),
+                  tooltip: 'Định vị của tôi',
+                  onPressed: _recenterToUser,
                 ),
               ],
             ),
@@ -1993,6 +2106,7 @@ class _MapScreenState extends State<MapScreen> {
     required String label,
     required String? subtitle,
     bool isAddButton = false,
+    bool isDark = false,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -2004,7 +2118,7 @@ class _MapScreenState extends State<MapScreen> {
             height: 58,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: isAddButton ? const Color(0xFFE5F1FF) : const Color(0xFFE5F1FF),
+              color: isDark ? const Color(0xFF007AFF).withOpacity(0.25) : const Color(0xFFE5F1FF),
             ),
             child: Icon(
               icon,
@@ -2015,10 +2129,10 @@ class _MapScreenState extends State<MapScreen> {
           const SizedBox(height: 6),
           Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF1C1C1E),
+              color: isDark ? Colors.white : const Color(0xFF1C1C1E),
             ),
           ),
           if (subtitle != null) ...[
@@ -2166,37 +2280,37 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Bottom Search Capsule (Screenshot 1)
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
+    final isDark = _isDarkMap;
     return GestureDetector(
       onTap: _openAppleSearchModal,
       child: Container(
         height: 50,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.88),
-          borderRadius: BorderRadius.circular(25),
-          border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
+        decoration: MapOverlayGlassStyle.decoration(
+          isDark: isDark,
+          radius: 25,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(25),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            filter: ImageFilter.blur(
+              sigmaX: MapOverlayGlassStyle.blurSigma,
+              sigmaY: MapOverlayGlassStyle.blurSigma,
+            ),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  const Icon(Icons.search_rounded, color: Color(0xFF8E8E93), size: 22),
+                  Icon(
+                    Icons.search_rounded,
+                    color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+                    size: 22,
+                  ),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Tìm kiếm điểm đến...',
                       style: TextStyle(
-                        color: Color(0xFF8E8E93),
+                        color: isDark ? Colors.white60 : const Color(0xFF8E8E93),
                         fontSize: 16,
                         fontWeight: FontWeight.w400,
                         letterSpacing: -0.2,
@@ -2206,7 +2320,11 @@ class _MapScreenState extends State<MapScreen> {
                   IconButton(
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    icon: const Icon(Icons.mic_none_rounded, color: Color(0xFF8E8E93), size: 22),
+                    icon: Icon(
+                      Icons.mic_none_rounded,
+                      color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+                      size: 22,
+                    ),
                     onPressed: _openAppleSearchModal,
                   ),
                   const SizedBox(width: 6),
@@ -2215,14 +2333,14 @@ class _MapScreenState extends State<MapScreen> {
                     height: 30,
                     decoration: const BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Color(0xFF5E5CE6),
+                      color: Color(0xFF007AFF),
                     ),
                     child: const Center(
                       child: Text(
                         'Y',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -2239,6 +2357,7 @@ class _MapScreenState extends State<MapScreen> {
 
   void _openAppleSearchModal() {
     _setOverlayMode(MapOverlayMode.search);
+    final isDark = _isDarkMap;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2259,581 +2378,583 @@ class _MapScreenState extends State<MapScreen> {
                 return ClipRRect(
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
                   child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+                    filter: ImageFilter.blur(
+                      sigmaX: MapOverlayGlassStyle.blurSigma,
+                      sigmaY: MapOverlayGlassStyle.blurSigma,
+                    ),
                     child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF2F2F7).withOpacity(0.80),
+                      decoration: MapOverlayGlassStyle.decoration(
+                        isDark: isDark,
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                        border: Border(
-                          top: BorderSide(color: Colors.white.withOpacity(0.60), width: 0.5),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.12),
-                            blurRadius: 28,
-                            offset: const Offset(0, -6),
-                          ),
-                        ],
                       ),
                       child: Column(
-                    children: [
-                      // Top Drag Handle
-                      Center(
-                        child: Container(
-                          width: 36,
-                          height: 5,
-                          margin: const EdgeInsets.only(top: 10, bottom: 12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFD1D1D6),
-                            borderRadius: BorderRadius.circular(2.5),
+                        children: [
+                          // Top Drag Handle
+                          Center(
+                            child: Container(
+                              width: 36,
+                              height: 5,
+                              margin: const EdgeInsets.only(top: 10, bottom: 12),
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.white30 : const Color(0xFFD1D1D6),
+                                borderRadius: BorderRadius.circular(2.5),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
 
-                      // Search Input Header
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                height: 46,
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(23),
-                                  border: Border.all(color: Colors.black.withOpacity(0.06)),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.04),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.search_rounded, color: Colors.black54, size: 20),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _searchController,
-                                        autofocus: false,
-                                        style: const TextStyle(
-                                          color: Colors.black87,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                        decoration: const InputDecoration(
-                                          hintText: 'Bản Đồ Apple',
-                                          hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
-                                          border: InputBorder.none,
-                                          isDense: true,
-                                        ),
-                                        onChanged: (val) {
-                                          _onSearchChanged(val);
-                                          setModalState(() {});
-                                        },
-                                        onSubmitted: (val) {
-                                          _onSearchSubmitted(val);
-                                          setModalState(() {});
-                                        },
-                                      ),
-                                    ),
-                                    if (_isAutocompleteRefreshing || _isResolvingGoogleLink)
-                                      const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
-                                      )
-                                    else if (_searchController.text.isNotEmpty)
-                                      GestureDetector(
-                                        onTap: () {
-                                          _searchController.clear();
-                                          _onSearchChanged('');
-                                          setModalState(() {});
-                                        },
-                                        child: const Icon(Icons.cancel, color: Colors.black38, size: 20),
-                                      ),
-                                    const SizedBox(width: 6),
-                                    const Icon(Icons.mic_none_rounded, color: Colors.black54, size: 20),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: () => Navigator.pop(modalCtx),
-                              child: Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.black.withOpacity(0.07),
-                                ),
-                                child: const Icon(Icons.close_rounded, color: Colors.black54, size: 20),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      if (_isResolvingGoogleLink)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF007AFF).withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFF007AFF).withOpacity(0.2)),
-                            ),
+                          // Search Input Header
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0),
                             child: Row(
                               children: [
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
-                                ),
-                                const SizedBox(width: 10),
                                 Expanded(
-                                  child: Text(
-                                    _googleLinkStatusText ?? 'Đang mở liên kết Google Maps…',
-                                    style: const TextStyle(fontSize: 12, color: Color(0xFF007AFF), fontWeight: FontWeight.w600),
-                                    overflow: TextOverflow.ellipsis,
+                                  child: Container(
+                                    height: 46,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                                      borderRadius: BorderRadius.circular(23),
+                                      border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.search_rounded,
+                                          color: isDark ? Colors.white70 : Colors.black54,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: TextField(
+                                            controller: _searchController,
+                                            autofocus: false,
+                                            style: TextStyle(
+                                              color: isDark ? Colors.white : Colors.black87,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                            decoration: InputDecoration(
+                                              hintText: 'Bản Đồ Apple',
+                                              hintStyle: TextStyle(
+                                                color: isDark ? Colors.white38 : Colors.black38,
+                                                fontSize: 16,
+                                              ),
+                                              border: InputBorder.none,
+                                              isDense: true,
+                                            ),
+                                            onChanged: (val) {
+                                              _onSearchChanged(val);
+                                              setModalState(() {});
+                                            },
+                                            onSubmitted: (val) {
+                                              _onSearchSubmitted(val);
+                                              setModalState(() {});
+                                            },
+                                          ),
+                                        ),
+                                        if (_isAutocompleteRefreshing || _isResolvingGoogleLink)
+                                          const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
+                                          )
+                                        else if (_searchController.text.isNotEmpty)
+                                          GestureDetector(
+                                            onTap: () {
+                                              _searchController.clear();
+                                              _onSearchChanged('');
+                                              setModalState(() {});
+                                            },
+                                            child: Icon(
+                                              Icons.cancel,
+                                              color: isDark ? Colors.white60 : Colors.black38,
+                                              size: 20,
+                                            ),
+                                          ),
+                                        const SizedBox(width: 6),
+                                        Icon(
+                                          Icons.mic_none_rounded,
+                                          color: isDark ? Colors.white70 : Colors.black54,
+                                          size: 20,
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
+                                const SizedBox(width: 8),
                                 GestureDetector(
-                                  onTap: _cancelGoogleLinkResolution,
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                    child: Text('Hủy', style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold, fontSize: 13)),
+                                  onTap: () => Navigator.pop(modalCtx),
+                                  child: Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                                      border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                    ),
+                                    child: Icon(
+                                      Icons.close_rounded,
+                                      color: isDark ? Colors.white70 : Colors.black54,
+                                      size: 20,
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ),
 
-                      const SizedBox(height: 16),
-
-                      // Body: Query Results or Recent Searches & Nearby Categories
-                      Expanded(
-                        child: isQueryMode
-                            ? ListView.separated(
-                                controller: scrollController,
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: results.length,
-                                separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.black12),
-                                itemBuilder: (context, idx) {
-                                  final p = results[idx];
-                                  return ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    leading: const CircleAvatar(
-                                      radius: 18,
-                                      backgroundColor: Colors.white,
-                                      child: Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
+                          if (_isResolvingGoogleLink)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF007AFF).withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF007AFF).withOpacity(0.2)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
                                     ),
-                                    title: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            p.name,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        _buildPrecisionBadge(p.precision),
-                                      ],
-                                    ),
-                                    subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black54, fontSize: 13)),
-                                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.black38),
-                                    onTap: () {
-                                      Navigator.pop(modalCtx);
-                                      _onPlaceClicked(p);
-                                    },
-                                  );
-                                },
-                              )
-                            : ListView(
-                                controller: scrollController,
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                children: [
-                                  // Quick Action: Paste Google Maps Link Chip
-                                  GestureDetector(
-                                    onTap: () async {
-                                      Navigator.pop(modalCtx);
-                                      _pasteFromClipboard();
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.all(12),
-                                      margin: const EdgeInsets.only(bottom: 16),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withOpacity(0.04),
-                                            blurRadius: 8,
-                                            offset: const Offset(0, 2),
-                                          ),
-                                        ],
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        _googleLinkStatusText ?? 'Đang mở liên kết Google Maps…',
+                                        style: const TextStyle(fontSize: 12, color: Color(0xFF007AFF), fontWeight: FontWeight.w600),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      child: const Row(
-                                        children: [
-                                          Icon(Icons.content_paste_rounded, color: Color(0xFF007AFF), size: 20),
-                                          SizedBox(width: 10),
-                                          Expanded(
-                                            child: Text(
-                                              'Dán liên kết Google Maps hoặc Tọa độ',
-                                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF007AFF)),
+                                    ),
+                                    GestureDetector(
+                                      onTap: _cancelGoogleLinkResolution,
+                                      child: const Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                        child: Text('Hủy', style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold, fontSize: 13)),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+
+                          const SizedBox(height: 16),
+
+                          // Body: Query Results or Recent Searches & Nearby Categories
+                          Expanded(
+                            child: isQueryMode
+                                ? ListView.separated(
+                                    controller: scrollController,
+                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                    itemCount: results.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                      height: 1,
+                                      color: isDark ? Colors.white12 : Colors.black12,
+                                    ),
+                                    itemBuilder: (context, idx) {
+                                      final p = results[idx];
+                                      final effectiveName = _getEffectivePlaceName(p);
+                                      return ListTile(
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        leading: CircleAvatar(
+                                          radius: 18,
+                                          backgroundColor: isDark
+                                              ? const Color(0xFF007AFF).withOpacity(0.25)
+                                              : const Color(0xFFE5F1FF),
+                                          child: const Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
+                                        ),
+                                        title: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                effectiveName,
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 15,
+                                                  color: isDark ? Colors.white : Colors.black87,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
                                             ),
-                                          ),
-                                          Icon(Icons.chevron_right_rounded, color: Colors.black38),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-
-                                  // Section 1: "Địa điểm >" (Saved / Quick destinations matching Image 5)
-                                  GestureDetector(
-                                    onTap: () {
-                                      // Can show all saved places
-                                    },
-                                    child: const Row(
-                                      children: [
-                                        Text(
-                                          'Địa điểm',
+                                            const SizedBox(width: 6),
+                                            _buildPrecisionBadge(p.precision),
+                                          ],
+                                        ),
+                                        subtitle: Text(
+                                          p.displayName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.bold,
-                                            color: Color(0xFF1C1C1E),
-                                            letterSpacing: -0.4,
+                                            color: isDark ? Colors.white60 : Colors.black54,
+                                            fontSize: 13,
                                           ),
                                         ),
-                                        SizedBox(width: 4),
-                                        Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Row(
+                                        trailing: Icon(
+                                          Icons.arrow_forward_ios_rounded,
+                                          size: 14,
+                                          color: isDark ? Colors.white38 : Colors.black38,
+                                        ),
+                                        onTap: () {
+                                          Navigator.pop(modalCtx);
+                                          _onPlaceClicked(p);
+                                        },
+                                      );
+                                    },
+                                  )
+                                : ListView(
+                                    controller: scrollController,
+                                    padding: const EdgeInsets.symmetric(horizontal: 16),
                                     children: [
-                                      // 1. Nhà (Home)
-                                      _buildQuickPlaceCircleAction(
-                                        icon: Icons.home_rounded,
-                                        label: 'Nhà',
-                                        subtitle: 'Thêm',
-                                        onTap: () {
-                                          final home = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('nhà') || p.name.toLowerCase().contains('home')).firstOrNull;
-                                          if (home != null) {
-                                            Navigator.pop(modalCtx);
-                                            _calculateRoutesForPlace(home);
-                                          } else {
-                                            // Focus search to add home
-                                            _searchController.text = 'Nhà ';
-                                            _onSearchChanged('Nhà ');
-                                            setModalState(() {});
-                                          }
+                                      // Quick Action: Paste Google Maps Link Chip
+                                      GestureDetector(
+                                        onTap: () async {
+                                          Navigator.pop(modalCtx);
+                                          _pasteFromClipboard();
                                         },
+                                        child: Container(
+                                          padding: const EdgeInsets.all(12),
+                                          margin: const EdgeInsets.only(bottom: 16),
+                                          decoration: BoxDecoration(
+                                            color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                                            borderRadius: BorderRadius.circular(16),
+                                            border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.content_paste_rounded, color: Color(0xFF007AFF), size: 20),
+                                              const SizedBox(width: 10),
+                                              const Expanded(
+                                                child: Text(
+                                                  'Dán liên kết Google Maps hoặc Tọa độ',
+                                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF007AFF)),
+                                                ),
+                                              ),
+                                              Icon(
+                                                Icons.chevron_right_rounded,
+                                                color: isDark ? Colors.white38 : Colors.black38,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
                                       ),
-                                      const SizedBox(width: 16),
-                                      // 2. Công ty (Work)
-                                      _buildQuickPlaceCircleAction(
-                                        icon: Icons.work_rounded,
-                                        label: 'Công ty',
-                                        subtitle: 'Thêm',
-                                        onTap: () {
-                                          final work = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('công ty') || p.name.toLowerCase().contains('work')).firstOrNull;
-                                          if (work != null) {
-                                            Navigator.pop(modalCtx);
-                                            _calculateRoutesForPlace(work);
-                                          } else {
-                                            _searchController.text = 'Công ty ';
-                                            _onSearchChanged('Công ty ');
-                                            setModalState(() {});
-                                          }
-                                        },
+
+                                      // Section 1: "Địa điểm >" (Saved / Quick destinations matching Image 5)
+                                      GestureDetector(
+                                        onTap: () {},
+                                        child: Row(
+                                          children: [
+                                            Text(
+                                              'Địa điểm',
+                                              style: TextStyle(
+                                                fontSize: 20,
+                                                fontWeight: FontWeight.bold,
+                                                color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                                                letterSpacing: -0.4,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Icon(
+                                              Icons.chevron_right_rounded,
+                                              color: isDark ? Colors.white38 : Colors.black45,
+                                              size: 22,
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                      const SizedBox(width: 16),
-                                      // 3. Thêm (Add)
-                                      _buildQuickPlaceCircleAction(
-                                        icon: Icons.add_rounded,
-                                        label: 'Thêm',
-                                        subtitle: null,
-                                        isAddButton: true,
-                                        onTap: () {
-                                          if (_searchService.recentSearches.isNotEmpty) {
-                                            final first = _searchService.recentSearches.first;
-                                            SavedPlaceDialog.show(
-                                              context: context,
-                                              place: first,
-                                              isEditing: false,
-                                              onSave: (customName) async {
-                                                await _searchService.savePlace(first.copyWith(name: customName));
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        children: [
+                                          // 1. Nhà (Home)
+                                          _buildQuickPlaceCircleAction(
+                                            icon: Icons.home_rounded,
+                                            label: 'Nhà',
+                                            subtitle: 'Thêm',
+                                            isDark: isDark,
+                                            onTap: () {
+                                              final home = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('nhà') || p.name.toLowerCase().contains('home')).firstOrNull;
+                                              if (home != null) {
+                                                Navigator.pop(modalCtx);
+                                                _calculateRoutesForPlace(home);
+                                              } else {
+                                                _searchController.text = 'Nhà ';
+                                                _onSearchChanged('Nhà ');
+                                                setModalState(() {});
+                                              }
+                                            },
+                                          ),
+                                          const SizedBox(width: 16),
+                                          // 2. Công ty (Work)
+                                          _buildQuickPlaceCircleAction(
+                                            icon: Icons.work_rounded,
+                                            label: 'Công ty',
+                                            subtitle: 'Thêm',
+                                            isDark: isDark,
+                                            onTap: () {
+                                              final work = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('công ty') || p.name.toLowerCase().contains('work')).firstOrNull;
+                                              if (work != null) {
+                                                Navigator.pop(modalCtx);
+                                                _calculateRoutesForPlace(work);
+                                              } else {
+                                                _searchController.text = 'Công ty ';
+                                                _onSearchChanged('Công ty ');
+                                                setModalState(() {});
+                                              }
+                                            },
+                                          ),
+                                          const SizedBox(width: 16),
+                                          // 3. Thêm (Add)
+                                          _buildQuickPlaceCircleAction(
+                                            icon: Icons.add_rounded,
+                                            label: 'Thêm',
+                                            subtitle: null,
+                                            isAddButton: true,
+                                            isDark: isDark,
+                                            onTap: () {
+                                              if (_searchService.recentSearches.isNotEmpty) {
+                                                final first = _searchService.recentSearches.first;
+                                                SavedPlaceDialog.show(
+                                                  context: context,
+                                                  place: first,
+                                                  isEditing: false,
+                                                  onSave: (customName) async {
+                                                    await _searchService.savePlace(first.copyWith(name: customName));
+                                                    setModalState(() {});
+                                                    setState(() {});
+                                                  },
+                                                );
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+
+                                      const SizedBox(height: 24),
+
+                                      // Section 2: "Gần đây >" (Recent Searches matching Image 5)
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Text(
+                                                'Gần đây',
+                                                style: TextStyle(
+                                                  fontSize: 20,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                                                  letterSpacing: -0.4,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Icon(
+                                                Icons.chevron_right_rounded,
+                                                color: isDark ? Colors.white38 : Colors.black45,
+                                                size: 22,
+                                              ),
+                                            ],
+                                          ),
+                                          if (_searchService.recentSearches.isNotEmpty)
+                                            GestureDetector(
+                                              onTap: () async {
+                                                await _searchService.clearRecentSearches();
                                                 setModalState(() {});
                                                 setState(() {});
                                               },
-                                            );
-                                          }
-                                        },
+                                              child: const Text(
+                                                'Xóa tất cả',
+                                                style: TextStyle(
+                                                  color: Color(0xFF007AFF),
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                                          borderRadius: BorderRadius.circular(16),
+                                          border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
+                                              blurRadius: 8,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Column(
+                                          children: _searchService.recentSearches.isEmpty
+                                              ? [
+                                                  Padding(
+                                                    padding: const EdgeInsets.all(16.0),
+                                                    child: Text(
+                                                      'Chưa có lịch sử tìm kiếm',
+                                                      style: TextStyle(
+                                                        color: isDark ? Colors.white38 : Colors.black38,
+                                                        fontSize: 14,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ]
+                                              : _searchService.recentSearches.take(8).map((p) {
+                                                  final effectiveName = _getEffectivePlaceName(p);
+                                                  return Column(
+                                                    children: [
+                                                      ListTile(
+                                                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                                                        leading: _buildRecentPlaceAvatar(p, isDark),
+                                                        title: Text(
+                                                          effectiveName,
+                                                          style: TextStyle(
+                                                            fontWeight: FontWeight.bold,
+                                                            fontSize: 15,
+                                                            color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                                                          ),
+                                                          overflow: TextOverflow.ellipsis,
+                                                        ),
+                                                        subtitle: Text(
+                                                          p.displayName,
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: TextStyle(
+                                                            color: isDark ? Colors.white60 : Colors.black45,
+                                                            fontSize: 13,
+                                                          ),
+                                                        ),
+                                                        trailing: IconButton(
+                                                          icon: Icon(
+                                                            Icons.more_horiz_rounded,
+                                                            color: isDark ? Colors.white60 : Colors.black54,
+                                                            size: 22,
+                                                          ),
+                                                          tooltip: 'Tùy chọn',
+                                                          onPressed: () => _showRecentPlaceActionSheet(context, p, setModalState),
+                                                        ),
+                                                        onTap: () {
+                                                          Navigator.pop(modalCtx);
+                                                          _onPlaceClicked(p);
+                                                        },
+                                                      ),
+                                                      Container(
+                                                        height: 0.5,
+                                                        margin: const EdgeInsets.only(left: 62, right: 16),
+                                                        color: isDark ? Colors.white12 : Colors.black.withOpacity(0.07),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }).toList(),
+                                        ),
+                                      ),
 
-                                  const SizedBox(height: 24),
+                                      const SizedBox(height: 24),
 
-                                  // Section 2: "Gần đây >" (Recent Searches matching Image 5)
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Row(
+                                      // Section 3: "Hướng dẫn của bạn >" (Your Guides / Favorites matching Image 5)
+                                      Row(
                                         children: [
                                           Text(
-                                            'Gần đây',
+                                            'Hướng dẫn của bạn',
                                             style: TextStyle(
                                               fontSize: 20,
                                               fontWeight: FontWeight.bold,
-                                              color: Color(0xFF1C1C1E),
+                                              color: isDark ? Colors.white : const Color(0xFF1C1C1E),
                                               letterSpacing: -0.4,
                                             ),
                                           ),
-                                          SizedBox(width: 4),
-                                          Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
+                                          const SizedBox(width: 4),
+                                          Icon(
+                                            Icons.chevron_right_rounded,
+                                            color: isDark ? Colors.white38 : Colors.black45,
+                                            size: 22,
+                                          ),
                                         ],
                                       ),
-                                      if (_searchService.recentSearches.isNotEmpty)
-                                        GestureDetector(
-                                          onTap: () async {
-                                            await _searchService.clearRecentSearches();
-                                            setModalState(() {});
-                                            setState(() {});
-                                          },
-                                          child: const Text(
-                                            'Xóa tất cả',
-                                            style: TextStyle(
-                                              color: Color(0xFF007AFF),
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(16),
-                                      boxShadow: [
-                                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: _searchService.recentSearches.isEmpty
-                                          ? [
-                                              const Padding(
-                                                padding: EdgeInsets.all(16.0),
-                                                child: Text('Chưa có lịch sử tìm kiếm', style: TextStyle(color: Colors.black38, fontSize: 14)),
+                                      const SizedBox(height: 10),
+                                      GestureDetector(
+                                        onTap: () {},
+                                        child: Container(
+                                          width: 160,
+                                          height: 175,
+                                          margin: const EdgeInsets.only(bottom: 24),
+                                          decoration: BoxDecoration(
+                                            color: isDark ? const Color(0xFF2C3240) : const Color(0xFF1C1C1E),
+                                            borderRadius: BorderRadius.circular(18),
+                                            border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(0.12),
+                                                blurRadius: 10,
+                                                offset: const Offset(0, 3),
                                               ),
-                                            ]
-                                          : _searchService.recentSearches.take(8).map((p) {
-                                              return Column(
-                                                children: [
-                                                  ListTile(
-                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                                                    leading: CircleAvatar(
-                                                      radius: 19,
-                                                      backgroundColor: const Color(0xFFB8835C),
-                                                      child: const Icon(Icons.apartment_rounded, color: Colors.white, size: 19),
-                                                    ),
-                                                    title: Text(
-                                                      p.name,
-                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1C1C1E)),
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                    subtitle: Text(
-                                                      p.displayName,
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(color: Colors.black45, fontSize: 13),
-                                                    ),
-                                                    trailing: IconButton(
-                                                      icon: const Icon(Icons.more_horiz_rounded, color: Colors.black54, size: 22),
-                                                      tooltip: 'Tùy chọn',
-                                                      onPressed: () => _showRecentPlaceActionSheet(context, p, setModalState),
-                                                    ),
-                                                    onTap: () {
-                                                      Navigator.pop(modalCtx);
-                                                      _onPlaceClicked(p);
-                                                    },
-                                                  ),
-                                                  Container(height: 0.5, margin: const EdgeInsets.only(left: 62, right: 16), color: Colors.black.withOpacity(0.07)),
-                                                ],
-                                              );
-                                            }).toList(),
-                                    ),
-                                  ),
-
-                                  const SizedBox(height: 24),
-
-                                  // Section 3: "Hướng dẫn của bạn >" (Your Guides / Favorites matching Image 5)
-                                  const Row(
-                                    children: [
-                                      Text(
-                                        'Hướng dẫn của bạn',
-                                        style: TextStyle(
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFF1C1C1E),
-                                          letterSpacing: -0.4,
-                                        ),
-                                      ),
-                                      SizedBox(width: 4),
-                                      Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  GestureDetector(
-                                    onTap: () {
-                                      // Show saved places if any
-                                    },
-                                    child: Container(
-                                      width: 160,
-                                      height: 175,
-                                      margin: const EdgeInsets.only(bottom: 24),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF1C1C1E),
-                                        borderRadius: BorderRadius.circular(18),
-                                        boxShadow: [
-                                          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 10, offset: const Offset(0, 3)),
-                                        ],
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          Expanded(
-                                            child: Center(
-                                              child: Icon(
-                                                Icons.star_rounded,
-                                                color: const Color(0xFFFFCC00),
-                                                size: 64,
-                                              ),
-                                            ),
+                                            ],
                                           ),
-                                          Container(
-                                            width: double.infinity,
-                                            padding: const EdgeInsets.all(12),
-                                            decoration: const BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
-                                            ),
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'Mục ưa thích',
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 14,
-                                                    color: Color(0xFF1C1C1E),
+                                          child: Column(
+                                            children: [
+                                              const Expanded(
+                                                child: Center(
+                                                  child: Icon(
+                                                    Icons.star_rounded,
+                                                    color: Color(0xFFFFCC00),
+                                                    size: 64,
                                                   ),
                                                 ),
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  '${_searchService.savedPlaces.length} địa điểm',
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.black45,
-                                                  ),
+                                              ),
+                                              Container(
+                                                width: double.infinity,
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                                                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(18)),
                                                 ),
-                                              ],
-                                            ),
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      'Mục ưa thích',
+                                                      style: TextStyle(
+                                                        fontWeight: FontWeight.bold,
+                                                        fontSize: 14,
+                                                        color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '${_searchService.savedPlaces.length} địa điểm',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: isDark ? Colors.white60 : Colors.black45,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ],
+                                        ),
                                       ),
-                                    ),
+                                    ],
                                   ),
-
-                                  // Section 2: "Tìm lân cận" (Nearby Categories)
-                                  const Text(
-                                    'Tìm lân cận',
-                                    style: TextStyle(
-                                      fontSize: 19,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black87,
-                                      letterSpacing: -0.3,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(16),
-                                      boxShadow: [
-                                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        _buildAppleCategoryRow('🏛️', 'Ngân Hàng và ATM', () {
-                                          Navigator.pop(modalCtx);
-                                          _onSelectCategory(const QuickSearchCategory(
-                                            title: 'Ngân Hàng và ATM',
-                                            query: 'ngân hàng, atm',
-                                            icon: Icons.account_balance_rounded,
-                                            color: Color(0xFF007AFF),
-                                          ));
-                                        }),
-                                        const Divider(height: 1, indent: 48, color: Colors.black12),
-                                        _buildAppleCategoryRow('🛏️', 'Khách sạn', () {
-                                          Navigator.pop(modalCtx);
-                                          _onSelectCategory(const QuickSearchCategory(
-                                            title: 'Khách sạn',
-                                            query: 'khách sạn, homestay, hotel',
-                                            icon: Icons.hotel_rounded,
-                                            color: Color(0xFF5856D6),
-                                          ));
-                                        }),
-                                        const Divider(height: 1, indent: 48, color: Colors.black12),
-                                        _buildAppleCategoryRow('🛍️', 'Trung tâm thương mại', () {
-                                          Navigator.pop(modalCtx);
-                                          _onSelectCategory(const QuickSearchCategory(
-                                            title: 'Trung tâm thương mại',
-                                            query: 'trung tâm thương mại, siêu thị, vincom',
-                                            icon: Icons.shopping_bag_rounded,
-                                            color: Color(0xFFFF9500),
-                                          ));
-                                        }),
-                                        const Divider(height: 1, indent: 48, color: Colors.black12),
-                                        _buildAppleCategoryRow('⛽', 'Cây xăng', () {
-                                          Navigator.pop(modalCtx);
-                                          _onSelectCategory(const QuickSearchCategory(
-                                            title: 'Cây xăng',
-                                            query: 'cây xăng, petrolimex',
-                                            icon: Icons.local_gas_station_rounded,
-                                            color: Color(0xFFFF9F1C),
-                                          ));
-                                        }),
-                                        const Divider(height: 1, indent: 48, color: Colors.black12),
-                                        _buildAppleCategoryRow('☕', 'Quán cafe & Ăn uống', () {
-                                          Navigator.pop(modalCtx);
-                                          _onSelectCategory(const QuickSearchCategory(
-                                            title: 'Quán cafe & Ăn uống',
-                                            query: 'quán cafe, cà phê, highlands, the coffee house',
-                                            icon: Icons.local_cafe_rounded,
-                                            color: Color(0xFF8D6E63),
-                                          ));
-                                        }),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 30),
-                                ],
-                              ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
                     ),
                   ),
                 );

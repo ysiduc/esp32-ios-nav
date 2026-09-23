@@ -803,6 +803,22 @@ class SearchService {
   }
 
   // --- Saved Places (Favorites) API ---
+    /// Find a saved place by name match or coordinate proximity (< 0.0001 deg) (P6.2)
+  MapPlace? findSavedPlace(MapPlace place) {
+    _ensureLoaded();
+    for (final saved in _savedPlaces) {
+      if (saved.name.toLowerCase() == place.name.toLowerCase() && saved.isCustomSaved) {
+        return saved;
+      }
+      final latDiff = (saved.coordinate.latitude - place.coordinate.latitude).abs();
+      final lonDiff = (saved.coordinate.longitude - place.coordinate.longitude).abs();
+      if (latDiff < 0.0001 && lonDiff < 0.0001) {
+        return saved;
+      }
+    }
+    return null;
+  }
+
   List<MapPlace> get savedPlaces {
     _ensureLoaded();
     return List.unmodifiable(_savedPlaces);

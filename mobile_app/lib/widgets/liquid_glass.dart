@@ -10,6 +10,76 @@ import 'package:flutter/services.dart';
 /// Centralized Design System Tokens for Apple Maps Liquid Glass (P5.8.2)
 /// Adheres strictly to Target Images 1 & 2 (light, airy, translucent, subtle frosted milk,
 /// 0.5pt specular edges, diffused soft shadows) while rejecting Anti-reference Images 3 & 4.
+/// Unified Liquid Glass Material Style (P6.2)
+/// Authoritative reference is Image 4:
+/// - Map texture and roads are visibly translucent through the glass body
+/// - Milky frosted diffusion (blur 24)
+/// - Translucent adaptive tint (light: milky white ~0.38; dark: dark neutral/navy ~0.30)
+/// - Ultra-fine specular highlight edge (0.5 - 0.6pt white stroke)
+/// - Soft ambient diffuse shadow (blur 20, no harsh drop)
+/// - Unified across: Drawer, Search sheet, Right toolbar, Bottom search bar
+class MapOverlayGlassStyle {
+  static const double blurSigma = 24.0;
+
+  static double blur({bool isDark = false}) => blurSigma;
+
+  static Color fill({required bool isDark, double opacityFactor = 1.0}) {
+    if (isDark) {
+      return const Color(0xFF161B26).withOpacity(0.30 * opacityFactor);
+    } else {
+      return Colors.white.withOpacity(0.38 * opacityFactor);
+    }
+  }
+
+  static Color secondaryFill({required bool isDark}) {
+    if (isDark) {
+      return Colors.white.withOpacity(0.12);
+    } else {
+      return Colors.white.withOpacity(0.68);
+    }
+  }
+
+  static Border border({required bool isDark, double width = 0.5}) {
+    if (isDark) {
+      return Border.all(
+        color: Colors.white.withOpacity(0.35),
+        width: width,
+      );
+    } else {
+      return Border.all(
+        color: Colors.white.withOpacity(0.60),
+        width: width,
+      );
+    }
+  }
+
+  static List<BoxShadow> shadow({required bool isDark}) {
+    return [
+      BoxShadow(
+        color: Colors.black.withOpacity(isDark ? 0.28 : 0.08),
+        blurRadius: 20.0,
+        spreadRadius: 0.0,
+        offset: const Offset(0, 4),
+      ),
+    ];
+  }
+
+  static BoxDecoration decoration({
+    required bool isDark,
+    BorderRadius? borderRadius,
+    double radius = 24.0,
+    double borderWidth = 0.5,
+    double opacityFactor = 1.0,
+  }) {
+    return BoxDecoration(
+      color: fill(isDark: isDark, opacityFactor: opacityFactor),
+      borderRadius: borderRadius ?? BorderRadius.circular(radius),
+      border: border(isDark: isDark, width: borderWidth),
+      boxShadow: shadow(isDark: isDark),
+    );
+  }
+}
+
 class AppleGlassTokens {
   // --- 1. Blur Intensities ---
   static const double blurLight = 16.0;
@@ -21,9 +91,9 @@ class AppleGlassTokens {
   static final Color fillLight = Colors.white.withOpacity(0.72);
   static final Color fillRegular = Colors.white.withOpacity(0.78);
   static final Color fillProminent = Colors.white.withOpacity(0.85);
-  static final Color fillToolbar = Colors.white.withOpacity(0.80);
-  static final Color fillSheet = const Color(0xFFF2F2F7).withOpacity(0.95);
-  static final Color fillSearchField = Colors.white.withOpacity(0.92);
+  static final Color fillToolbar = Colors.white.withOpacity(0.38);
+  static final Color fillSheet = Colors.white.withOpacity(0.38);
+  static final Color fillSearchField = Colors.white.withOpacity(0.68);
   static const Color fillCard = Colors.white;
 
   // --- 3. Specular Border Strokes (0.5pt subtle, refined light highlights) ---
@@ -95,6 +165,21 @@ class AppleGlassTokens {
     border: Border.all(color: borderCard, width: 0.5),
     boxShadow: shadowCard,
   );
+
+  /// Unified Map Overlay Glass material preset (P6.2)
+  static BoxDecoration mapOverlayMaterial({
+    required bool isDark,
+    BorderRadius? borderRadius,
+    double radius = 24.0,
+    double borderWidth = 0.5,
+    double opacityFactor = 1.0,
+  }) => MapOverlayGlassStyle.decoration(
+    isDark: isDark,
+    borderRadius: borderRadius,
+    radius: radius,
+    borderWidth: borderWidth,
+    opacityFactor: opacityFactor,
+  );
 }
 
 enum AppGlassVariant {
@@ -109,6 +194,9 @@ enum AppGlassVariant {
 
   /// Crimson/reddish tinted glass for destructive and cancel actions
   danger,
+
+  /// Unified Map Overlay Liquid Glass (P6.2 Image 4 reference)
+  mapOverlay,
 }
 
 /// Active navigation/map overlay presentation mode (P5.8)
@@ -597,6 +685,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
           break;
         case AppGlassVariant.clear:
         case AppGlassVariant.regular:
+        case AppGlassVariant.mapOverlay:
           solidBg = isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC);
           solidBorder = isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0);
           break;
@@ -635,6 +724,10 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
     switch (widget.variant) {
       case AppGlassVariant.prominent:
         defaultBorderColor = AppleGlassTokens.borderEdge;
+        break;
+
+      case AppGlassVariant.mapOverlay:
+        defaultBorderColor = isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.60);
         break;
 
       case AppGlassVariant.clear:
@@ -705,6 +798,10 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
     switch (widget.variant) {
       case AppGlassVariant.prominent:
         fillColor = AppleGlassTokens.fillProminent;
+        break;
+
+      case AppGlassVariant.mapOverlay:
+        fillColor = MapOverlayGlassStyle.fill(isDark: isDark);
         break;
 
       case AppGlassVariant.clear:
