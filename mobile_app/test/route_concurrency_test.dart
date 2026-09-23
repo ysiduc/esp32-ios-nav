@@ -210,6 +210,7 @@ void main() {
 
       expect(result.isSuccess, isTrue);
       expect(recordedCosting, equals('motorcycle'));
+      expect(recordedOsrmMode, isNull);
     });
 
     // -------------------------------------------------------------
