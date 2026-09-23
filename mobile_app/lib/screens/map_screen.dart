@@ -481,8 +481,7 @@ class _MapScreenState extends State<MapScreen> {
   RoutePresentationMode get _presentationMode {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     if (navManager.isNavigating && navManager.activeRoute != null) {
-      if (navManager.remainingTotalDistance <= 10.0 &&
-          navManager.currentStepIndex >= (navManager.activeRoute!.steps.length - 1)) {
+      if (navManager.hasArrived) {
         return RoutePresentationMode.arrived;
       }
       return RoutePresentationMode.navigating;
@@ -1899,6 +1898,18 @@ class _MapScreenState extends State<MapScreen> {
           Text('Routes recv: $_telemetryRoutesReceived, commit: $_telemetryRoutesCommitted, retained: ${_telemetryPreviewRetained ? "YES" : "NO"}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
           Text('Status: $_routeTelemetryStatus (gen #$_routeRequestGeneration, routes: $_routeTelemetryRoutesCount)', style: const TextStyle(fontSize: 10)),
           if (navManager.isNavigating) ...[
+            const Divider(height: 12, thickness: 0.5),
+            const Text(
+              'ARRIVAL ENGINE (P5.9.5)',
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFFFF2D55)),
+            ),
+            const SizedBox(height: 4),
+            Text('Arrived: ${navManager.hasArrived ? "YES" : "NO"}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: navManager.hasArrived ? const Color(0xFF34C759) : Colors.black87)),
+            Text('Arrival candidate samples: ${navManager.arrivalCandidateSamples}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+            Text('Physical -> dest: ${navManager.physicalDistanceToDestination != null ? "${navManager.physicalDistanceToDestination!.toStringAsFixed(1)}m" : "--"}', style: const TextStyle(fontSize: 11)),
+            Text('Route remain: ${navManager.remainingTotalDistance.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('GPS accuracy: ${navManager.horizontalAccuracy.toStringAsFixed(1)}m', style: const TextStyle(fontSize: 11)),
+            Text('Upcoming maneuver: ${navManager.authoritativeCurrentManeuver?.maneuverType.name ?? "none"}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
             const Divider(height: 12, thickness: 0.5),
             const Text(
               'NAV ENGINE (P5.6)',

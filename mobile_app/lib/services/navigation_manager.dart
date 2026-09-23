@@ -49,6 +49,11 @@ class NavigationManager extends ChangeNotifier {
   double _displayProgressMeters = 0.0;
   LatLng? _navigationDestination;
 
+  // Arrival State & Stability (P5.9.5)
+  bool _hasArrived = false;
+  int _arrivalCandidateSamples = 0;
+  bool _hasAnnouncedArrival = false;
+
   // Off-Route Detector & Reroute Engine (P5.5 Sections 19 - 44)
   final OffRouteDetector _offRouteDetector;
   OffRouteDecision? _lastOffRouteDecision;
@@ -150,6 +155,13 @@ class NavigationManager extends ChangeNotifier {
   double get rawMatchedProgressMeters => _rawMatchedProgressMeters;
   double get displayProgressMeters => _displayProgressMeters;
   LatLng? get navigationDestination => _navigationDestination;
+  bool get hasArrived => _hasArrived;
+  int get arrivalCandidateSamples => _arrivalCandidateSamples;
+  double? get physicalDistanceToDestination {
+    final physical = _acceptedPhysicalLocation ?? _rawLocation;
+    if (physical == null || _navigationDestination == null) return null;
+    return RouteGeometry.distanceBetween(physical, _navigationDestination!);
+  }
 
   // Secondary Reference Route (P5.6 BUG F)
   NavRoute? _secondaryRoute;
@@ -238,6 +250,14 @@ class NavigationManager extends ChangeNotifier {
   String get bannerInstruction {
     final m = authoritativeCurrentManeuver;
     if (m == null) return 'Tiếp tục đi thẳng';
+    if (m.maneuverType == ManeuverType.arrive ||
+        m.instruction.toLowerCase().contains('tới nơi') ||
+        m.instruction.toLowerCase().contains('điểm đến')) {
+      if (_hasArrived) {
+        return 'Bạn đã tới nơi.';
+      }
+      return 'Điểm đến ở phía trước';
+    }
     if (m.instruction.isNotEmpty) return m.instruction;
     if (m.streetName.isNotEmpty) return 'Đi vào ${m.streetName}';
     return 'Tiếp tục đi thẳng';
@@ -415,6 +435,9 @@ class NavigationManager extends ChangeNotifier {
     rerouteFailedAt = null;
     routeCommittedAt = null;
 
+    _hasArrived = false;
+    _arrivalCandidateSamples = 0;
+    _hasAnnouncedArrival = false;
     _offRouteDetector.reset();
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
@@ -472,6 +495,9 @@ class NavigationManager extends ChangeNotifier {
     _rerouteStatus = 'idle';
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
+    _hasArrived = false;
+    _arrivalCandidateSamples = 0;
+    _hasAnnouncedArrival = false;
     _displayProgressMeters = 0.0;
     _rawMatchedProgressMeters = 0.0;
     _currentSpeedKmh = 38.0;
@@ -512,7 +538,11 @@ class NavigationManager extends ChangeNotifier {
         _remainingEtaMinutes = 0;
         _currentSpeedKmh = 0.0;
         _secondaryRoute = null;
-        VoiceGuidanceService().announceArrival(_activeRoute?.title);
+        _hasArrived = true;
+        if (!_hasAnnouncedArrival) {
+          _hasAnnouncedArrival = true;
+          VoiceGuidanceService().announceArrival(_activeRoute?.title);
+        }
         notifyListeners();
         _sendCurrentPayloadToEsp32();
       }
@@ -628,6 +658,9 @@ class NavigationManager extends ChangeNotifier {
     // 5. UPDATE REMAINING METRICS (Sections 49, 50)
     _updateRemainingMetrics();
 
+    // 6. ARRIVAL EVALUATION (P5.9.5)
+    _evaluateArrival(newLocation, horizontalAccuracy);
+
     // Voice announcement check for turns & maneuvers
     if (_currentStepIndex < _activeRoute!.steps.length) {
       final activeStep = _activeRoute!.steps[_currentStepIndex];
@@ -639,6 +672,45 @@ class NavigationManager extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  void _evaluateArrival(LatLng physicalLocation, double horizontalAccuracy) {
+    if (!_isNavigating || _isSimulating || _navigationDestination == null || _activeRoute == null) {
+      return;
+    }
+    if (_hasArrived) return;
+
+    final bool isArrivalManeuver = (_currentStepIndex >= _activeRoute!.steps.length - 1) ||
+        (authoritativeCurrentManeuver?.maneuverType == ManeuverType.arrive);
+    if (!isArrivalManeuver) {
+      _arrivalCandidateSamples = 0;
+      return;
+    }
+
+    final physical = _acceptedPhysicalLocation ?? _rawLocation ?? physicalLocation;
+    final physicalDist = RouteGeometry.distanceBetween(physical, _navigationDestination!);
+    final physicalThreshold = math.max(20.0, math.min(30.0, horizontalAccuracy * 1.25));
+
+    final passesConditions = _remainingTotalDistance <= 20.0 &&
+        physicalDist <= physicalThreshold &&
+        horizontalAccuracy <= 20.0;
+
+    if (passesConditions) {
+      _arrivalCandidateSamples++;
+      if (_arrivalCandidateSamples >= 2) {
+        _hasArrived = true;
+        _remainingTotalDistance = 0.0;
+        _distanceToNextManeuver = 0.0;
+        if (!_hasAnnouncedArrival) {
+          _hasAnnouncedArrival = true;
+          VoiceGuidanceService().announceArrival(_activeRoute?.title);
+        }
+        notifyListeners();
+        _sendCurrentPayloadToEsp32();
+      }
+    } else {
+      _arrivalCandidateSamples = 0;
+    }
   }
 
   void _evaluateOffRoute(LatLng physicalLocation, DateTime sampleTime) {
@@ -903,6 +975,9 @@ class NavigationManager extends ChangeNotifier {
         _displayProgressMeters = _rawMatchedProgressMeters;
 
         _currentStepIndex = 0;
+        _hasArrived = false;
+        _arrivalCandidateSamples = 0;
+        _hasAnnouncedArrival = false;
         _offRouteDetector.reset();
         _lastOffRouteDecision = OffRouteDecision(
           state: OffRouteState.onRoute,
@@ -1054,13 +1129,29 @@ class NavigationManager extends ChangeNotifier {
     final m = now.minute.toString().padLeft(2, '0');
     final curClock = '$h:$m';
 
+    final isArriveManeuver = step.maneuverType == ManeuverType.arrive;
+    final String street;
+    final int distToTurn;
+    if (isArriveManeuver) {
+      if (_hasArrived) {
+        street = 'Bạn đã tới nơi.';
+        distToTurn = 0;
+      } else {
+        street = step.streetName.isNotEmpty ? step.streetName : 'Điểm đến ở phía trước';
+        distToTurn = _distanceToNextManeuver.round();
+      }
+    } else {
+      street = step.streetName.isNotEmpty ? step.streetName : step.instruction;
+      distToTurn = _distanceToNextManeuver.round();
+    }
+
     final payload = EspNavPayload(
       isNavigating: true,
       turnCode: step.turnCode,
-      distanceToTurn: _distanceToNextManeuver.round(),
-      totalDistance: _remainingTotalDistance.round(),
-      etaMinutes: _remainingEtaMinutes,
-      streetName: step.streetName.isNotEmpty ? step.streetName : step.instruction,
+      distanceToTurn: distToTurn,
+      totalDistance: _hasArrived ? 0 : _remainingTotalDistance.round(),
+      etaMinutes: _hasArrived ? 0 : _remainingEtaMinutes,
+      streetName: street,
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _currentStepIndex,
       totalSteps: _activeRoute!.steps.length,
@@ -1087,15 +1178,32 @@ class NavigationManager extends ChangeNotifier {
     final upcomingPts = _isNavigating ? computeUpcomingRoutePoints() : <List<int>>[];
 
     final mStep = authoritativeCurrentManeuver ?? currentStep;
+    final isArrive = _isNavigating && mStep?.maneuverType == ManeuverType.arrive;
+    final String previewStreet;
+    final int previewDistToTurn;
+    if (!_isNavigating) {
+      previewStreet = 'SAN SANG';
+      previewDistToTurn = 0;
+    } else if (isArrive) {
+      if (_hasArrived) {
+        previewStreet = 'Bạn đã tới nơi.';
+        previewDistToTurn = 0;
+      } else {
+        previewStreet = (mStep?.streetName.isNotEmpty == true) ? mStep!.streetName : 'Điểm đến ở phía trước';
+        previewDistToTurn = _distanceToNextManeuver.round();
+      }
+    } else {
+      previewStreet = (mStep?.streetName.isNotEmpty == true ? mStep!.streetName : (mStep?.instruction ?? ''));
+      previewDistToTurn = _distanceToNextManeuver.round();
+    }
+
     final payload = EspNavPayload(
       isNavigating: _isNavigating,
       turnCode: _isNavigating ? (mStep?.turnCode ?? 0) : 0,
-      distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
-      totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
-      etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
-      streetName: _isNavigating
-          ? (mStep?.streetName.isNotEmpty == true ? mStep!.streetName : (mStep?.instruction ?? ''))
-          : 'SAN SANG',
+      distanceToTurn: previewDistToTurn,
+      totalDistance: (_isNavigating && !_hasArrived) ? _remainingTotalDistance.round() : 0,
+      etaMinutes: (_isNavigating && !_hasArrived) ? _remainingEtaMinutes : 0,
+      streetName: previewStreet,
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _isNavigating ? _currentStepIndex : 0,
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
@@ -1138,11 +1246,17 @@ class NavigationManager extends ChangeNotifier {
     _matchedLocation = _acceptedPhysicalLocation ?? _rawLocation;
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
+    _hasArrived = false;
+    _arrivalCandidateSamples = 0;
+    _hasAnnouncedArrival = false;
     _displayProgressMeters = 0.0;
     _rawMatchedProgressMeters = 0.0;
     _distanceToNextManeuver = 0.0;
     _remainingTotalDistance = 0.0;
     _remainingEtaMinutes = 0;
+    _hasArrived = false;
+    _arrivalCandidateSamples = 0;
+    _hasAnnouncedArrival = false;
     suspectedAt = null;
     confirmedAt = null;
     requestStartedAt = null;

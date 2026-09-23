@@ -16,6 +16,7 @@ class VoiceGuidanceService extends ChangeNotifier {
   bool _isMuted = false;
   bool get isMuted => _isMuted;
   int get lastSpokenStepIndex => _lastSpokenStepIndex;
+  String get lastSpokenText => _lastSpokenText;
 
   // Trackers to prevent repeating the same speech in the same step
   final Set<int> _announced200mSteps = {};
