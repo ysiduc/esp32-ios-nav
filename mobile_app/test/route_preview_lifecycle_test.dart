@@ -1,3 +1,4 @@
+import 'package:mobile_app/screens/map_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/models/route_model.dart';
@@ -175,27 +176,39 @@ void main() {
 
     test('P5.9.4 Route planning prioritizes acceptedPhysicalLocation over stale matchedLocation', () {
       final physicalLoc = const LatLng(20.9785, 105.8340);
-      final staleMatchedLoc = const LatLng(21.5000, 106.5000);
+      final rawLoc = const LatLng(20.9780, 105.8335);
       final fallbackUserPos = const LatLng(21.0000, 105.8000);
+      final staleMatchedLoc = const LatLng(21.5000, 106.5000);
 
-      // Simulate state where acceptedPhysicalLocation is set
-      // (Using reflection/subclass or checking priority order)
-      final LatLng chosenStart;
-      final accepted = physicalLoc;
-      final raw = const LatLng(20.9780, 105.8335);
+      // 1. Accepted physical present -> accepted physical wins
+      final start1 = MapScreen.selectRoutePlanningStart(
+        acceptedPhysicalLocation: physicalLoc,
+        rawLocation: rawLoc,
+        fallbackLocation: fallbackUserPos,
+      );
+      expect(start1, equals(physicalLoc));
+      expect(start1, isNot(equals(staleMatchedLoc)));
 
-      // P5.9.4 logic under test
-      if (accepted != null) {
-        chosenStart = accepted;
-      } else if (raw != null) {
-        chosenStart = raw;
-      } else {
-        chosenStart = fallbackUserPos;
-      }
+      // 2. Accepted null, raw present -> raw wins
+      final start2 = MapScreen.selectRoutePlanningStart(
+        acceptedPhysicalLocation: null,
+        rawLocation: rawLoc,
+        fallbackLocation: fallbackUserPos,
+      );
+      expect(start2, equals(rawLoc));
+      expect(start2, isNot(equals(staleMatchedLoc)));
 
-      // Assert that physical location is preferred over any stale projection
-      expect(chosenStart, equals(physicalLoc));
-      expect(chosenStart, isNot(equals(staleMatchedLoc)));
+      // 3. Accepted null, raw null -> fallback wins
+      final start3 = MapScreen.selectRoutePlanningStart(
+        acceptedPhysicalLocation: null,
+        rawLocation: null,
+        fallbackLocation: fallbackUserPos,
+      );
+      expect(start3, equals(fallbackUserPos));
+      expect(start3, isNot(equals(staleMatchedLoc)));
+
+      // 4. Stale matchedLocation is never selected
+      expect([start1, start2, start3], isNot(contains(staleMatchedLoc)));
     });
   });
 }

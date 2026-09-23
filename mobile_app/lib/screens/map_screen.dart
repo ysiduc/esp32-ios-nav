@@ -37,6 +37,18 @@ class MapScreen extends StatefulWidget {
   final Widget? drawer;
   const MapScreen({super.key, this.onOpenMenu, this.drawer});
 
+  /// Selects the route planning origin prioritizing physical GPS over stale route projections
+  @visibleForTesting
+  static LatLng selectRoutePlanningStart({
+    required LatLng? acceptedPhysicalLocation,
+    required LatLng? rawLocation,
+    required LatLng fallbackLocation,
+  }) {
+    return acceptedPhysicalLocation ??
+        rawLocation ??
+        fallbackLocation;
+  }
+
   @override
   State<MapScreen> createState() => _MapScreenState();
 }
@@ -1072,18 +1084,14 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _calculateRoutesForPlace(MapPlace place) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     // P5.9.4 Section 3: Route planning must use physical GPS, not stale route-matched projection
-    String startSource = 'fallback';
-    final LatLng startPos;
-    if (navManager.acceptedPhysicalLocation != null) {
-      startPos = navManager.acceptedPhysicalLocation!;
-      startSource = 'physical';
-    } else if (navManager.rawLocation != null) {
-      startPos = navManager.rawLocation!;
-      startSource = 'raw';
-    } else {
-      startPos = _userPosition;
-      startSource = 'userPosition';
-    }
+    final startPos = MapScreen.selectRoutePlanningStart(
+      acceptedPhysicalLocation: navManager.acceptedPhysicalLocation,
+      rawLocation: navManager.rawLocation,
+      fallbackLocation: _userPosition,
+    );
+    final String startSource = navManager.acceptedPhysicalLocation != null
+        ? 'physical'
+        : (navManager.rawLocation != null ? 'raw' : 'userPosition');
 
     try {
       Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 1500));
