@@ -210,6 +210,12 @@ class _MapScreenState extends State<MapScreen> {
   int _selectedRouteIndex = 0;
   String _transportMode = 'bike'; // Default to Motorcycle in Vietnam
   bool _isLoadingRoutes = false;
+  int _routeRequestGeneration = 0;
+  String? _routeErrorMessage;
+  String _routeTelemetryProvider = 'valhalla';
+  String _routeTelemetryStatus = 'idle';
+  int _routeTelemetryLatencyMs = 0;
+  int _routeTelemetryRoutesCount = 0;
   bool _isSearching = false;
   int _googleLinkGeneration = 0;
   bool _isAutocompleteRefreshing = false;
@@ -1040,33 +1046,103 @@ class _MapScreenState extends State<MapScreen> {
       Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 1500));
     } catch (_) {}
 
+    final int currentGen = ++_routeRequestGeneration;
+
+    // Coordinate validation
+    final bool validStart = MapboxDirectionsService.isValidCoordinate(startPos) &&
+        !(startPos.latitude == 0.0 && startPos.longitude == 0.0);
+    final bool validDest = MapboxDirectionsService.isValidCoordinate(place.coordinate) &&
+        !(place.coordinate.latitude == 0.0 && place.coordinate.longitude == 0.0);
+
+    if (!validStart || !validDest) {
+      debugPrint('[Routing] Invalid coordinates for route calculation: start=$startPos, dest=${place.coordinate}');
+      if (mounted) {
+        setState(() {
+          _selectedPlace = place;
+          _viewMode = 2;
+          _routes = [];
+          _isLoadingRoutes = false;
+          _routeErrorMessage = 'Tọa độ vị trí không hợp lệ.';
+          _routeTelemetryStatus = 'failed';
+        });
+        _updateDestinationMarker();
+        _updateRouteOnMap();
+      }
+      return;
+    }
+
     setState(() {
       _isLoadingRoutes = true;
       _selectedPlace = place;
       _viewMode = 2; // Open Route Comparison
       _selectedRouteIndex = 0;
       _routes = [];
+      _routeErrorMessage = null;
+      _routeTelemetryStatus = 'requesting';
+      _routeTelemetryLatencyMs = 0;
+      _routeTelemetryRoutesCount = 0;
     });
     _updateDestinationMarker();
+    _updateRouteOnMap();
 
-    final routes = await _directionsService.calculateMultipleRoutes(
-      startPos,
-      place.coordinate,
-      mode: _transportMode,
+    debugPrint(
+      '[Routing] Request #$currentGen: start=(${startPos.latitude.toStringAsFixed(4)}, ${startPos.longitude.toStringAsFixed(4)}) '
+      'dest=(${place.coordinate.latitude.toStringAsFixed(4)}, ${place.coordinate.longitude.toStringAsFixed(4)}) '
+      'mode=$_transportMode',
     );
 
-    if (mounted) {
+    try {
+      final result = await _directionsService.calculateRoutesDetailed(
+        startPos,
+        place.coordinate,
+        mode: _transportMode,
+      );
+
+      if (!mounted || currentGen != _routeRequestGeneration) {
+        debugPrint('[Routing] Discarding stale route result #$currentGen (latest is $_routeRequestGeneration)');
+        return;
+      }
+
       setState(() {
-        _routes = routes;
-        _isLoadingRoutes = false;
-        _selectedRouteIndex = 0;
+        _routeTelemetryProvider = result.provider.name;
+        _routeTelemetryLatencyMs = result.latency.inMilliseconds;
+        _routeTelemetryRoutesCount = result.routes.length;
+
+        if (result.isSuccess) {
+          _routes = result.routes;
+          _routeErrorMessage = null;
+          _routeTelemetryStatus = 'success';
+          _selectedRouteIndex = 0;
+        } else {
+          _routes = [];
+          _routeTelemetryStatus = result.failure == RouteFailureReason.timeout ? 'timeout' : 'failed';
+          _routeErrorMessage = result.errorMessage ?? 'Không thể tính lộ trình. Kiểm tra kết nối mạng và thử lại.';
+        }
       });
 
-      if (routes.isNotEmpty) {
-        context.read<NavigationManager>().setPreviewRoute(routes.first);
-        _fitRouteBounds(routes.first.polylinePoints);
+      if (result.isSuccess && result.routes.isNotEmpty) {
+        context.read<NavigationManager>().setPreviewRoute(result.routes.first);
+        _fitRouteBounds(result.routes.first.polylinePoints);
         _updateRouteOnMap();
         _updateDestinationMarker();
+      } else {
+        _updateRouteOnMap();
+      }
+    } catch (e) {
+      debugPrint('[Routing] Route calculation exception #$currentGen: $e');
+      if (mounted && currentGen == _routeRequestGeneration) {
+        setState(() {
+          _routes = [];
+          _routeTelemetryStatus = 'failed';
+          _routeErrorMessage = 'Không thể tính lộ trình. Kiểm tra kết nối mạng và thử lại.';
+        });
+        _updateRouteOnMap();
+      }
+    } finally {
+      if (mounted && currentGen == _routeRequestGeneration) {
+        setState(() {
+          _isLoadingRoutes = false;
+        });
       }
     }
   }
@@ -1099,8 +1175,18 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _startDriving({bool isSimulation = false}) {
-    if (_routes.isEmpty) return;
+    if (_routes.isEmpty || _isLoadingRoutes) return;
     final chosenRoute = _routes[_selectedRouteIndex];
+    if (chosenRoute.isFallbackSynthetic) {
+      debugPrint('[MapScreen] Blocked start navigation: synthetic route is not allowed.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Lộ trình này chỉ dùng để tham khảo ngoại tuyến, không thể dẫn đường thực tế.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
     final navManager = Provider.of<NavigationManager>(context, listen: false);
 
     _isAutoCentering = true;
@@ -1711,6 +1797,17 @@ class _MapScreenState extends State<MapScreen> {
           Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Render FPS: ${streamService.renderFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
+          const Divider(height: 12, thickness: 0.5),
+          const Text(
+            'ROUTING TELEMETRY (P5.9.1)',
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF34C759)),
+          ),
+          const SizedBox(height: 4),
+          Text('Route provider: $_routeTelemetryProvider', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text('Route status: $_routeTelemetryStatus', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _routeTelemetryStatus == 'success' ? const Color(0xFF34C759) : (_routeTelemetryStatus == 'requesting' ? const Color(0xFF007AFF) : Colors.red))),
+          Text('Route latency: ${_routeTelemetryLatencyMs > 0 ? "${_routeTelemetryLatencyMs}ms" : "--"}', style: const TextStyle(fontSize: 11)),
+          Text('Request generation: #$_routeRequestGeneration', style: const TextStyle(fontSize: 11)),
+          Text('Routes returned: $_routeTelemetryRoutesCount', style: const TextStyle(fontSize: 11)),
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),
             const Text(
@@ -2980,92 +3077,201 @@ class _MapScreenState extends State<MapScreen> {
 
               const SizedBox(height: 12),
 
-              // Bottom Route Action Card: Large Time Info + Big Green "ĐI" Button
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF2F2F7),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            durationStr,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                              letterSpacing: -0.4,
+              // Loading & Error Status Banners
+              if (_isLoadingRoutes) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF2F2F7),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      const CupertinoActivityIndicator(radius: 10),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Đang tìm lộ trình tối ưu...',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Giờ đến: $arrivalStr · $distanceStr',
-                            style: const TextStyle(fontSize: 13, color: Colors.black54),
-                          ),
-                          Text(
-                            _selectedRouteIndex == 0
-                                ? 'Đề xuất'
-                                : 'Lộ trình thay thế ${_selectedRouteIndex + 1}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: _selectedRouteIndex == 0 ? const Color(0xFF34C759) : const Color(0xFF007AFF),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Simulation Button (Small)
-                    GestureDetector(
-                      onTap: () => _startDriving(isSimulation: true),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: const Icon(Icons.play_arrow_rounded, color: Color(0xFF007AFF), size: 22),
-                      ),
-                    ),
-                    // Big Bright Green "ĐI" Button (Screenshot 4)
-                    GestureDetector(
-                      onTap: () => _startDriving(isSimulation: false),
-                      child: Container(
-                        width: 70,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF34C759),
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF34C759).withOpacity(0.4),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
+                            Text(
+                              _transportMode == 'bike'
+                                  ? 'Đang tính toán tuyến xe máy (Valhalla)...'
+                                  : 'Đang kết nối dịch vụ định tuyến...',
+                              style: const TextStyle(fontSize: 12, color: Colors.black54),
                             ),
                           ],
                         ),
-                        child: const Center(
-                          child: Text(
-                            'ĐI',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
+                      ),
+                    ],
+                  ),
+                ),
+              ] else if (_routeErrorMessage != null && _routes.isEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF2F2),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFFF3B30).withOpacity(0.25)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: Color(0xFFFF3B30), size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Không thể tính lộ trình',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFFF3B30)),
                             ),
+                            Text(
+                              _routeErrorMessage!,
+                              style: const TextStyle(fontSize: 12, color: Colors.black54),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () {
+                          if (_selectedPlace != null) {
+                            _calculateRoutesForPlace(_selectedPlace!);
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF007AFF),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Text(
+                            'Thử lại',
+                            style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+              ],
+
+              const SizedBox(height: 12),
+
+              // Bottom Route Action Card: Large Time Info + Big Green "ĐI" Button
+              Builder(
+                builder: (context) {
+                  final bool canStartNav = !_isLoadingRoutes && selectedRoute != null && !selectedRoute.isFallbackSynthetic;
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF2F2F7),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _isLoadingRoutes ? 'Đang tính...' : durationStr,
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: _isLoadingRoutes ? Colors.black38 : Colors.black87,
+                                  letterSpacing: -0.4,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _isLoadingRoutes
+                                    ? 'Đang tìm lộ trình nhanh nhất'
+                                    : (selectedRoute != null
+                                        ? (selectedRoute.isFallbackSynthetic
+                                            ? 'Lộ trình tham khảo (Ngoại tuyến)'
+                                            : 'Giờ đến: $arrivalStr · $distanceStr')
+                                        : (_routeErrorMessage != null
+                                            ? 'Kiểm tra mạng và thử lại'
+                                            : 'Không có lộ trình')),
+                                style: const TextStyle(fontSize: 13, color: Colors.black54),
+                              ),
+                              if (canStartNav)
+                                Text(
+                                  _selectedRouteIndex == 0
+                                      ? 'Đề xuất'
+                                      : 'Lộ trình thay thế ${_selectedRouteIndex + 1}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: _selectedRouteIndex == 0 ? const Color(0xFF34C759) : const Color(0xFF007AFF),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        // Simulation Button (Small)
+                        GestureDetector(
+                          onTap: canStartNav ? () => _startDriving(isSimulation: true) : null,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: BoxDecoration(
+                              color: canStartNav ? Colors.white : const Color(0xFFE5E5EA),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: canStartNav ? Colors.black12 : Colors.transparent),
+                            ),
+                            child: Icon(
+                              Icons.play_arrow_rounded,
+                              color: canStartNav ? const Color(0xFF007AFF) : Colors.black26,
+                              size: 22,
+                            ),
+                          ),
+                        ),
+                        // Big Bright Green "ĐI" Button (Screenshot 4)
+                        GestureDetector(
+                          onTap: canStartNav ? () => _startDriving(isSimulation: false) : null,
+                          child: Container(
+                            width: 70,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              color: canStartNav ? const Color(0xFF34C759) : const Color(0xFFE5E5EA),
+                              borderRadius: BorderRadius.circular(18),
+                              boxShadow: canStartNav
+                                  ? [
+                                      BoxShadow(
+                                        color: const Color(0xFF34C759).withOpacity(0.4),
+                                        blurRadius: 12,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ]
+                                  : null,
+                            ),
+                            child: Center(
+                              child: Text(
+                                'ĐI',
+                                style: TextStyle(
+                                  color: canStartNav ? Colors.white : Colors.black26,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
 
               const SizedBox(height: 6),

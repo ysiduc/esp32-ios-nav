@@ -203,6 +203,8 @@ class NavRoute {
   final Color themeColor;
   final int durationDiffMinutes;
   final double distanceDiffKm;
+  final bool isFallbackSynthetic;
+  final String provider;
 
   NavRoute({
     required this.totalDistanceMeters,
@@ -218,6 +220,8 @@ class NavRoute {
     this.themeColor = const Color(0xFF00F0FF),
     this.durationDiffMinutes = 0,
     this.distanceDiffKm = 0.0,
+    this.isFallbackSynthetic = false,
+    this.provider = 'valhalla',
   });
 
   String get formattedDistance {
@@ -271,6 +275,8 @@ class NavRoute {
     Color? themeColor,
     int? durationDiffMinutes,
     double? distanceDiffKm,
+    bool? isFallbackSynthetic,
+    String? provider,
   }) {
     return NavRoute(
       totalDistanceMeters: totalDistanceMeters ?? this.totalDistanceMeters,
@@ -286,6 +292,58 @@ class NavRoute {
       themeColor: themeColor ?? this.themeColor,
       durationDiffMinutes: durationDiffMinutes ?? this.durationDiffMinutes,
       distanceDiffKm: distanceDiffKm ?? this.distanceDiffKm,
+      isFallbackSynthetic: isFallbackSynthetic ?? this.isFallbackSynthetic,
+      provider: provider ?? this.provider,
+    );
+  }
+}
+
+enum RouteProvider {
+  valhalla,
+  osrm,
+  mapbox,
+  synthetic,
+}
+
+enum RouteFailureReason {
+  timeout,
+  noNetwork,
+  providerRejected,
+  noRoute,
+  invalidCoordinates,
+  parseError,
+}
+
+class RouteCalculationResult {
+  final List<NavRoute> routes;
+  final RouteProvider provider;
+  final Duration latency;
+  final RouteFailureReason? failure;
+  final String? errorMessage;
+
+  const RouteCalculationResult({
+    required this.routes,
+    required this.provider,
+    required this.latency,
+    this.failure,
+    this.errorMessage,
+  });
+
+  bool get isSuccess =>
+      routes.isNotEmpty && failure == null && !routes.first.isFallbackSynthetic;
+
+  static RouteCalculationResult failed({
+    required RouteProvider provider,
+    required Duration latency,
+    required RouteFailureReason failure,
+    String? errorMessage,
+  }) {
+    return RouteCalculationResult(
+      routes: const [],
+      provider: provider,
+      latency: latency,
+      failure: failure,
+      errorMessage: errorMessage,
     );
   }
 }

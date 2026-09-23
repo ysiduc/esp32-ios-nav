@@ -159,12 +159,40 @@ class OsrmService {
     return classifiedRoutes;
   }
 
+  /// Direct OSRM routes query with fast failover between primary and secondary
+  Future<List<NavRoute>> fetchOsrmRoutes(
+    LatLng start,
+    LatLng destination, {
+    required String mode,
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    List<NavRoute> routes = await _fetchFromOsrm(
+      _primaryOsrmBaseUrl,
+      start,
+      destination,
+      mode: mode,
+      timeout: timeout,
+    );
+    if (routes.isEmpty) {
+      routes = await _fetchFromOsrm(
+        _secondaryOsrmBaseUrl,
+        start,
+        destination,
+        mode: mode,
+        useDirectProfile: true,
+        timeout: timeout,
+      );
+    }
+    return routes;
+  }
+
   Future<List<NavRoute>> _fetchFromOsrm(
     String baseUrl,
     LatLng start,
     LatLng destination, {
     required String mode,
     bool useDirectProfile = false,
+    Duration timeout = const Duration(seconds: 4),
   }) async {
     try {
       // For Vietnam motorbike routing: We use OSRM driving profile with customized Vietnamese motorbike speeds (38 km/h)
@@ -180,7 +208,7 @@ class OsrmService {
 
       final response = await http.get(Uri.parse(urlStr), headers: {
         'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)',
-      }).timeout(const Duration(seconds: 8));
+      }).timeout(timeout);
 
       if (response.statusCode != 200) {
         return [];
@@ -263,6 +291,8 @@ class OsrmService {
           polylinePoints: polylinePoints,
           steps: steps,
           summary: summary,
+          provider: 'osrm',
+          isFallbackSynthetic: false,
         ));
       }
 
@@ -366,6 +396,8 @@ class OsrmService {
       totalDurationSeconds: durationSec,
       steps: steps,
       polylinePoints: pts,
+      provider: 'synthetic',
+      isFallbackSynthetic: true,
     );
   }
 }

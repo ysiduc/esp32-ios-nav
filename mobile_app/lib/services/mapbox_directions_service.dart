@@ -1,80 +1,363 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'osrm_service.dart';
+import 'valhalla_service.dart';
+
+typedef ValhallaRouteProvider = Future<NavRoute?> Function(
+  LatLng start,
+  LatLng destination, {
+  required String costing,
+});
+
+typedef OsrmRouteProvider = Future<List<NavRoute>> Function(
+  LatLng start,
+  LatLng destination, {
+  required String mode,
+});
+
+typedef MapboxRouteProvider = Future<List<NavRoute>> Function(
+  LatLng start,
+  LatLng destination, {
+  required String mode,
+});
+
+class _CandidateResult {
+  final List<NavRoute> routes;
+  final RouteProvider provider;
+  const _CandidateResult(this.routes, this.provider);
+}
+
+RouteProvider routeProviderFromString(String str) {
+  switch (str.toLowerCase()) {
+    case 'valhalla':
+      return RouteProvider.valhalla;
+    case 'osrm':
+      return RouteProvider.osrm;
+    case 'mapbox':
+      return RouteProvider.mapbox;
+    case 'synthetic':
+    default:
+      return RouteProvider.synthetic;
+  }
+}
 
 /// Navigation Directions Service
-/// Supports MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
+/// Unifies Valhalla motorcycle routing with OSRM fallback and Mapbox fallback.
+/// Enforces staggered concurrency (racing) and an 8-second hard deadline.
 class MapboxDirectionsService {
-  // In-Memory Route Cache (instant retrieval for repeated queries)
   static final Map<String, List<NavRoute>> _routeCache = {};
-  final OsrmService _osrmService = OsrmService();
+  static void clearCache() => _routeCache.clear();
+  final OsrmService _osrmService;
+  final ValhallaService _valhallaService;
 
-  /// Calculate multiple alternative routes
-  Future<List<NavRoute>> calculateMultipleRoutes(
+  // Test injection hooks
+  ValhallaRouteProvider? valhallaProvider;
+  OsrmRouteProvider? osrmProvider;
+  MapboxRouteProvider? mapboxProvider;
+
+  MapboxDirectionsService({
+    OsrmService? osrmService,
+    ValhallaService? valhallaService,
+    this.valhallaProvider,
+    this.osrmProvider,
+    this.mapboxProvider,
+  })  : _osrmService = osrmService ?? OsrmService(),
+        _valhallaService = valhallaService ?? ValhallaService();
+
+  /// Validate coordinates range: lat [-90, 90], lon [-180, 180]
+  static bool isValidCoordinate(LatLng coord) {
+    if (coord.latitude.isNaN || coord.latitude.isInfinite ||
+        coord.longitude.isNaN || coord.longitude.isInfinite) {
+      return false;
+    }
+    if (coord.latitude < -90.0 || coord.latitude > 90.0) return false;
+    if (coord.longitude < -180.0 || coord.longitude > 180.0) return false;
+    return true;
+  }
+
+  /// Primary route calculation API returning detailed [RouteCalculationResult].
+  /// Uses staggered concurrency:
+  /// - T0: starts primary provider (Valhalla for bike, OSRM for driving)
+  /// - T0 + 1.5s: if pending, starts secondary fallback in parallel
+  /// - First valid non-empty real route wins
+  /// - 8s hard deadline cancels and returns failure
+  Future<RouteCalculationResult> calculateRoutesDetailed(
     LatLng start,
     LatLng destination, {
-    String mode = 'bike', // 'bike' (motorcycle), 'driving', 'foot'
+    String mode = 'bike',
     bool avoidTolls = false,
     bool avoidHighways = false,
+    Duration staggeredDelay = const Duration(milliseconds: 1500),
+    Duration hardDeadline = const Duration(milliseconds: 8000),
   }) async {
+    final stopwatch = Stopwatch()..start();
+
+    // 1. Coordinate Validation
+    if (!isValidCoordinate(start) || !isValidCoordinate(destination)) {
+      debugPrint('[Routing] Invalid coordinates: start=$start, dest=$destination');
+      return RouteCalculationResult.failed(
+        provider: RouteProvider.mapbox,
+        latency: stopwatch.elapsed,
+        failure: RouteFailureReason.invalidCoordinates,
+        errorMessage: 'Tọa độ không hợp lệ',
+      );
+    }
+
+    if ((start.latitude == 0.0 && start.longitude == 0.0) ||
+        (destination.latitude == 0.0 && destination.longitude == 0.0)) {
+      debugPrint('[Routing] Null island (0,0) coordinate rejected');
+      return RouteCalculationResult.failed(
+        provider: RouteProvider.mapbox,
+        latency: stopwatch.elapsed,
+        failure: RouteFailureReason.invalidCoordinates,
+        errorMessage: 'Tọa độ vị trí (0,0) không hợp lệ',
+      );
+    }
+
+    // Check in-memory cache
     final cacheKey =
         '${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
         '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$mode';
     if (_routeCache.containsKey(cacheKey)) {
-      return _routeCache[cacheKey]!;
+      final cached = _routeCache[cacheKey]!;
+      if (cached.isNotEmpty) {
+        return RouteCalculationResult(
+          routes: cached,
+          provider: routeProviderFromString(cached.first.provider),
+          latency: stopwatch.elapsed,
+        );
+      }
     }
 
-    List<NavRoute> routes = [];
+    // Determine primary and fallback providers
+    final RouteProvider primaryProvider;
+    final RouteProvider secondaryProvider;
+    final Future<List<NavRoute>> Function() fetchPrimary;
+    final Future<List<NavRoute>> Function() fetchSecondary;
 
+    if (mode == 'bike') {
+      primaryProvider = RouteProvider.valhalla;
+      secondaryProvider = RouteProvider.osrm;
 
-    // Bổ sung 1-2 lộ trình thay thế (Alternatives) từ OSRM để người dùng có nhiều lựa chọn
-    try {
-      final altRoutes = await _osrmService.calculateMultipleRoutes(
-        start,
-        destination,
-        mode: mode,
-        avoidTolls: avoidTolls,
-        avoidHighways: avoidHighways,
-      );
-      if (routes.isEmpty) {
-        routes.addAll(altRoutes);
+      fetchPrimary = () async {
+        final r = valhallaProvider != null
+            ? await valhallaProvider!(start, destination, costing: 'motorcycle')
+            : await _valhallaService.calculateRoute(start, destination, costing: 'motorcycle');
+        if (r != null) {
+          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        }
+        return [];
+      };
+
+      fetchSecondary = () async {
+        final list = osrmProvider != null
+            ? await osrmProvider!(start, destination, mode: 'bike')
+            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'bike');
+        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+      };
+    } else if (mode == 'foot') {
+      primaryProvider = RouteProvider.valhalla;
+      secondaryProvider = RouteProvider.osrm;
+
+      fetchPrimary = () async {
+        final r = valhallaProvider != null
+            ? await valhallaProvider!(start, destination, costing: 'pedestrian')
+            : await _valhallaService.calculateRoute(start, destination, costing: 'pedestrian');
+        if (r != null) {
+          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        }
+        return [];
+      };
+
+      fetchSecondary = () async {
+        final list = osrmProvider != null
+            ? await osrmProvider!(start, destination, mode: 'foot')
+            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'foot');
+        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+      };
+    } else {
+      // 'driving'
+      primaryProvider = RouteProvider.osrm;
+      secondaryProvider = RouteProvider.valhalla;
+
+      fetchPrimary = () async {
+        final list = osrmProvider != null
+            ? await osrmProvider!(start, destination, mode: 'driving')
+            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'driving');
+        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+      };
+
+      fetchSecondary = () async {
+        final r = valhallaProvider != null
+            ? await valhallaProvider!(start, destination, costing: 'auto')
+            : await _valhallaService.calculateRoute(start, destination, costing: 'auto');
+        if (r != null) {
+          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        }
+        return [];
+      };
+    }
+
+    debugPrint(
+      '[Routing] Start calculation: start=(${start.latitude.toStringAsFixed(4)}, ${start.longitude.toStringAsFixed(4)}) '
+      'dest=(${destination.latitude.toStringAsFixed(4)}, ${destination.longitude.toStringAsFixed(4)}) '
+      'mode=$mode primary=${primaryProvider.name}',
+    );
+
+    // Staggered race with hard deadline
+    final completer = Completer<_CandidateResult>();
+    Timer? fallbackTimer;
+    bool anyWinner = false;
+    bool primaryFinished = false;
+    bool secondaryLaunched = false;
+    bool secondaryFinished = false;
+
+    void launchSecondary() {
+      if (secondaryLaunched || completer.isCompleted || anyWinner) return;
+      secondaryLaunched = true;
+      fallbackTimer?.cancel();
+      debugPrint('[Routing] Launching fallback ${secondaryProvider.name} in parallel');
+      fetchSecondary().then((routes) {
+        secondaryFinished = true;
+        if (completer.isCompleted) return;
+        if (routes.isNotEmpty && !routes.first.isFallbackSynthetic) {
+          anyWinner = true;
+          completer.complete(_CandidateResult(routes, secondaryProvider));
+        } else if (primaryFinished && !anyWinner) {
+          completer.complete(_CandidateResult(const [], secondaryProvider));
+        }
+      }).catchError((e) {
+        debugPrint('[Routing] Fallback ${secondaryProvider.name} failed: $e');
+        secondaryFinished = true;
+        if (!completer.isCompleted && primaryFinished && !anyWinner) {
+          completer.complete(_CandidateResult(const [], secondaryProvider));
+        }
+      });
+    }
+
+    void handlePrimaryResult(List<NavRoute> routes) {
+      primaryFinished = true;
+      if (completer.isCompleted) return;
+      if (routes.isNotEmpty && !routes.first.isFallbackSynthetic) {
+        anyWinner = true;
+        completer.complete(_CandidateResult(routes, primaryProvider));
       } else {
-        for (int i = 0; i < altRoutes.length && routes.length < 3; i++) {
-          final alt = altRoutes[i];
-          final diffSec = (alt.totalDurationSeconds - routes.first.totalDurationSeconds).abs();
-          final diffDist = (alt.totalDistanceMeters - routes.first.totalDistanceMeters).abs();
-          if (diffSec > 60 || diffDist > 200) {
-            routes.add(alt.copyWith(
-              title: i == 0 ? 'Lộ trình qua đường lớn' : 'Lộ trình tránh đông',
-              subtitle: 'Lựa chọn thay thế ${routes.length}',
-            ));
-          }
+        if (!secondaryLaunched) {
+          // Primary failed or empty: trigger secondary fallback immediately!
+          launchSecondary();
+        } else if (secondaryFinished && !anyWinner) {
+          completer.complete(_CandidateResult(const [], primaryProvider));
         }
       }
-    } catch (_) {}
-
-    // Fallback to Mapbox if available
-    if (routes.isEmpty && MapboxConfig.accessToken.isNotEmpty) {
-      routes = await _fetchFromMapbox(start, destination, mode: mode);
     }
 
-    // Fallback: offline emergency route if remote servers fail
-    if (routes.isEmpty) {
-      routes = [_generateEmergencyRoute(start, destination, mode: mode)];
-    }
+    // 1. Launch Primary at T0
+    fetchPrimary().then((routes) {
+      handlePrimaryResult(routes);
+    }).catchError((e) {
+      debugPrint('[Routing] Primary ${primaryProvider.name} failed: $e');
+      handlePrimaryResult([]);
+    });
 
-    // Classify routes
-    routes = _classifyAndRankRoutes(routes, mode);
+    // 2. Schedule Secondary at T0 + staggeredDelay if primary still pending
+    fallbackTimer = Timer(staggeredDelay, () {
+      if (!completer.isCompleted && !anyWinner && !secondaryLaunched) {
+        debugPrint('[Routing] Primary still pending after ${staggeredDelay.inMilliseconds}ms -> launching fallback ${secondaryProvider.name} in parallel');
+        launchSecondary();
+      }
+    });
 
-    _routeCache[cacheKey] = routes;
-    if (_routeCache.length > 50) {
-      _routeCache.remove(_routeCache.keys.first);
+    try {
+      final winner = await completer.future.timeout(hardDeadline);
+      fallbackTimer.cancel();
+
+      if (winner.routes.isNotEmpty) {
+        final classified = _classifyAndRankRoutes(winner.routes, mode);
+        _routeCache[cacheKey] = classified;
+        if (_routeCache.length > 50) {
+          _routeCache.remove(_routeCache.keys.first);
+        }
+        return RouteCalculationResult(
+          routes: classified,
+          provider: winner.provider,
+          latency: stopwatch.elapsed,
+        );
+      }
+
+      // If both primary and secondary returned empty, try Mapbox if configured
+      if (MapboxConfig.accessToken.isNotEmpty || mapboxProvider != null) {
+        final mapboxRoutes = mapboxProvider != null
+            ? await mapboxProvider!(start, destination, mode: mode)
+            : await _fetchFromMapbox(start, destination, mode: mode);
+        if (mapboxRoutes.isNotEmpty) {
+          final classified = _classifyAndRankRoutes(mapboxRoutes, mode);
+          _routeCache[cacheKey] = classified;
+          return RouteCalculationResult(
+            routes: classified,
+            provider: RouteProvider.mapbox,
+            latency: stopwatch.elapsed,
+          );
+        }
+      }
+
+      return RouteCalculationResult.failed(
+        provider: primaryProvider,
+        latency: stopwatch.elapsed,
+        failure: RouteFailureReason.noRoute,
+        errorMessage: 'Không tìm thấy lộ trình phù hợp',
+      );
+    } on TimeoutException {
+      fallbackTimer.cancel();
+      debugPrint('[Routing] Hard deadline (${hardDeadline.inSeconds}s) reached without response');
+      return RouteCalculationResult.failed(
+        provider: primaryProvider,
+        latency: stopwatch.elapsed,
+        failure: RouteFailureReason.timeout,
+        errorMessage: 'Quá thời gian tính toán lộ trình (${hardDeadline.inSeconds} giây)',
+      );
+    } catch (e) {
+      fallbackTimer.cancel();
+      return RouteCalculationResult.failed(
+        provider: primaryProvider,
+        latency: stopwatch.elapsed,
+        failure: RouteFailureReason.providerRejected,
+        errorMessage: 'Lỗi định tuyến: $e',
+      );
     }
-    return routes;
+  }
+
+  /// Backward-compatible method returning route list
+  Future<List<NavRoute>> calculateMultipleRoutes(
+    LatLng start,
+    LatLng destination, {
+    String mode = 'bike',
+    bool avoidTolls = false,
+    bool avoidHighways = false,
+  }) async {
+    final result = await calculateRoutesDetailed(
+      start,
+      destination,
+      mode: mode,
+      avoidTolls: avoidTolls,
+      avoidHighways: avoidHighways,
+    );
+    return result.routes;
+  }
+
+  /// Single route calculation
+  Future<NavRoute?> calculateRoute(
+    LatLng start,
+    LatLng destination, {
+    String profile = 'bike',
+  }) async {
+    final list = await calculateMultipleRoutes(start, destination, mode: profile);
+    return list.isNotEmpty ? list.first : null;
   }
 
   Future<List<NavRoute>> _fetchFromMapbox(
@@ -83,9 +366,7 @@ class MapboxDirectionsService {
     required String mode,
   }) async {
     try {
-      // Map app transport mode to Mapbox profile
       final profile = _modeToMapboxProfile(mode);
-
       final url = MapboxConfig.directionsUrl(
         profile: profile,
         startLng: start.longitude,
@@ -97,7 +378,7 @@ class MapboxDirectionsService {
 
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 4));
 
       if (response.statusCode != 200) return [];
 
@@ -132,7 +413,6 @@ class MapboxDirectionsService {
         totalDuration = (totalDistance / 1000.0) / avgSpeedKmh * 3600.0;
       }
 
-      // Parse polyline (GeoJSON format)
       final geometry = routeJson['geometry'] as Map<String, dynamic>;
       final coordsList = geometry['coordinates'] as List;
       final polylinePoints = coordsList.map<LatLng>((coord) {
@@ -142,7 +422,6 @@ class MapboxDirectionsService {
         );
       }).toList();
 
-      // Parse turn-by-turn steps from legs
       final steps = <NavStep>[];
       final legs = routeJson['legs'] as List? ?? [];
       int globalStepIndex = 0;
@@ -192,6 +471,8 @@ class MapboxDirectionsService {
         polylinePoints: polylinePoints,
         steps: steps,
         summary: summary,
+        provider: 'mapbox',
+        isFallbackSynthetic: false,
       );
     } catch (_) {
       return null;
@@ -206,7 +487,6 @@ class MapboxDirectionsService {
         return 'driving-traffic';
       case 'bike':
       default:
-        // Motorcycle in Vietnam: use driving-traffic for road accuracy
         return 'driving-traffic';
     }
   }
@@ -307,24 +587,12 @@ class MapboxDirectionsService {
       ));
     }
 
-    // Move fastest to front
     if (fastestIdx != 0 && classified.length > fastestIdx) {
       final fastest = classified.removeAt(fastestIdx);
       classified.insert(0, fastest);
     }
 
     return classified;
-  }
-
-  /// Single route calculation
-  Future<NavRoute?> calculateRoute(
-    LatLng start,
-    LatLng destination, {
-    String profile = 'bike',
-  }) async {
-    final list =
-        await calculateMultipleRoutes(start, destination, mode: profile);
-    return list.isNotEmpty ? list.first : null;
   }
 
   String _buildInstruction(
@@ -361,7 +629,8 @@ class MapboxDirectionsService {
     return 'Tiếp tục đi thẳng trên $street';
   }
 
-  NavRoute _generateEmergencyRoute(LatLng start, LatLng dest,
+  /// Emergency offline fallback route - strictly tagged synthetic and forbidden from real navigation.
+  static NavRoute generateEmergencyRoute(LatLng start, LatLng dest,
       {String mode = 'bike'}) {
     const distCalc = Distance();
     final totalDist = distCalc.as(LengthUnit.Meter, start, dest);
@@ -374,9 +643,9 @@ class MapboxDirectionsService {
     final mid2 = LatLng(dest.latitude, (start.longitude + dest.longitude) / 2);
 
     return NavRoute(
-      title: 'Lộ trình tối ưu (Offline)',
-      subtitle: 'Tuyến đường ngắn nhất',
-      summary: 'Tuyến đường ngắn nhất',
+      title: 'Lộ trình tham khảo (Ngoại tuyến)',
+      subtitle: 'Đường thẳng tham khảo - Không thể dẫn đường',
+      summary: 'Tuyến đường thẳng tham khảo',
       totalDistanceMeters: totalDist,
       totalDurationSeconds: durationSec,
       steps: [
@@ -400,6 +669,8 @@ class MapboxDirectionsService {
         ),
       ],
       polylinePoints: [start, mid1, mid2, dest],
+      provider: 'synthetic',
+      isFallbackSynthetic: true,
     );
   }
 }

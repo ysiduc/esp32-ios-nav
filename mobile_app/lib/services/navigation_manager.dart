@@ -372,6 +372,10 @@ class NavigationManager extends ChangeNotifier {
 
   /// Start Real-World Turn-by-Turn Navigation with GPS
   void startNavigation(NavRoute route) {
+    if (route.isFallbackSynthetic) {
+      debugPrint('[NavigationManager] Blocked startNavigation: synthetic route is not allowed.');
+      return;
+    }
     stopNavigation();
     _enableBackgroundNavigation();
     _rerouteGeneration++;
@@ -447,6 +451,10 @@ class NavigationManager extends ChangeNotifier {
 
   /// Start Simulation Mode (walks through polyline path automatically)
   void startSimulation(NavRoute route) {
+    if (route.isFallbackSynthetic) {
+      debugPrint('[NavigationManager] Blocked startSimulation: synthetic route is not allowed.');
+      return;
+    }
     stopNavigation();
     _enableBackgroundNavigation();
     _rerouteGeneration++;

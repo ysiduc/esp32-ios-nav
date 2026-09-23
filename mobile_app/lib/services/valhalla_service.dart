@@ -48,7 +48,7 @@ class ValhallaService implements RoutingService {
           'User-Agent': 'ESP32_Valhalla_Navigator/1.0',
         },
         body: requestBody,
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 6));
 
       if (response.statusCode != 200) {
         return null;
@@ -112,6 +112,8 @@ class ValhallaService implements RoutingService {
         polylinePoints: polylinePoints,
         steps: steps,
         summary: leg['summary']?['name'] ?? 'Lộ trình Valhalla',
+        provider: 'valhalla',
+        isFallbackSynthetic: false,
       );
     } catch (_) {
       return null;
