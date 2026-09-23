@@ -390,6 +390,8 @@ class RouteCalculationResult {
   final List<ProviderRouteResult> providerDiagnostics;
   final double? snapDistanceMeters;
   final LatLng? snappedDestination;
+  final double? snapStartDistanceMeters;
+  final LatLng? snappedStart;
 
   const RouteCalculationResult({
     required this.routes,
@@ -400,6 +402,8 @@ class RouteCalculationResult {
     this.providerDiagnostics = const [],
     this.snapDistanceMeters,
     this.snappedDestination,
+    this.snapStartDistanceMeters,
+    this.snappedStart,
   });
 
   bool get isSuccess =>

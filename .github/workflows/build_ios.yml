@@ -152,7 +152,7 @@ jobs:
       - name: 4c. Run Live Routing Provider Smoke Test
         working-directory: mobile_app
         run: |
-          dart run tool/provider_smoke_test.dart || echo '::warning::Live routing provider smoke test completed with warnings' 
+          dart run tool/provider_smoke_test.dart
 
       - name: 5. Pod install
         working-directory: mobile_app/ios

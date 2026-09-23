@@ -10,6 +10,9 @@ import 'routing_service.dart';
 class ValhallaService implements RoutingService {
   static const String _valhallaBaseUrl = 'https://valhalla1.openstreetmap.de';
 
+  
+  static Uri routeUri() => Uri.parse('$_valhallaBaseUrl/route');
+
   static const Map<String, String> _defaultHeaders = {
     'Content-Type': 'application/json',
     'User-Agent': 'ESP32Nav/2.0 (contact@esp32nav.app)',
@@ -34,7 +37,16 @@ class ValhallaService implements RoutingService {
     bool allowLanguageFallback = true,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final url = Uri.parse('/route');
+    final url = routeUri();
+
+    if (!url.hasScheme || !url.hasAuthority || url.host.isEmpty) {
+      return ProviderRouteResult.failure(
+        provider: 'valhalla',
+        latency: Duration.zero,
+        errorType: 'invalidUri',
+        safeMessage: 'Cấu hình URL Valhalla không hợp lệ (thiếu host: $url)',
+      );
+    }
 
     Map<String, dynamic> buildPayload({bool includeLanguage = true}) {
       final directionsOptions = <String, dynamic>{
@@ -176,7 +188,9 @@ class ValhallaService implements RoutingService {
       final latency = stopwatch.elapsed;
       final errStr = e.toString().toLowerCase();
       String errorType = 'network';
-      if (errStr.contains('handshake') || errStr.contains('certificate')) {
+      if (errStr.contains('no host specified') || errStr.contains('invalid uri') || errStr.contains('relative uri')) {
+        errorType = 'invalidUri';
+      } else if (errStr.contains('handshake') || errStr.contains('certificate')) {
         errorType = 'tls';
       } else if (errStr.contains('failed host lookup')) {
         errorType = 'dns';

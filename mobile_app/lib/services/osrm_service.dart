@@ -231,6 +231,7 @@ class OsrmService {
     required String mode,
     Duration timeout = const Duration(seconds: 4),
     Duration staggerDelay = const Duration(milliseconds: 800),
+    void Function(ProviderRouteResult diagnostic)? onDiagnostic,
   }) async {
     final completer = Completer<ProviderRouteResult>();
     Timer? fallbackTimer;
@@ -253,6 +254,7 @@ class OsrmService {
         timeout: timeout,
         serverTag: 'osrm2',
       ).then((res) {
+        onDiagnostic?.call(res);
         if (completer.isCompleted) return;
         if (res.success && res.routes.isNotEmpty) {
           anyWinner = true;
@@ -261,13 +263,15 @@ class OsrmService {
           completer.complete(primaryFailure ?? res);
         }
       }).catchError((e) {
+        final failRes = ProviderRouteResult.failure(
+          provider: 'osrm2',
+          latency: const Duration(milliseconds: 800),
+          errorType: 'network',
+          safeMessage: 'Lỗi OSRM secondary: $e',
+        );
+        onDiagnostic?.call(failRes);
         if (!completer.isCompleted) {
-          completer.complete(primaryFailure ?? ProviderRouteResult.failure(
-            provider: 'osrm2',
-            latency: const Duration(milliseconds: 800),
-            errorType: 'network',
-            safeMessage: 'Lỗi OSRM secondary: $e',
-          ));
+          completer.complete(primaryFailure ?? failRes);
         }
       });
     }
@@ -282,6 +286,7 @@ class OsrmService {
       timeout: timeout,
       serverTag: 'osrm1',
     ).then((res) {
+      onDiagnostic?.call(res);
       if (completer.isCompleted) return;
       if (res.success && res.routes.isNotEmpty) {
         anyWinner = true;
@@ -301,6 +306,7 @@ class OsrmService {
         errorType: 'network',
         safeMessage: 'Lỗi OSRM primary: $e',
       );
+      onDiagnostic?.call(primaryFailure!);
       if (!secondaryLaunched) {
         launchSecondary();
       }

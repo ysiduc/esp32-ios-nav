@@ -104,6 +104,7 @@ class MapboxDirectionsService {
     Duration hardDeadline = const Duration(milliseconds: 8000),
     bool allowSnapRecovery = true,
     double maxSnapMeters = 300.0,
+    double maxStartSnapMeters = 150.0,
   }) async {
     final stopwatch = Stopwatch()..start();
     final List<ProviderRouteResult> diagnostics = [];
@@ -184,8 +185,11 @@ class MapboxDirectionsService {
             destination,
             mode: 'bike',
             timeout: const Duration(seconds: 4),
+            onDiagnostic: (diag) {
+              if (!diagnostics.any((d) => d.provider == diag.provider)) diagnostics.add(diag);
+            },
           );
-          diagnostics.add(res);
+          if (!diagnostics.any((d) => d.provider == res.provider)) diagnostics.add(res);
           return res.routes;
         }
       };
@@ -222,8 +226,11 @@ class MapboxDirectionsService {
             destination,
             mode: 'foot',
             timeout: const Duration(seconds: 4),
+            onDiagnostic: (diag) {
+              if (!diagnostics.any((d) => d.provider == diag.provider)) diagnostics.add(diag);
+            },
           );
-          diagnostics.add(res);
+          if (!diagnostics.any((d) => d.provider == res.provider)) diagnostics.add(res);
           return res.routes;
         }
       };
@@ -242,8 +249,11 @@ class MapboxDirectionsService {
             destination,
             mode: 'driving',
             timeout: const Duration(seconds: 4),
+            onDiagnostic: (diag) {
+              if (!diagnostics.any((d) => d.provider == diag.provider)) diagnostics.add(diag);
+            },
           );
-          diagnostics.add(res);
+          if (!diagnostics.any((d) => d.provider == res.provider)) diagnostics.add(res);
           return res.routes;
         }
       };
@@ -354,47 +364,46 @@ class MapboxDirectionsService {
         );
       }
 
-      // Check if both providers returned unroutable / noSegment / noRoute -> Attempt Snap Recovery (Item 6 & 7)
+      // Check if both providers returned unroutable / noSegment / noRoute -> Attempt Snap Recovery (P5.9.3 Items 4, 5, 8)
       if (allowSnapRecovery) {
         final hasRateLimit = diagnostics.any((d) => d.errorType == 'rateLimited');
         final hasDns = diagnostics.any((d) => d.errorType == 'dns');
         final hasTls = diagnostics.any((d) => d.errorType == 'tls');
 
         if (!hasRateLimit && !hasDns && !hasTls) {
-          debugPrint('[Routing] Attempting routable snap recovery for destination $destination');
-          final snapDest = nearestSnapProvider != null
-              ? await nearestSnapProvider!(destination, maxRadiusMeters: maxSnapMeters)
-              : await _osrmService.findNearestRoutablePoint(
+          debugPrint('[Routing] Attempting routable snap recovery for start and destination independently');
+          final snapStartFuture = nearestSnapProvider != null
+              ? nearestSnapProvider!(start, maxRadiusMeters: maxStartSnapMeters)
+              : _osrmService.findNearestRoutablePoint(
+                  start,
+                  maxRadiusMeters: maxStartSnapMeters,
+                  timeout: const Duration(seconds: 2),
+                );
+
+          final snapDestFuture = nearestSnapProvider != null
+              ? nearestSnapProvider!(destination, maxRadiusMeters: maxSnapMeters)
+              : _osrmService.findNearestRoutablePoint(
                   destination,
                   maxRadiusMeters: maxSnapMeters,
                   timeout: const Duration(seconds: 2),
                 );
 
-          if (snapDest.success && snapDest.snapped != destination) {
-            final remainingBudget = hardDeadline - stopwatch.elapsed;
-            if (remainingBudget > const Duration(seconds: 2)) {
-              debugPrint('[Routing] Snapped to nearest road (${snapDest.distanceMeters.toStringAsFixed(1)}m). Retrying route...');
-              final retryResult = await calculateRoutesDetailed(
-                start,
-                snapDest.snapped,
-                mode: mode,
-                avoidTolls: avoidTolls,
-                avoidHighways: avoidHighways,
-                allowSnapRecovery: false, // Prevent multiple recursion
-                hardDeadline: remainingBudget,
-              );
-              if (retryResult.isSuccess) {
-                return RouteCalculationResult(
-                  routes: retryResult.routes,
-                  provider: retryResult.provider,
-                  latency: stopwatch.elapsed,
-                  providerDiagnostics: [...diagnostics, ...retryResult.providerDiagnostics],
-                  snapDistanceMeters: snapDest.distanceMeters,
-                  snappedDestination: snapDest.snapped,
-                );
-              }
-            }
-          } else if (!snapDest.success && snapDest.distanceMeters > maxSnapMeters) {
+          final snapResults = await Future.wait([snapStartFuture, snapDestFuture]);
+          final snapStart = snapResults[0];
+          final snapDest = snapResults[1];
+
+          // Check if either is too far from routable road
+          if (!snapStart.success && snapStart.distanceMeters > maxStartSnapMeters) {
+            return RouteCalculationResult.failed(
+              provider: primaryProvider,
+              latency: stopwatch.elapsed,
+              failure: RouteFailureReason.noRoute,
+              errorMessage: 'Vị trí bắt đầu nằm quá xa đường giao thông (cách ${snapStart.distanceMeters.toStringAsFixed(0)}m, tối đa ${maxStartSnapMeters.toStringAsFixed(0)}m)',
+              providerDiagnostics: diagnostics,
+            );
+          }
+
+          if (!snapDest.success && snapDest.distanceMeters > maxSnapMeters) {
             return RouteCalculationResult.failed(
               provider: primaryProvider,
               latency: stopwatch.elapsed,
@@ -402,6 +411,48 @@ class MapboxDirectionsService {
               errorMessage: 'Điểm đến nằm quá xa đường giao thông (cách ${snapDest.distanceMeters.toStringAsFixed(0)}m, tối đa ${maxSnapMeters.toStringAsFixed(0)}m)',
               providerDiagnostics: diagnostics,
             );
+          }
+
+          // Item 5: DO NOT REQUIRE BOTH TO MOVE
+          // If start was already on road (e.g. 0-3m), keep start. Otherwise use snapStart.snapped
+          final effectiveStart = (snapStart.success && snapStart.distanceMeters > 3.0)
+              ? snapStart.snapped
+              : start;
+          final effectiveDest = (snapDest.success && snapDest.distanceMeters > 3.0)
+              ? snapDest.snapped
+              : destination;
+
+          final hasStartMoved = effectiveStart != start;
+          final hasDestMoved = effectiveDest != destination;
+
+          if (hasStartMoved || hasDestMoved) {
+            final remainingBudget = hardDeadline - stopwatch.elapsed;
+            if (remainingBudget > const Duration(seconds: 2)) {
+              debugPrint('[Routing] Snapped endpoints: start moved=$hasStartMoved (${snapStart.distanceMeters.toStringAsFixed(1)}m), dest moved=$hasDestMoved (${snapDest.distanceMeters.toStringAsFixed(1)}m). Retrying route with remaining budget ${remainingBudget.inMilliseconds}ms...');
+              final retryResult = await calculateRoutesDetailed(
+                effectiveStart,
+                effectiveDest,
+                mode: mode,
+                avoidTolls: avoidTolls,
+                avoidHighways: avoidHighways,
+                allowSnapRecovery: false, // Prevent multiple recursion
+                hardDeadline: remainingBudget,
+                maxSnapMeters: maxSnapMeters,
+                maxStartSnapMeters: maxStartSnapMeters,
+              );
+              if (retryResult.isSuccess) {
+                return RouteCalculationResult(
+                  routes: retryResult.routes,
+                  provider: retryResult.provider,
+                  latency: stopwatch.elapsed,
+                  providerDiagnostics: [...diagnostics, ...retryResult.providerDiagnostics],
+                  snapStartDistanceMeters: snapStart.success ? snapStart.distanceMeters : null,
+                  snappedStart: snapStart.success ? snapStart.snapped : null,
+                  snapDistanceMeters: snapDest.success ? snapDest.distanceMeters : null,
+                  snappedDestination: snapDest.success ? snapDest.snapped : null,
+                );
+              }
+            }
           }
         }
       }

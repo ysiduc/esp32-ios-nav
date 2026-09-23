@@ -219,6 +219,8 @@ class _MapScreenState extends State<MapScreen> {
   String _telemetryValStatus = '--';
   String _telemetryOsrm1Status = '--';
   String _telemetryOsrm2Status = '--';
+  LatLng? _telemetryStartOrig;
+  double? _telemetrySnapStartDist;
   double? _telemetrySnapDestDist;
   String _telemetryWinner = '--';
   bool _isSearching = false;
@@ -1132,6 +1134,8 @@ class _MapScreenState extends State<MapScreen> {
         _telemetryValStatus = valStatus;
         _telemetryOsrm1Status = osrm1Status;
         _telemetryOsrm2Status = osrm2Status;
+        _telemetryStartOrig = startPos;
+        _telemetrySnapStartDist = result.snapStartDistanceMeters;
         _telemetrySnapDestDist = result.snapDistanceMeters;
         _telemetryWinner = result.isSuccess ? result.provider.name : 'none';
 
@@ -1826,15 +1830,19 @@ class _MapScreenState extends State<MapScreen> {
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
           const Divider(height: 12, thickness: 0.5),
           const Text(
-            'ROUTING TELEMETRY (P5.9.2)',
+            'ROUTING TELEMETRY (P5.9.3)',
             style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF34C759)),
           ),
           const SizedBox(height: 4),
+          if (_telemetryStartOrig != null)
+            Text('Start orig: ${_telemetryStartOrig!.latitude.toStringAsFixed(4)}, ${_telemetryStartOrig!.longitude.toStringAsFixed(4)}', style: const TextStyle(fontSize: 10)),
+          if (_telemetrySnapStartDist != null)
+            Text('Snap start: ${_telemetrySnapStartDist!.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11, color: Color(0xFF007AFF), fontWeight: FontWeight.w600)),
+          if (_telemetrySnapDestDist != null)
+            Text('Snap dest: ${_telemetrySnapDestDist!.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11, color: Color(0xFF007AFF), fontWeight: FontWeight.w600)),
           Text('VAL: $_telemetryValStatus', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           Text('OSRM1: $_telemetryOsrm1Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           Text('OSRM2: $_telemetryOsrm2Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-          if (_telemetrySnapDestDist != null)
-            Text('Snap dest: ${_telemetrySnapDestDist!.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11, color: Color(0xFF007AFF), fontWeight: FontWeight.w600)),
           Text('Winner: $_telemetryWinner (${_routeTelemetryLatencyMs > 0 ? "${_routeTelemetryLatencyMs}ms" : "--"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _routeTelemetryStatus == 'success' ? const Color(0xFF34C759) : Colors.red)),
           Text('Status: $_routeTelemetryStatus (gen #$_routeRequestGeneration, routes: $_routeTelemetryRoutesCount)', style: const TextStyle(fontSize: 10)),
           if (navManager.isNavigating) ...[
