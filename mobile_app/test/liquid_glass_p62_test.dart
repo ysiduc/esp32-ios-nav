@@ -1,13 +1,9 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:mobile_app/widgets/liquid_glass.dart';
 import 'package:mobile_app/models/route_model.dart';
-import 'package:mobile_app/services/search_service.dart';
-import 'package:mobile_app/services/ble_service.dart';
-import 'package:mobile_app/services/esp_stream_service.dart';
+import 'package:mobile_app/screens/map_screen.dart';
 import 'package:mobile_app/main.dart';
 
 void main() {
@@ -59,27 +55,25 @@ void main() {
   });
 
   group('P6.2 Custom Saved Place Name Priority (Requirements 12 & 13)', () {
-    test('findSavedPlace matches by name or coordinate proximity and gives custom name precedence', () async {
-      final service = SearchService();
-
+    test('effectivePlaceLabel matches by name or coordinate proximity and gives custom name precedence', () {
       final originalPlace = MapPlace(
         name: 'Vị trí Google Maps',
-        displayName: '20.97690, 105.81234',
+        displayName: '20.97690, 105.81234, Hà Nội',
         coordinate: const LatLng(20.97690, 105.81234),
       );
 
-      // Save with custom user name
-      final customSaved = originalPlace.copyWith(
+      final customSaved = MapPlace(
         name: 'Tân Tiến Lab',
+        displayName: 'Tân Tiến, Hà Nội',
+        coordinate: const LatLng(20.97690, 105.81234),
         isCustomSaved: true,
       );
-      await service.savePlace(customSaved);
 
-      // Querying the original generic place resolves to customSaved!
-      final matched = service.findSavedPlace(originalPlace);
-      expect(matched, isNotNull);
-      expect(matched!.name, equals('Tân Tiến Lab'));
-      expect(matched.name, isNot(equals('Vị trí Google Maps')));
+      final savedPlaces = [customSaved];
+
+      final label = effectivePlaceLabel(originalPlace, savedPlaces);
+      expect(label, equals('Tân Tiến Lab'));
+      expect(label, isNot(equals('Vị trí Google Maps')));
     });
   });
 

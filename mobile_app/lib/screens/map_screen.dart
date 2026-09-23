@@ -39,6 +39,50 @@ enum MapThemeMode {
   dark,            // Dark minimal
 }
 
+/// Pure UI presentation helper for resolving the effective display name of a place (P6.2a)
+/// Priority: matching saved custom name > place.name > displayName first segment > "Địa điểm đã chọn"
+String effectivePlaceLabel(
+  MapPlace place,
+  List<MapPlace> savedPlaces,
+) {
+  // 1. Priority: matching custom saved name
+  for (final saved in savedPlaces) {
+    if (saved.isCustomSaved) {
+      final nameMatch = saved.name.trim().isNotEmpty &&
+          saved.name.toLowerCase() == place.name.toLowerCase() &&
+          saved.name != 'Vị trí Google Maps';
+      final latDiff = (saved.coordinate.latitude - place.coordinate.latitude).abs();
+      final lonDiff = (saved.coordinate.longitude - place.coordinate.longitude).abs();
+      final coordMatch = (latDiff < 0.0001 && lonDiff < 0.0001) &&
+          saved.name.trim().isNotEmpty &&
+          saved.name != 'Vị trí Google Maps';
+      if (nameMatch || coordMatch) {
+        return saved.name.trim();
+      }
+    }
+  }
+
+  // 2. Priority: place.name if non-empty and not generic
+  if (place.name.trim().isNotEmpty && place.name != 'Vị trí Google Maps') {
+    return place.name.trim();
+  }
+
+  // 3. Priority: displayName first segment
+  if (place.displayName.trim().isNotEmpty) {
+    final firstPart = place.displayName.split(',').first.trim();
+    if (firstPart.isNotEmpty && firstPart != 'Vị trí Google Maps') {
+      return firstPart;
+    }
+  }
+
+  // 4. Fallback to place.name if available
+  if (place.name.trim().isNotEmpty) {
+    return place.name.trim();
+  }
+
+  return 'Địa điểm đã chọn';
+}
+
 class MapScreen extends StatefulWidget {
   final VoidCallback? onOpenMenu;
   final Widget? drawer;
@@ -177,21 +221,7 @@ class _MapScreenState extends State<MapScreen> {
       (mounted && Theme.of(context).brightness == Brightness.dark);
 
   String _getEffectivePlaceName(MapPlace place) {
-    final saved = _searchService.findSavedPlace(place);
-    if (saved != null && saved.name.trim().isNotEmpty && saved.name != 'Vị trí Google Maps') {
-      return saved.name.trim();
-    }
-    if (place.name.trim().isNotEmpty && place.name != 'Vị trí Google Maps') {
-      return place.name.trim();
-    }
-    if (place.displayName.trim().isNotEmpty) {
-      final firstPart = place.displayName.split(',').first.trim();
-      if (firstPart.isNotEmpty && firstPart != 'Vị trí Google Maps') return firstPart;
-    }
-    if (place.name.trim().isNotEmpty) {
-      return place.name.trim();
-    }
-    return 'Địa điểm đã chọn';
+    return effectivePlaceLabel(place, _searchService.savedPlaces);
   }
 
   Widget _buildRecentPlaceAvatar(MapPlace p, bool isDark) {
@@ -223,7 +253,11 @@ class _MapScreenState extends State<MapScreen> {
       bgColor = isDark ? const Color(0xFFFF9500).withOpacity(0.30) : const Color(0xFFFFF4E5);
       iconColor = const Color(0xFFFF9500);
       iconData = Icons.shopping_bag_rounded;
-    } else if (p.isCustomSaved || _searchService.findSavedPlace(p) != null) {
+    } else if (p.isCustomSaved || _searchService.savedPlaces.any((s) =>
+        s.isCustomSaved &&
+        ((s.name.toLowerCase() == p.name.toLowerCase()) ||
+            ((s.coordinate.latitude - p.coordinate.latitude).abs() < 0.0001 &&
+                (s.coordinate.longitude - p.coordinate.longitude).abs() < 0.0001)))) {
       bgColor = isDark ? const Color(0xFF007AFF).withOpacity(0.25) : const Color(0xFFE5F1FF);
       iconColor = const Color(0xFF007AFF);
       iconData = Icons.star_rounded;
