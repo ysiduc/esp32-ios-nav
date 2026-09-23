@@ -314,12 +314,82 @@ enum RouteFailureReason {
   parseError,
 }
 
+class ProviderRouteResult {
+  final String provider;
+  final bool success;
+  final List<NavRoute> routes;
+  final int? httpStatus;
+  final String? apiCode;
+  final String? errorType; // timeout, dns, network, tls, http, noSegment, noRoute, rateLimited, invalidRequest, parseError, emptyResponse
+  final String? safeMessage;
+  final Duration latency;
+  final double? snapDistanceMeters;
+  final LatLng? snappedCoordinate;
+
+  const ProviderRouteResult({
+    required this.provider,
+    required this.success,
+    this.routes = const [],
+    this.httpStatus,
+    this.apiCode,
+    this.errorType,
+    this.safeMessage,
+    required this.latency,
+    this.snapDistanceMeters,
+    this.snappedCoordinate,
+  });
+
+  factory ProviderRouteResult.success({
+    required String provider,
+    required List<NavRoute> routes,
+    required Duration latency,
+    int httpStatus = 200,
+    String? apiCode,
+    double? snapDistanceMeters,
+    LatLng? snappedCoordinate,
+  }) {
+    return ProviderRouteResult(
+      provider: provider,
+      success: true,
+      routes: routes,
+      httpStatus: httpStatus,
+      apiCode: apiCode ?? 'Ok',
+      latency: latency,
+      snapDistanceMeters: snapDistanceMeters,
+      snappedCoordinate: snappedCoordinate,
+    );
+  }
+
+  factory ProviderRouteResult.failure({
+    required String provider,
+    required Duration latency,
+    required String errorType,
+    String? safeMessage,
+    int? httpStatus,
+    String? apiCode,
+  }) {
+    return ProviderRouteResult(
+      provider: provider,
+      success: false,
+      routes: const [],
+      errorType: errorType,
+      safeMessage: safeMessage,
+      httpStatus: httpStatus,
+      apiCode: apiCode,
+      latency: latency,
+    );
+  }
+}
+
 class RouteCalculationResult {
   final List<NavRoute> routes;
   final RouteProvider provider;
   final Duration latency;
   final RouteFailureReason? failure;
   final String? errorMessage;
+  final List<ProviderRouteResult> providerDiagnostics;
+  final double? snapDistanceMeters;
+  final LatLng? snappedDestination;
 
   const RouteCalculationResult({
     required this.routes,
@@ -327,6 +397,9 @@ class RouteCalculationResult {
     required this.latency,
     this.failure,
     this.errorMessage,
+    this.providerDiagnostics = const [],
+    this.snapDistanceMeters,
+    this.snappedDestination,
   });
 
   bool get isSuccess =>
@@ -337,6 +410,7 @@ class RouteCalculationResult {
     required Duration latency,
     required RouteFailureReason failure,
     String? errorMessage,
+    List<ProviderRouteResult> providerDiagnostics = const [],
   }) {
     return RouteCalculationResult(
       routes: const [],
@@ -344,6 +418,7 @@ class RouteCalculationResult {
       latency: latency,
       failure: failure,
       errorMessage: errorMessage,
+      providerDiagnostics: providerDiagnostics,
     );
   }
 }

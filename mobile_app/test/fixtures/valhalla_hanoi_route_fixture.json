@@ -1,0 +1,225 @@
+{
+  "trip": {
+    "locations": [
+      {
+        "type": "break",
+        "lat": 21.0285,
+        "lon": 105.8542,
+        "original_index": 0
+      },
+      {
+        "type": "break",
+        "lat": 21.0478,
+        "lon": 105.8368,
+        "side_of_street": "right",
+        "original_index": 1
+      }
+    ],
+    "legs": [
+      {
+        "maneuvers": [
+          {
+            "type": 1,
+            "instruction": "Lái về phía tây.",
+            "verbal_succinct_transition_instruction": "Lái về phía tây. Rồi Rẽ phải vào Phố Đinh Tiên Hoàng.",
+            "verbal_pre_transition_instruction": "Lái về phía tây. Rồi Rẽ phải vào Phố Đinh Tiên Hoàng.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 10 mét.",
+            "bearing_after": 280,
+            "time": 3.6,
+            "length": 0.01,
+            "cost": 4.23,
+            "begin_shape_index": 0,
+            "end_shape_index": 2,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 10,
+            "instruction": "Rẽ phải vào Phố Đinh Tiên Hoàng.",
+            "verbal_transition_alert_instruction": "Rẽ phải vào Phố Đinh Tiên Hoàng.",
+            "verbal_succinct_transition_instruction": "Rẽ phải.",
+            "verbal_pre_transition_instruction": "Rẽ phải vào Phố Đinh Tiên Hoàng.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 400 mét.",
+            "street_names": [
+              "Phố Đinh Tiên Hoàng"
+            ],
+            "bearing_before": 280,
+            "bearing_after": 9,
+            "time": 74.934,
+            "length": 0.412,
+            "cost": 136.039,
+            "begin_shape_index": 2,
+            "end_shape_index": 28,
+            "has_time_restrictions": true,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 10,
+            "instruction": "Rẽ phải vào Phố Hàng Thùng.",
+            "verbal_transition_alert_instruction": "Rẽ phải vào Phố Hàng Thùng.",
+            "verbal_succinct_transition_instruction": "Rẽ phải.",
+            "verbal_pre_transition_instruction": "Rẽ phải vào Phố Hàng Thùng.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 200 mét.",
+            "street_names": [
+              "Phố Hàng Thùng"
+            ],
+            "bearing_before": 352,
+            "bearing_after": 92,
+            "time": 46.118,
+            "length": 0.225,
+            "cost": 86.114,
+            "begin_shape_index": 28,
+            "end_shape_index": 37,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 10,
+            "instruction": "Rẽ phải vào Đường Trần Quang Khải.",
+            "verbal_transition_alert_instruction": "Rẽ phải vào Đường Trần Quang Khải.",
+            "verbal_succinct_transition_instruction": "Rẽ phải.",
+            "verbal_pre_transition_instruction": "Rẽ phải vào Đường Trần Quang Khải.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 100 mét.",
+            "street_names": [
+              "Đường Trần Quang Khải"
+            ],
+            "bearing_before": 73,
+            "bearing_after": 157,
+            "time": 24.381,
+            "length": 0.139,
+            "cost": 45.725,
+            "begin_shape_index": 37,
+            "end_shape_index": 39,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 16,
+            "instruction": "Giữ bên trái.",
+            "verbal_transition_alert_instruction": "Giữ bên trái.",
+            "verbal_succinct_transition_instruction": "Giữ bên trái. Rồi Rẽ trái vào Đường Trần Quang Khải.",
+            "verbal_pre_transition_instruction": "Giữ bên trái. Rồi Rẽ trái vào Đường Trần Quang Khải.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 40 mét.",
+            "bearing_before": 157,
+            "bearing_after": 122,
+            "time": 8.79,
+            "length": 0.038,
+            "cost": 10.046,
+            "begin_shape_index": 39,
+            "end_shape_index": 44,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 14,
+            "instruction": "Rẽ trái vào Đường Trần Quang Khải.",
+            "verbal_transition_alert_instruction": "Rẽ trái vào Đường Trần Quang Khải.",
+            "verbal_succinct_transition_instruction": "Rẽ trái.",
+            "verbal_pre_transition_instruction": "Rẽ trái vào Đường Trần Quang Khải.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 300 mét.",
+            "street_names": [
+              "Đường Trần Quang Khải"
+            ],
+            "bearing_before": 115,
+            "bearing_after": 336,
+            "time": 60.985,
+            "length": 0.315,
+            "cost": 114.565,
+            "begin_shape_index": 44,
+            "end_shape_index": 45,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 16,
+            "instruction": "Giữ bên trái để đi trên Đường Trần Quang Khải.",
+            "verbal_transition_alert_instruction": "Giữ bên trái để đi trên Đường Trần Quang Khải.",
+            "verbal_succinct_transition_instruction": "Giữ bên trái.",
+            "verbal_pre_transition_instruction": "Giữ bên trái để đi trên Đường Trần Quang Khải.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 2.5 ki-lô-mét.",
+            "street_names": [
+              "Đường Trần Quang Khải"
+            ],
+            "bearing_before": 336,
+            "bearing_after": 323,
+            "time": 389.399,
+            "length": 2.476,
+            "cost": 461.25,
+            "begin_shape_index": 45,
+            "end_shape_index": 120,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 15,
+            "instruction": "Rẽ trái vào Đường Thanh Niên.",
+            "verbal_transition_alert_instruction": "Rẽ trái vào Đường Thanh Niên.",
+            "verbal_succinct_transition_instruction": "Rẽ trái.",
+            "verbal_pre_transition_instruction": "Rẽ trái vào Đường Thanh Niên.",
+            "verbal_post_transition_instruction": "Tiếp tục đi thêm 500 mét.",
+            "street_names": [
+              "Đường Thanh Niên"
+            ],
+            "bearing_before": 323,
+            "bearing_after": 224,
+            "time": 82.55,
+            "length": 0.491,
+            "cost": 140.869,
+            "begin_shape_index": 120,
+            "end_shape_index": 141,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          },
+          {
+            "type": 5,
+            "instruction": "Điểm đến của bạn nằm ở phải.",
+            "verbal_transition_alert_instruction": "Địa điểm của bạn sẽ nằm ở phải.",
+            "verbal_pre_transition_instruction": "Điểm đến của bạn nằm ở phải.",
+            "bearing_before": 224,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 141,
+            "end_shape_index": 141,
+            "travel_mode": "drive",
+            "travel_type": "motorcycle"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": true,
+          "has_toll": false,
+          "has_highway": false,
+          "has_ferry": false,
+          "min_lat": 21.028503,
+          "min_lon": 105.837213,
+          "max_lat": 21.050774,
+          "max_lon": 105.856749,
+          "time": 690.759,
+          "length": 4.107,
+          "cost": 998.842
+        },
+        "shape": "ohnbg@oyx{hEARYbDa@E_Ik@i@E_BIaBMgCGeEKoJYoQY_BE}@Aqn@cAmCEeBo@cHKmHIuAAiAES?e\\QwCFu@Ze@RqBk@cg@bD}D\\BeBh@k_@c@aGiAcF}Pqo@aAiD[}AoCcNeAmFzcAi^`Bk@DeCZiAlC{Al@}@v@aGi`DrlAmK`Ikf@bTkMrFgJ~D_EdBuFhCkWjM_RfKmTvMmLlHyGhEwStRkJlIsMzKkXxSgUpQeL|JgFdEeL~G{NnFuJxDsIdFuK~IwDzDaCxEsBvD}FlEoGdE_LxIoItGgP~OqE`F_At@uAvA_Av@eJrKkRfVoGbImRhT{DxEqCbDaRpQqOtMkq@lj@uKbJgDpCeH|FwKvIqIbIcH~ImN`TiSh[qBfDkBpCmDdF{BtD}RrZmGrJmElGoAdByA`BuIxJmc@jf@iFxFwF`GopBthBuH~H{[~XiSdRsZ`Y{FbFkJpI{J|IaDxBeDbCt@tIjCpC~GzKlQ|R~ErFlBrAjFvCfg@`VtR`IrGnCxBnA~CnBhD`CxZxWtAjARTrBjBTR^^rSdTjQfR"
+      }
+    ],
+    "summary": {
+      "has_time_restrictions": true,
+      "has_toll": false,
+      "has_highway": false,
+      "has_ferry": false,
+      "min_lat": 21.028503,
+      "min_lon": 105.837213,
+      "max_lat": 21.050774,
+      "max_lon": 105.856749,
+      "time": 690.759,
+      "length": 4.107,
+      "cost": 998.842
+    },
+    "status_message": "Found route between points",
+    "status": 0,
+    "units": "kilometers",
+    "language": "vi-VN"
+  }
+}

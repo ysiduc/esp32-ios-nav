@@ -216,6 +216,11 @@ class _MapScreenState extends State<MapScreen> {
   String _routeTelemetryStatus = 'idle';
   int _routeTelemetryLatencyMs = 0;
   int _routeTelemetryRoutesCount = 0;
+  String _telemetryValStatus = '--';
+  String _telemetryOsrm1Status = '--';
+  String _telemetryOsrm2Status = '--';
+  double? _telemetrySnapDestDist;
+  String _telemetryWinner = '--';
   bool _isSearching = false;
   int _googleLinkGeneration = 0;
   bool _isAutocompleteRefreshing = false;
@@ -1103,10 +1108,32 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
 
+      String valStatus = '--';
+      String osrm1Status = '--';
+      String osrm2Status = '--';
+
+      for (final d in result.providerDiagnostics) {
+        final statusStr = d.success
+            ? '${d.apiCode ?? "200"} (${d.latency.inMilliseconds}ms)'
+            : '${d.errorType ?? "fail"}${d.httpStatus != null ? " ${d.httpStatus}" : ""} (${d.latency.inMilliseconds}ms)';
+        if (d.provider == 'valhalla') {
+          valStatus = statusStr;
+        } else if (d.provider == 'osrm1' || (d.provider == 'osrm' && osrm1Status == '--')) {
+          osrm1Status = statusStr;
+        } else if (d.provider == 'osrm2') {
+          osrm2Status = statusStr;
+        }
+      }
+
       setState(() {
         _routeTelemetryProvider = result.provider.name;
         _routeTelemetryLatencyMs = result.latency.inMilliseconds;
         _routeTelemetryRoutesCount = result.routes.length;
+        _telemetryValStatus = valStatus;
+        _telemetryOsrm1Status = osrm1Status;
+        _telemetryOsrm2Status = osrm2Status;
+        _telemetrySnapDestDist = result.snapDistanceMeters;
+        _telemetryWinner = result.isSuccess ? result.provider.name : 'none';
 
         if (result.isSuccess) {
           _routes = result.routes;
@@ -1799,15 +1826,17 @@ class _MapScreenState extends State<MapScreen> {
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
           const Divider(height: 12, thickness: 0.5),
           const Text(
-            'ROUTING TELEMETRY (P5.9.1)',
+            'ROUTING TELEMETRY (P5.9.2)',
             style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF34C759)),
           ),
           const SizedBox(height: 4),
-          Text('Route provider: $_routeTelemetryProvider', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-          Text('Route status: $_routeTelemetryStatus', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _routeTelemetryStatus == 'success' ? const Color(0xFF34C759) : (_routeTelemetryStatus == 'requesting' ? const Color(0xFF007AFF) : Colors.red))),
-          Text('Route latency: ${_routeTelemetryLatencyMs > 0 ? "${_routeTelemetryLatencyMs}ms" : "--"}', style: const TextStyle(fontSize: 11)),
-          Text('Request generation: #$_routeRequestGeneration', style: const TextStyle(fontSize: 11)),
-          Text('Routes returned: $_routeTelemetryRoutesCount', style: const TextStyle(fontSize: 11)),
+          Text('VAL: $_telemetryValStatus', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text('OSRM1: $_telemetryOsrm1Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          Text('OSRM2: $_telemetryOsrm2Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          if (_telemetrySnapDestDist != null)
+            Text('Snap dest: ${_telemetrySnapDestDist!.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11, color: Color(0xFF007AFF), fontWeight: FontWeight.w600)),
+          Text('Winner: $_telemetryWinner (${_routeTelemetryLatencyMs > 0 ? "${_routeTelemetryLatencyMs}ms" : "--"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _routeTelemetryStatus == 'success' ? const Color(0xFF34C759) : Colors.red)),
+          Text('Status: $_routeTelemetryStatus (gen #$_routeRequestGeneration, routes: $_routeTelemetryRoutesCount)', style: const TextStyle(fontSize: 10)),
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),
             const Text(

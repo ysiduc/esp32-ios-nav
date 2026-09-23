@@ -27,6 +27,11 @@ typedef MapboxRouteProvider = Future<List<NavRoute>> Function(
   required String mode,
 });
 
+typedef NearestSnapProvider = Future<OsrmSnapResult> Function(
+  LatLng point, {
+  double maxRadiusMeters,
+});
+
 class _CandidateResult {
   final List<NavRoute> routes;
   final RouteProvider provider;
@@ -60,6 +65,7 @@ class MapboxDirectionsService {
   ValhallaRouteProvider? valhallaProvider;
   OsrmRouteProvider? osrmProvider;
   MapboxRouteProvider? mapboxProvider;
+  NearestSnapProvider? nearestSnapProvider;
 
   MapboxDirectionsService({
     OsrmService? osrmService,
@@ -67,6 +73,7 @@ class MapboxDirectionsService {
     this.valhallaProvider,
     this.osrmProvider,
     this.mapboxProvider,
+    this.nearestSnapProvider,
   })  : _osrmService = osrmService ?? OsrmService(),
         _valhallaService = valhallaService ?? ValhallaService();
 
@@ -95,8 +102,11 @@ class MapboxDirectionsService {
     bool avoidHighways = false,
     Duration staggeredDelay = const Duration(milliseconds: 1500),
     Duration hardDeadline = const Duration(milliseconds: 8000),
+    bool allowSnapRecovery = true,
+    double maxSnapMeters = 300.0,
   }) async {
     final stopwatch = Stopwatch()..start();
+    final List<ProviderRouteResult> diagnostics = [];
 
     // 1. Coordinate Validation
     if (!isValidCoordinate(start) || !isValidCoordinate(destination)) {
@@ -146,40 +156,76 @@ class MapboxDirectionsService {
       secondaryProvider = RouteProvider.osrm;
 
       fetchPrimary = () async {
-        final r = valhallaProvider != null
-            ? await valhallaProvider!(start, destination, costing: 'motorcycle')
-            : await _valhallaService.calculateRoute(start, destination, costing: 'motorcycle');
-        if (r != null) {
-          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        if (valhallaProvider != null) {
+          final r = await valhallaProvider!(start, destination, costing: 'motorcycle');
+          if (r != null) {
+            return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+          }
+          return [];
+        } else {
+          final res = await _valhallaService.calculateRouteDetailed(
+            start,
+            destination,
+            costing: 'motorcycle',
+            timeout: const Duration(seconds: 5),
+          );
+          diagnostics.add(res);
+          return res.routes;
         }
-        return [];
       };
 
       fetchSecondary = () async {
-        final list = osrmProvider != null
-            ? await osrmProvider!(start, destination, mode: 'bike')
-            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'bike');
-        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        if (osrmProvider != null) {
+          final list = await osrmProvider!(start, destination, mode: 'bike');
+          return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        } else {
+          final res = await _osrmService.fetchOsrmRoutesDetailed(
+            start,
+            destination,
+            mode: 'bike',
+            timeout: const Duration(seconds: 4),
+          );
+          diagnostics.add(res);
+          return res.routes;
+        }
       };
     } else if (mode == 'foot') {
       primaryProvider = RouteProvider.valhalla;
       secondaryProvider = RouteProvider.osrm;
 
       fetchPrimary = () async {
-        final r = valhallaProvider != null
-            ? await valhallaProvider!(start, destination, costing: 'pedestrian')
-            : await _valhallaService.calculateRoute(start, destination, costing: 'pedestrian');
-        if (r != null) {
-          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        if (valhallaProvider != null) {
+          final r = await valhallaProvider!(start, destination, costing: 'pedestrian');
+          if (r != null) {
+            return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+          }
+          return [];
+        } else {
+          final res = await _valhallaService.calculateRouteDetailed(
+            start,
+            destination,
+            costing: 'pedestrian',
+            timeout: const Duration(seconds: 5),
+          );
+          diagnostics.add(res);
+          return res.routes;
         }
-        return [];
       };
 
       fetchSecondary = () async {
-        final list = osrmProvider != null
-            ? await osrmProvider!(start, destination, mode: 'foot')
-            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'foot');
-        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        if (osrmProvider != null) {
+          final list = await osrmProvider!(start, destination, mode: 'foot');
+          return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        } else {
+          final res = await _osrmService.fetchOsrmRoutesDetailed(
+            start,
+            destination,
+            mode: 'foot',
+            timeout: const Duration(seconds: 4),
+          );
+          diagnostics.add(res);
+          return res.routes;
+        }
       };
     } else {
       // 'driving'
@@ -187,20 +233,38 @@ class MapboxDirectionsService {
       secondaryProvider = RouteProvider.valhalla;
 
       fetchPrimary = () async {
-        final list = osrmProvider != null
-            ? await osrmProvider!(start, destination, mode: 'driving')
-            : await _osrmService.fetchOsrmRoutes(start, destination, mode: 'driving');
-        return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        if (osrmProvider != null) {
+          final list = await osrmProvider!(start, destination, mode: 'driving');
+          return list.map((r) => r.copyWith(provider: 'osrm', isFallbackSynthetic: false)).toList();
+        } else {
+          final res = await _osrmService.fetchOsrmRoutesDetailed(
+            start,
+            destination,
+            mode: 'driving',
+            timeout: const Duration(seconds: 4),
+          );
+          diagnostics.add(res);
+          return res.routes;
+        }
       };
 
       fetchSecondary = () async {
-        final r = valhallaProvider != null
-            ? await valhallaProvider!(start, destination, costing: 'auto')
-            : await _valhallaService.calculateRoute(start, destination, costing: 'auto');
-        if (r != null) {
-          return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+        if (valhallaProvider != null) {
+          final r = await valhallaProvider!(start, destination, costing: 'auto');
+          if (r != null) {
+            return [r.copyWith(provider: 'valhalla', isFallbackSynthetic: false)];
+          }
+          return [];
+        } else {
+          final res = await _valhallaService.calculateRouteDetailed(
+            start,
+            destination,
+            costing: 'auto',
+            timeout: const Duration(seconds: 5),
+          );
+          diagnostics.add(res);
+          return res.routes;
         }
-        return [];
       };
     }
 
@@ -249,7 +313,6 @@ class MapboxDirectionsService {
         completer.complete(_CandidateResult(routes, primaryProvider));
       } else {
         if (!secondaryLaunched) {
-          // Primary failed or empty: trigger secondary fallback immediately!
           launchSecondary();
         } else if (secondaryFinished && !anyWinner) {
           completer.complete(_CandidateResult(const [], primaryProvider));
@@ -287,10 +350,63 @@ class MapboxDirectionsService {
           routes: classified,
           provider: winner.provider,
           latency: stopwatch.elapsed,
+          providerDiagnostics: diagnostics,
         );
       }
 
-      // If both primary and secondary returned empty, try Mapbox if configured
+      // Check if both providers returned unroutable / noSegment / noRoute -> Attempt Snap Recovery (Item 6 & 7)
+      if (allowSnapRecovery) {
+        final hasRateLimit = diagnostics.any((d) => d.errorType == 'rateLimited');
+        final hasDns = diagnostics.any((d) => d.errorType == 'dns');
+        final hasTls = diagnostics.any((d) => d.errorType == 'tls');
+
+        if (!hasRateLimit && !hasDns && !hasTls) {
+          debugPrint('[Routing] Attempting routable snap recovery for destination $destination');
+          final snapDest = nearestSnapProvider != null
+              ? await nearestSnapProvider!(destination, maxRadiusMeters: maxSnapMeters)
+              : await _osrmService.findNearestRoutablePoint(
+                  destination,
+                  maxRadiusMeters: maxSnapMeters,
+                  timeout: const Duration(seconds: 2),
+                );
+
+          if (snapDest.success && snapDest.snapped != destination) {
+            final remainingBudget = hardDeadline - stopwatch.elapsed;
+            if (remainingBudget > const Duration(seconds: 2)) {
+              debugPrint('[Routing] Snapped to nearest road (${snapDest.distanceMeters.toStringAsFixed(1)}m). Retrying route...');
+              final retryResult = await calculateRoutesDetailed(
+                start,
+                snapDest.snapped,
+                mode: mode,
+                avoidTolls: avoidTolls,
+                avoidHighways: avoidHighways,
+                allowSnapRecovery: false, // Prevent multiple recursion
+                hardDeadline: remainingBudget,
+              );
+              if (retryResult.isSuccess) {
+                return RouteCalculationResult(
+                  routes: retryResult.routes,
+                  provider: retryResult.provider,
+                  latency: stopwatch.elapsed,
+                  providerDiagnostics: [...diagnostics, ...retryResult.providerDiagnostics],
+                  snapDistanceMeters: snapDest.distanceMeters,
+                  snappedDestination: snapDest.snapped,
+                );
+              }
+            }
+          } else if (!snapDest.success && snapDest.distanceMeters > maxSnapMeters) {
+            return RouteCalculationResult.failed(
+              provider: primaryProvider,
+              latency: stopwatch.elapsed,
+              failure: RouteFailureReason.noRoute,
+              errorMessage: 'Điểm đến nằm quá xa đường giao thông (cách ${snapDest.distanceMeters.toStringAsFixed(0)}m, tối đa ${maxSnapMeters.toStringAsFixed(0)}m)',
+              providerDiagnostics: diagnostics,
+            );
+          }
+        }
+      }
+
+      // Try Mapbox if configured (Item 12: verified accessToken)
       if (MapboxConfig.accessToken.isNotEmpty || mapboxProvider != null) {
         final mapboxRoutes = mapboxProvider != null
             ? await mapboxProvider!(start, destination, mode: mode)
@@ -302,15 +418,32 @@ class MapboxDirectionsService {
             routes: classified,
             provider: RouteProvider.mapbox,
             latency: stopwatch.elapsed,
+            providerDiagnostics: diagnostics,
           );
         }
+      }
+
+      // Format diagnostic-rich user failure message (Item 11)
+      String failureMsg = 'Không tìm thấy lộ trình phù hợp';
+      RouteFailureReason failureReason = RouteFailureReason.noRoute;
+
+      if (diagnostics.any((d) => d.errorType == 'rateLimited')) {
+        failureReason = RouteFailureReason.providerRejected;
+        failureMsg = 'Dịch vụ định tuyến đang quá tải. Vui lòng thử lại sau giây lát.';
+      } else if (diagnostics.any((d) => d.errorType == 'dns' || d.errorType == 'network')) {
+        failureReason = RouteFailureReason.noNetwork;
+        failureMsg = 'Không thể kết nối máy chủ định tuyến. Kiểm tra mạng và thử lại.';
+      } else if (diagnostics.any((d) => d.errorType == 'noSegment')) {
+        failureReason = RouteFailureReason.noRoute;
+        failureMsg = 'Không tìm thấy đường nối giữa vị trí của bạn và điểm đến.';
       }
 
       return RouteCalculationResult.failed(
         provider: primaryProvider,
         latency: stopwatch.elapsed,
-        failure: RouteFailureReason.noRoute,
-        errorMessage: 'Không tìm thấy lộ trình phù hợp',
+        failure: failureReason,
+        errorMessage: failureMsg,
+        providerDiagnostics: diagnostics,
       );
     } on TimeoutException {
       fallbackTimer.cancel();
@@ -319,7 +452,8 @@ class MapboxDirectionsService {
         provider: primaryProvider,
         latency: stopwatch.elapsed,
         failure: RouteFailureReason.timeout,
-        errorMessage: 'Quá thời gian tính toán lộ trình (${hardDeadline.inSeconds} giây)',
+        errorMessage: 'Quá thời gian tính toán lộ trình (${hardDeadline.inSeconds} giây). Kiểm tra mạng và thử lại.',
+        providerDiagnostics: diagnostics,
       );
     } catch (e) {
       fallbackTimer.cancel();
@@ -328,6 +462,7 @@ class MapboxDirectionsService {
         latency: stopwatch.elapsed,
         failure: RouteFailureReason.providerRejected,
         errorMessage: 'Lỗi định tuyến: $e',
+        providerDiagnostics: diagnostics,
       );
     }
   }

@@ -1,9 +1,29 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../models/route_model.dart';
 import 'valhalla_service.dart';
+
+class OsrmSnapResult {
+  final LatLng original;
+  final LatLng snapped;
+  final double distanceMeters;
+  final String? streetName;
+  final bool success;
+  final String? errorMessage;
+
+  const OsrmSnapResult({
+    required this.original,
+    required this.snapped,
+    required this.distanceMeters,
+    this.streetName,
+    required this.success,
+    this.errorMessage,
+  });
+}
 
 class OsrmService {
   static const String _primaryOsrmBaseUrl = 'https://router.project-osrm.org';
@@ -12,6 +32,7 @@ class OsrmService {
 
   // In-Memory Route Cache (0ms instant route retrieval)
   static final Map<String, List<NavRoute>> _routeCache = {};
+  static void clearCache() => _routeCache.clear();
 
   /// Calculate multiple genuine alternative routes between start and end
   Future<List<NavRoute>> calculateMultipleRoutes(
@@ -26,26 +47,10 @@ class OsrmService {
       return _routeCache[cacheKey]!;
     }
 
-    // 1. Try Primary OSRM Server
-    List<NavRoute> routes = await _fetchFromOsrm(
-      _primaryOsrmBaseUrl,
-      start,
-      destination,
-      mode: mode,
-    );
+    final osrmResult = await fetchOsrmRoutesDetailed(start, destination, mode: mode);
+    List<NavRoute> routes = osrmResult.routes;
 
-    // 2. Fallback to Secondary OSRM Server if primary returned empty
-    if (routes.isEmpty) {
-      routes = await _fetchFromOsrm(
-        _secondaryOsrmBaseUrl,
-        start,
-        destination,
-        mode: mode,
-        useDirectProfile: true,
-      );
-    }
-
-    // 3. Fallback to Valhalla if OSRM failed
+    // Fallback to Valhalla if OSRM failed
     if (routes.isEmpty) {
       final valhallaCosting = mode == 'bike' ? 'motorcycle' : (mode == 'foot' ? 'pedestrian' : 'auto');
       final valhallaRoute = await _valhallaService.calculateRoute(start, destination, costing: valhallaCosting);
@@ -54,15 +59,13 @@ class OsrmService {
       }
     }
 
-    // 4. Instant Fallback Route Generator if all remote servers failed/offline
+    // Instant Fallback Route Generator if all remote servers failed/offline
     if (routes.isEmpty) {
       final fallbackRoute = _generateEmergencyRoute(start, destination, mode: mode);
       routes = [fallbackRoute];
     }
 
-    // -------------------------------------------------------------
     // Classify & Rank Routes (Fastest vs Shortest vs Alternative)
-    // -------------------------------------------------------------
     int fastestIdx = 0;
     int shortestIdx = 0;
     double minDuration = routes[0].totalDurationSeconds;
@@ -159,67 +162,316 @@ class OsrmService {
     return classifiedRoutes;
   }
 
-  /// Direct OSRM routes query with fast failover between primary and secondary
-  Future<List<NavRoute>> fetchOsrmRoutes(
+  /// Snap a point to the nearest routable road edge using OSRM /nearest API
+  Future<OsrmSnapResult> findNearestRoutablePoint(
+    LatLng point, {
+    double maxRadiusMeters = 300.0,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    final urls = [
+      '$_primaryOsrmBaseUrl/nearest/v1/driving/${point.longitude},${point.latitude}?number=1',
+      '$_secondaryOsrmBaseUrl/nearest/v1/driving/${point.longitude},${point.latitude}?number=1',
+    ];
+
+    for (final urlStr in urls) {
+      try {
+        final response = await http.get(Uri.parse(urlStr), headers: {
+          'User-Agent': 'ESP32Nav/2.0 (contact@esp32nav.app)',
+        }).timeout(timeout);
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          if (data['code'] == 'Ok' && (data['waypoints'] as List).isNotEmpty) {
+            final wp = data['waypoints'][0] as Map<String, dynamic>;
+            final loc = wp['location'] as List;
+            final dist = (wp['distance'] as num).toDouble();
+            final name = (wp['name'] as String? ?? '').trim();
+            final snapped = LatLng((loc[1] as num).toDouble(), (loc[0] as num).toDouble());
+
+            if (dist <= maxRadiusMeters) {
+              debugPrint('[OSRM Snap] Point $point snapped to $snapped (${dist.toStringAsFixed(1)}m on $name)');
+              return OsrmSnapResult(
+                original: point,
+                snapped: snapped,
+                distanceMeters: dist,
+                streetName: name.isNotEmpty ? name : null,
+                success: true,
+              );
+            } else {
+              debugPrint('[OSRM Snap] Point $point is too far from routable road (${dist.toStringAsFixed(1)}m > ${maxRadiusMeters}m)');
+              return OsrmSnapResult(
+                original: point,
+                snapped: snapped,
+                distanceMeters: dist,
+                streetName: name.isNotEmpty ? name : null,
+                success: false,
+                errorMessage: 'Điểm nằm quá xa đường giao thông (${dist.toStringAsFixed(0)}m > ${maxRadiusMeters.toStringAsFixed(0)}m)',
+              );
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[OSRM Snap] Nearest probe error on $urlStr: $e');
+      }
+    }
+
+    return OsrmSnapResult(
+      original: point,
+      snapped: point,
+      distanceMeters: 0,
+      success: false,
+      errorMessage: 'Không thể tìm đường giao thông gần tọa độ',
+    );
+  }
+
+  /// Hedged racing between OSRM primary (T0) and secondary (T0+800ms) with rich diagnostics
+  Future<ProviderRouteResult> fetchOsrmRoutesDetailed(
     LatLng start,
     LatLng destination, {
     required String mode,
     Duration timeout = const Duration(seconds: 4),
+    Duration staggerDelay = const Duration(milliseconds: 800),
   }) async {
-    List<NavRoute> routes = await _fetchFromOsrm(
-      _primaryOsrmBaseUrl,
-      start,
-      destination,
-      mode: mode,
-      timeout: timeout,
-    );
-    if (routes.isEmpty) {
-      routes = await _fetchFromOsrm(
+    final completer = Completer<ProviderRouteResult>();
+    Timer? fallbackTimer;
+    bool anyWinner = false;
+    bool secondaryLaunched = false;
+    ProviderRouteResult? primaryFailure;
+
+    void launchSecondary() {
+      if (secondaryLaunched || completer.isCompleted || anyWinner) return;
+      secondaryLaunched = true;
+      fallbackTimer?.cancel();
+      debugPrint('[OSRM] Launching secondary OSRM in parallel');
+
+      _fetchSingleOsrm(
         _secondaryOsrmBaseUrl,
         start,
         destination,
         mode: mode,
         useDirectProfile: true,
         timeout: timeout,
-      );
+        serverTag: 'osrm2',
+      ).then((res) {
+        if (completer.isCompleted) return;
+        if (res.success && res.routes.isNotEmpty) {
+          anyWinner = true;
+          completer.complete(res);
+        } else {
+          completer.complete(primaryFailure ?? res);
+        }
+      }).catchError((e) {
+        if (!completer.isCompleted) {
+          completer.complete(primaryFailure ?? ProviderRouteResult.failure(
+            provider: 'osrm2',
+            latency: const Duration(milliseconds: 800),
+            errorType: 'network',
+            safeMessage: 'Lỗi OSRM secondary: $e',
+          ));
+        }
+      });
     }
-    return routes;
+
+    // 1. Launch Primary at T0
+    _fetchSingleOsrm(
+      _primaryOsrmBaseUrl,
+      start,
+      destination,
+      mode: mode,
+      useDirectProfile: false,
+      timeout: timeout,
+      serverTag: 'osrm1',
+    ).then((res) {
+      if (completer.isCompleted) return;
+      if (res.success && res.routes.isNotEmpty) {
+        anyWinner = true;
+        fallbackTimer?.cancel();
+        completer.complete(res);
+      } else {
+        primaryFailure = res;
+        if (!secondaryLaunched) {
+          // Primary failed fast: trigger secondary immediately!
+          launchSecondary();
+        }
+      }
+    }).catchError((e) {
+      primaryFailure = ProviderRouteResult.failure(
+        provider: 'osrm1',
+        latency: Duration.zero,
+        errorType: 'network',
+        safeMessage: 'Lỗi OSRM primary: $e',
+      );
+      if (!secondaryLaunched) {
+        launchSecondary();
+      }
+    });
+
+    // 2. Schedule Secondary at T0 + staggerDelay if primary still pending
+    fallbackTimer = Timer(staggerDelay, () {
+      if (!completer.isCompleted && !anyWinner && !secondaryLaunched) {
+        debugPrint('[OSRM] Primary still pending after ${staggerDelay.inMilliseconds}ms -> launching fallback');
+        launchSecondary();
+      }
+    });
+
+    return completer.future;
   }
 
-  Future<List<NavRoute>> _fetchFromOsrm(
+  /// Direct OSRM routes query backward-compatible
+  Future<List<NavRoute>> fetchOsrmRoutes(
+    LatLng start,
+    LatLng destination, {
+    required String mode,
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final result = await fetchOsrmRoutesDetailed(start, destination, mode: mode, timeout: timeout);
+    return result.routes;
+  }
+
+  Future<ProviderRouteResult> _fetchSingleOsrm(
     String baseUrl,
     LatLng start,
     LatLng destination, {
     required String mode,
     bool useDirectProfile = false,
     Duration timeout = const Duration(seconds: 4),
+    String serverTag = 'osrm',
   }) async {
+    final stopwatch = Stopwatch()..start();
     try {
-      // For Vietnam motorbike routing: We use OSRM driving profile with customized Vietnamese motorbike speeds (38 km/h)
-      // because OSRM 'bike' is pedal bicycle (12km/h, walking paths, stairs).
       String profile = 'driving';
       if (mode == 'foot') {
         profile = 'foot';
       }
 
+      // Prompt item 4: Use alternatives=true for compatibility smoke test
       final urlStr = useDirectProfile
-          ? '$baseUrl/route/v1/driving/${start.longitude},${start.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true&alternatives=3'
-          : '$baseUrl/route/v1/$profile/${start.longitude},${start.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true&alternatives=3&annotations=false';
+          ? '$baseUrl/route/v1/driving/${start.longitude},${start.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true&alternatives=true'
+          : '$baseUrl/route/v1/$profile/${start.longitude},${start.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true&alternatives=true&annotations=false';
 
       final response = await http.get(Uri.parse(urlStr), headers: {
-        'User-Agent': 'ESP32_Smart_Navigator/2.0 (contact@esp32nav.app)',
+        'User-Agent': 'ESP32Nav/2.0 (contact@esp32nav.app)',
       }).timeout(timeout);
 
-      if (response.statusCode != 200) {
-        return [];
+      final latency = stopwatch.elapsed;
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final apiCode = data['code']?.toString() ?? 'Ok';
+
+        if (apiCode == 'Ok') {
+          final routes = parseOsrmResponse(data, start, destination, mode);
+          if (routes.isNotEmpty) {
+            return ProviderRouteResult.success(
+              provider: serverTag,
+              routes: routes,
+              latency: latency,
+              httpStatus: 200,
+              apiCode: 'Ok',
+            );
+          } else {
+            return ProviderRouteResult.failure(
+              provider: serverTag,
+              latency: latency,
+              httpStatus: 200,
+              apiCode: 'EmptyRoutes',
+              errorType: 'emptyResponse',
+              safeMessage: 'Dữ liệu lộ trình OSRM rỗng',
+            );
+          }
+        } else {
+          final errorType = (apiCode == 'NoSegment' || apiCode == 'NoRoute') ? 'noRoute' : 'invalidRequest';
+          final msg = data['message']?.toString() ?? 'Không tìm thấy lộ trình';
+          return ProviderRouteResult.failure(
+            provider: serverTag,
+            latency: latency,
+            httpStatus: 200,
+            apiCode: apiCode,
+            errorType: errorType,
+            safeMessage: errorType == 'noRoute' ? 'Không tìm thấy đường phù hợp gần tọa độ' : msg,
+          );
+        }
       }
 
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      if (data['code'] != 'Ok' || (data['routes'] as List).isEmpty) {
-        return [];
-      }
+      // Non-200 Diagnostic
+      String errorType = 'http';
+      String safeMessage = 'Lỗi máy chủ OSRM (HTTP ${response.statusCode})';
+      String? apiCode;
 
-      final rawRoutes = data['routes'] as List;
+      try {
+        final errData = jsonDecode(response.body) as Map<String, dynamic>;
+        apiCode = errData['code']?.toString();
+        final msg = errData['message']?.toString();
+        if (response.statusCode == 429) {
+          errorType = 'rateLimited';
+          safeMessage = 'Dịch vụ OSRM đang quá tải. Hãy thử lại.';
+        } else if (apiCode == 'NoSegment' || apiCode == 'NoRoute') {
+          errorType = 'noRoute';
+          safeMessage = 'Không tìm thấy đường nối giữa 2 điểm';
+        } else if (msg != null && msg.isNotEmpty) {
+          safeMessage = msg;
+        }
+      } catch (_) {}
+
+      debugPrint('[$serverTag] Failed: status=${response.statusCode}, code=$apiCode, errorType=$errorType, latency=${latency.inMilliseconds}ms');
+      return ProviderRouteResult.failure(
+        provider: serverTag,
+        latency: latency,
+        httpStatus: response.statusCode,
+        apiCode: apiCode,
+        errorType: errorType,
+        safeMessage: safeMessage,
+      );
+    } on TimeoutException {
+      final latency = stopwatch.elapsed;
+      debugPrint('[$serverTag] Timeout after ${latency.inMilliseconds}ms');
+      return ProviderRouteResult.failure(
+        provider: serverTag,
+        latency: latency,
+        errorType: 'timeout',
+        safeMessage: 'Quá thời gian kết nối OSRM',
+      );
+    } on SocketException catch (e) {
+      final latency = stopwatch.elapsed;
+      final isDns = e.message.toLowerCase().contains('failed host lookup');
+      final errorType = isDns ? 'dns' : 'network';
+      debugPrint('[$serverTag] Network error ($errorType): $e');
+      return ProviderRouteResult.failure(
+        provider: serverTag,
+        latency: latency,
+        errorType: errorType,
+        safeMessage: isDns ? 'Không thể phân giải tên miền máy chủ OSRM (DNS)' : 'Không thể kết nối mạng tới OSRM',
+      );
+    } on HandshakeException catch (e) {
+      final latency = stopwatch.elapsed;
+      debugPrint('[$serverTag] TLS error: $e');
+      return ProviderRouteResult.failure(
+        provider: serverTag,
+        latency: latency,
+        errorType: 'tls',
+        safeMessage: 'Lỗi bảo mật kết nối OSRM (TLS)',
+      );
+    } catch (e) {
+      final latency = stopwatch.elapsed;
+      debugPrint('[$serverTag] Exception: $e');
+      return ProviderRouteResult.failure(
+        provider: serverTag,
+        latency: latency,
+        errorType: e is FormatException ? 'parseError' : 'network',
+        safeMessage: 'Lỗi kết nối OSRM: $e',
+      );
+    }
+  }
+
+  /// Static helper to parse OSRM JSON response
+  static List<NavRoute> parseOsrmResponse(
+    Map<String, dynamic> data,
+    LatLng start,
+    LatLng destination,
+    String mode,
+  ) {
+    try {
+      final rawRoutes = data['routes'] as List? ?? [];
       final parsedRoutes = <NavRoute>[];
 
       for (int rIdx = 0; rIdx < rawRoutes.length; rIdx++) {
@@ -229,7 +481,6 @@ class OsrmService {
 
         // Adjust duration for Vietnamese motorbike speed if mode == 'bike'
         if (mode == 'bike') {
-          // Average motorbike speed in Vietnam cities ~32 km/h, suburbs ~45 km/h
           final avgSpeedKmh = totalDistance > 10000 ? 42.0 : 32.0;
           totalDuration = (totalDistance / 1000.0) / avgSpeedKmh * 3600.0;
         }
@@ -245,11 +496,11 @@ class OsrmService {
 
         // Parse turn-by-turn steps
         final steps = <NavStep>[];
-        final legs = routeJson['legs'] as List;
+        final legs = routeJson['legs'] as List? ?? [];
         int globalStepIndex = 0;
 
         for (final leg in legs) {
-          final legSteps = leg['steps'] as List;
+          final legSteps = leg['steps'] as List? ?? [];
           for (final step in legSteps) {
             final maneuver = step['maneuver'] as Map<String, dynamic>;
             final manType = maneuver['type'] as String? ?? 'straight';
@@ -265,7 +516,7 @@ class OsrmService {
             final name = (step['name'] as String? ?? '').trim();
             final streetName = name.isEmpty ? 'Đường không tên' : name;
 
-            final instruction = _buildInstruction(manType, manModifier, streetName, maneuver);
+            final instruction = buildInstruction(manType, manModifier, streetName, maneuver);
 
             steps.add(NavStep(
               stepIndex: globalStepIndex++,
@@ -286,6 +537,8 @@ class OsrmService {
         }
 
         parsedRoutes.add(NavRoute(
+          title: 'Lộ trình ${rIdx + 1}',
+          subtitle: 'Tuyến OSRM',
           totalDistanceMeters: totalDistance,
           totalDurationSeconds: totalDuration,
           polylinePoints: polylinePoints,
@@ -297,7 +550,8 @@ class OsrmService {
       }
 
       return parsedRoutes;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[OSRM] Parsing error: $e');
       return [];
     }
   }
@@ -313,7 +567,7 @@ class OsrmService {
   }
 
   /// Helper to create localized turn instructions
-  String _buildInstruction(String type, String? modifier, String street, [Map<String, dynamic>? maneuver]) {
+  static String buildInstruction(String type, String? modifier, String street, [Map<String, dynamic>? maneuver]) {
     if (type == 'depart') return 'Bắt đầu di chuyển trên $street';
     if (type == 'arrive') return 'Bạn đã đến điểm đến!';
     if (type == 'roundabout' || type == 'rotary') {
@@ -352,7 +606,6 @@ class OsrmService {
     final speedKmh = mode == 'bike' ? 35.0 : (mode == 'foot' ? 5.0 : 45.0);
     final durationSec = (totalDist / (speedKmh * 1000.0 / 3600.0)).clamp(30.0, 86400.0);
 
-    // Intermediate points
     final mid1 = LatLng(start.latitude, (start.longitude + dest.longitude) / 2.0);
     final mid2 = LatLng(dest.latitude, (start.longitude + dest.longitude) / 2.0);
     final pts = [start, mid1, mid2, dest];
@@ -389,9 +642,9 @@ class OsrmService {
     ];
 
     return NavRoute(
-      title: 'Lộ trình tối ưu (Offline)',
-      subtitle: 'Tuyến đường ngắn nhất',
-      summary: 'Tuyến đường ngắn nhất',
+      title: 'Lộ trình tham khảo (Ngoại tuyến)',
+      subtitle: 'Đường thẳng tham khảo - Không thể dẫn đường',
+      summary: 'Tuyến đường thẳng tham khảo',
       totalDistanceMeters: totalDist,
       totalDurationSeconds: durationSec,
       steps: steps,
