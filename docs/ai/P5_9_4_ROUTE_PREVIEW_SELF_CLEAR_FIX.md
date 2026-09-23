@@ -148,3 +148,44 @@ Flash: [====      ]  35.9% (used 1200069 bytes from 3342336 bytes)
 | **CI Production IPA Build** | **TRIGGERED** | Target: `ESP32Nav-Flutter-PRODUCTION.ipa` |
 | **Physical iPhone Field Test** | **MANUAL FIELD PENDING** | Pending field test on physical device |
 
+
+---
+
+## 7. CI Workflow Run & Analyzer Cleanup (P5.9.4a)
+
+### 7.1 Root Cause of CI Failure (Run 35855174413)
+Workflow run `35855174413` failed during `4b. Run Flutter Analyzer & Unit Tests` due to two static analysis warnings in `test/route_preview_lifecycle_test.dart`:
+- `test/route_preview_lifecycle_test.dart:188:20: unnecessary_null_comparison`
+- `test/route_preview_lifecycle_test.dart:190:22: unnecessary_null_comparison`
+
+The test had assigned non-nullable `final accepted = physicalLoc;` and then checked `if (accepted != null)`, which the analyzer flagged as redundant.
+
+### 7.2 The Solution
+Rather than suppressing warnings with `// ignore`, the route origin selection logic was extracted into a dedicated, testable production helper on `MapScreen`:
+```dart
+@visibleForTesting
+static LatLng selectRoutePlanningStart({
+  required LatLng? acceptedPhysicalLocation,
+  required LatLng? rawLocation,
+  required LatLng fallbackLocation,
+}) {
+  return acceptedPhysicalLocation ??
+      rawLocation ??
+      fallbackLocation;
+}
+```
+Production `_calculateRoutesForPlace()` uses this exact helper.
+The test was updated to verify all 4 boundary conditions without duplicate conditionals:
+1. `acceptedPhysicalLocation` present $\to$ physical wins.
+2. `acceptedPhysicalLocation` null, `rawLocation` present $\to$ raw wins.
+3. `acceptedPhysicalLocation` null, `rawLocation` null $\to$ fallback user position wins.
+4. Stale `matchedLocation` is never selected for new route planning.
+
+### 7.3 CI Validation
+- **Run 35855174413**: `FAILED` (2 static analysis warnings in `route_preview_lifecycle_test.dart`)
+- **Run 35856380040 (P5.9.4a)**: `SUCCESS`
+  - `flutter analyze --no-fatal-infos`: **No issues found**
+  - `flutter test --reporter expanded`: **202 / 202 PASS**
+  - `dart run tool/provider_smoke_test.dart`: **All 4 endpoints & production pipeline PASS**
+  - Artifact generated: `ESP32Nav-Flutter-PRODUCTION.ipa`
+
