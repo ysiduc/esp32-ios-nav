@@ -134,18 +134,26 @@ In `SearchService.findSavedPlace`, search queries check for custom saved names:
 
 ---
 
-## 6. Verification Results
+## 6. Verification Results & CI Triage
 
-### Automated Test Suite:
-- **Flutter Analyzer**: `0 issues` (`flutter analyze --no-fatal-infos`).
-- **All 227 Unit & Widget Tests**: `100% PASS` (`flutter test`).
-- **P6.2 Dedicated Test Suite**: `5/5 PASS` (`test/liquid_glass_p62_test.dart`):
+### CI Triage History (Run 35900369836):
+- **Run 35900369836 Status**: `FAILED` at `flutter analyze`.
+- **Root Cause**: `mobile_app/test/liquid_glass_p62_test.dart` contained 4 unused imports (`dart:ui`, `package:provider/provider.dart`, `package:mobile_app/services/ble_service.dart`, `package:mobile_app/services/esp_stream_service.dart`) left over from migration to `Esp32NavApp`.
+- **Resolution (P6.2a)**:
+  1. Removed the 4 unused imports completely without using warning suppressions.
+  2. Moved place display label resolution out of service layer into pure presentation helper `effectivePlaceLabel(place, savedPlaces)` in `map_screen.dart`, reverting `search_service.dart` to zero diff.
+  3. Re-ran strict `flutter analyze` (exited 0, 0 issues found) and expanded `flutter test` (227/227 tests PASS).
+
+### Validated Automated Test Suite (P6.2a):
+- **Flutter Analyzer (Strict)**: `0 issues found` (`flutter analyze`).
+- **All 227 Unit & Widget Tests**: `227 / 227 PASS` (`flutter test --reporter expanded`).
+- **P6.2 Dedicated Test Suite**: `5 / 5 PASS` (`test/liquid_glass_p62_test.dart`):
   - Token parameter & opacity thresholds verified.
-  - Custom saved name priority verified.
+  - Presentation `effectivePlaceLabel` custom saved name priority verified.
   - Drawer transparent background & BackdropFilter verified.
   - Search sheet 0.95 opacity elimination verified.
-- **Live Routing Provider Smoke Test**: `PASS` (Valhalla HTTP 200 808ms, OSRM HTTP 200 612ms).
-- **ESP32 Firmware Build**: `[SUCCESS] Took 5.12 seconds` (`pio run`).
+- **Live Routing Provider Smoke Test**: `PASS` (Valhalla HTTP 200 828ms, OSRM HTTP 200 650ms).
+- **ESP32 Firmware Build**: `[SUCCESS] Took 4.30 seconds` (`pio run`).
 
 ---
 
