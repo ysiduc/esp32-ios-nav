@@ -220,9 +220,13 @@ class _MapScreenState extends State<MapScreen> {
   String _telemetryOsrm1Status = '--';
   String _telemetryOsrm2Status = '--';
   LatLng? _telemetryStartOrig;
+  String _telemetryStartSource = 'none';
   double? _telemetrySnapStartDist;
   double? _telemetrySnapDestDist;
   String _telemetryWinner = '--';
+  int _telemetryRoutesReceived = 0;
+  int _telemetryRoutesCommitted = 0;
+  bool _telemetryPreviewRetained = false;
   bool _isSearching = false;
   int _googleLinkGeneration = 0;
   bool _isAutocompleteRefreshing = false;
@@ -766,13 +770,33 @@ class _MapScreenState extends State<MapScreen> {
     final rev = navManager.renderRevision;
     final isNav = navManager.isNavigating;
 
-    if (rev != _lastObservedRenderRevision || isNav != _lastObservedNavigating) {
-      _lastObservedRenderRevision = rev;
-      _lastObservedNavigating = isNav;
-      if (!isNav) {
-        _routes = [];
-        _routeRenderController.clearAndInvalidate();
-      } else {
+    final revChanged = rev != _lastObservedRenderRevision;
+    final wasNavigating = _lastObservedNavigating;
+    final navigationStopped = wasNavigating && !isNav;
+    final navigationStarted = !wasNavigating && isNav;
+
+    _lastObservedRenderRevision = rev;
+    _lastObservedNavigating = isNav;
+
+    if (navigationStopped) {
+      debugPrint('[Navigation] Navigation stopped -> clearing active routes and render line');
+      _routes = [];
+      _routeRenderController.clearAndInvalidate();
+      return;
+    }
+
+    if (isNav && (revChanged || navigationStarted)) {
+      _throttledUpdateRouteOnMap(forceRedraw: true);
+      return;
+    }
+
+    if (!isNav && revChanged) {
+      // PREVIEW REVISION:
+      // DO NOT clear _routes.
+      //
+      // setPreviewRoute() legitimately increments renderRevision
+      // while navigation has not started yet.
+      if (_routes.isNotEmpty) {
         _throttledUpdateRouteOnMap(forceRedraw: true);
       }
     }
@@ -1047,7 +1071,19 @@ class _MapScreenState extends State<MapScreen> {
   // -------------------------------------------------------------
   Future<void> _calculateRoutesForPlace(MapPlace place) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final startPos = navManager.currentLocation ?? _userPosition;
+    // P5.9.4 Section 3: Route planning must use physical GPS, not stale route-matched projection
+    String startSource = 'fallback';
+    final LatLng startPos;
+    if (navManager.acceptedPhysicalLocation != null) {
+      startPos = navManager.acceptedPhysicalLocation!;
+      startSource = 'physical';
+    } else if (navManager.rawLocation != null) {
+      startPos = navManager.rawLocation!;
+      startSource = 'raw';
+    } else {
+      startPos = _userPosition;
+      startSource = 'userPosition';
+    }
 
     try {
       Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 1500));
@@ -1135,17 +1171,23 @@ class _MapScreenState extends State<MapScreen> {
         _telemetryOsrm1Status = osrm1Status;
         _telemetryOsrm2Status = osrm2Status;
         _telemetryStartOrig = startPos;
+        _telemetryStartSource = startSource;
         _telemetrySnapStartDist = result.snapStartDistanceMeters;
         _telemetrySnapDestDist = result.snapDistanceMeters;
         _telemetryWinner = result.isSuccess ? result.provider.name : 'none';
+        _telemetryRoutesReceived = result.routes.length;
 
         if (result.isSuccess) {
           _routes = result.routes;
+          _telemetryRoutesCommitted = _routes.length;
+          _telemetryPreviewRetained = true;
           _routeErrorMessage = null;
           _routeTelemetryStatus = 'success';
           _selectedRouteIndex = 0;
         } else {
           _routes = [];
+          _telemetryRoutesCommitted = 0;
+          _telemetryPreviewRetained = false;
           _routeTelemetryStatus = result.failure == RouteFailureReason.timeout ? 'timeout' : 'failed';
           _routeErrorMessage = result.errorMessage ?? 'Không thể tính lộ trình. Kiểm tra kết nối mạng và thử lại.';
         }
@@ -1153,6 +1195,8 @@ class _MapScreenState extends State<MapScreen> {
 
       if (result.isSuccess && result.routes.isNotEmpty) {
         context.read<NavigationManager>().setPreviewRoute(result.routes.first);
+        debugPrint('[Routing] preview committed, routes still=\${_routes.length}');
+        _telemetryPreviewRetained = _routes.isNotEmpty;
         _fitRouteBounds(result.routes.first.polylinePoints);
         _updateRouteOnMap();
         _updateDestinationMarker();
@@ -1830,12 +1874,12 @@ class _MapScreenState extends State<MapScreen> {
           Text('Thermal: ${streamService.thermalState}', style: const TextStyle(fontSize: 11, color: Color(0xFF34C759))),
           const Divider(height: 12, thickness: 0.5),
           const Text(
-            'ROUTING TELEMETRY (P5.9.3)',
+            'ROUTING TELEMETRY (P5.9.4)',
             style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF34C759)),
           ),
           const SizedBox(height: 4),
           if (_telemetryStartOrig != null)
-            Text('Start orig: ${_telemetryStartOrig!.latitude.toStringAsFixed(4)}, ${_telemetryStartOrig!.longitude.toStringAsFixed(4)}', style: const TextStyle(fontSize: 10)),
+            Text('Start orig: ${_telemetryStartOrig!.latitude.toStringAsFixed(4)}, ${_telemetryStartOrig!.longitude.toStringAsFixed(4)} ($_telemetryStartSource)', style: const TextStyle(fontSize: 10)),
           if (_telemetrySnapStartDist != null)
             Text('Snap start: ${_telemetrySnapStartDist!.toStringAsFixed(0)}m', style: const TextStyle(fontSize: 11, color: Color(0xFF007AFF), fontWeight: FontWeight.w600)),
           if (_telemetrySnapDestDist != null)
@@ -1844,6 +1888,7 @@ class _MapScreenState extends State<MapScreen> {
           Text('OSRM1: $_telemetryOsrm1Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           Text('OSRM2: $_telemetryOsrm2Status', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           Text('Winner: $_telemetryWinner (${_routeTelemetryLatencyMs > 0 ? "${_routeTelemetryLatencyMs}ms" : "--"})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _routeTelemetryStatus == 'success' ? const Color(0xFF34C759) : Colors.red)),
+          Text('Routes recv: $_telemetryRoutesReceived, commit: $_telemetryRoutesCommitted, retained: ${_telemetryPreviewRetained ? "YES" : "NO"}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
           Text('Status: $_routeTelemetryStatus (gen #$_routeRequestGeneration, routes: $_routeTelemetryRoutesCount)', style: const TextStyle(fontSize: 10)),
           if (navManager.isNavigating) ...[
             const Divider(height: 12, thickness: 0.5),

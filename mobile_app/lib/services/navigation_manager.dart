@@ -1134,6 +1134,8 @@ class NavigationManager extends ChangeNotifier {
     _secondaryRoute = null;
     _activeRouteGeometry = null;
     _navigationDestination = null;
+    _matchedProjection = null;
+    _matchedLocation = _acceptedPhysicalLocation ?? _rawLocation;
     _currentStepIndex = 0;
     _simulatedPolylineIndex = 0;
     _displayProgressMeters = 0.0;
