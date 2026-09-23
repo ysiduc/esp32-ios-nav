@@ -115,19 +115,45 @@ All **188 tests** passed cleanly:
 ```
 
 ### 4.2 Flutter Static Analysis
-```
-flutter analyze
+```bash
+flutter analyze --no-fatal-infos
 Analyzing mobile_app...
-No issues found! (ran in 1.2s)
+No issues found! (ran in 1.1s)
 ```
 
 ### 4.3 ESP32 Firmware Build
-```
+```bash
 pio run in firmware_esp32:
 RAM:   [====      ]  41.3% (used 135416 bytes from 327680 bytes)
 Flash: [====      ]  35.9% (used 1200069 bytes from 3342336 bytes)
 [SUCCESS] Took 4.97 seconds
 ```
+
+### 4.4 CI Workflow Audit & Resolution (P5.9.1a)
+
+#### CI Run 35827363565 (FAILED)
+- **Trigger**: Commit `4b87c3e`
+- **Failure Point**: Job `Compile Flutter iOS IPA` (Step 4b: `Run Flutter Analyzer & Unit Tests`)
+- **Root Cause**: `flutter analyze --fatal-warnings` detected an unused variable in `test/route_concurrency_test.dart:192:15`:
+  ```
+  warning • The value of the local variable 'recordedOsrmMode' isn't used. Try removing the variable or using it • test/route_concurrency_test.dart:192:15 • unused_local_variable
+  ```
+- **Resolution**: Rather than simply removing the variable, converted it into a meaningful assertion verifying that when primary Valhalla succeeds immediately, fallback OSRM is never triggered:
+  ```dart
+  expect(recordedCosting, equals('motorcycle'));
+  expect(recordedOsrmMode, isNull);
+  ```
+
+#### CI Run 35847072228 (SUCCESS)
+- **Trigger**: Commit `8a78e10` (`fix(test): clean P5.9.1 routing analyzer warning`)
+- **Status**: **ALL JOBS PASSED**
+  - `Compile ESP32-S3 Firmware`: **SUCCESS** (1m 17s)
+  - `Compile Flutter iOS IPA`: **SUCCESS** (3m 24s)
+  - `Compile Native iOS Swift/SwiftUI`: **SUCCESS** (5m 44s)
+- **Artifacts Generated & Verified**:
+  - `ESP32Nav-Flutter-PRODUCTION-ipa` (Mandatory Production Target)
+  - `ESP32Nav-Native-REFERENCE-ipa`
+  - `esp32_firmware_bin`
 
 ---
 
