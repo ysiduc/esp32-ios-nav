@@ -25,9 +25,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_typography.dart';
 import '../widgets/common/status_badge.dart';
-import '../widgets/common/empty_state_card.dart';
 import '../widgets/common/saved_place_dialog.dart';
-import '../widgets/common/saved_place_tile.dart';
 
 
 
@@ -1494,6 +1492,8 @@ class _MapScreenState extends State<MapScreen> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: widget.drawer,
+      drawerEnableOpenDragGesture: true,
+      drawerEdgeDragWidth: MediaQuery.of(context).size.width * 0.25,
       onDrawerChanged: (isOpen) {
         _setOverlayMode(isOpen ? MapOverlayMode.drawer : MapOverlayMode.none);
       },
@@ -1531,19 +1531,7 @@ class _MapScreenState extends State<MapScreen> {
             tiltGesturesEnabled: true,
           ),
 
-          // -----------------------------------------------------------
-          // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
-          // -----------------------------------------------------------
-          if (!isDriving)
-            SafeArea(
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 16.0, top: 8.0),
-                  child: _buildTopLeftGlassGroup(context, bleService, streamService),
-                ),
-              ),
-            ),
+          // (Top-left controls removed in P6.1: drawer opens via left-edge swipe gesture)
 
           if (_showDebugOverlay)
             Positioned(
@@ -1795,150 +1783,96 @@ class _MapScreenState extends State<MapScreen> {
   // ─────────────────────────────────────────────────────────────
   // Liquid Glass Floating Controls (P5.4.1.3 Sections 36-45, 64)
   // ─────────────────────────────────────────────────────────────
-  Widget _buildTopLeftGlassGroup(BuildContext context, BleService bleService, EspStreamService streamService) {
-    return AppGlassPill(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            icon: Stack(
-              alignment: Alignment.center,
-              children: [
-                const Icon(Icons.menu_rounded, color: Color(0xFF1C1C1E), size: 22),
-                if (bleService.isConnected)
-                  Positioned(
-                    right: 6,
-                    top: 6,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: bleService.isWifiConnected ? const Color(0xFF05FFA1) : const Color(0xFF007AFF),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            tooltip: 'Menu',
-            onPressed: () {
-              _setOverlayMode(MapOverlayMode.drawer);
-              if (widget.onOpenMenu != null) {
-                widget.onOpenMenu!();
-              } else {
-                _scaffoldKey.currentState?.openDrawer();
-              }
-            },
-          ),
-          Container(
-            width: 0.8,
-            height: 20,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
+  Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
+    return Container(
+      width: 48,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
+        boxShadow: [
+          BoxShadow(
             color: Colors.black.withOpacity(0.08),
-          ),
-          GestureDetector(
-            onTap: () {
-              setState(() => _showDebugOverlay = !_showDebugOverlay);
-            },
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.cloudy_snowing, color: Color(0xFF007AFF), size: 16),
-                  SizedBox(width: 5),
-                  Text(
-                    '27°',
-                    style: TextStyle(
-                      color: Color(0xFF1C1C1E),
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
-    return AppGlassToolbar(
-      groupId: 'right-toolbar',
-      radius: 23,
-      width: 46,
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      children: [
-        IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 20),
-          tooltip: 'Đổi nền bản đồ',
-          onPressed: _showMapThemePicker,
-        ),
-        Container(width: 26, height: 0.8, color: Colors.black.withOpacity(0.08)),
-        IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 20),
-          tooltip: 'Hướng Bắc',
-          onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-        ),
-        Container(width: 26, height: 0.8, color: Colors.black.withOpacity(0.08)),
-        IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: Icon(
-            _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-            color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
-            size: 20,
-          ),
-          tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
-          onPressed: () {
-            setState(() {
-              _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
-            });
-            if (_selectedPlace != null) {
-              _calculateRoutesForPlace(_selectedPlace!);
-            }
-          },
-        ),
-        Container(width: 26, height: 0.8, color: Colors.black.withOpacity(0.08)),
-        Container(
-          width: 40,
-          height: 40,
-          margin: const EdgeInsets.symmetric(vertical: 2),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
-          ),
-          child: IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            icon: Icon(
-              _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
-              color: const Color(0xFF007AFF),
-              size: 20,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 22),
+                  tooltip: 'Đổi nền bản đồ',
+                  onPressed: _showMapThemePicker,
+                ),
+                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
+                  tooltip: 'Hướng Bắc',
+                  onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
+                ),
+                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  icon: Icon(
+                    _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+                    color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+                    size: 22,
+                  ),
+                  tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
+                  onPressed: () {
+                    setState(() {
+                      _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
+                    });
+                    if (_selectedPlace != null) {
+                      _calculateRoutesForPlace(_selectedPlace!);
+                    }
+                  },
+                ),
+                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+                Container(
+                  width: 40,
+                  height: 40,
+                  margin: const EdgeInsets.symmetric(vertical: 2),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
+                  ),
+                  child: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                    icon: Icon(
+                      _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
+                      color: const Color(0xFF007AFF),
+                      size: 22,
+                    ),
+                    tooltip: 'Vị trí hiện tại',
+                    onPressed: () {
+                      if (isDriving) {
+                        _recenterToVehicle();
+                      } else {
+                        _recenterToUser();
+                      }
+                    },
+                  ),
+                ),
+              ],
             ),
-            tooltip: 'Vị trí hiện tại',
-            onPressed: () {
-              if (isDriving) {
-                _recenterToVehicle();
-              } else {
-                _recenterToUser();
-              }
-            },
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -2054,6 +1988,119 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildQuickPlaceCircleAction({
+    required IconData icon,
+    required String label,
+    required String? subtitle,
+    bool isAddButton = false,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isAddButton ? const Color(0xFFE5F1FF) : const Color(0xFFE5F1FF),
+            ),
+            child: Icon(
+              icon,
+              color: const Color(0xFF007AFF),
+              size: isAddButton ? 32 : 28,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1C1C1E),
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 1),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Color(0xFF007AFF),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showRecentPlaceActionSheet(BuildContext context, MapPlace place, StateSetter setModalState) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(2)),
+              ),
+              Text(
+                place.name,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Color(0xFF1C1C1E)),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.directions_rounded, color: Color(0xFF007AFF)),
+                title: const Text('Chỉ đường đến đây'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.pop(context);
+                  _calculateRoutesForPlace(place);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.star_outline_rounded, color: Color(0xFFFF9500)),
+                title: const Text('Lưu vào Mục ưa thích'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await _searchService.savePlace(place);
+                  setModalState(() {});
+                  setState(() {});
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: Color(0xFFFF3B30)),
+                title: const Text('Xóa khỏi lịch sử tìm kiếm', style: TextStyle(color: Color(0xFFFF3B30))),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await _searchService.deleteRecentSearch(place);
+                  setModalState(() {});
+                  setState(() {});
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCircularGlassButton({
     required IconData icon,
     Color? iconColor,
@@ -2119,60 +2166,77 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Bottom Search Capsule (Screenshot 1)
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
-    return AppGlassPill(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+    return GestureDetector(
       onTap: _openAppleSearchModal,
-      child: Row(
-        children: [
-          const Icon(Icons.search_rounded, color: Color(0xFF3C3C43), size: 22),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              'Tìm kiếm điểm đến...',
-              style: TextStyle(
-                color: Color(0xFF3C3C43),
-                fontSize: 16,
-                fontWeight: FontWeight.w400,
-                letterSpacing: -0.2,
-              ),
+      child: Container(
+        height: 50,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.88),
+          borderRadius: BorderRadius.circular(25),
+          border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
-          ),
-          IconButton(
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            icon: const Icon(Icons.mic_rounded, color: Color(0xFF3C3C43), size: 22),
-            onPressed: _openAppleSearchModal,
-          ),
-          const SizedBox(width: 4),
-          GestureDetector(
-            child: Container(
-              width: 30,
-              height: 30,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: Color(0xFF5E5CE6),
-              ),
-              child: const Center(
-                child: Text(
-                  'Y',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(25),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  const Icon(Icons.search_rounded, color: Color(0xFF8E8E93), size: 22),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Tìm kiếm điểm đến...',
+                      style: TextStyle(
+                        color: Color(0xFF8E8E93),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
                   ),
-                ),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    icon: const Icon(Icons.mic_none_rounded, color: Color(0xFF8E8E93), size: 22),
+                    onPressed: _openAppleSearchModal,
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0xFF5E5CE6),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'Y',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
 
-  // -------------------------------------------------------------
-  // Apple Maps Search Modal Sheet (Screenshot 2)
-  // -------------------------------------------------------------
   void _openAppleSearchModal() {
     _setOverlayMode(MapOverlayMode.search);
     showModalBottomSheet(
@@ -2254,7 +2318,7 @@ class _MapScreenState extends State<MapScreen> {
                                     Expanded(
                                       child: TextField(
                                         controller: _searchController,
-                                        autofocus: true,
+                                        autofocus: false,
                                         style: const TextStyle(
                                           color: Colors.black87,
                                           fontSize: 16,
@@ -2432,111 +2496,111 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
 
-                                  // Section 1: "Địa điểm đã lưu" (Saved Places)
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          const Text(
-                                            'Địa điểm đã lưu',
-                                            style: TextStyle(
-                                              fontSize: 19,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.black87,
-                                              letterSpacing: -0.3,
-                                            ),
+                                  // Section 1: "Địa điểm >" (Saved / Quick destinations matching Image 5)
+                                  GestureDetector(
+                                    onTap: () {
+                                      // Can show all saved places
+                                    },
+                                    child: const Row(
+                                      children: [
+                                        Text(
+                                          'Địa điểm',
+                                          style: TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.bold,
+                                            color: Color(0xFF1C1C1E),
+                                            letterSpacing: -0.4,
                                           ),
-                                          const SizedBox(width: 8),
-                                          if (_searchService.savedPlaces.isNotEmpty)
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFF007AFF).withOpacity(0.12),
-                                                borderRadius: BorderRadius.circular(10),
-                                              ),
-                                              child: Text(
-                                                '${_searchService.savedPlaces.length}',
-                                                style: const TextStyle(
-                                                  color: Color(0xFF007AFF),
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
+                                        ),
+                                        SizedBox(width: 4),
+                                        Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      // 1. Nhà (Home)
+                                      _buildQuickPlaceCircleAction(
+                                        icon: Icons.home_rounded,
+                                        label: 'Nhà',
+                                        subtitle: 'Thêm',
+                                        onTap: () {
+                                          final home = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('nhà') || p.name.toLowerCase().contains('home')).firstOrNull;
+                                          if (home != null) {
+                                            Navigator.pop(modalCtx);
+                                            _calculateRoutesForPlace(home);
+                                          } else {
+                                            // Focus search to add home
+                                            _searchController.text = 'Nhà ';
+                                            _onSearchChanged('Nhà ');
+                                            setModalState(() {});
+                                          }
+                                        },
+                                      ),
+                                      const SizedBox(width: 16),
+                                      // 2. Công ty (Work)
+                                      _buildQuickPlaceCircleAction(
+                                        icon: Icons.work_rounded,
+                                        label: 'Công ty',
+                                        subtitle: 'Thêm',
+                                        onTap: () {
+                                          final work = _searchService.savedPlaces.where((p) => p.name.toLowerCase().contains('công ty') || p.name.toLowerCase().contains('work')).firstOrNull;
+                                          if (work != null) {
+                                            Navigator.pop(modalCtx);
+                                            _calculateRoutesForPlace(work);
+                                          } else {
+                                            _searchController.text = 'Công ty ';
+                                            _onSearchChanged('Công ty ');
+                                            setModalState(() {});
+                                          }
+                                        },
+                                      ),
+                                      const SizedBox(width: 16),
+                                      // 3. Thêm (Add)
+                                      _buildQuickPlaceCircleAction(
+                                        icon: Icons.add_rounded,
+                                        label: 'Thêm',
+                                        subtitle: null,
+                                        isAddButton: true,
+                                        onTap: () {
+                                          if (_searchService.recentSearches.isNotEmpty) {
+                                            final first = _searchService.recentSearches.first;
+                                            SavedPlaceDialog.show(
+                                              context: context,
+                                              place: first,
+                                              isEditing: false,
+                                              onSave: (customName) async {
+                                                await _searchService.savePlace(first.copyWith(name: customName));
+                                                setModalState(() {});
+                                                setState(() {});
+                                              },
+                                            );
+                                          }
+                                        },
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(16),
-                                      boxShadow: [
-                                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: _searchService.savedPlaces.isEmpty
-                                          ? [
-                                              const EmptyStateCard(
-                                                icon: Icons.bookmark_outline_rounded,
-                                                title: 'Chưa có địa điểm đã lưu',
-                                                description: 'Chạm biểu tượng Lưu trên địa điểm để lưu lại kèm tên tuỳ chỉnh.',
-                                              ),
-                                            ]
-                                          : _searchService.savedPlaces.map((p) {
-                                              return SavedPlaceTile(
-                                                place: p,
-                                                onTap: () {
-                                                  Navigator.pop(modalCtx);
-                                                  _onPlaceClicked(p);
-                                                },
-                                                onRoute: () {
-                                                  Navigator.pop(modalCtx);
-                                                  _calculateRoutesForPlace(p);
-                                                },
-                                                onRename: () {
-                                                  SavedPlaceDialog.show(
-                                                    context: context,
-                                                    place: p,
-                                                    isEditing: true,
-                                                    onSave: (newName) async {
-                                                      await _searchService.updateSavedPlace(p, newName);
-                                                      setModalState(() {});
-                                                      setState(() {});
-                                                    },
-                                                  );
-                                                },
-                                                onDelete: () async {
-                                                  await _searchService.removeSavedPlace(p);
-                                                  setModalState(() {});
-                                                  setState(() {});
-                                                },
-                                              );
-                                            }).toList(),
-                                    ),
-                                  ),
 
-                                  const SizedBox(height: 20),
+                                  const SizedBox(height: 24),
 
-                                  // Section 2: "Lịch sử tìm kiếm" (Recent Searches)
+                                  // Section 2: "Gần đây >" (Recent Searches matching Image 5)
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
                                       const Row(
                                         children: [
                                           Text(
-                                            'Lịch sử tìm kiếm',
+                                            'Gần đây',
                                             style: TextStyle(
-                                              fontSize: 19,
+                                              fontSize: 20,
                                               fontWeight: FontWeight.bold,
-                                              color: Colors.black87,
-                                              letterSpacing: -0.3,
+                                              color: Color(0xFF1C1C1E),
+                                              letterSpacing: -0.4,
                                             ),
                                           ),
-                                          Icon(Icons.chevron_right_rounded, color: Colors.black54, size: 22),
+                                          SizedBox(width: 4),
+                                          Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
                                         ],
                                       ),
                                       if (_searchService.recentSearches.isNotEmpty)
@@ -2557,7 +2621,7 @@ class _MapScreenState extends State<MapScreen> {
                                         ),
                                     ],
                                   ),
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: 10),
                                   Container(
                                     decoration: BoxDecoration(
                                       color: Colors.white,
@@ -2578,37 +2642,34 @@ class _MapScreenState extends State<MapScreen> {
                                               return Column(
                                                 children: [
                                                   ListTile(
-                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                                                    leading: const Icon(Icons.history_rounded, color: Colors.black45, size: 20),
-                                                    title: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            p.name,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        _buildPrecisionBadge(p.precision),
-                                      ],
-                                    ),
-                                                    subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black45, fontSize: 13)),
+                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                                                    leading: CircleAvatar(
+                                                      radius: 19,
+                                                      backgroundColor: const Color(0xFFB8835C),
+                                                      child: const Icon(Icons.apartment_rounded, color: Colors.white, size: 19),
+                                                    ),
+                                                    title: Text(
+                                                      p.name,
+                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1C1C1E)),
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                    subtitle: Text(
+                                                      p.displayName,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(color: Colors.black45, fontSize: 13),
+                                                    ),
                                                     trailing: IconButton(
-                                                      icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 18),
-                                                      tooltip: 'Xóa',
-                                                      onPressed: () async {
-                                                        await _searchService.deleteRecentSearch(p);
-                                                        setModalState(() {});
-                                                        setState(() {});
-                                                      },
+                                                      icon: const Icon(Icons.more_horiz_rounded, color: Colors.black54, size: 22),
+                                                      tooltip: 'Tùy chọn',
+                                                      onPressed: () => _showRecentPlaceActionSheet(context, p, setModalState),
                                                     ),
                                                     onTap: () {
                                                       Navigator.pop(modalCtx);
                                                       _onPlaceClicked(p);
                                                     },
                                                   ),
-                                                  const Divider(height: 1, indent: 48, color: Colors.black12),
+                                                  Container(height: 0.5, margin: const EdgeInsets.only(left: 62, right: 16), color: Colors.black.withOpacity(0.07)),
                                                 ],
                                               );
                                             }).toList(),
@@ -2616,6 +2677,83 @@ class _MapScreenState extends State<MapScreen> {
                                   ),
 
                                   const SizedBox(height: 24),
+
+                                  // Section 3: "Hướng dẫn của bạn >" (Your Guides / Favorites matching Image 5)
+                                  const Row(
+                                    children: [
+                                      Text(
+                                        'Hướng dẫn của bạn',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFF1C1C1E),
+                                          letterSpacing: -0.4,
+                                        ),
+                                      ),
+                                      SizedBox(width: 4),
+                                      Icon(Icons.chevron_right_rounded, color: Colors.black45, size: 22),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  GestureDetector(
+                                    onTap: () {
+                                      // Show saved places if any
+                                    },
+                                    child: Container(
+                                      width: 160,
+                                      height: 175,
+                                      margin: const EdgeInsets.only(bottom: 24),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1C1C1E),
+                                        borderRadius: BorderRadius.circular(18),
+                                        boxShadow: [
+                                          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 10, offset: const Offset(0, 3)),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Expanded(
+                                            child: Center(
+                                              child: Icon(
+                                                Icons.star_rounded,
+                                                color: const Color(0xFFFFCC00),
+                                                size: 64,
+                                              ),
+                                            ),
+                                          ),
+                                          Container(
+                                            width: double.infinity,
+                                            padding: const EdgeInsets.all(12),
+                                            decoration: const BoxDecoration(
+                                              color: Colors.white,
+                                              borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                  'Mục ưa thích',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 14,
+                                                    color: Color(0xFF1C1C1E),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  '${_searchService.savedPlaces.length} địa điểm',
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.black45,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
 
                                   // Section 2: "Tìm lân cận" (Nearby Categories)
                                   const Text(

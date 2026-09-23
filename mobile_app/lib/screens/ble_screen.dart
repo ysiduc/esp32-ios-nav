@@ -54,6 +54,9 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.primary, size: 20),
           tooltip: 'Quay lại Bản đồ',
@@ -77,6 +80,8 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             ),
             child: TabBar(
               controller: _tabController,
+              dividerColor: Colors.transparent,
+              dividerHeight: 0,
               indicatorSize: TabBarIndicatorSize.tab,
               indicator: BoxDecoration(
                 color: AppColors.surface,
@@ -243,7 +248,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: bleService.discoveredDevices.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, indent: 56),
+              separatorBuilder: (_, __) => Container(height: 0.5, margin: const EdgeInsets.only(left: 64, right: 16), color: AppColors.border),
               itemBuilder: (ctx, i) {
                 final item = bleService.discoveredDevices[i];
                 final d = item.device;

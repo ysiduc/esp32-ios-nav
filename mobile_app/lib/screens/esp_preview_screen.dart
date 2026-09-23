@@ -31,6 +31,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
   final TextEditingController _smsSenderCtrl = TextEditingController(text: 'Zalo: Anh Nam');
   final TextEditingController _smsMsgCtrl = TextEditingController(text: 'Bạn đang ở đâu đấy?');
 
+  bool _enableIPhoneNotifications = true;
+  bool _enableCallNotifications = true;
+  bool _enableMessageNotifications = true;
+
   Timer? _popupDismissTimer;
   Timer? _autoStartTimer;
   Timer? _previewSyncTimer;
@@ -358,7 +362,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: streamService.isStreaming ? AppColors.primary : Colors.white12),
+                border: Border.all(color: streamService.isStreaming ? AppColors.primary.withOpacity(0.5) : AppColors.border),
               ),
               child: Column(
                 children: [
@@ -380,9 +384,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            streamService.isStreaming ? 'Đang Stream JPEG Zoom x16 sang ESP32' : 'Dừng Stream',
+                            streamService.isStreaming ? 'Đang Stream JPEG Zoom x${streamService.minimapZoom} sang ESP32' : 'Dừng Stream',
                             style: TextStyle(
-                              color: streamService.isStreaming ? const Color(0xFF05FFA1) : Colors.white54,
+                              color: streamService.isStreaming ? AppColors.textPrimary : AppColors.textSecondary,
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
                             ),
@@ -408,7 +412,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     children: [
                       Column(
                         children: [
-                          const Text('FPS THỰC TẾ', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('FPS THỰC TẾ', style: TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.actualFps.toStringAsFixed(1)} FPS',
@@ -419,7 +423,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       Container(width: 1, height: 24, color: AppColors.border),
                       Column(
                         children: [
-                          const Text('KÍCH THƯỚC FRAME', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('KÍCH THƯỚC FRAME', style: TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.frameSizeKb} KB',
@@ -430,7 +434,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       Container(width: 1, height: 24, color: AppColors.border),
                       Column(
                         children: [
-                          const Text('MỤC TIÊU', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('MỤC TIÊU', style: TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.targetFps} FPS',
@@ -454,7 +458,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primary.withAlpha(100)),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -469,7 +473,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           Text(
                             'TỶ LỆ PHÓNG TO MINIMAP',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: AppColors.textPrimary,
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
                               letterSpacing: 0.5,
@@ -502,7 +506,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         ? 'Độ chi tiết cao: Hiển thị toà nhà, khu dân cư, số nhà & POI (khớp ảnh chụp)'
                         : 'Toàn cảnh: Hiển thị trục đường chính và các góc rẽ',
                     style: TextStyle(
-                      color: streamService.minimapZoom >= 17 ? const Color(0xFF05FFA1) : Colors.white60,
+                      color: streamService.minimapZoom >= 17 ? AppColors.success : AppColors.textSecondary,
                       fontSize: 11,
                     ),
                   ),
@@ -510,7 +514,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       activeTrackColor: AppColors.primary,
-                      inactiveTrackColor: Colors.white12,
+                      inactiveTrackColor: AppColors.border,
                       thumbColor: AppColors.primary,
                       overlayColor: AppColors.primary.withAlpha(40),
                       trackHeight: 6,
@@ -697,17 +701,17 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         SizedBox(height: 2),
                         Text(
                           'Nguồn map & style gửi sang ESP32',
-                          style: TextStyle(color: Colors.white54, fontSize: 10),
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
                         ),
                       ],
                     ),
                   ),
                   DropdownButton<String>(
                     value: streamService.streamMapStyle,
-                    dropdownColor: const Color(0xFF1E293B),
+                    dropdownColor: AppColors.surface,
                     underline: const SizedBox(),
                     icon: const Icon(Icons.arrow_drop_down, color: AppColors.primary),
-                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.bold),
                     items: const [
                       DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
                       DropdownMenuItem(value: 'streets-v2-dark', child: Text('MapTiler Dark')),
@@ -810,7 +814,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: mediaService.hasMedia ? Colors.white : Colors.white54,
+                                  color: mediaService.hasMedia ? AppColors.textPrimary : AppColors.textSecondary,
                                   fontSize: 12,
                                   fontWeight: mediaService.hasMedia ? FontWeight.bold : FontWeight.normal,
                                 ),
@@ -834,22 +838,22 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         onPressed: () => mediaService.pollNowPlaying(),
                       ),
                       ActionChip(
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Simulate: Waiting For You', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        backgroundColor: AppColors.canvas,
+                        side: const BorderSide(color: AppColors.border),
+                        label: const Text('Simulate: Waiting For You', style: TextStyle(color: AppColors.textPrimary, fontSize: 11)),
                         onPressed: () => mediaService.setMockSong('Waiting For You', 'MONO'),
                       ),
                       ActionChip(
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Simulate: Nơi Này Có Anh', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        backgroundColor: AppColors.canvas,
+                        side: const BorderSide(color: AppColors.border),
+                        label: const Text('Simulate: Nơi Này Có Anh', style: TextStyle(color: AppColors.textPrimary, fontSize: 11)),
                         onPressed: () => mediaService.setMockSong('Noi Nay Co Anh', 'Son Tung M-TP'),
                       ),
                       ActionChip(
                         avatar: const Icon(Icons.edit, size: 14, color: AppColors.primary),
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Nhập tùy ý...', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        backgroundColor: AppColors.canvas,
+                        side: const BorderSide(color: AppColors.border),
+                        label: const Text('Nhập tùy ý...', style: TextStyle(color: AppColors.textPrimary, fontSize: 11)),
                         onPressed: () => _showEditSongDialog(context, navManager),
                       ),
                     ],
@@ -902,7 +906,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                   const SizedBox(height: 4),
                   const Text(
                     'Ảnh được nạp và lưu vĩnh viễn vào bộ nhớ Flash SPIFFS của ESP32 đến khi bạn thay mới.',
-                    style: TextStyle(color: Colors.white60, fontSize: 11),
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
                   ),
                   const SizedBox(height: 12),
 
@@ -951,7 +955,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Text('Ảnh Ngang (Màn Chờ)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const Text('Ảnh Ngang (Màn Chờ)', style: TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.bold)),
                               const SizedBox(height: 2),
                               const Text('320 x 240 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
                               const SizedBox(height: 8),
@@ -1019,7 +1023,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Text('Ảnh Dọc (Màn Map)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const Text('Ảnh Dọc (Màn Map)', style: TextStyle(color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.bold)),
                               const SizedBox(height: 2),
                               const Text('144 x 208 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
                               const SizedBox(height: 8),
@@ -1081,223 +1085,143 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             const SizedBox(height: 14),
 
             // -------------------------------------------------------------
-            // THÔNG BÁO CUỘC GỌI & TIN NHẮN (ANCS)
+            // THÔNG BÁO IPHONE (ANCS) - APPLE NOTIFICATION CENTER SERVICE
             // -------------------------------------------------------------
             Container(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: AppColors.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.03),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(Icons.notifications_active_rounded, color: Color(0xFFFFB800), size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        'THÔNG BÁO CUỘC GỌI & TIN NHẮN (ANCS)',
-                        style: TextStyle(color: Color(0xFFFFB800), fontSize: 13, fontWeight: FontWeight.bold),
+                      const Row(
+                        children: [
+                          Icon(Icons.notifications_active_rounded, color: AppColors.primary, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Thông báo iPhone (ANCS)',
+                            style: TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Switch.adaptive(
+                        value: _enableIPhoneNotifications,
+                        activeTrackColor: AppColors.primary,
+                        onChanged: (val) {
+                          setState(() {
+                            _enableIPhoneNotifications = val;
+                          });
+                        },
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Tự động hiển thị cuộc gọi đến và tin nhắn từ iPhone lên màn hình ESP32 qua giao thức Apple ANCS.',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.4),
+                  ),
+                  const SizedBox(height: 12),
 
-                  // ANCS Setup Guide
+                  // Guide Tip Container
                   Container(
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F1B2A),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.primary.withAlpha(80)),
+                      color: AppColors.canvas,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.border),
                     ),
                     child: const Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 18),
-                        SizedBox(width: 8),
+                        SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Để iPhone tự động gửi tên người gọi & tin nhắn thật đến ESP32:\n'
+                            'Để nhận thông báo cuộc gọi & tin nhắn thật từ iOS:\n'
                             '1. Mở Cài đặt iPhone ➔ Bluetooth\n'
-                            '2. Bấm chữ (i) bên cạnh "ysiducw"\n'
+                            '2. Bấm biểu tượng (i) bên cạnh thiết bị "ysiducw"\n'
                             '3. BẬT mục "Chia sẻ thông báo hệ thống" (Share System Notifications).',
-                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, height: 1.4),
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 11, height: 1.45),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
 
-                  // Call Controls
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: TextField(
-                          controller: _callerNameCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            labelText: 'Tên người gọi',
-                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  if (_enableIPhoneNotifications) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.canvas,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Column(
+                        children: [
+                          ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.phone_in_talk_rounded, color: AppColors.success, size: 20),
+                            title: const Text(
+                              'Thông báo cuộc gọi',
+                              style: TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: const Text(
+                              'Hiển thị tên người gọi & số điện thoại',
+                              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                            ),
+                            trailing: Switch.adaptive(
+                              value: _enableCallNotifications,
+                              activeTrackColor: AppColors.primary,
+                              onChanged: (val) {
+                                setState(() {
+                                  _enableCallNotifications = val;
+                                });
+                              },
+                            ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        flex: 4,
-                        child: TextField(
-                          controller: _callerNumCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            labelText: 'Số điện thoại',
-                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          Container(height: 0.5, margin: const EdgeInsets.only(left: 48, right: 12), color: AppColors.border),
+                          ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.chat_bubble_outline_rounded, color: AppColors.primary, size: 20),
+                            title: const Text(
+                              'Thông báo tin nhắn',
+                              style: TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: const Text(
+                              'Hiển thị người gửi và nội dung xem trước',
+                              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                            ),
+                            trailing: Switch.adaptive(
+                              value: _enableMessageNotifications,
+                              activeTrackColor: AppColors.primary,
+                              onChanged: (val) {
+                                setState(() {
+                                  _enableMessageNotifications = val;
+                                });
+                              },
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0068FF).withAlpha(50),
-                            foregroundColor: const Color(0xFF0068FF),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            side: const BorderSide(color: Color(0xFF0068FF)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
-                          label: const Text('Gọi Zalo thử', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => _triggerCall(app: 'zalo', name: 'Nguyễn Văn A', number: 'Zalo Audio Call'),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
-                            foregroundColor: const Color(0xFF05FFA1),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            side: const BorderSide(color: Color(0xFF05FFA1)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.phone_in_talk_rounded, size: 16),
-                          label: const Text('Gọi SIM thử', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => _triggerCall(app: 'sim'),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.redAccent,
-                          side: const BorderSide(color: Colors.redAccent),
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        icon: const Icon(Icons.call_end_rounded, size: 16),
-                        label: const Text('Tắt', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                        onPressed: _dismissCall,
-                      ),
-                    ],
-                  ),
-
-                  const Divider(color: AppColors.border, height: 20),
-
-                  // SMS Controls
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 4,
-                        child: TextField(
-                          controller: _smsSenderCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            labelText: 'Người gửi SMS/Zalo',
-                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        flex: 5,
-                        child: TextField(
-                          controller: _smsMsgCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            labelText: 'Nội dung tin nhắn',
-                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF0068FF).withAlpha(40),
-                            foregroundColor: const Color(0xFF0068FF),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            side: const BorderSide(color: Color(0xFF0068FF)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.forum_outlined, size: 15),
-                          label: const Text('Tin Zalo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => _triggerSms(app: 'zalo'),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981).withAlpha(40),
-                            foregroundColor: const Color(0xFF10B981),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            side: const BorderSide(color: Color(0xFF10B981)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.sms_outlined, size: 15),
-                          label: const Text('Tin SIM', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => _triggerSms(app: 'sim', sender: '0988.123.456', message: 'Mã OTP của bạn là 849201'),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFA855F7).withAlpha(40),
-                            foregroundColor: const Color(0xFFA855F7),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            side: const BorderSide(color: Color(0xFFA855F7)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          icon: const Icon(Icons.message_outlined, size: 15),
-                          label: const Text('Messenger', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => _triggerSms(app: 'messenger', sender: 'Linh Hoàng', message: 'Tối nay 7h tập trung nhé!'),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1916,20 +1840,20 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       onTap: () {
         streamService.minimapZoom = zoomVal;
       },
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(10),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF00F0FF) : const Color(0xFF1E293B),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isSelected ? const Color(0xFF00F0FF) : Colors.white10),
+          color: isSelected ? AppColors.primary : AppColors.canvas,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: isSelected ? AppColors.primary : AppColors.border),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.black : Colors.white70,
-            fontSize: 10,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
           ),
         ),
       ),
