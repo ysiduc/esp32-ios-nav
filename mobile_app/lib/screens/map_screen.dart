@@ -21,6 +21,14 @@ import '../services/off_route_detector.dart';
 import '../services/route_render_controller.dart';
 import '../services/search_service.dart';
 import '../services/voice_guidance_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_radius.dart';
+import '../theme/app_typography.dart';
+import '../widgets/common/status_badge.dart';
+import '../widgets/common/empty_state_card.dart';
+import '../widgets/common/saved_place_dialog.dart';
+import '../widgets/common/saved_place_tile.dart';
+
 
 
 // RoutePresentationMode is imported from route_render_controller.dart
@@ -215,7 +223,13 @@ class _MapScreenState extends State<MapScreen> {
 
   bool _mapReady = false;
 
-  // Coordinates default (Hanoi)
+  // Startup location state (P6.0 Current Location First)
+  bool _hasCenteredOnUser = false;
+  bool _isLocatingUser = true;
+  bool _locationPermissionDenied = false;
+  Timer? _locatingTimeoutTimer;
+
+  // Coordinates default (Hanoi fallback)
   LatLng _userPosition = const LatLng(21.0285, 105.8542);
   MapPlace? _selectedPlace;
   List<NavRoute> _routes = [];
@@ -425,8 +439,21 @@ class _MapScreenState extends State<MapScreen> {
       navManager.addListener(_onNavigationManagerChanged);
       _lastObservedRenderRevision = navManager.renderRevision;
       _lastObservedNavigating = navManager.isNavigating;
-      if (navManager.currentLocation != null) {
-        _userPosition = navManager.currentLocation!;
+      final curLoc = navManager.currentLocation ?? navManager.acceptedPhysicalLocation;
+      if (curLoc != null) {
+        _userPosition = curLoc;
+        _isLocatingUser = false;
+        _hasCenteredOnUser = true;
+      } else {
+        _isLocatingUser = true;
+        _locatingTimeoutTimer = Timer(const Duration(seconds: 6), () {
+          if (mounted && _isLocatingUser) {
+            setState(() {
+              _isLocatingUser = false;
+              _locationPermissionDenied = true;
+            });
+          }
+        });
       }
 
       // Hook navigation position update callback to continuously center vehicle with 3D perspective
@@ -468,14 +495,27 @@ class _MapScreenState extends State<MapScreen> {
     _mapReady = true;
     MapNativeGlassController.instance.attachMap(controller, _mapKey);
 
-    // Move camera to user position
+    // P6.0: Prioritize current physical location on launch instead of Hoan Kiem default
     final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final pos = navManager.currentLocation ?? _userPosition;
-    controller.animateCamera(
-      ml.CameraUpdate.newCameraPosition(
-        ml.CameraPosition(target: ml.LatLng(pos.latitude, pos.longitude), zoom: 16.5),
-      ),
-    );
+    final curLoc = navManager.currentLocation ?? navManager.acceptedPhysicalLocation;
+    if (curLoc != null) {
+      _userPosition = curLoc;
+      _hasCenteredOnUser = true;
+      _isLocatingUser = false;
+      controller.animateCamera(
+        ml.CameraUpdate.newCameraPosition(
+          ml.CameraPosition(target: ml.LatLng(curLoc.latitude, curLoc.longitude), zoom: 16.5),
+        ),
+      );
+    } else {
+      _isLocatingUser = true;
+      // Position camera at fallback initially while locating indicator is shown
+      controller.animateCamera(
+        ml.CameraUpdate.newCameraPosition(
+          ml.CameraPosition(target: ml.LatLng(_userPosition.latitude, _userPosition.longitude), zoom: 16.5),
+        ),
+      );
+    }
   }
 
   RoutePresentationMode get _presentationMode {
@@ -789,6 +829,28 @@ class _MapScreenState extends State<MapScreen> {
     _lastObservedRenderRevision = rev;
     _lastObservedNavigating = isNav;
 
+    // P6.0: When first GPS fix is acquired after startup, center camera smoothly onto real position
+    final curLoc = navManager.currentLocation ?? navManager.acceptedPhysicalLocation;
+    if (curLoc != null) {
+      _userPosition = curLoc;
+      _locatingTimeoutTimer?.cancel();
+      if (!_hasCenteredOnUser && _mapReady && _mapController != null && !isNav) {
+        _hasCenteredOnUser = true;
+        _isLocatingUser = false;
+        _locationPermissionDenied = false;
+        _mapController?.animateCamera(
+          ml.CameraUpdate.newCameraPosition(
+            ml.CameraPosition(target: ml.LatLng(curLoc.latitude, curLoc.longitude), zoom: 16.5),
+          ),
+        );
+        setState(() {});
+      } else if (_isLocatingUser) {
+        _isLocatingUser = false;
+        _locationPermissionDenied = false;
+        setState(() {});
+      }
+    }
+
     if (navigationStopped) {
       debugPrint('[Navigation] Navigation stopped -> clearing active routes and render line');
       _routes = [];
@@ -815,6 +877,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    _locatingTimeoutTimer?.cancel();
     MapNativeGlassController.instance.detachMap();
     _routeRenderCadenceTimer?.cancel();
     _cameraCadenceTimer?.cancel();
@@ -1298,6 +1361,22 @@ class _MapScreenState extends State<MapScreen> {
     _updateRouteOnMap();
   }
 
+  void _recenterToUser() {
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final curLoc = navManager.currentLocation ?? navManager.acceptedPhysicalLocation;
+    if (curLoc != null) {
+      _userPosition = curLoc;
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngZoom(ml.LatLng(curLoc.latitude, curLoc.longitude), 16.5),
+      );
+    } else {
+      setState(() {
+        _isLocatingUser = true;
+        _locationPermissionDenied = false;
+      });
+    }
+  }
+
   void _recenterToVehicle() {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final current = navManager.currentLocation ?? _userPosition;
@@ -1474,7 +1553,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
-          // 3. BLE Status Indicator (Top-Center)
+          // 3. BLE Status Indicator (Top-Center) & Locating Indicator
           // -----------------------------------------------------------
           if (!isDriving && bleService.isConnected)
             SafeArea(
@@ -1483,6 +1562,36 @@ class _MapScreenState extends State<MapScreen> {
                 child: Padding(
                   padding: const EdgeInsets.only(top: 8.0),
                   child: _buildBleStatusBadge(bleService),
+                ),
+              ),
+            ),
+
+          if (!isDriving && _isLocatingUser)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: EdgeInsets.only(top: bleService.isConnected ? 44.0 : 8.0),
+                  child: const StatusBadge(
+                    text: 'Đang định vị...',
+                    icon: Icons.my_location_rounded,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+            )
+          else if (!isDriving && _locationPermissionDenied && navManager.currentLocation == null)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: EdgeInsets.only(top: bleService.isConnected ? 44.0 : 8.0),
+                  child: StatusBadge(
+                    text: 'Chạm để tìm vị trí',
+                    icon: Icons.location_searching_rounded,
+                    color: AppColors.warning,
+                    onTap: _recenterToUser,
+                  ),
                 ),
               ),
             ),
@@ -1824,10 +1933,7 @@ class _MapScreenState extends State<MapScreen> {
               if (isDriving) {
                 _recenterToVehicle();
               } else {
-                final current = navManager.currentLocation ?? _userPosition;
-                _mapController?.animateCamera(
-                  ml.CameraUpdate.newLatLngZoom(ml.LatLng(current.latitude, current.longitude), 16.5),
-                );
+                _recenterToUser();
               }
             },
           ),
@@ -2374,75 +2480,40 @@ class _MapScreenState extends State<MapScreen> {
                                     child: Column(
                                       children: _searchService.savedPlaces.isEmpty
                                           ? [
-                                              Padding(
-                                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                                                child: Row(
-                                                  children: [
-                                                    Icon(Icons.bookmark_outline_rounded, color: Colors.black26, size: 22),
-                                                    const SizedBox(width: 10),
-                                                    const Expanded(
-                                                      child: Text(
-                                                        'Chưa có địa điểm lưu. Chạm "Lưu" trên địa điểm để lưu vào đây.',
-                                                        style: TextStyle(color: Colors.black45, fontSize: 13),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
+                                              const EmptyStateCard(
+                                                icon: Icons.bookmark_outline_rounded,
+                                                title: 'Chưa có địa điểm đã lưu',
+                                                description: 'Chạm biểu tượng Lưu trên địa điểm để lưu lại kèm tên tuỳ chỉnh.',
                                               ),
                                             ]
                                           : _searchService.savedPlaces.map((p) {
-                                              return Column(
-                                                children: [
-                                                  ListTile(
-                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                                                    leading: Container(
-                                                      width: 36,
-                                                      height: 36,
-                                                      decoration: BoxDecoration(
-                                                        color: const Color(0xFFFF9500).withOpacity(0.15),
-                                                        shape: BoxShape.circle,
-                                                      ),
-                                                      child: const Icon(Icons.star_rounded, color: Color(0xFFFF9500), size: 20),
-                                                    ),
-                                                    title: Text(
-                                                      p.name,
-                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
-                                                    ),
-                                                    subtitle: Text(
-                                                      p.displayName,
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                      style: const TextStyle(color: Colors.black45, fontSize: 13),
-                                                    ),
-                                                    trailing: Row(
-                                                      mainAxisSize: MainAxisSize.min,
-                                                      children: [
-                                                        IconButton(
-                                                          icon: const Icon(Icons.directions_rounded, color: Color(0xFF007AFF), size: 22),
-                                                          tooltip: 'Chỉ đường',
-                                                          onPressed: () {
-                                                            Navigator.pop(modalCtx);
-                                                            _calculateRoutesForPlace(p);
-                                                          },
-                                                        ),
-                                                        IconButton(
-                                                          icon: const Icon(Icons.close_rounded, color: Colors.black38, size: 18),
-                                                          tooltip: 'Bỏ lưu',
-                                                          onPressed: () async {
-                                                            await _searchService.removeSavedPlace(p);
-                                                            setModalState(() {});
-                                                            setState(() {});
-                                                          },
-                                                        ),
-                                                      ],
-                                                    ),
-                                                    onTap: () {
-                                                      Navigator.pop(modalCtx);
-                                                      _onPlaceClicked(p);
+                                              return SavedPlaceTile(
+                                                place: p,
+                                                onTap: () {
+                                                  Navigator.pop(modalCtx);
+                                                  _onPlaceClicked(p);
+                                                },
+                                                onRoute: () {
+                                                  Navigator.pop(modalCtx);
+                                                  _calculateRoutesForPlace(p);
+                                                },
+                                                onRename: () {
+                                                  SavedPlaceDialog.show(
+                                                    context: context,
+                                                    place: p,
+                                                    isEditing: true,
+                                                    onSave: (newName) async {
+                                                      await _searchService.updateSavedPlace(p, newName);
+                                                      setModalState(() {});
+                                                      setState(() {});
                                                     },
-                                                  ),
-                                                  const Divider(height: 1, indent: 48, color: Colors.black12),
-                                                ],
+                                                  );
+                                                },
+                                                onDelete: () async {
+                                                  await _searchService.removeSavedPlace(p);
+                                                  setModalState(() {});
+                                                  setState(() {});
+                                                },
                                               );
                                             }).toList(),
                                     ),
@@ -2776,16 +2847,16 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Bookmark / Save Place Button
+                      // Bookmark / Save Place Button (P6.0 Custom Name Dialog & Edit)
                       Expanded(
                         flex: 4,
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: isSaved ? const Color(0xFFFF9500).withOpacity(0.16) : const Color(0xFFE5F0FF),
-                            foregroundColor: isSaved ? const Color(0xFFFF9500) : const Color(0xFF007AFF),
+                            backgroundColor: isSaved ? AppColors.warning.withOpacity(0.16) : AppColors.primaryLight,
+                            foregroundColor: isSaved ? AppColors.warning : AppColors.primary,
                             elevation: 0,
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            shape: RoundedRectangleBorder(borderRadius: AppRadius.roundedMd),
                           ),
                           icon: Icon(isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded, size: 20),
                           label: Text(
@@ -2793,16 +2864,66 @@ class _MapScreenState extends State<MapScreen> {
                             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                           ),
                           onPressed: () async {
-                            await _searchService.toggleSavePlace(place);
-                            setState(() {});
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  duration: const Duration(seconds: 1),
-                                  content: Text(
-                                    isSaved ? 'Đã xóa khỏi địa điểm đã lưu' : 'Đã lưu địa điểm thành công',
+                            if (isSaved) {
+                              // Options to edit or delete saved place
+                              showModalBottomSheet(
+                                context: context,
+                                backgroundColor: Colors.transparent,
+                                builder: (ctx) => Container(
+                                  padding: const EdgeInsets.all(20),
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.surface,
+                                    borderRadius: AppRadius.sheetTop,
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      ListTile(
+                                        leading: const Icon(Icons.edit_rounded, color: AppColors.primary),
+                                        title: const Text('Đổi tên địa điểm', style: AppTypography.headline),
+                                        onTap: () {
+                                          Navigator.pop(ctx);
+                                          SavedPlaceDialog.show(
+                                            context: context,
+                                            place: place,
+                                            isEditing: true,
+                                            onSave: (newName) async {
+                                              await _searchService.updateSavedPlace(place, newName);
+                                              setState(() {});
+                                            },
+                                          );
+                                        },
+                                      ),
+                                      ListTile(
+                                        leading: const Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+                                        title: const Text('Xóa khỏi danh sách đã lưu', style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.w600)),
+                                        onTap: () async {
+                                          Navigator.pop(ctx);
+                                          await _searchService.removeSavedPlace(place);
+                                          setState(() {});
+                                        },
+                                      ),
+                                    ],
                                   ),
                                 ),
+                              );
+                            } else {
+                              SavedPlaceDialog.show(
+                                context: context,
+                                place: place,
+                                onSave: (customName) async {
+                                  final toSave = place.copyWith(name: customName);
+                                  await _searchService.savePlace(toSave);
+                                  setState(() {});
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        duration: const Duration(seconds: 1),
+                                        content: Text('Đã lưu  thành công'),
+                                      ),
+                                    );
+                                  }
+                                },
                               );
                             }
                           },

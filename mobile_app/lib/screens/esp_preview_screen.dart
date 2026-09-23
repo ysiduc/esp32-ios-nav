@@ -1,3 +1,5 @@
+import '../theme/app_colors.dart';
+import '../theme/app_shadows.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -322,12 +324,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0B0F17),
+      backgroundColor: AppColors.canvas,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF131B26),
+        backgroundColor: AppColors.surface,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF00F0FF)),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppColors.primary),
           tooltip: 'Quay lại Bản đồ',
           onPressed: () {
             if (widget.onBackToMap != null) {
@@ -339,7 +341,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         ),
         title: const Row(
           children: [
-            Icon(Icons.tv_rounded, color: Color(0xFF00F0FF)),
+            Icon(Icons.tv_rounded, color: AppColors.primary),
             SizedBox(width: 10),
             Text('Mô phỏng Màn hình ESP32', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           ],
@@ -354,9 +356,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: streamService.isStreaming ? const Color(0xFF00F0FF) : Colors.white12),
+                border: Border.all(color: streamService.isStreaming ? AppColors.primary : Colors.white12),
               ),
               child: Column(
                 children: [
@@ -389,7 +391,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                       Switch.adaptive(
                         value: streamService.isStreaming,
-                        activeTrackColor: const Color(0xFF00F0FF),
+                        activeTrackColor: AppColors.primary,
                         onChanged: (val) {
                           if (val) {
                             streamService.startStreaming(boundaryKey: _streamBoundaryKey);
@@ -400,7 +402,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                     ],
                   ),
-                  const Divider(color: Colors.white12, height: 16),
+                  const Divider(color: AppColors.border, height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
@@ -414,18 +416,18 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           ),
                         ],
                       ),
-                      Container(width: 1, height: 24, color: Colors.white12),
+                      Container(width: 1, height: 24, color: AppColors.border),
                       Column(
                         children: [
                           const Text('KÍCH THƯỚC FRAME', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.frameSizeKb} KB',
-                            style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            style: const TextStyle(color: AppColors.primary, fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
                           ),
                         ],
                       ),
-                      Container(width: 1, height: 24, color: Colors.white12),
+                      Container(width: 1, height: 24, color: AppColors.border),
                       Column(
                         children: [
                           const Text('MỤC TIÊU', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
@@ -450,9 +452,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(100)),
+                border: Border.all(color: AppColors.primary.withAlpha(100)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -462,7 +464,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.zoom_in_rounded, color: Color(0xFF00F0FF), size: 20),
+                          Icon(Icons.zoom_in_rounded, color: AppColors.primary, size: 20),
                           SizedBox(width: 8),
                           Text(
                             'TỶ LỆ PHÓNG TO MINIMAP',
@@ -478,14 +480,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00F0FF).withAlpha(30),
+                          color: AppColors.primary.withAlpha(30),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF00F0FF)),
+                          border: Border.all(color: AppColors.primary),
                         ),
                         child: Text(
                           'Zoom x${streamService.minimapZoom}',
                           style: const TextStyle(
-                            color: Color(0xFF00F0FF),
+                            color: AppColors.primary,
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
                             fontFamily: 'monospace',
@@ -507,10 +509,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                   const SizedBox(height: 8),
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
-                      activeTrackColor: const Color(0xFF00F0FF),
+                      activeTrackColor: AppColors.primary,
                       inactiveTrackColor: Colors.white12,
-                      thumbColor: const Color(0xFF00F0FF),
-                      overlayColor: const Color(0xFF00F0FF).withAlpha(40),
+                      thumbColor: AppColors.primary,
+                      overlayColor: AppColors.primary.withAlpha(40),
                       trackHeight: 6,
                       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
                     ),
@@ -549,14 +551,8 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                 decoration: BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF202A36), width: 5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withAlpha(240),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
+                  border: Border.all(color: const Color(0xFF2C2C2E), width: 5),
+                  boxShadow: AppShadows.floating,
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Column(
@@ -573,14 +569,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                               children: [
                                 Icon(
                                   bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
-                                  color: const Color(0xFF00F0FF),
+                                  color: AppColors.primary,
                                   size: 11,
                                 ),
                                 const SizedBox(width: 2),
                                 const Text(
                                   '* ysiduc',
                                   style: TextStyle(
-                                    color: Color(0xFF00F0FF),
+                                    color: AppColors.primary,
                                     fontSize: 9,
                                     fontWeight: FontWeight.bold,
                                   ),
@@ -682,13 +678,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(60)),
+                border: Border.all(color: AppColors.primary.withAlpha(60)),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.layers_rounded, color: Color(0xFF00F0FF), size: 18),
+                  const Icon(Icons.layers_rounded, color: AppColors.primary, size: 18),
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Column(
@@ -696,7 +692,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       children: [
                         Text(
                           'BẢN ĐỒ MINIMAP ESP32',
-                          style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                          style: TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                         ),
                         SizedBox(height: 2),
                         Text(
@@ -710,7 +706,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     value: streamService.streamMapStyle,
                     dropdownColor: const Color(0xFF1E293B),
                     underline: const SizedBox(),
-                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF00F0FF)),
+                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.primary),
                     style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                     items: const [
                       DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
@@ -735,9 +731,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(60)),
+                border: Border.all(color: AppColors.primary.withAlpha(60)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -747,25 +743,25 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.music_note_rounded, color: Color(0xFF00F0FF), size: 16),
+                          Icon(Icons.music_note_rounded, color: AppColors.primary, size: 16),
                           SizedBox(width: 6),
                           Text(
                             'ĐIỀU KHIỂN NHẠC & CHẾ ĐỘ MÀN HÌNH',
-                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold),
+                            style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: navManager.isNavigating ? const Color(0xFF00F0FF).withAlpha(30) : const Color(0xFF05FFA1).withAlpha(30),
+                          color: navManager.isNavigating ? AppColors.primary.withAlpha(30) : const Color(0xFF05FFA1).withAlpha(30),
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: navManager.isNavigating ? const Color(0xFF00F0FF) : const Color(0xFF05FFA1)),
+                          border: Border.all(color: navManager.isNavigating ? AppColors.primary : const Color(0xFF05FFA1)),
                         ),
                         child: Text(
                           navManager.isNavigating ? 'DẪN ĐƯỜNG' : 'CHẾ ĐỘ CHỜ',
                           style: TextStyle(
-                            color: navManager.isNavigating ? const Color(0xFF00F0FF) : const Color(0xFF05FFA1),
+                            color: navManager.isNavigating ? AppColors.primary : const Color(0xFF05FFA1),
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
                           ),
@@ -779,7 +775,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0B111A),
+                      color: AppColors.canvas,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: mediaService.hasMedia ? const Color(0xFF05FFA1).withAlpha(140) : Colors.white12,
@@ -831,10 +827,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     runSpacing: 6,
                     children: [
                       ActionChip(
-                        avatar: const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF00F0FF)),
-                        backgroundColor: const Color(0xFF00F0FF).withAlpha(25),
-                        side: const BorderSide(color: Color(0xFF00F0FF)),
-                        label: const Text('Lấy lại nhạc iPhone', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        avatar: const Icon(Icons.refresh_rounded, size: 14, color: AppColors.primary),
+                        backgroundColor: AppColors.primary.withAlpha(25),
+                        side: const BorderSide(color: AppColors.primary),
+                        label: const Text('Lấy lại nhạc iPhone', style: TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.bold)),
                         onPressed: () => mediaService.pollNowPlaying(),
                       ),
                       ActionChip(
@@ -850,7 +846,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         onPressed: () => mediaService.setMockSong('Noi Nay Co Anh', 'Son Tung M-TP'),
                       ),
                       ActionChip(
-                        avatar: const Icon(Icons.edit, size: 14, color: Color(0xFF00F0FF)),
+                        avatar: const Icon(Icons.edit, size: 14, color: AppColors.primary),
                         backgroundColor: const Color(0xFF0E1520),
                         side: const BorderSide(color: Color(0xFF1E293B)),
                         label: const Text('Nhập tùy ý...', style: TextStyle(color: Colors.white70, fontSize: 11)),
@@ -886,20 +882,20 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+                border: Border.all(color: AppColors.primary.withAlpha(80)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.photo_library_rounded, color: Color(0xFF00F0FF), size: 20),
+                      Icon(Icons.photo_library_rounded, color: AppColors.primary, size: 20),
                       SizedBox(width: 8),
                       Text(
                         'CÀI ĐẶT HÌNH NỀN TÙY CHỌN (FLASH ESP32)',
-                        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 13, fontWeight: FontWeight.bold),
+                        style: TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
@@ -915,9 +911,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       padding: const EdgeInsets.all(10),
                       margin: const EdgeInsets.only(bottom: 12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
+                        color: AppColors.canvas,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFF00F0FF)),
+                        border: Border.all(color: AppColors.primary),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -926,7 +922,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(_uploadStatusText, style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 12, fontWeight: FontWeight.bold)),
-                              Text('${(_uploadProgress * 100).toInt()}%', style: const TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold)),
+                              Text('${(_uploadProgress * 100).toInt()}%', style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -948,9 +944,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B111A),
+                            color: AppColors.canvas,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white12),
+                            border: Border.all(color: AppColors.border),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
@@ -965,7 +961,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                   decoration: BoxDecoration(
                                     color: Colors.black26,
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.white24),
+                                    border: Border.all(color: AppColors.border),
                                   ),
                                   child: _waitImagePreview != null
                                       ? ClipRRect(
@@ -987,7 +983,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 width: double.infinity,
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF00F0FF),
+                                    backgroundColor: AppColors.primary,
                                     foregroundColor: Colors.black,
                                     padding: const EdgeInsets.symmetric(vertical: 8),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -1016,9 +1012,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B111A),
+                            color: AppColors.canvas,
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white12),
+                            border: Border.all(color: AppColors.border),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
@@ -1033,7 +1029,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                   decoration: BoxDecoration(
                                     color: Colors.black26,
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.white24),
+                                    border: Border.all(color: AppColors.border),
                                   ),
                                   child: _mapImagePreview != null
                                       ? ClipRRect(
@@ -1090,9 +1086,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: AppColors.border),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1115,12 +1111,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     decoration: BoxDecoration(
                       color: const Color(0xFF0F1B2A),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+                      border: Border.all(color: AppColors.primary.withAlpha(80)),
                     ),
                     child: const Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.info_outline_rounded, color: Color(0xFF00F0FF), size: 18),
+                        Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 18),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -1217,7 +1213,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     ],
                   ),
 
-                  const Divider(color: Colors.white12, height: 20),
+                  const Divider(color: AppColors.border, height: 20),
 
                   // SMS Controls
                   Row(
@@ -1318,7 +1314,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF131B26),
+        backgroundColor: AppColors.surface,
         title: const Text('Đổi bài hát đang phát', style: TextStyle(color: Colors.white, fontSize: 16)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1328,9 +1324,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
                 labelText: 'Tên bài hát',
-                labelStyle: TextStyle(color: Color(0xFF00F0FF)),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00F0FF))),
+                labelStyle: TextStyle(color: AppColors.primary),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.border)),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary)),
               ),
             ),
             const SizedBox(height: 12),
@@ -1339,9 +1335,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               style: const TextStyle(color: Colors.white),
               decoration: const InputDecoration(
                 labelText: 'Tên ca sĩ / nghệ sĩ',
-                labelStyle: TextStyle(color: Color(0xFF00F0FF)),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00F0FF))),
+                labelStyle: TextStyle(color: AppColors.primary),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.border)),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary)),
               ),
             ),
           ],
@@ -1353,7 +1349,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00F0FF),
+              backgroundColor: AppColors.primary,
               foregroundColor: Colors.black,
             ),
             onPressed: () {

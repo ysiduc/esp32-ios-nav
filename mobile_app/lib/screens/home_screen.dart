@@ -1,11 +1,17 @@
+import '../widgets/liquid_glass.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
-import '../services/navigation_manager.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_radius.dart';
+import '../theme/app_shadows.dart';
+import '../theme/app_typography.dart';
+import '../widgets/common/map_card.dart';
+import '../widgets/common/section_header.dart';
+import '../widgets/common/status_badge.dart';
+import 'map_screen.dart';
 import 'ble_screen.dart';
 import 'esp_preview_screen.dart';
-import 'map_screen.dart';
-import '../widgets/liquid_glass.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,30 +21,20 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _currentIndex = 0;
 
   @override
   Widget build(BuildContext context) {
     final bleService = context.watch<BleService>();
-    final navManager = context.watch<NavigationManager>();
 
     final screens = [
-      MapScreen(
-        onOpenMenu: () => _scaffoldKey.currentState?.openDrawer(),
-      ),
-      BleScreen(
-        onBackToMap: () => setState(() => _currentIndex = 0),
-      ),
-      EspPreviewScreen(
-        onBackToMap: () => setState(() => _currentIndex = 0),
-      ),
+      const MapScreen(),
+      BleScreen(onBackToMap: () => setState(() => _currentIndex = 0)),
+      EspPreviewScreen(onBackToMap: () => setState(() => _currentIndex = 0)),
     ];
 
     return Scaffold(
-      key: _scaffoldKey,
-      drawerEnableOpenDragGesture: _currentIndex == 0 && !navManager.isNavigating,
-      onDrawerChanged: (isOpen) => NativeGlassHostController.instance.setOverlayMode(
+      onDrawerChanged: (isOpen) => MapNativeGlassController.instance.setOverlayMode(
         isOpen ? MapOverlayMode.drawer : MapOverlayMode.none,
       ),
       drawer: _buildAppDrawer(context, bleService),
@@ -46,7 +42,6 @@ class _HomeScreenState extends State<HomeScreen> {
         index: _currentIndex,
         children: screens,
       ),
-      // No bottomNavigationBar: Map is the pure full-screen main interface!
     );
   }
 
@@ -55,31 +50,30 @@ class _HomeScreenState extends State<HomeScreen> {
     final isWifi = bleService.isWifiConnected;
 
     return Drawer(
-      backgroundColor: const Color(0xFF131B26),
+      backgroundColor: AppColors.surfaceSecondary,
+      surfaceTintColor: Colors.transparent,
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header
-            Container(
+            Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Colors.white10)),
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       Container(
-                        width: 44,
-                        height: 44,
+                        width: 48,
+                        height: 48,
                         decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFF00F0FF).withAlpha(35),
-                          border: Border.all(color: const Color(0xFF00F0FF).withAlpha(120)),
+                          color: AppColors.primaryLight,
+                          borderRadius: AppRadius.roundedLg,
+                          border: Border.all(color: AppColors.primary.withAlpha(50), width: 1.0),
+                          boxShadow: AppShadows.card,
                         ),
-                        child: const Icon(Icons.navigation_rounded, color: Color(0xFF00F0FF), size: 24),
+                        child: const Icon(Icons.navigation_rounded, color: AppColors.primary, size: 26),
                       ),
                       const SizedBox(width: 14),
                       const Column(
@@ -87,12 +81,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Text(
                             'ESP32 NAVI',
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+                            style: AppTypography.title2,
                           ),
                           SizedBox(height: 2),
                           Text(
                             'Bản đồ dẫn đường thông minh',
-                            style: TextStyle(color: Colors.white54, fontSize: 12),
+                            style: AppTypography.caption,
                           ),
                         ],
                       ),
@@ -100,35 +94,28 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Connection Status Pill
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0B111A),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: isBle ? const Color(0xFF05FFA1).withAlpha(80) : Colors.white12,
-                      ),
-                    ),
+                  // Connection Status Card
+                  MapCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     child: Row(
                       children: [
-                        Icon(
-                          isBle ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-                          color: isBle ? const Color(0xFF05FFA1) : Colors.white38,
-                          size: 16,
+                        StatusBadge(
+                          text: isBle ? 'KẾT NỐI' : 'CHƯA KẾT NỐI',
+                          color: isBle ? AppColors.success : AppColors.textSecondary,
+                          icon: isBle ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             isBle
-                                ? (isWifi ? 'BLE + WiFi Hotspot (${bleService.wifiIp})' : 'Đã kết nối BLE (ESP32 Live)')
-                                : 'Chưa kết nối ESP32',
-                            style: TextStyle(
-                              color: isBle ? const Color(0xFF05FFA1) : Colors.white54,
-                              fontSize: 11.5,
+                                ? (isWifi ? 'BLE + Hotspot (${bleService.wifiIp})' : 'Đã kết nối BLE ESP32')
+                                : 'Chưa kết nối thiết bị ESP32',
+                            style: AppTypography.footnote.copyWith(
                               fontWeight: FontWeight.w600,
+                              color: isBle ? AppColors.textPrimary : AppColors.textSecondary,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
@@ -138,8 +125,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
+            const SectionHeader(title: 'Ứng dụng & Điều hướng'),
+            const SizedBox(height: 4),
+
             // Navigation Items
-            const SizedBox(height: 12),
             _buildDrawerTile(
               icon: Icons.map_rounded,
               title: 'Bản đồ dẫn đường',
@@ -153,9 +142,9 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildDrawerTile(
               icon: Icons.bluetooth_searching_rounded,
               title: 'Kết nối ESP32',
-              subtitle: 'Quét BLE & Cài đặt WiFi Hotspot iPhone',
+              subtitle: 'Quét BLE & Cài đặt WiFi Hotspot',
               isSelected: _currentIndex == 1,
-              badgeColor: isBle ? const Color(0xFF05FFA1) : null,
+              badgeColor: isBle ? AppColors.success : null,
               onTap: () {
                 Navigator.pop(context);
                 setState(() => _currentIndex = 1);
@@ -164,7 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildDrawerTile(
               icon: Icons.screenshot_monitor_rounded,
               title: 'Mô phỏng Màn hình ESP32',
-              subtitle: 'Xem trước HUD, Mini Map & FPS stream',
+              subtitle: 'Xem trước HUD, Mini Map & Stream',
               isSelected: _currentIndex == 2,
               onTap: () {
                 Navigator.pop(context);
@@ -175,25 +164,23 @@ class _HomeScreenState extends State<HomeScreen> {
             const Spacer(),
 
             // Footer Info
-            Container(
+            Padding(
               padding: const EdgeInsets.all(16),
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0B111A),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.info_outline_rounded, color: Color(0xFF00F0FF), size: 18),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Bấm 3 gạch góc trên trái để mở menu này bất cứ lúc nào.',
-                      style: TextStyle(color: Colors.white60, fontSize: 11),
+              child: MapCard(
+                padding: const EdgeInsets.all(14),
+                color: AppColors.surface,
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Chạm nút 3 gạch góc trên bản đồ để mở menu nhanh bất cứ lúc nào.',
+                        style: AppTypography.caption,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -210,33 +197,43 @@ class _HomeScreenState extends State<HomeScreen> {
     required VoidCallback onTap,
     Color? badgeColor,
   }) {
+    final bg = isSelected ? AppColors.primaryLight : AppColors.surface;
+    final border = isSelected ? AppColors.primary.withAlpha(90) : AppColors.border;
+    final fg = isSelected ? AppColors.primary : AppColors.textPrimary;
+
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFF00F0FF).withAlpha(30) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isSelected ? const Color(0xFF00F0FF).withAlpha(100) : Colors.transparent,
-        ),
+        color: bg,
+        borderRadius: AppRadius.roundedLg,
+        border: Border.all(color: border, width: isSelected ? 1.4 : 0.8),
+        boxShadow: isSelected ? AppShadows.button : AppShadows.card,
       ),
       child: ListTile(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        leading: Icon(
-          icon,
-          color: isSelected ? const Color(0xFF00F0FF) : Colors.white70,
-          size: 24,
+        shape: const RoundedRectangleBorder(borderRadius: AppRadius.roundedLg),
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primary : AppColors.canvas,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            icon,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
+            size: 20,
+          ),
         ),
         title: Text(
           title,
-          style: TextStyle(
-            color: isSelected ? const Color(0xFF00F0FF) : Colors.white,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-            fontSize: 14,
+          style: AppTypography.headline.copyWith(
+            color: fg,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
           ),
         ),
         subtitle: Text(
           subtitle,
-          style: const TextStyle(color: Colors.white38, fontSize: 11),
+          style: AppTypography.caption,
         ),
         trailing: badgeColor != null
             ? Container(
@@ -244,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 height: 8,
                 decoration: BoxDecoration(color: badgeColor, shape: BoxShape.circle),
               )
-            : null,
+            : const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.textTertiary),
         onTap: onTap,
       ),
     );

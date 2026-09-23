@@ -850,6 +850,21 @@ class SearchService {
     _persistSavedPlaces();
   }
 
+  Future<void> updateSavedPlace(MapPlace oldPlace, String newName, {String? newDisplayName}) async {
+    await _ensureLoaded();
+    final idx = _savedPlaces.indexWhere((p) =>
+        p.name.toLowerCase() == oldPlace.name.toLowerCase() ||
+        ((p.coordinate.latitude - oldPlace.coordinate.latitude).abs() < 0.0001 &&
+            (p.coordinate.longitude - oldPlace.coordinate.longitude).abs() < 0.0001));
+    if (idx != -1) {
+      _savedPlaces[idx] = _savedPlaces[idx].copyWith(
+        name: newName.trim(),
+        displayName: newDisplayName?.trim() ?? _savedPlaces[idx].displayName,
+      );
+      _persistSavedPlaces();
+    }
+  }
+
   static Future<void> _persistSavedPlaces() async {
     try {
       final prefs = await SharedPreferences.getInstance();
