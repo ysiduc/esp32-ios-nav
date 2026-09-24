@@ -33,6 +33,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
 
     return Scaffold(
+      drawerScrimColor: Colors.transparent,
       onDrawerChanged: (isOpen) => MapNativeGlassController.instance.setOverlayMode(
         isOpen ? MapOverlayMode.drawer : MapOverlayMode.none,
       ),
@@ -64,32 +65,32 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      child: ClipRRect(
-        borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: MapOverlayGlassStyle.blurSigma,
-            sigmaY: MapOverlayGlassStyle.blurSigma,
-          ),
-          child: Container(
-            decoration: BoxDecoration(
-              color: MapOverlayGlassStyle.sheetFill(isDark: isDark),
-              borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
-              border: Border(
-                right: BorderSide(
-                  color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
-                  width: 0.8,
-                ),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(isDark ? 0.30 : 0.08),
-                  blurRadius: 24,
-                  offset: const Offset(4, 0),
-                ),
-              ],
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
+          gradient: MapOverlayGlassStyle.drawerRimGradient(isDark: isDark),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(isDark ? 0.25 : 0.06),
+              blurRadius: 24,
+              offset: const Offset(4, 0),
             ),
-            child: SafeArea(
+          ],
+        ),
+        padding: const EdgeInsets.only(top: 0.8, right: 0.8, bottom: 0.8),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.horizontal(right: Radius.circular(27.2)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: MapOverlayGlassStyle.largeSurfaceBlur,
+              sigmaY: MapOverlayGlassStyle.largeSurfaceBlur,
+            ),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: MapOverlayGlassStyle.wateryLargeSurfaceGradient(isDark: isDark),
+                borderRadius: const BorderRadius.horizontal(right: Radius.circular(27.2)),
+              ),
+              child: SafeArea(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -145,9 +146,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                           decoration: BoxDecoration(
-                            color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                            color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                             borderRadius: BorderRadius.circular(16),
-                            border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                            border: MapOverlayGlassStyle.drawerCardBorder(isDark: isDark),
                           ),
                           child: Row(
                             children: [
@@ -244,9 +245,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: MapOverlayGlassStyle.secondaryFill(isDark: isDark),
+                        color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                         borderRadius: BorderRadius.circular(16),
-                        border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                        border: MapOverlayGlassStyle.drawerCardBorder(isDark: isDark),
                       ),
                       child: Row(
                         children: [
@@ -270,6 +271,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -282,12 +284,8 @@ class _HomeScreenState extends State<HomeScreen> {
     required VoidCallback onTap,
     Color? badgeColor,
   }) {
-    final bg = isSelected
-        ? const Color(0xFF007AFF).withOpacity(isDark ? 0.28 : 0.12)
-        : MapOverlayGlassStyle.secondaryFill(isDark: isDark);
-    final border = isSelected
-        ? Border.all(color: const Color(0xFF007AFF).withOpacity(0.55), width: 1.2)
-        : MapOverlayGlassStyle.border(isDark: isDark, width: 0.5);
+    final bg = MapOverlayGlassStyle.drawerCardFill(isDark: isDark, isSelected: isSelected);
+    final border = MapOverlayGlassStyle.drawerCardBorder(isDark: isDark, isSelected: isSelected);
     final fg = isSelected
         ? const Color(0xFF007AFF)
         : (isDark ? Colors.white : AppColors.textPrimary);

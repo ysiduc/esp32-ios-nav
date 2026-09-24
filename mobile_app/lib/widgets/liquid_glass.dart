@@ -19,9 +19,12 @@ import 'package:flutter/services.dart';
 /// - Soft ambient diffuse shadow (blur 20, no harsh drop)
 /// - Unified across: Drawer, Search sheet, Right toolbar, Bottom search bar
 class MapOverlayGlassStyle {
-  static const double blurSigma = 26.0;
+  static const double largeSurfaceBlur = 16.0;
+  static const double capsuleBlur = 22.0;
+  static const double blurSigma = 22.0;
 
-  static double blur({bool isDark = false}) => blurSigma;
+  static double blur({bool isDark = false, bool isLargeSurface = false}) =>
+      isLargeSurface ? largeSurfaceBlur : capsuleBlur;
 
   /// Watery clear glass fill (P6.3 spec: 0.10 - 0.18 for toolbar & overlays)
   static Color fill({required bool isDark, double opacityFactor = 1.0}) {
@@ -55,6 +58,84 @@ class MapOverlayGlassStyle {
       return Colors.white.withOpacity(0.10);
     } else {
       return Colors.white.withOpacity(0.50);
+    }
+  }
+
+  /// P6.4 Watery large surface gradient for Drawer & Search Sheet
+  /// light mode: top 0.10, center 0.055, bottom 0.09
+  /// dark mode: top 0.15, center 0.10, bottom 0.14
+  static Gradient wateryLargeSurfaceGradient({
+    required bool isDark,
+    double opacityFactor = 1.0,
+  }) {
+    return LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: isDark
+          ? [
+              const Color(0xFF1E2638).withOpacity(0.15 * opacityFactor),
+              const Color(0xFF121824).withOpacity(0.10 * opacityFactor),
+              const Color(0xFF1A2230).withOpacity(0.14 * opacityFactor),
+            ]
+          : [
+              Colors.white.withOpacity(0.10 * opacityFactor),
+              Colors.white.withOpacity(0.055 * opacityFactor),
+              Colors.white.withOpacity(0.09 * opacityFactor),
+            ],
+      stops: const [0.0, 0.5, 1.0],
+    );
+  }
+
+  /// P6.4 Outer specular highlight rim for Drawer (meniscus curve edge)
+  static Gradient drawerRimGradient({required bool isDark}) {
+    return LinearGradient(
+      begin: Alignment.topRight,
+      end: Alignment.bottomRight,
+      colors: isDark
+          ? [
+              Colors.white.withOpacity(0.40),
+              Colors.white.withOpacity(0.10),
+              Colors.white.withOpacity(0.06),
+              Colors.white.withOpacity(0.25),
+            ]
+          : [
+              Colors.white.withOpacity(0.80),
+              Colors.white.withOpacity(0.28),
+              Colors.white.withOpacity(0.18),
+              Colors.white.withOpacity(0.55),
+            ],
+      stops: const [0.0, 0.35, 0.70, 1.0],
+    );
+  }
+
+  /// P6.4 Drawer card fill token (0.10–0.16 light, 0.06–0.10 dark, selected blue tint 0.12)
+  static Color drawerCardFill({required bool isDark, bool isSelected = false}) {
+    if (isSelected) {
+      return const Color(0xFF007AFF).withOpacity(isDark ? 0.14 : 0.12);
+    }
+    return isDark ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.12);
+  }
+
+  /// P6.4 Drawer card border token
+  static Border drawerCardBorder({required bool isDark, bool isSelected = false}) {
+    if (isSelected) {
+      return Border.all(
+        color: const Color(0xFF007AFF).withOpacity(isDark ? 0.60 : 0.50),
+        width: 1.0,
+      );
+    }
+    return Border.all(
+      color: isDark ? Colors.white.withOpacity(0.14) : Colors.white.withOpacity(0.25),
+      width: 0.5,
+    );
+  }
+
+  /// P6.4 Search sheet input field and card fill token (0.14–0.22)
+  static Color searchSheetFieldFill({required bool isDark}) {
+    if (isDark) {
+      return Colors.white.withOpacity(0.12);
+    } else {
+      return Colors.white.withOpacity(0.16);
     }
   }
 
@@ -190,8 +271,8 @@ class WateryLiquidGlassCapsule extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius - 0.8),
         child: BackdropFilter(
           filter: ImageFilter.blur(
-            sigmaX: MapOverlayGlassStyle.blurSigma,
-            sigmaY: MapOverlayGlassStyle.blurSigma,
+            sigmaX: MapOverlayGlassStyle.capsuleBlur,
+            sigmaY: MapOverlayGlassStyle.capsuleBlur,
           ),
           child: Container(
             padding: padding,

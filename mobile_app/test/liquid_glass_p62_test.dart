@@ -11,8 +11,8 @@ void main() {
 
   group('P6.2 Unified Liquid Glass Material Spec (Authoritative Image 4)', () {
     test('MapOverlayGlassStyle defines consistent translucent glass parameters', () {
-      expect(MapOverlayGlassStyle.blurSigma, equals(26.0));
-      expect(MapOverlayGlassStyle.blur(), equals(26.0));
+      expect(MapOverlayGlassStyle.blurSigma, equals(22.0));
+      expect(MapOverlayGlassStyle.blur(), equals(22.0));
 
       // Light mode: translucent watery diffusion (0.14), NOT opaque (0.80 - 0.95)
       final lightFill = MapOverlayGlassStyle.fill(isDark: false);
