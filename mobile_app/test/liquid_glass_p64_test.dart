@@ -18,17 +18,17 @@ void main() {
     test('drawer cards do not use secondaryFill 0.50 and have watery card tokens', () {
       final unselectedLightCard = MapOverlayGlassStyle.drawerCardFill(isDark: false, isSelected: false);
       expect(unselectedLightCard.opacity, isNot(closeTo(0.50, 0.05)));
-      expect(unselectedLightCard.opacity, inInclusiveRange(0.10, 0.65));
+      expect(unselectedLightCard.opacity, inInclusiveRange(0.04, 0.65));
 
       final unselectedDarkCard = MapOverlayGlassStyle.drawerCardFill(isDark: true, isSelected: false);
-      expect(unselectedDarkCard.opacity, inInclusiveRange(0.05, 0.20));
+      expect(unselectedDarkCard.opacity, inInclusiveRange(0.02, 0.20));
 
       final selectedLightCard = MapOverlayGlassStyle.drawerCardFill(isDark: false, isSelected: true);
-      expect(selectedLightCard.opacity, inInclusiveRange(0.10, 0.20));
+      expect(selectedLightCard.opacity, inInclusiveRange(0.07, 0.20));
 
       final searchFieldFill = MapOverlayGlassStyle.searchSheetFieldFill(isDark: false);
       expect(searchFieldFill.opacity, isNot(closeTo(0.50, 0.05)));
-      expect(searchFieldFill.opacity, inInclusiveRange(0.14, 0.88));
+      expect(searchFieldFill.opacity, inInclusiveRange(0.08, 0.88));
     });
 
     testWidgets('HomeScreen Scaffold.drawerScrimColor is transparent (no map darkening)', (tester) async {

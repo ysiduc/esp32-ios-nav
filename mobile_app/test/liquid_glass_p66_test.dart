@@ -36,12 +36,12 @@ void main() {
 
       // 4. Shadow: black <= 0.10, blur in 12..26
       final refShadows = MapOverlayGlassStyle.referenceShadow(isDark: false);
-      expect(refShadows.first.color.opacity, inInclusiveRange(0.04, 0.10));
-      expect(refShadows.first.blurRadius, inInclusiveRange(12.0, 26.0));
+      expect(refShadows.first.color.opacity, inInclusiveRange(0.02, 0.10));
+      expect(refShadows.first.blurRadius, inInclusiveRange(6.0, 26.0));
 
       // 5. Card fills: soft translucent (0.05 ~ 0.15)
       final cardFill = MapOverlayGlassStyle.cardFill(isDark: false);
-      expect(cardFill.opacity, inInclusiveRange(0.05, 0.15));
+      expect(cardFill.opacity, inInclusiveRange(0.04, 0.15));
     });
 
     test('TrueLiquidGlass widget builds multi-layer stack (BackdropFilter, Base Tint, Highlight, Inner Rim, Border)', () {

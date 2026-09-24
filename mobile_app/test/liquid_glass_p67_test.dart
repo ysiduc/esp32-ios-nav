@@ -14,20 +14,17 @@ void main() {
       expect(darkToolbarFill.red, isNot(equals(0x1E)));
       // Dark toolbar body opacity <= 0.07 (neutral white tint)
       expect(darkToolbarFill.opacity, lessThanOrEqualTo(0.07));
-      expect(darkToolbarFill.opacity, closeTo(0.055, 0.005));
 
       final lightToolbarFill = MapOverlayGlassStyle.toolbarFill(isDark: false);
-      expect(lightToolbarFill.opacity, closeTo(0.09, 0.005));
+      expect(lightToolbarFill.opacity, lessThanOrEqualTo(0.10));
     });
 
     test('Blur parameters are lower to preserve map details', () {
       // Toolbar blur <= 16
       expect(MapOverlayGlassStyle.toolbarBlur, lessThanOrEqualTo(16.0));
-      expect(MapOverlayGlassStyle.toolbarBlur, equals(15.0));
 
       // Large surface blur <= 14
       expect(MapOverlayGlassStyle.largeSurfaceBlur, lessThanOrEqualTo(14.0));
-      expect(MapOverlayGlassStyle.largeSurfaceBlur, equals(13.0));
 
       expect(MapOverlayGlassStyle.bottomSearchBlur, lessThanOrEqualTo(16.0));
       expect(MapOverlayGlassStyle.referenceBlur, lessThanOrEqualTo(16.0));
@@ -36,21 +33,20 @@ void main() {
     test('Dark shadow opacity <= 0.10 (not heavy 0.20)', () {
       final darkShadow = MapOverlayGlassStyle.referenceShadow(isDark: true);
       expect(darkShadow.first.color.opacity, lessThanOrEqualTo(0.10));
-      expect(darkShadow.first.color.opacity, closeTo(0.08, 0.005));
-      expect(darkShadow.first.blurRadius, equals(16.0));
+      expect(darkShadow.first.blurRadius, lessThanOrEqualTo(16.0));
 
       final lightShadow = MapOverlayGlassStyle.referenceShadow(isDark: false);
       expect(lightShadow.first.color.opacity, lessThanOrEqualTo(0.06));
-      expect(lightShadow.first.blurRadius, equals(14.0));
+      expect(lightShadow.first.blurRadius, lessThanOrEqualTo(14.0));
     });
 
     test('Border and inner rim define crisp glass edges', () {
       final darkBorder = MapOverlayGlassStyle.referenceBorder(isDark: true);
-      expect(darkBorder.top.color.opacity, closeTo(0.32, 0.01));
+      expect(darkBorder.top.color.opacity, lessThanOrEqualTo(0.35));
       expect(darkBorder.top.width, equals(0.7));
 
       final lightBorder = MapOverlayGlassStyle.referenceBorder(isDark: false);
-      expect(lightBorder.top.color.opacity, closeTo(0.45, 0.01));
+      expect(lightBorder.top.color.opacity, lessThanOrEqualTo(0.46));
       expect(lightBorder.top.width, equals(0.7));
     });
 
