@@ -71,37 +71,25 @@ void main() {
       expect(deco.border?.top.width, equals(0.8));
     });
 
-    testWidgets('Right toolbar in HomeScreen renders exact 35895237697 Container', (tester) async {
+    testWidgets('Right toolbar in HomeScreen renders AppGlassToolbar with clear variant', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
-      final containers = tester.widgetList<Container>(find.byType(Container));
-      final toolbarContainer = containers.firstWhere(
-        (c) => c.constraints?.maxWidth == 48 || (c.decoration is BoxDecoration && (c.decoration as BoxDecoration).color?.opacity == Colors.white.withOpacity(0.85).opacity && (c.decoration as BoxDecoration).borderRadius == BorderRadius.circular(24)),
-      );
-      expect(toolbarContainer, isNotNull);
-      final deco = toolbarContainer.decoration as BoxDecoration;
-      expect(deco.color?.opacity, closeTo(0.85, 0.01));
-      expect(deco.borderRadius, equals(BorderRadius.circular(24)));
-      expect(deco.border?.top.color.opacity, closeTo(0.70, 0.01));
-      expect(deco.border?.top.width, equals(0.8));
-      expect(deco.boxShadow?.first.blurRadius, equals(16.0));
+      final toolbars = tester.widgetList<AppGlassToolbar>(find.byType(AppGlassToolbar));
+      final toolbar = toolbars.firstWhere((t) => t.width == 48 && t.radius == 24);
+      expect(toolbar, isNotNull);
+      expect(toolbar.variant, equals(AppGlassVariant.clear));
     });
 
-    testWidgets('Bottom search in HomeScreen renders exact 35895237697 Container', (tester) async {
+    testWidgets('Bottom search in HomeScreen renders AppGlassSurface with clear variant', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
-      final containers = tester.widgetList<Container>(find.byType(Container));
-      final searchContainer = containers.firstWhere(
-        (c) => c.decoration is BoxDecoration && (c.decoration as BoxDecoration).color?.opacity == Colors.white.withOpacity(0.88).opacity && (c.decoration as BoxDecoration).borderRadius == BorderRadius.circular(25),
-      );
-      expect(searchContainer, isNotNull);
-      final deco = searchContainer.decoration as BoxDecoration;
-      expect(deco.color?.opacity, closeTo(0.88, 0.01));
-      expect(deco.borderRadius, equals(BorderRadius.circular(25)));
-      expect(deco.border?.top.color.opacity, closeTo(0.70, 0.01));
-      expect(deco.border?.top.width, equals(0.8));
+      final surfaces = tester.widgetList<AppGlassSurface>(find.byType(AppGlassSurface));
+      final searchSurface = surfaces.firstWhere((s) => s.surfaceId == 'bottom-search');
+      expect(searchSurface, isNotNull);
+      expect(searchSurface.variant, equals(AppGlassVariant.clear));
+      expect(searchSurface.radius, equals(25.0));
     });
 
     testWidgets('Drawer in HomeScreen opens with translucent background', (tester) async {

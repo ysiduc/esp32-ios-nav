@@ -1841,6 +1841,7 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
 
             if let existing = glassSurfaceViews[id] {
                 existing.frame = frame
+                MapLibreMapController.applyCorners(view: existing, x: x, y: y, w: w, h: h, container: container)
             } else {
                 let view = MapLibreMapController.createGlassEffectView(
                     variant: variant,
@@ -1849,6 +1850,7 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
                     tintColorOverride: tintColor
                 )
                 view.frame = frame
+                MapLibreMapController.applyCorners(view: view, x: x, y: y, w: w, h: h, container: container)
                 view.isUserInteractionEnabled = false
                 container.addSubview(view)
                 glassSurfaceViews[id] = view
@@ -1862,11 +1864,19 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
 
             var minX = CGFloat.infinity, minY = CGFloat.infinity
             var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
+            var groupRadius: CGFloat = 24.0
+            var groupVariant: String = "clear"
             for s in groupList {
                 let x = CGFloat(s["x"] as? Double ?? 0.0)
                 let y = CGFloat(s["y"] as? Double ?? 0.0)
                 let w = CGFloat(s["w"] as? Double ?? 0.0)
                 let h = CGFloat(s["h"] as? Double ?? 0.0)
+                if let r = s["radius"] as? Double {
+                    groupRadius = CGFloat(r)
+                }
+                if let v = s["variant"] as? String {
+                    groupVariant = v
+                }
                 minX = min(minX, x)
                 minY = min(minY, y)
                 maxX = max(maxX, x + w)
@@ -1879,7 +1889,7 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
                 existingGroup.frame = groupFrame
                 groupContainer = existingGroup
             } else {
-                groupContainer = MapLibreMapController.createGlassContainerView(cornerRadius: 23.0)
+                groupContainer = MapLibreMapController.createGlassContainerView(cornerRadius: groupRadius, variant: groupVariant)
                 groupContainer.frame = groupFrame
                 groupContainer.isUserInteractionEnabled = false
                 container.addSubview(groupContainer)
@@ -1938,6 +1948,24 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
         }
     }
 
+    private static func applyCorners(view: UIView, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, container: UIView) {
+        if x <= 0 && w < container.bounds.width {
+            // Drawer: only round the right edge
+            let corners: CACornerMask = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            view.layer.maskedCorners = corners
+            for sub in view.subviews {
+                sub.layer.maskedCorners = corners
+            }
+        } else if (y + h) >= (container.bounds.height - 30.0) && w >= (container.bounds.width - 30.0) {
+            // Bottom sheet: only round the top edge
+            let corners: CACornerMask = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+            view.layer.maskedCorners = corners
+            for sub in view.subviews {
+                sub.layer.maskedCorners = corners
+            }
+        }
+    }
+
     static var isTrueGlassAvailable: Bool {
         if #available(iOS 26.0, *) {
             return NSClassFromString("UIGlassEffect") != nil
@@ -1952,7 +1980,7 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
         return false
     }
 
-    static func createGlassContainerView(cornerRadius: CGFloat) -> UIView {
+    static func createGlassContainerView(cornerRadius: CGFloat, variant: String = "clear") -> UIView {
         let container = UIView()
         container.backgroundColor = .clear
         container.layer.cornerRadius = cornerRadius
@@ -1972,13 +2000,30 @@ class MapLibreMapController: NSObject, FlutterPlatformView, MLNMapViewDelegate, 
             }
         }
 
-        let blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
+        let blurEffect: UIBlurEffect
+        let tintColor: UIColor
+        if variant == "clear" {
+            blurEffect = UIBlurEffect(style: .systemUltraThinMaterialLight)
+            tintColor = UIColor.white.withAlphaComponent(0.08)
+        } else {
+            blurEffect = UIBlurEffect(style: .systemThinMaterialLight)
+            tintColor = UIColor.white.withAlphaComponent(0.20)
+        }
+
         let effectView = UIVisualEffectView(effect: blurEffect)
         effectView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         effectView.layer.cornerRadius = cornerRadius
         effectView.layer.masksToBounds = true
         effectView.isUserInteractionEnabled = false
         container.addSubview(effectView)
+
+        let tintView = UIView()
+        tintView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        tintView.backgroundColor = tintColor
+        tintView.layer.cornerRadius = cornerRadius
+        tintView.layer.masksToBounds = true
+        tintView.isUserInteractionEnabled = false
+        container.addSubview(tintView)
 
         let specularEdge = UIView()
         specularEdge.autoresizingMask = [.flexibleWidth, .flexibleHeight]

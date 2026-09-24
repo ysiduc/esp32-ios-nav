@@ -81,24 +81,21 @@ void main() {
       expect(deco.gradient, isNull, reason: 'TrueLiquidGlass must NOT auto-apply a body gradient when none supplied');
     });
 
-    testWidgets('Right toolbar and bottom search render clear-core glass on HomeScreen', (tester) async {
+    testWidgets('Right toolbar and bottom search render native clear glass on HomeScreen', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
-      final glassFinder = find.byType(TrueLiquidGlass);
-      expect(glassFinder, findsWidgets);
+      final toolbarFinder = find.byType(AppGlassToolbar);
+      expect(toolbarFinder, findsWidgets);
 
-      final glassWidgets = tester.widgetList<TrueLiquidGlass>(glassFinder);
-      final toolbar = glassWidgets.where((w) => w.width == 48 && w.radius == 24).first;
-      expect(toolbar.blurSigma, lessThanOrEqualTo(24.0));
-      expect(toolbar.bodyGradient, isNull);
+      final toolbar = tester.widgetList<AppGlassToolbar>(toolbarFinder).firstWhere((w) => w.width == 48 && w.radius == 24);
+      expect(toolbar.variant, equals(AppGlassVariant.clear));
 
-      final searchPill = glassWidgets.where((w) => w.height == 50 && w.radius == 25).first;
-      expect(searchPill.blurSigma, lessThanOrEqualTo(24.0));
-      expect(searchPill.bodyGradient, isNull);
+      final searchPill = tester.widgetList<AppGlassSurface>(find.byType(AppGlassSurface)).firstWhere((w) => w.height == 50 && w.radius == 25);
+      expect(searchPill.variant, equals(AppGlassVariant.clear));
     });
 
-    testWidgets('Drawer and Search Modal use largeSurfaceBlur (<= 14)', (tester) async {
+    testWidgets('Drawer and Search Modal use native clear glass surface with overlayOwned', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
@@ -110,11 +107,11 @@ void main() {
       final drawerFinder = find.byType(Drawer);
       expect(drawerFinder, findsOneWidget);
 
-      final drawerGlass = tester.widget<TrueLiquidGlass>(
-        find.descendant(of: drawerFinder, matching: find.byType(TrueLiquidGlass)),
+      final drawerGlass = tester.widget<AppGlassSurface>(
+        find.descendant(of: drawerFinder, matching: find.byType(AppGlassSurface)),
       );
-      expect(drawerGlass.blurSigma, lessThanOrEqualTo(24.0));
-      expect(drawerGlass.bodyGradient, isNull);
+      expect(drawerGlass.variant, equals(AppGlassVariant.clear));
+      expect(drawerGlass.overlayOwned, isTrue);
     });
   });
 }

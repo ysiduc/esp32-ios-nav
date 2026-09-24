@@ -1930,79 +1930,75 @@ class _MapScreenState extends State<MapScreen> {
   // Liquid Glass Floating Controls (P5.4.1.3 Sections 36-45, 64)
   // ─────────────────────────────────────────────────────────────
   Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
-    return TrueLiquidGlass(
+    return AppGlassToolbar(
+      groupId: 'right-toolbar',
+      variant: AppGlassVariant.clear,
       width: 48,
       radius: 24,
-      fillColor: Colors.white.withOpacity(0.85),
-      border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
-      blurSigma: 20.0,
       padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 22),
-                  tooltip: 'Đổi nền bản đồ',
-                  onPressed: _showMapThemePicker,
-                ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
-                  tooltip: 'Hướng Bắc',
-                  onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-                ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: Icon(
-                    _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-                    color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
-                    size: 22,
-                  ),
-                  tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
-                  onPressed: () {
-                    setState(() {
-                      _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
-                    });
-                    if (_selectedPlace != null) {
-                      _calculateRoutesForPlace(_selectedPlace!);
-                    }
-                  },
-                ),
-                Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
-                Container(
-                  width: 40,
-                  height: 40,
-                  margin: const EdgeInsets.symmetric(vertical: 2),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
-                  ),
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                    icon: Icon(
-                      _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
-                      color: const Color(0xFF007AFF),
-                      size: 22,
-                    ),
-                    tooltip: 'Vị trí hiện tại',
-                    onPressed: () {
-                      if (isDriving) {
-                        _recenterToVehicle();
-                      } else {
-                        _recenterToUser();
-                      }
-                    },
-                  ),
-                ),
-              ],
+      children: [
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 22),
+          tooltip: 'Đổi nền bản đồ',
+          onPressed: _showMapThemePicker,
+        ),
+        Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
+          tooltip: 'Hướng Bắc',
+          onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
+        ),
+        Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+        IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          icon: Icon(
+            _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+            color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+            size: 22,
+          ),
+          tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
+          onPressed: () {
+            setState(() {
+              _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
+            });
+            if (_selectedPlace != null) {
+              _calculateRoutesForPlace(_selectedPlace!);
+            }
+          },
+        ),
+        Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+        Container(
+          width: 40,
+          height: 40,
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: Icon(
+              _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
+              color: const Color(0xFF007AFF),
+              size: 22,
             ),
+            tooltip: 'Vị trí hiện tại',
+            onPressed: () {
+              if (isDriving) {
+                _recenterToVehicle();
+              } else {
+                _recenterToUser();
+              }
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -2040,10 +2036,38 @@ class _MapScreenState extends State<MapScreen> {
           const SizedBox(height: 6),
           Text('Transport: ${streamService.activeJpegTransport.name}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
           ListenableBuilder(
-            listenable: AppAccessibilityService.instance,
-            builder: (context, _) => Text(
-              'Glass backend: ${AppGlassBackend.currentName(context)}',
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF5E5CE6)),
+            listenable: Listenable.merge([
+              AppAccessibilityService.instance,
+              MapNativeGlassController.instance,
+            ]),
+            builder: (context, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Glass backend: ${AppGlassBackend.currentName(context, null, false, true)}',
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF5E5CE6)),
+                ),
+                Text(
+                  ' • right-toolbar: ${AppGlassBackend.surfaceBackendName(context: context, overlayOwned: false, isGroup: true)}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF5E5CE6)),
+                ),
+                Text(
+                  ' • bottom-search: ${AppGlassBackend.surfaceBackendName(context: context, overlayOwned: false)}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF5E5CE6)),
+                ),
+                Text(
+                  ' • drawer: ${AppGlassBackend.surfaceBackendName(context: context, overlayOwned: true)}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF5E5CE6)),
+                ),
+                Text(
+                  ' • search-sheet: ${AppGlassBackend.surfaceBackendName(context: context, overlayOwned: true)}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF5E5CE6)),
+                ),
+                Text(
+                  ' • route-sheet: ${AppGlassBackend.surfaceBackendName(context: context, overlayOwned: true)}',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF5E5CE6)),
+                ),
+              ],
             ),
           ),
           Text('Output FPS: ${streamService.actualFps.toStringAsFixed(1)}', style: const TextStyle(fontSize: 11)),
@@ -2297,15 +2321,16 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Bottom Search Capsule (Screenshot 1)
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
-    return TrueLiquidGlass(
-      height: 50,
-      radius: 25,
-      fillColor: Colors.white.withOpacity(0.88),
-      border: Border.all(color: Colors.white.withOpacity(0.70), width: 0.8),
-      blurSigma: 20.0,
+    return GestureDetector(
       onTap: _openAppleSearchModal,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
+      child: AppGlassSurface(
+        surfaceId: 'bottom-search',
+        variant: AppGlassVariant.clear,
+        height: 50,
+        radius: 25,
+        border: Border.all(color: Colors.white.withOpacity(0.40), width: 0.5),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
                 children: [
                   const Icon(Icons.search_rounded, color: Color(0xFF8E8E93), size: 22),
                   const SizedBox(width: 10),
@@ -2345,6 +2370,7 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ],
               ),
+      ),
     );
   }
 
@@ -2369,12 +2395,18 @@ class _MapScreenState extends State<MapScreen> {
               maxChildSize: 0.95,
               minChildSize: 0.45,
               builder: (_, scrollController) {
-                return TrueLiquidGlass(
+                return AppGlassSurface(
+                  surfaceId: 'search-sheet',
+                  variant: AppGlassVariant.clear,
+                  radius: 26,
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-                  isDark: isDark,
-                  fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
-                  border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-                  blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
+                  overlayOwned: true,
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.white.withOpacity(0.40),
+                      width: 0.5,
+                    ),
+                  ),
                   child: Column(
                     children: [
                           // Top Drag Handle
@@ -2997,13 +3029,19 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildApplePlaceInspectorSheet(MapPlace place) {
     final isDark = _isDarkMap;
     final effectiveName = _getEffectivePlaceName(place);
-    return TrueLiquidGlass(
+    return AppGlassSurface(
+      surfaceId: 'place-sheet',
+      variant: AppGlassVariant.clear,
       width: double.infinity,
+      radius: 26,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-      isDark: isDark,
-      fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
-      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
+      overlayOwned: true,
+      border: Border(
+        top: BorderSide(
+          color: Colors.white.withOpacity(0.40),
+          width: 0.5,
+        ),
+      ),
       child: SafeArea(
         top: false,
         child: Padding(
@@ -3299,13 +3337,19 @@ class _MapScreenState extends State<MapScreen> {
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalStr = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
-    return TrueLiquidGlass(
+    return AppGlassSurface(
+      surfaceId: 'route-sheet',
+      variant: AppGlassVariant.clear,
       width: double.infinity,
+      radius: 26,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-      isDark: isDark,
-      fillColor: MapOverlayGlassStyle.routeSheetFill(isDark: isDark),
-      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
+      overlayOwned: true,
+      border: Border(
+        top: BorderSide(
+          color: Colors.white.withOpacity(0.40),
+          width: 0.5,
+        ),
+      ),
       child: SafeArea(
         top: false,
         child: Padding(

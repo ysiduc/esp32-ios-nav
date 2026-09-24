@@ -647,6 +647,7 @@ class GlassSurfaceData {
   final bool isSelected;
   final int? tint;
   final String? groupId;
+  final bool overlayOwned;
 
   const GlassSurfaceData({
     required this.id,
@@ -656,6 +657,7 @@ class GlassSurfaceData {
     this.isSelected = false,
     this.tint,
     this.groupId,
+    this.overlayOwned = false,
   });
 
   Map<String, dynamic> toMap() => {
@@ -669,6 +671,7 @@ class GlassSurfaceData {
     'isSelected': isSelected,
     if (tint != null) 'tint': tint,
     if (groupId != null) 'groupId': groupId,
+    'overlayOwned': overlayOwned,
   };
 
   @override
@@ -682,10 +685,11 @@ class GlassSurfaceData {
           variant == other.variant &&
           isSelected == other.isSelected &&
           tint == other.tint &&
-          groupId == other.groupId;
+          groupId == other.groupId &&
+          overlayOwned == other.overlayOwned;
 
   @override
-  int get hashCode => Object.hash(id, rect, radius, variant, isSelected, tint, groupId);
+  int get hashCode => Object.hash(id, rect, radius, variant, isSelected, tint, groupId, overlayOwned);
 }
 
 /// Controller coordinating native Liquid Glass surfaces inside MapLibre native view (P5.9 Architecture)
@@ -775,6 +779,7 @@ class MapNativeGlassController extends ChangeNotifier {
     final origin = mapGlobalOrigin;
     final payload = _surfaces.values.map((s) {
       final localRect = s.rect.shift(-origin);
+      final isVisible = s.overlayOwned ? true : !isOverlayActive;
       return {
         'id': s.id,
         'x': localRect.left,
@@ -786,7 +791,8 @@ class MapNativeGlassController extends ChangeNotifier {
         'isSelected': s.isSelected,
         if (s.tint != null) 'tint': s.tint,
         if (s.groupId != null) 'groupId': s.groupId,
-        'visible': !isOverlayActive,
+        'overlayOwned': s.overlayOwned,
+        'visible': isVisible,
       };
     }).toList();
 
@@ -911,10 +917,11 @@ class AppGlassBackend {
   @visibleForTesting
   static TargetPlatform? forcePlatformForTesting;
 
-  /// Resolves the active rendering backend based on platform and accessibility settings
+  /// Resolves the active rendering backend based on platform and accessibility settings (P5.7.1 & P6.9)
   static AppGlassBackendType resolve({
-    required BuildContext context,
+    BuildContext? context,
     required bool isReduceTransparency,
+    bool overlayOwned = false,
   }) {
     // 1. Accessibility Fallback: Reduce Transparency ALWAYS forces opaque fallback (P5.7.1 & P5.7.2)
     if (isReduceTransparency) {
@@ -927,8 +934,8 @@ class AppGlassBackend {
     }
 
     // 3. Z-Order Composition Guard: When a modal, drawer, or dialog is active,
-    // fallback to pure Flutter compositing so no native platform view occludes the overlay! (P5.8)
-    if (NativeGlassHostController.instance.isOverlayActive) {
+    // unrelated map surfaces hide, while overlayOwned surfaces (drawer, sheets) stay on native glass!
+    if (NativeGlassHostController.instance.isOverlayActive && !overlayOwned) {
       return AppGlassBackendType.flutterFallback;
     }
 
@@ -950,11 +957,27 @@ class AppGlassBackend {
     return AppGlassBackendType.flutterFallback;
   }
 
-  /// Returns a human-readable telemetry string for debug overlay and field verification (P5.8)
-  static String currentName(BuildContext context, [bool? isReduceTransparency]) {
+  /// Returns a human-readable telemetry string for debug overlay and field verification (P5.8 & P6.9 Section 17)
+  static String currentName([BuildContext? context, bool? isReduceTransparency, bool overlayOwned = false, bool pretty = false]) {
     final effectiveReduceTransparency = isReduceTransparency ??
         AppAccessibilityService.instance.reduceTransparency;
-    final type = resolve(context: context, isReduceTransparency: effectiveReduceTransparency);
+    final type = resolve(context: context, isReduceTransparency: effectiveReduceTransparency, overlayOwned: overlayOwned);
+    if (pretty) {
+      switch (type) {
+        case AppGlassBackendType.uiGlass:
+        case AppGlassBackendType.nativeModern:
+          return 'UIGlassEffect';
+        case AppGlassBackendType.uiGlassContainer:
+          return 'UIGlassContainerEffect';
+        case AppGlassBackendType.nativeBlurFallback:
+          return 'native-blur-clear';
+        case AppGlassBackendType.flutterFallback:
+          return 'flutter-fallback';
+        case AppGlassBackendType.opaqueAccessibility:
+        case AppGlassBackendType.opaqueFallback:
+          return 'opaque-accessibility';
+      }
+    }
     switch (type) {
       case AppGlassBackendType.uiGlass:
       case AppGlassBackendType.nativeModern:
@@ -970,6 +993,48 @@ class AppGlassBackend {
         return 'opaque-accessibility';
     }
   }
+
+  /// Surface-specific backend telemetry string (P6.9 Requirement 17)
+  static String surfaceBackendName({
+    BuildContext? context,
+    required bool overlayOwned,
+    bool isGroup = false,
+  }) {
+    if (AppAccessibilityService.instance.reduceTransparency) {
+      return 'opaque-accessibility';
+    }
+    final platform = forcePlatformForTesting ?? defaultTargetPlatform;
+    if (platform != TargetPlatform.iOS && forceBackendForTesting == null) {
+      return 'flutter-fallback';
+    }
+    if (NativeGlassHostController.instance.isOverlayActive && !overlayOwned) {
+      return 'flutter-fallback';
+    }
+    if (forceBackendForTesting != null) {
+      switch (forceBackendForTesting!) {
+        case AppGlassBackendType.uiGlass:
+        case AppGlassBackendType.nativeModern:
+          return 'UIGlassEffect';
+        case AppGlassBackendType.uiGlassContainer:
+          return 'UIGlassContainerEffect';
+        case AppGlassBackendType.nativeBlurFallback:
+          return 'native-blur-clear';
+        case AppGlassBackendType.flutterFallback:
+          return 'flutter-fallback';
+        case AppGlassBackendType.opaqueAccessibility:
+        case AppGlassBackendType.opaqueFallback:
+          return 'opaque-accessibility';
+      }
+    }
+    final cap = AppAccessibilityService.instance.nativeGlassCapability;
+    if (isGroup && (cap == 'uiglass-container' || cap == 'uiglass')) {
+      return 'UIGlassContainerEffect';
+    }
+    if (cap == 'uiglass' || cap == 'native-modern') {
+      return 'UIGlassEffect';
+    }
+    return 'native-blur-clear';
+  }
 }
 
 /// Base adaptive Liquid Glass material container (P5.7 & P5.7.1)
@@ -979,6 +1044,7 @@ class AppGlassSurface extends StatefulWidget {
   final Widget child;
   final AppGlassVariant variant;
   final double radius;
+  final BorderRadius? borderRadius;
   final double? blur;
   final Color? tint;
   final EdgeInsetsGeometry? padding;
@@ -992,12 +1058,14 @@ class AppGlassSurface extends StatefulWidget {
   final bool? reduceTransparency;
   final String? groupId;
   final String? surfaceId;
+  final bool overlayOwned;
 
   const AppGlassSurface({
     super.key,
     required this.child,
     this.variant = AppGlassVariant.regular,
     this.radius = 24.0,
+    this.borderRadius,
     this.blur,
     this.tint,
     this.padding,
@@ -1011,6 +1079,7 @@ class AppGlassSurface extends StatefulWidget {
     this.reduceTransparency,
     this.groupId,
     this.surfaceId,
+    this.overlayOwned = false,
   });
 
   @override
@@ -1032,12 +1101,14 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
   void didUpdateWidget(covariant AppGlassSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.radius != widget.radius ||
+        oldWidget.borderRadius != widget.borderRadius ||
         oldWidget.variant != widget.variant ||
         oldWidget.isSelected != widget.isSelected ||
         oldWidget.tint != widget.tint ||
         oldWidget.groupId != widget.groupId ||
         oldWidget.width != widget.width ||
-        oldWidget.height != widget.height) {
+        oldWidget.height != widget.height ||
+        oldWidget.overlayOwned != widget.overlayOwned) {
       _scheduleLayoutRegistration();
     }
   }
@@ -1064,6 +1135,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
             isSelected: widget.isSelected,
             tint: widget.tint?.value,
             groupId: widget.groupId,
+            overlayOwned: widget.overlayOwned,
           ),
         );
       }
@@ -1095,6 +1167,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
     final backend = AppGlassBackend.resolve(
       context: context,
       isReduceTransparency: isReduceTransparency,
+      overlayOwned: widget.overlayOwned,
     );
 
     // 1. Accessibility Fallback: Opaque high-contrast surface if transparency is reduced
@@ -1160,7 +1233,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
         break;
 
       case AppGlassVariant.clear:
-        defaultBorderColor = AppleGlassTokens.borderSubtle.withOpacity(0.45);
+        defaultBorderColor = Colors.white.withOpacity(0.40);
         break;
 
       case AppGlassVariant.danger:
@@ -1208,7 +1281,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
         height: widget.height,
         padding: widget.padding,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(widget.radius),
+          borderRadius: widget.borderRadius ?? BorderRadius.circular(widget.radius),
           border: widget.border ?? defaultBorder,
           boxShadow: shadows,
         ),
@@ -1234,7 +1307,7 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
         break;
 
       case AppGlassVariant.clear:
-        fillColor = AppleGlassTokens.fillLight.withOpacity(0.30);
+        fillColor = Colors.white.withOpacity(0.08);
         break;
 
       case AppGlassVariant.danger:
@@ -1250,23 +1323,24 @@ class _AppGlassSurfaceState extends State<AppGlassSurface> {
       fillColor = Color.alphaBlend(widget.tint!, fillColor);
     }
 
+    final effectiveBorderRadius = widget.borderRadius ?? BorderRadius.circular(widget.radius);
     return Container(
       margin: widget.margin,
       width: widget.width,
       height: widget.height,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(widget.radius),
+        borderRadius: effectiveBorderRadius,
         boxShadow: shadows,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(widget.radius),
+        borderRadius: effectiveBorderRadius,
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
           child: Container(
             padding: widget.padding,
             decoration: BoxDecoration(
               color: fillColor,
-              borderRadius: BorderRadius.circular(widget.radius),
+              borderRadius: effectiveBorderRadius,
               border: widget.border ?? defaultBorder,
             ),
             child: widget.child,
@@ -1455,25 +1529,29 @@ class AppGlassToolbar extends StatelessWidget {
   final Axis axis;
   final AppGlassVariant variant;
   final double radius;
+  final BorderRadius? borderRadius;
   final double? width;
   final double? height;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
   final Color? tint;
   final String? groupId;
+  final bool overlayOwned;
 
   const AppGlassToolbar({
     super.key,
     required this.children,
     this.axis = Axis.vertical,
-    this.variant = AppGlassVariant.regular,
+    this.variant = AppGlassVariant.clear,
     this.radius = 24.0,
+    this.borderRadius,
     this.width,
     this.height,
     this.padding = const EdgeInsets.all(4.0),
     this.margin,
     this.tint,
     this.groupId,
+    this.overlayOwned = false,
   });
 
   @override
@@ -1482,11 +1560,13 @@ class AppGlassToolbar extends StatelessWidget {
       groupId: groupId ?? 'right-toolbar',
       variant: variant,
       radius: radius,
+      borderRadius: borderRadius,
       width: width,
       height: height,
       padding: padding,
       margin: margin,
       tint: tint,
+      overlayOwned: overlayOwned,
       child: Flex(
         direction: axis,
         mainAxisSize: MainAxisSize.min,

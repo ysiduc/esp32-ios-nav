@@ -65,11 +65,18 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      child: TrueLiquidGlass(
+      child: AppGlassSurface(
+        surfaceId: 'drawer',
+        variant: AppGlassVariant.clear,
+        radius: 28,
         borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
-        fillColor: MapOverlayGlassStyle.drawerFill(isDark: isDark),
-        border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-        blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
+        overlayOwned: true,
+        border: Border(
+          right: BorderSide(
+            color: Colors.white.withOpacity(0.40),
+            width: 0.5,
+          ),
+        ),
         child: SafeArea(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
