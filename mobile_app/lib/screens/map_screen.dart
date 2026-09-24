@@ -1931,12 +1931,13 @@ class _MapScreenState extends State<MapScreen> {
   // ─────────────────────────────────────────────────────────────
   Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
     final isDark = _isDarkMap;
-    return ReferenceGlassSurface(
+    return TrueLiquidGlass(
       width: 48,
       radius: 24,
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.toolbarFill(isDark: isDark),
-      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark, width: 0.8),
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
+      blurSigma: 28.0,
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1955,7 +1956,7 @@ class _MapScreenState extends State<MapScreen> {
           Container(
             width: 26,
             height: 0.5,
-            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.06),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -1967,7 +1968,7 @@ class _MapScreenState extends State<MapScreen> {
           Container(
             width: 26,
             height: 0.5,
-            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.06),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -1992,7 +1993,7 @@ class _MapScreenState extends State<MapScreen> {
           Container(
             width: 26,
             height: 0.5,
-            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.06),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -2001,7 +2002,7 @@ class _MapScreenState extends State<MapScreen> {
               _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
               color: _isAutoCentering
                   ? const Color(0xFF007AFF)
-                  : (isDark ? Colors.white70 : const Color(0xFF8E8E93)),
+                  : (isDark ? Colors.white70 : const Color(0xFF1C1C1E)),
               size: 22,
             ),
             tooltip: 'Định vị của tôi',
@@ -2304,19 +2305,20 @@ class _MapScreenState extends State<MapScreen> {
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
     final isDark = _isDarkMap;
-    return ReferenceGlassSurface(
+    return TrueLiquidGlass(
       height: 50,
       radius: 25,
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.bottomSearchFill(isDark: isDark),
-      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark, width: 0.8),
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
+      blurSigma: 28.0,
       onTap: _openAppleSearchModal,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           Icon(
             Icons.search_rounded,
-            color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+            color: isDark ? Colors.white70 : const Color(0xFF1C1C1E),
             size: 22,
           ),
           const SizedBox(width: 10),
@@ -2324,7 +2326,7 @@ class _MapScreenState extends State<MapScreen> {
             child: Text(
               'Tìm kiếm điểm đến...',
               style: TextStyle(
-                color: isDark ? Colors.white60 : const Color(0xFF8E8E93),
+                color: isDark ? Colors.white70 : const Color(0xFF3C3C43),
                 fontSize: 16,
                 fontWeight: FontWeight.w400,
                 letterSpacing: -0.2,
@@ -2336,7 +2338,7 @@ class _MapScreenState extends State<MapScreen> {
             constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
             icon: Icon(
               Icons.mic_none_rounded,
-              color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+              color: isDark ? Colors.white70 : const Color(0xFF1C1C1E),
               size: 22,
             ),
             onPressed: _openAppleSearchModal,
@@ -2386,21 +2388,12 @@ class _MapScreenState extends State<MapScreen> {
               maxChildSize: 0.95,
               minChildSize: 0.45,
               builder: (_, scrollController) {
-                return ReferenceGlassSurface(
+                return TrueLiquidGlass(
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
                   isDark: isDark,
                   fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
-                  border: Border.all(
-                    color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
-                    width: 0.8,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? 0.25 : 0.10),
-                      blurRadius: 26,
-                      offset: const Offset(0, -6),
-                    ),
-                  ],
+                  border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
+                  blurSigma: 28.0,
                   child: Column(
                     children: [
                           // Top Drag Handle
@@ -2583,50 +2576,61 @@ class _MapScreenState extends State<MapScreen> {
                                     itemBuilder: (context, idx) {
                                       final p = results[idx];
                                       final effectiveName = _getEffectivePlaceName(p);
-                                      return ListTile(
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        leading: CircleAvatar(
-                                          radius: 18,
-                                          backgroundColor: isDark
-                                              ? const Color(0xFF007AFF).withOpacity(0.25)
-                                              : const Color(0xFFE5F1FF),
-                                          child: const Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
-                                        ),
-                                        title: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                effectiveName,
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 15,
-                                                  color: isDark ? Colors.white : Colors.black87,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 6),
-                                            _buildPrecisionBadge(p.precision),
-                                          ],
-                                        ),
-                                        subtitle: Text(
-                                          p.displayName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: isDark ? Colors.white60 : Colors.black54,
-                                            fontSize: 13,
+                                      return Container(
+                                        margin: const EdgeInsets.symmetric(vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: MapOverlayGlassStyle.cardFill(isDark: isDark),
+                                          borderRadius: BorderRadius.circular(14),
+                                          border: Border.all(
+                                            color: isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.28),
+                                            width: 0.8,
                                           ),
                                         ),
-                                        trailing: Icon(
-                                          Icons.arrow_forward_ios_rounded,
-                                          size: 14,
-                                          color: isDark ? Colors.white38 : Colors.black38,
+                                        child: ListTile(
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                                          leading: CircleAvatar(
+                                            radius: 18,
+                                            backgroundColor: isDark
+                                                ? const Color(0xFF007AFF).withOpacity(0.25)
+                                                : const Color(0xFFE5F1FF),
+                                            child: const Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
+                                          ),
+                                          title: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  effectiveName,
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 15,
+                                                    color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                              _buildPrecisionBadge(p.precision),
+                                            ],
+                                          ),
+                                          subtitle: Text(
+                                            p.displayName,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: isDark ? Colors.white60 : Colors.black54,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          trailing: Icon(
+                                            Icons.arrow_forward_ios_rounded,
+                                            size: 14,
+                                            color: isDark ? Colors.white38 : Colors.black38,
+                                          ),
+                                          onTap: () {
+                                            Navigator.pop(modalCtx);
+                                            _onPlaceClicked(p);
+                                          },
                                         ),
-                                        onTap: () {
-                                          Navigator.pop(modalCtx);
-                                          _onPlaceClicked(p);
-                                        },
                                       );
                                     },
                                   )
@@ -3010,19 +3014,15 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Place Inspector Sheet (Screenshot 3)
   // -------------------------------------------------------------
   Widget _buildApplePlaceInspectorSheet(MapPlace place) {
-    return Container(
+    final isDark = _isDarkMap;
+    final effectiveName = _getEffectivePlaceName(place);
+    return TrueLiquidGlass(
       width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.96),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.16),
-            blurRadius: 25,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      isDark: isDark,
+      fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
+      blurSigma: 28.0,
       child: SafeArea(
         top: false,
         child: Padding(
@@ -3062,11 +3062,11 @@ class _MapScreenState extends State<MapScreen> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Text(
-                          place.name,
-                          style: const TextStyle(
+                          effectiveName,
+                          style: TextStyle(
                             fontSize: 19,
                             fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                            color: isDark ? Colors.white : const Color(0xFF1C1C1E),
                             letterSpacing: -0.3,
                           ),
                           textAlign: TextAlign.center,
@@ -3318,22 +3318,13 @@ class _MapScreenState extends State<MapScreen> {
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalStr = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
-    return ReferenceGlassSurface(
+    return TrueLiquidGlass(
       width: double.infinity,
       borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.routeSheetFill(isDark: isDark),
-      border: Border.all(
-        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
-        width: 0.8,
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(isDark ? 0.25 : 0.10),
-          blurRadius: 28,
-          offset: const Offset(0, -6),
-        ),
-      ],
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
+      blurSigma: 28.0,
       child: SafeArea(
         top: false,
         child: Padding(
