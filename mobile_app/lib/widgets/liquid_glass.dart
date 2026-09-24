@@ -19,49 +19,112 @@ import 'package:flutter/services.dart';
 /// - Soft ambient diffuse shadow (blur 20, no harsh drop)
 /// - Unified across: Drawer, Search sheet, Right toolbar, Bottom search bar
 class MapOverlayGlassStyle {
-  static const double blurSigma = 24.0;
+  static const double blurSigma = 26.0;
 
   static double blur({bool isDark = false}) => blurSigma;
 
+  /// Watery clear glass fill (P6.3 spec: 0.10 - 0.18 for toolbar & overlays)
   static Color fill({required bool isDark, double opacityFactor = 1.0}) {
     if (isDark) {
-      return const Color(0xFF161B26).withOpacity(0.30 * opacityFactor);
+      return const Color(0xFF161B26).withOpacity(0.18 * opacityFactor);
     } else {
-      return Colors.white.withOpacity(0.38 * opacityFactor);
+      return Colors.white.withOpacity(0.14 * opacityFactor);
+    }
+  }
+
+  /// Search bar watery fill (soft, slightly wider capsule)
+  static Color searchBarFill({required bool isDark}) {
+    if (isDark) {
+      return const Color(0xFF161B26).withOpacity(0.22);
+    } else {
+      return Colors.white.withOpacity(0.18);
+    }
+  }
+
+  /// Sheet fill (readable background for search sheet)
+  static Color sheetFill({required bool isDark}) {
+    if (isDark) {
+      return const Color(0xFF161B26).withOpacity(0.28);
+    } else {
+      return Colors.white.withOpacity(0.24);
     }
   }
 
   static Color secondaryFill({required bool isDark}) {
     if (isDark) {
-      return Colors.white.withOpacity(0.12);
+      return Colors.white.withOpacity(0.10);
     } else {
-      return Colors.white.withOpacity(0.68);
+      return Colors.white.withOpacity(0.50);
     }
   }
 
-  static Border border({required bool isDark, double width = 0.5}) {
-    if (isDark) {
-      return Border.all(
-        color: Colors.white.withOpacity(0.35),
-        width: width,
-      );
-    } else {
-      return Border.all(
-        color: Colors.white.withOpacity(0.60),
-        width: width,
-      );
-    }
+  /// Refractive specular outer rim gradient (P6.3 watery edge)
+  static Gradient specularRimGradient({required bool isDark}) {
+    return LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: isDark
+          ? [
+              Colors.white.withOpacity(0.42),
+              Colors.white.withOpacity(0.12),
+              Colors.white.withOpacity(0.06),
+              Colors.white.withOpacity(0.22),
+            ]
+          : [
+              Colors.white.withOpacity(0.85),
+              Colors.white.withOpacity(0.35),
+              Colors.white.withOpacity(0.20),
+              Colors.white.withOpacity(0.60),
+            ],
+      stops: const [0.0, 0.35, 0.70, 1.0],
+    );
   }
 
-  static List<BoxShadow> shadow({required bool isDark}) {
+  /// Watery glass body gradient simulating meniscus / convex curve
+  static Gradient wateryBodyGradient({required bool isDark, double opacityFactor = 1.0}) {
+    return LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: isDark
+          ? [
+              const Color(0xFF222C3D).withOpacity(0.24 * opacityFactor),
+              const Color(0xFF121824).withOpacity(0.14 * opacityFactor),
+              const Color(0xFF1A2230).withOpacity(0.20 * opacityFactor),
+            ]
+          : [
+              Colors.white.withOpacity(0.22 * opacityFactor),
+              Colors.white.withOpacity(0.11 * opacityFactor),
+              Colors.white.withOpacity(0.18 * opacityFactor),
+            ],
+      stops: const [0.0, 0.5, 1.0],
+    );
+  }
+
+  static List<BoxShadow> softShadow({required bool isDark}) {
     return [
       BoxShadow(
-        color: Colors.black.withOpacity(isDark ? 0.28 : 0.08),
+        color: Colors.black.withOpacity(isDark ? 0.20 : 0.06),
         blurRadius: 20.0,
         spreadRadius: 0.0,
         offset: const Offset(0, 4),
       ),
     ];
+  }
+
+  static List<BoxShadow> shadow({required bool isDark}) => softShadow(isDark: isDark);
+
+  static Border border({required bool isDark, double width = 0.5}) {
+    if (isDark) {
+      return Border.all(
+        color: Colors.white.withOpacity(0.30),
+        width: width,
+      );
+    } else {
+      return Border.all(
+        color: Colors.white.withOpacity(0.65),
+        width: width,
+      );
+    }
   }
 
   static BoxDecoration decoration({
@@ -80,6 +143,82 @@ class MapOverlayGlassStyle {
   }
 }
 
+/// True Liquid Glass Watery Capsule (P6.3)
+/// Renders a single continuous capsule with:
+/// 1. Outer specular highlight gradient rim (0.8pt refractive edge)
+/// 2. Soft ambient floating shadow (no harsh grey drop)
+/// 3. Deep optical BackdropFilter (sigma 26.0)
+/// 4. Watery body gradient with 0.10 - 0.18 translucent core
+/// 5. Top/left inner specular meniscus sheen
+class WateryLiquidGlassCapsule extends StatelessWidget {
+  final Widget child;
+  final double? width;
+  final double? height;
+  final double radius;
+  final bool isDark;
+  final double opacityFactor;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final VoidCallback? onTap;
+
+  const WateryLiquidGlassCapsule({
+    super.key,
+    required this.child,
+    this.width,
+    this.height,
+    this.radius = 24.0,
+    required this.isDark,
+    this.opacityFactor = 1.0,
+    this.padding,
+    this.margin,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final capsule = Container(
+      margin: margin,
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        gradient: MapOverlayGlassStyle.specularRimGradient(isDark: isDark),
+        boxShadow: MapOverlayGlassStyle.softShadow(isDark: isDark),
+      ),
+      padding: const EdgeInsets.all(0.8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius - 0.8),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: MapOverlayGlassStyle.blurSigma,
+            sigmaY: MapOverlayGlassStyle.blurSigma,
+          ),
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(
+              gradient: MapOverlayGlassStyle.wateryBodyGradient(
+                isDark: isDark,
+                opacityFactor: opacityFactor,
+              ),
+              borderRadius: BorderRadius.circular(radius - 0.8),
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+
+    if (onTap != null) {
+      return GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: capsule,
+      );
+    }
+    return capsule;
+  }
+}
+
 class AppleGlassTokens {
   // --- 1. Blur Intensities ---
   static const double blurLight = 16.0;
@@ -91,9 +230,9 @@ class AppleGlassTokens {
   static final Color fillLight = Colors.white.withOpacity(0.72);
   static final Color fillRegular = Colors.white.withOpacity(0.78);
   static final Color fillProminent = Colors.white.withOpacity(0.85);
-  static final Color fillToolbar = Colors.white.withOpacity(0.38);
-  static final Color fillSheet = Colors.white.withOpacity(0.38);
-  static final Color fillSearchField = Colors.white.withOpacity(0.68);
+  static final Color fillToolbar = Colors.white.withOpacity(0.14);
+  static final Color fillSheet = Colors.white.withOpacity(0.24);
+  static final Color fillSearchField = Colors.white.withOpacity(0.50);
   static const Color fillCard = Colors.white;
 
   // --- 3. Specular Border Strokes (0.5pt subtle, refined light highlights) ---

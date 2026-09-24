@@ -11,28 +11,28 @@ void main() {
 
   group('P6.2 Unified Liquid Glass Material Spec (Authoritative Image 4)', () {
     test('MapOverlayGlassStyle defines consistent translucent glass parameters', () {
-      expect(MapOverlayGlassStyle.blurSigma, equals(24.0));
-      expect(MapOverlayGlassStyle.blur(), equals(24.0));
+      expect(MapOverlayGlassStyle.blurSigma, equals(26.0));
+      expect(MapOverlayGlassStyle.blur(), equals(26.0));
 
-      // Light mode: translucent milky diffusion (0.38), NOT opaque (0.80 - 0.95)
+      // Light mode: translucent watery diffusion (0.14), NOT opaque (0.80 - 0.95)
       final lightFill = MapOverlayGlassStyle.fill(isDark: false);
-      expect(lightFill.opacity, closeTo(0.38, 0.05));
-      expect(lightFill.opacity, lessThan(0.50));
+      expect(lightFill.opacity, closeTo(0.14, 0.05));
+      expect(lightFill.opacity, lessThan(0.20));
 
       // Dark mode: dark neutral/navy translucent glass base, NOT opaque white
       final darkFill = MapOverlayGlassStyle.fill(isDark: true);
-      expect(darkFill.opacity, closeTo(0.30, 0.05));
-      expect(darkFill.opacity, lessThan(0.40));
+      expect(darkFill.opacity, closeTo(0.18, 0.05));
+      expect(darkFill.opacity, lessThan(0.25));
       expect(darkFill.red, lessThan(35)); // dark base, not pure white
 
       // Specular border
       final lightBorder = MapOverlayGlassStyle.border(isDark: false);
       expect(lightBorder.top.width, equals(0.5));
-      expect(lightBorder.top.color.opacity, closeTo(0.60, 0.05));
+      expect(lightBorder.top.color.opacity, closeTo(0.65, 0.05));
 
       final darkBorder = MapOverlayGlassStyle.border(isDark: true);
       expect(darkBorder.top.width, equals(0.5));
-      expect(darkBorder.top.color.opacity, closeTo(0.35, 0.05));
+      expect(darkBorder.top.color.opacity, closeTo(0.30, 0.05));
 
       // Soft diffuse shadow
       final shadows = MapOverlayGlassStyle.shadow(isDark: false);

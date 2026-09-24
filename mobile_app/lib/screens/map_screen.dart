@@ -1931,94 +1931,81 @@ class _MapScreenState extends State<MapScreen> {
   // ─────────────────────────────────────────────────────────────
   Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
     final isDark = _isDarkMap;
-    return Container(
+    return WateryLiquidGlassCapsule(
       width: 48,
-      decoration: MapOverlayGlassStyle.decoration(
-        isDark: isDark,
-        radius: 24,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: MapOverlayGlassStyle.blurSigma,
-            sigmaY: MapOverlayGlassStyle.blurSigma,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: Icon(
-                    Icons.layers_rounded,
-                    color: isDark ? Colors.white : const Color(0xFF1C1C1E),
-                    size: 22,
-                  ),
-                  tooltip: 'Đổi nền bản đồ',
-                  onPressed: _showMapThemePicker,
-                ),
-                Container(
-                  width: 26,
-                  height: 0.5,
-                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
-                ),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
-                  tooltip: 'Hướng Bắc',
-                  onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-                ),
-                Container(
-                  width: 26,
-                  height: 0.5,
-                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
-                ),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: Icon(
-                    _transportMode == 'bike' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-                    color: _transportMode == 'bike'
-                        ? const Color(0xFF007AFF)
-                        : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
-                    size: 22,
-                  ),
-                  tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
-                  onPressed: () {
-                    setState(() {
-                      _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
-                    });
-                    if (_selectedPlace != null) {
-                      _calculateRoutesForPlace(_selectedPlace!);
-                    }
-                  },
-                ),
-                Container(
-                  width: 26,
-                  height: 0.5,
-                  color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
-                ),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  icon: Icon(
-                    _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
-                    color: _isAutoCentering
-                        ? const Color(0xFF007AFF)
-                        : (isDark ? Colors.white70 : const Color(0xFF8E8E93)),
-                    size: 22,
-                  ),
-                  tooltip: 'Định vị của tôi',
-                  onPressed: _recenterToUser,
-                ),
-              ],
+      radius: 24,
+      isDark: isDark,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: Icon(
+              Icons.layers_rounded,
+              color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+              size: 22,
             ),
+            tooltip: 'Đổi nền bản đồ',
+            onPressed: _showMapThemePicker,
           ),
-        ),
+          Container(
+            width: 24,
+            height: 0.5,
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+          ),
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
+            tooltip: 'Hướng Bắc',
+            onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
+          ),
+          Container(
+            width: 24,
+            height: 0.5,
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+          ),
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: Icon(
+              _transportMode == 'bike' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
+              color: _transportMode == 'bike'
+                  ? const Color(0xFF007AFF)
+                  : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
+              size: 22,
+            ),
+            tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
+            onPressed: () {
+              setState(() {
+                _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
+              });
+              if (_selectedPlace != null) {
+                _calculateRoutesForPlace(_selectedPlace!);
+              }
+            },
+          ),
+          Container(
+            width: 24,
+            height: 0.5,
+            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+          ),
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            icon: Icon(
+              _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
+              color: _isAutoCentering
+                  ? const Color(0xFF007AFF)
+                  : (isDark ? Colors.white70 : const Color(0xFF8E8E93)),
+              size: 22,
+            ),
+            tooltip: 'Định vị của tôi',
+            onPressed: _recenterToUser,
+          ),
+        ],
       ),
     );
   }
@@ -2315,76 +2302,62 @@ class _MapScreenState extends State<MapScreen> {
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
     final isDark = _isDarkMap;
-    return GestureDetector(
+    return WateryLiquidGlassCapsule(
+      height: 50,
+      radius: 25,
+      isDark: isDark,
+      opacityFactor: 1.2,
       onTap: _openAppleSearchModal,
-      child: Container(
-        height: 50,
-        decoration: MapOverlayGlassStyle.decoration(
-          isDark: isDark,
-          radius: 25,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(25),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: MapOverlayGlassStyle.blurSigma,
-              sigmaY: MapOverlayGlassStyle.blurSigma,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.search_rounded,
-                    color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
-                    size: 22,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Tìm kiếm điểm đến...',
-                      style: TextStyle(
-                        color: isDark ? Colors.white60 : const Color(0xFF8E8E93),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    icon: Icon(
-                      Icons.mic_none_rounded,
-                      color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
-                      size: 22,
-                    ),
-                    onPressed: _openAppleSearchModal,
-                  ),
-                  const SizedBox(width: 6),
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFF007AFF),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'Y',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          Icon(
+            Icons.search_rounded,
+            color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Tìm kiếm điểm đến...',
+              style: TextStyle(
+                color: isDark ? Colors.white60 : const Color(0xFF8E8E93),
+                fontSize: 16,
+                fontWeight: FontWeight.w400,
+                letterSpacing: -0.2,
               ),
             ),
           ),
-        ),
+          IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            icon: Icon(
+              Icons.mic_none_rounded,
+              color: isDark ? Colors.white70 : const Color(0xFF8E8E93),
+              size: 22,
+            ),
+            onPressed: _openAppleSearchModal,
+          ),
+          const SizedBox(width: 6),
+          Container(
+            width: 30,
+            height: 30,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF007AFF),
+            ),
+            child: const Center(
+              child: Text(
+                'Y',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2417,9 +2390,22 @@ class _MapScreenState extends State<MapScreen> {
                       sigmaY: MapOverlayGlassStyle.blurSigma,
                     ),
                     child: Container(
-                      decoration: MapOverlayGlassStyle.decoration(
-                        isDark: isDark,
+                      decoration: BoxDecoration(
+                        color: MapOverlayGlassStyle.sheetFill(isDark: isDark),
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                        border: Border(
+                          top: BorderSide(
+                            color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
+                            width: 0.8,
+                          ),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(isDark ? 0.30 : 0.08),
+                            blurRadius: 28,
+                            offset: const Offset(0, -6),
+                          ),
+                        ],
                       ),
                       child: Column(
                         children: [

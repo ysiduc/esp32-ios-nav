@@ -1362,10 +1362,10 @@ void main() {
       expect(AppleGlassTokens.blurProminent, equals(24.0));
       expect(AppleGlassTokens.blurSheet, equals(30.0));
 
-      // P6.2: Search sheet no longer uses 0.95 opaque sheet fill
+      // P6.3: Search sheet and toolbar use watery translucent spec (0.10 - 0.25)
       expect(AppleGlassTokens.fillSheet.opacity, isNot(closeTo(0.95, 0.05)));
-      expect(AppleGlassTokens.fillSheet.opacity, closeTo(0.38, 0.05));
-      expect(AppleGlassTokens.fillToolbar.opacity, closeTo(0.38, 0.05));
+      expect(AppleGlassTokens.fillSheet.opacity, closeTo(0.24, 0.05));
+      expect(AppleGlassTokens.fillToolbar.opacity, closeTo(0.14, 0.05));
       expect(AppleGlassTokens.radiusSheet, equals(24.0));
       expect(AppleGlassTokens.radiusToolbar, equals(23.0));
 
