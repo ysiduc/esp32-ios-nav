@@ -65,32 +65,21 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
-          gradient: MapOverlayGlassStyle.drawerRimGradient(isDark: isDark),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.25 : 0.06),
-              blurRadius: 24,
-              offset: const Offset(4, 0),
-            ),
-          ],
+      child: ReferenceGlassSurface(
+        borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
+        fillColor: MapOverlayGlassStyle.drawerFill(isDark: isDark),
+        border: Border.all(
+          color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
+          width: 0.8,
         ),
-        padding: const EdgeInsets.only(top: 0.8, right: 0.8, bottom: 0.8),
-        child: ClipRRect(
-          borderRadius: const BorderRadius.horizontal(right: Radius.circular(27.2)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: MapOverlayGlassStyle.largeSurfaceBlur,
-              sigmaY: MapOverlayGlassStyle.largeSurfaceBlur,
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: MapOverlayGlassStyle.wateryLargeSurfaceGradient(isDark: isDark),
-                borderRadius: const BorderRadius.horizontal(right: Radius.circular(27.2)),
-              ),
-              child: SafeArea(
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
+            blurRadius: 16,
+            offset: const Offset(4, 0),
+          ),
+        ],
+        child: SafeArea(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -148,7 +137,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           decoration: BoxDecoration(
                             color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                             borderRadius: BorderRadius.circular(16),
-                            border: MapOverlayGlassStyle.drawerCardBorder(isDark: isDark),
+                            border: Border.all(
+                              color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                              width: 0.8,
+                            ),
                           ),
                           child: Row(
                             children: [
@@ -247,7 +239,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       decoration: BoxDecoration(
                         color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                         borderRadius: BorderRadius.circular(16),
-                        border: MapOverlayGlassStyle.drawerCardBorder(isDark: isDark),
+                        border: Border.all(
+                          color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                          width: 0.8,
+                        ),
                       ),
                       child: Row(
                         children: [
@@ -269,9 +264,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-        ),
-      ),
-      ),
     );
   }
 
@@ -284,8 +276,15 @@ class _HomeScreenState extends State<HomeScreen> {
     required VoidCallback onTap,
     Color? badgeColor,
   }) {
-    final bg = MapOverlayGlassStyle.drawerCardFill(isDark: isDark, isSelected: isSelected);
-    final border = MapOverlayGlassStyle.drawerCardBorder(isDark: isDark, isSelected: isSelected);
+    final bg = isSelected
+        ? const Color(0xFF007AFF).withOpacity(isDark ? 0.25 : 0.14)
+        : MapOverlayGlassStyle.drawerCardFill(isDark: isDark);
+    final border = isSelected
+        ? Border.all(color: const Color(0xFF007AFF).withOpacity(0.60), width: 1.0)
+        : Border.all(
+            color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+            width: 0.8,
+          );
     final fg = isSelected
         ? const Color(0xFF007AFF)
         : (isDark ? Colors.white : AppColors.textPrimary);

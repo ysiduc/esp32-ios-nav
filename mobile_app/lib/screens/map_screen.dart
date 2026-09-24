@@ -1931,10 +1931,12 @@ class _MapScreenState extends State<MapScreen> {
   // ─────────────────────────────────────────────────────────────
   Widget _buildRightSideGlassStack(NavigationManager navManager, bool isDriving) {
     final isDark = _isDarkMap;
-    return WateryLiquidGlassCapsule(
+    return ReferenceGlassSurface(
       width: 48,
       radius: 24,
       isDark: isDark,
+      fillColor: MapOverlayGlassStyle.toolbarFill(isDark: isDark),
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark, width: 0.8),
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1951,9 +1953,9 @@ class _MapScreenState extends State<MapScreen> {
             onPressed: _showMapThemePicker,
           ),
           Container(
-            width: 24,
+            width: 26,
             height: 0.5,
-            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -1963,9 +1965,9 @@ class _MapScreenState extends State<MapScreen> {
             onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
           ),
           Container(
-            width: 24,
+            width: 26,
             height: 0.5,
-            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -1988,9 +1990,9 @@ class _MapScreenState extends State<MapScreen> {
             },
           ),
           Container(
-            width: 24,
+            width: 26,
             height: 0.5,
-            color: isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.05),
+            color: isDark ? Colors.white24 : Colors.black.withOpacity(0.08),
           ),
           IconButton(
             padding: EdgeInsets.zero,
@@ -2302,11 +2304,12 @@ class _MapScreenState extends State<MapScreen> {
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
     final isDark = _isDarkMap;
-    return WateryLiquidGlassCapsule(
+    return ReferenceGlassSurface(
       height: 50,
       radius: 25,
       isDark: isDark,
-      opacityFactor: 1.2,
+      fillColor: MapOverlayGlassStyle.bottomSearchFill(isDark: isDark),
+      border: MapOverlayGlassStyle.referenceBorder(isDark: isDark, width: 0.8),
       onTap: _openAppleSearchModal,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -2383,33 +2386,23 @@ class _MapScreenState extends State<MapScreen> {
               maxChildSize: 0.95,
               minChildSize: 0.45,
               builder: (_, scrollController) {
-                return Container(
-                  decoration: BoxDecoration(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                    gradient: MapOverlayGlassStyle.specularRimGradient(isDark: isDark),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(isDark ? 0.25 : 0.06),
-                        blurRadius: 28,
-                        offset: const Offset(0, -6),
-                      ),
-                    ],
+                return ReferenceGlassSurface(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+                  isDark: isDark,
+                  fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
+                  border: Border.all(
+                    color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
+                    width: 0.8,
                   ),
-                  padding: const EdgeInsets.only(top: 0.8, left: 0.8, right: 0.8),
-                  child: ClipRRect(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(23.2)),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(
-                        sigmaX: MapOverlayGlassStyle.largeSurfaceBlur,
-                        sigmaY: MapOverlayGlassStyle.largeSurfaceBlur,
-                      ),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: MapOverlayGlassStyle.wateryLargeSurfaceGradient(isDark: isDark),
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(23.2)),
-                        ),
-                        child: Column(
-                        children: [
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(isDark ? 0.25 : 0.10),
+                      blurRadius: 26,
+                      offset: const Offset(0, -6),
+                    ),
+                  ],
+                  child: Column(
+                    children: [
                           // Top Drag Handle
                           Center(
                             child: Container(
@@ -2435,7 +2428,10 @@ class _MapScreenState extends State<MapScreen> {
                                     decoration: BoxDecoration(
                                       color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
                                       borderRadius: BorderRadius.circular(23),
-                                      border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                      border: Border.all(
+                                        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.65),
+                                        width: 0.8,
+                                      ),
                                       boxShadow: [
                                         BoxShadow(
                                           color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
@@ -2518,7 +2514,10 @@ class _MapScreenState extends State<MapScreen> {
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
                                       color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
-                                      border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                      border: Border.all(
+                                        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.65),
+                                        width: 0.8,
+                                      ),
                                     ),
                                     child: Icon(
                                       Icons.close_rounded,
@@ -2645,9 +2644,12 @@ class _MapScreenState extends State<MapScreen> {
                                           padding: const EdgeInsets.all(12),
                                           margin: const EdgeInsets.only(bottom: 16),
                                           decoration: BoxDecoration(
-                                            color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
+                                            color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                                             borderRadius: BorderRadius.circular(16),
-                                            border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                            border: Border.all(
+                                              color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                                              width: 0.8,
+                                            ),
                                             boxShadow: [
                                               BoxShadow(
                                                 color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
@@ -2811,9 +2813,12 @@ class _MapScreenState extends State<MapScreen> {
                                       const SizedBox(height: 10),
                                       Container(
                                         decoration: BoxDecoration(
-                                          color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
+                                          color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                                           borderRadius: BorderRadius.circular(16),
-                                          border: MapOverlayGlassStyle.border(isDark: isDark, width: 0.5),
+                                          border: Border.all(
+                                            color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                                            width: 0.8,
+                                          ),
                                           boxShadow: [
                                             BoxShadow(
                                               color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
@@ -2945,7 +2950,7 @@ class _MapScreenState extends State<MapScreen> {
                                                 width: double.infinity,
                                                 padding: const EdgeInsets.all(12),
                                                 decoration: BoxDecoration(
-                                                  color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
+                                                  color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                                                   borderRadius: const BorderRadius.vertical(bottom: Radius.circular(18)),
                                                 ),
                                                 child: Column(
@@ -2979,10 +2984,7 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                ),
-                );
+                    );
               },
             );
           },
@@ -3308,6 +3310,7 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Route Directions Sheet (Screenshot 4)
   // -------------------------------------------------------------
   Widget _buildAppleRouteDirectionsSheet() {
+    final isDark = _isDarkMap;
     final selectedRoute = _routes.isNotEmpty ? _routes[_selectedRouteIndex] : null;
     final durationStr = selectedRoute?.formattedDuration ?? '--';
     final distanceStr = selectedRoute?.formattedDistance ?? '--';
@@ -3315,19 +3318,22 @@ class _MapScreenState extends State<MapScreen> {
     final arrivalTime = DateTime.now().add(Duration(minutes: etaMins));
     final arrivalStr = '${arrivalTime.hour.toString().padLeft(2, '0')}:${arrivalTime.minute.toString().padLeft(2, '0')}';
 
-    return Container(
+    return ReferenceGlassSurface(
       width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.96),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 28,
-            offset: const Offset(0, -6),
-          ),
-        ],
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      isDark: isDark,
+      fillColor: MapOverlayGlassStyle.routeSheetFill(isDark: isDark),
+      border: Border.all(
+        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
+        width: 0.8,
       ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(isDark ? 0.25 : 0.10),
+          blurRadius: 28,
+          offset: const Offset(0, -6),
+        ),
+      ],
       child: SafeArea(
         top: false,
         child: Padding(
@@ -3342,7 +3348,7 @@ class _MapScreenState extends State<MapScreen> {
                   height: 5,
                   margin: const EdgeInsets.only(bottom: 8),
                   decoration: BoxDecoration(
-                    color: Colors.black26,
+                    color: isDark ? Colors.white30 : Colors.black26,
                     borderRadius: BorderRadius.circular(2.5),
                   ),
                 ),
@@ -3358,12 +3364,12 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   Column(
                     children: [
-                      const Text(
+                      Text(
                         'Chỉ đường',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                          color: isDark ? Colors.white : Colors.black87,
                           letterSpacing: -0.3,
                         ),
                       ),
@@ -3371,7 +3377,7 @@ class _MapScreenState extends State<MapScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFE5F0FF),
+                          color: isDark ? const Color(0xFF1C2C4E) : const Color(0xFFE5F0FF),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: const Text(
@@ -3394,9 +3400,13 @@ class _MapScreenState extends State<MapScreen> {
                       height: 32,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.black.withOpacity(0.08),
+                        color: isDark ? Colors.white12 : Colors.black.withOpacity(0.08),
+                        border: Border.all(
+                          color: isDark ? Colors.white.withOpacity(0.25) : Colors.white.withOpacity(0.55),
+                          width: 0.8,
+                        ),
                       ),
-                      child: const Icon(Icons.close_rounded, size: 18, color: Colors.black54),
+                      child: Icon(Icons.close_rounded, size: 18, color: isDark ? Colors.white70 : Colors.black54),
                     ),
                   ),
                 ],
@@ -3408,8 +3418,12 @@ class _MapScreenState extends State<MapScreen> {
               Container(
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E5EA),
+                  color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                    width: 0.8,
+                  ),
                 ),
                 child: Row(
                   children: [
@@ -3428,8 +3442,12 @@ class _MapScreenState extends State<MapScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF2F2F7),
+                  color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                    width: 0.8,
+                  ),
                 ),
                 child: Column(
                   children: [
@@ -3437,20 +3455,24 @@ class _MapScreenState extends State<MapScreen> {
                       children: [
                         const Icon(Icons.near_me_rounded, color: Color(0xFF007AFF), size: 18),
                         const SizedBox(width: 12),
-                        const Expanded(
+                        Expanded(
                           child: Text(
                             'Vị trí của tôi',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
                           ),
                         ),
-                        Icon(Icons.menu_rounded, color: Colors.black38, size: 18),
+                        Icon(Icons.menu_rounded, color: isDark ? Colors.white38 : Colors.black38, size: 18),
                       ],
                     ),
                     Padding(
                       padding: const EdgeInsets.only(left: 8, top: 4, bottom: 4),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: Container(width: 2, height: 16, color: Colors.black12),
+                        child: Container(width: 2, height: 16, color: isDark ? Colors.white24 : Colors.black12),
                       ),
                     ),
                     Row(
@@ -3460,19 +3482,23 @@ class _MapScreenState extends State<MapScreen> {
                         Expanded(
                           child: Text(
                             _selectedPlace?.name ?? 'Điểm đến',
-                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black87),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        Icon(Icons.menu_rounded, color: Colors.black38, size: 18),
+                        Icon(Icons.menu_rounded, color: isDark ? Colors.white38 : Colors.black38, size: 18),
                       ],
                     ),
                     Padding(
                       padding: const EdgeInsets.only(left: 8, top: 4, bottom: 4),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: Container(width: 2, height: 16, color: Colors.black12),
+                        child: Container(width: 2, height: 16, color: isDark ? Colors.white24 : Colors.black12),
                       ),
                     ),
                     Row(
@@ -3490,9 +3516,9 @@ class _MapScreenState extends State<MapScreen> {
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF007AFF)),
                           ),
                         ),
-                        const Icon(Icons.mic_none_rounded, color: Colors.black38, size: 18),
+                        Icon(Icons.mic_none_rounded, color: isDark ? Colors.white38 : Colors.black38, size: 18),
                         const SizedBox(width: 8),
-                        const Icon(Icons.menu_rounded, color: Colors.black38, size: 18),
+                        Icon(Icons.menu_rounded, color: isDark ? Colors.white38 : Colors.black38, size: 18),
                       ],
                     ),
                   ],
@@ -3523,11 +3549,15 @@ class _MapScreenState extends State<MapScreen> {
                           duration: const Duration(milliseconds: 200),
                           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                           decoration: BoxDecoration(
-                            color: isSelected ? const Color(0xFF007AFF) : Colors.white,
+                            color: isSelected
+                                ? const Color(0xFF007AFF)
+                                : MapOverlayGlassStyle.cardFill(isDark: isDark),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                              color: isSelected ? const Color(0xFF007AFF) : Colors.black12,
-                              width: isSelected ? 2 : 1,
+                              color: isSelected
+                                  ? const Color(0xFF007AFF)
+                                  : (isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55)),
+                              width: isSelected ? 2 : 0.8,
                             ),
                             boxShadow: [
                               BoxShadow(
@@ -3548,7 +3578,7 @@ class _MapScreenState extends State<MapScreen> {
                                   Text(
                                     r.formattedDuration,
                                     style: TextStyle(
-                                      color: isSelected ? Colors.white : const Color(0xFF1C1C1E),
+                                      color: isSelected ? Colors.white : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
                                       fontWeight: FontWeight.bold,
                                       fontSize: 15,
                                     ),
@@ -3557,7 +3587,7 @@ class _MapScreenState extends State<MapScreen> {
                                   Text(
                                     r.formattedDistance,
                                     style: TextStyle(
-                                      color: isSelected ? Colors.white.withOpacity(0.85) : Colors.black54,
+                                      color: isSelected ? Colors.white.withOpacity(0.85) : (isDark ? Colors.white60 : Colors.black54),
                                       fontSize: 12,
                                     ),
                                   ),
@@ -3589,8 +3619,12 @@ class _MapScreenState extends State<MapScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF2F2F7),
+                    color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                     borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                      width: 0.8,
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -3600,15 +3634,22 @@ class _MapScreenState extends State<MapScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            Text(
                               'Đang tìm lộ trình tối ưu...',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
                             ),
                             Text(
                               _transportMode == 'bike'
                                   ? 'Đang tính toán tuyến xe máy (Valhalla)...'
                                   : 'Đang kết nối dịch vụ định tuyến...',
-                              style: const TextStyle(fontSize: 12, color: Colors.black54),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white60 : Colors.black54,
+                              ),
                             ),
                           ],
                         ),
@@ -3621,7 +3662,7 @@ class _MapScreenState extends State<MapScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF2F2),
+                    color: isDark ? const Color(0xFF4A1C1C) : const Color(0xFFFFF2F2),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: const Color(0xFFFF3B30).withOpacity(0.25)),
                   ),
@@ -3639,7 +3680,10 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                             Text(
                               _routeErrorMessage!,
-                              style: const TextStyle(fontSize: 12, color: Colors.black54),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark ? Colors.white60 : Colors.black54,
+                              ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -3679,8 +3723,12 @@ class _MapScreenState extends State<MapScreen> {
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF2F2F7),
+                      color: MapOverlayGlassStyle.cardFill(isDark: isDark),
                       borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                        width: 0.8,
+                      ),
                     ),
                     child: Row(
                       children: [
@@ -3693,7 +3741,9 @@ class _MapScreenState extends State<MapScreen> {
                                 style: TextStyle(
                                   fontSize: 22,
                                   fontWeight: FontWeight.bold,
-                                  color: _isLoadingRoutes ? Colors.black38 : Colors.black87,
+                                  color: _isLoadingRoutes
+                                      ? (isDark ? Colors.white38 : Colors.black38)
+                                      : (isDark ? Colors.white : Colors.black87),
                                   letterSpacing: -0.4,
                                 ),
                               ),
@@ -3708,7 +3758,10 @@ class _MapScreenState extends State<MapScreen> {
                                         : (_routeErrorMessage != null
                                             ? 'Kiểm tra mạng và thử lại'
                                             : 'Không có lộ trình')),
-                                style: const TextStyle(fontSize: 13, color: Colors.black54),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: isDark ? Colors.white60 : Colors.black54,
+                                ),
                               ),
                               if (canStartNav)
                                 Text(
@@ -3728,16 +3781,22 @@ class _MapScreenState extends State<MapScreen> {
                         GestureDetector(
                           onTap: canStartNav ? () => _startDriving(isSimulation: true) : null,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                            width: 44,
+                            height: 44,
                             margin: const EdgeInsets.only(right: 8),
                             decoration: BoxDecoration(
-                              color: canStartNav ? Colors.white : const Color(0xFFE5E5EA),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: canStartNav ? Colors.black12 : Colors.transparent),
+                              shape: BoxShape.circle,
+                              color: isDark ? Colors.white12 : Colors.black.withOpacity(0.06),
+                              border: Border.all(
+                                color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+                                width: 0.8,
+                              ),
                             ),
                             child: Icon(
                               Icons.play_arrow_rounded,
-                              color: canStartNav ? const Color(0xFF007AFF) : Colors.black26,
+                              color: canStartNav
+                                  ? (isDark ? Colors.white : Colors.black87)
+                                  : (isDark ? Colors.white24 : Colors.black26),
                               size: 22,
                             ),
                           ),
@@ -3782,15 +3841,15 @@ class _MapScreenState extends State<MapScreen> {
 
               const SizedBox(height: 6),
               // Dots Page Indicator
-              const Center(
+              Center(
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircleAvatar(radius: 3, backgroundColor: Colors.black87),
-                    SizedBox(width: 4),
-                    CircleAvatar(radius: 3, backgroundColor: Colors.black26),
-                    SizedBox(width: 4),
-                    CircleAvatar(radius: 3, backgroundColor: Colors.black26),
+                    CircleAvatar(radius: 3, backgroundColor: isDark ? Colors.white : Colors.black87),
+                    const SizedBox(width: 4),
+                    CircleAvatar(radius: 3, backgroundColor: isDark ? Colors.white30 : Colors.black26),
+                    const SizedBox(width: 4),
+                    CircleAvatar(radius: 3, backgroundColor: isDark ? Colors.white30 : Colors.black26),
                   ],
                 ),
               ),
@@ -3802,6 +3861,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildAppleTransportModeBtn({required IconData icon, required String mode}) {
+    final isDark = _isDarkMap;
     final isSelected = (_transportMode == mode) ||
         (mode == 'bike' && _transportMode == 'bike') ||
         (mode == 'driving' && _transportMode == 'driving');
@@ -3816,12 +3876,20 @@ class _MapScreenState extends State<MapScreen> {
         child: Container(
           height: 38,
           decoration: BoxDecoration(
-            color: isSelected ? Colors.white : Colors.transparent,
+            color: isSelected
+                ? (isDark ? const Color(0xFF2C3240) : Colors.white.withOpacity(0.85))
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(12),
+            border: isSelected
+                ? Border.all(
+                    color: isDark ? Colors.white.withOpacity(0.30) : Colors.white.withOpacity(0.70),
+                    width: 0.8,
+                  )
+                : null,
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
+                      color: Colors.black.withOpacity(0.08),
                       blurRadius: 4,
                       offset: const Offset(0, 2),
                     ),
@@ -3830,14 +3898,15 @@ class _MapScreenState extends State<MapScreen> {
           ),
           child: Icon(
             icon,
-            color: isSelected ? Colors.black87 : Colors.black45,
+            color: isSelected
+                ? (isDark ? Colors.white : Colors.black87)
+                : (isDark ? Colors.white60 : Colors.black45),
             size: 20,
           ),
         ),
       ),
     );
   }
-
   // -------------------------------------------------------------
   // Apple Maps Active Driving Turn Banner (Screenshot 5)
   // -------------------------------------------------------------

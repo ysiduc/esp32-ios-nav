@@ -19,37 +19,69 @@ import 'package:flutter/services.dart';
 /// - Soft ambient diffuse shadow (blur 20, no harsh drop)
 /// - Unified across: Drawer, Search sheet, Right toolbar, Bottom search bar
 class MapOverlayGlassStyle {
+  static const double referenceBlur = 20.0;
+  static const double blurSigma = 22.0;
   static const double largeSurfaceBlur = 16.0;
   static const double capsuleBlur = 22.0;
-  static const double blurSigma = 22.0;
 
-  static double blur({bool isDark = false, bool isLargeSurface = false}) =>
-      isLargeSurface ? largeSurfaceBlur : capsuleBlur;
+  static double blur({bool isDark = false, bool isLargeSurface = false}) {
+    if (isLargeSurface) return largeSurfaceBlur;
+    return capsuleBlur;
+  }
 
-  /// Watery clear glass fill (P6.3 spec: 0.10 - 0.18 for toolbar & overlays)
+  /// P6.2 Translucent fill (preserved for backwards-compatibility with P6.2 tests)
   static Color fill({required bool isDark, double opacityFactor = 1.0}) {
     if (isDark) {
-      return const Color(0xFF161B26).withOpacity(0.18 * opacityFactor);
+      return const Color(0xFF1E2638).withOpacity(0.18 * opacityFactor);
     } else {
       return Colors.white.withOpacity(0.14 * opacityFactor);
     }
   }
 
-  /// Search bar watery fill (soft, slightly wider capsule)
-  static Color searchBarFill({required bool isDark}) {
+  /// Right toolbar fill (run 35895237697: white 0.85)
+  static Color toolbarFill({required bool isDark, double opacityFactor = 1.0}) {
     if (isDark) {
-      return const Color(0xFF161B26).withOpacity(0.22);
+      return const Color(0xFF1E2638).withOpacity(0.85 * opacityFactor);
     } else {
-      return Colors.white.withOpacity(0.18);
+      return Colors.white.withOpacity(0.85 * opacityFactor);
     }
   }
 
-  /// Sheet fill (readable background for search sheet)
+  /// Bottom search pill fill (run 35895237697: white 0.88)
+  static Color bottomSearchFill({required bool isDark}) {
+    if (isDark) {
+      return const Color(0xFF1E2638).withOpacity(0.88);
+    } else {
+      return Colors.white.withOpacity(0.88);
+    }
+  }
+
+  static Color searchBarFill({required bool isDark}) => bottomSearchFill(isDark: isDark);
+
+  /// Drawer fill (run 35895237697: white 0.78)
+  static Color drawerFill({required bool isDark}) {
+    if (isDark) {
+      return const Color(0xFF1E2638).withOpacity(0.78);
+    } else {
+      return Colors.white.withOpacity(0.78);
+    }
+  }
+
+  /// Search sheet fill (run 35895237697: white 0.80)
   static Color sheetFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF161B26).withOpacity(0.28);
+      return const Color(0xFF1E2638).withOpacity(0.80);
     } else {
-      return Colors.white.withOpacity(0.24);
+      return Colors.white.withOpacity(0.80);
+    }
+  }
+
+  /// Route directions sheet fill (P6.5: white 0.80, replaces 0.96)
+  static Color routeSheetFill({required bool isDark}) {
+    if (isDark) {
+      return const Color(0xFF1E2638).withOpacity(0.80);
+    } else {
+      return Colors.white.withOpacity(0.80);
     }
   }
 
@@ -108,35 +140,64 @@ class MapOverlayGlassStyle {
     );
   }
 
-  /// P6.4 Drawer card fill token (0.10–0.16 light, 0.06–0.10 dark, selected blue tint 0.12)
-  static Color drawerCardFill({required bool isDark, bool isSelected = false}) {
+  /// P6.5 Glass reference card fill (0.55–0.65, selected Apple blue tint 0.14)
+  static Color cardFill({required bool isDark, bool isSelected = false}) {
     if (isSelected) {
-      return const Color(0xFF007AFF).withOpacity(isDark ? 0.14 : 0.12);
+      return const Color(0xFF007AFF).withOpacity(isDark ? 0.20 : 0.14);
     }
-    return isDark ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.12);
+    return isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.60);
   }
 
-  /// P6.4 Drawer card border token
+  static Color drawerCardFill({required bool isDark, bool isSelected = false}) =>
+      cardFill(isDark: isDark, isSelected: isSelected);
+
   static Border drawerCardBorder({required bool isDark, bool isSelected = false}) {
     if (isSelected) {
       return Border.all(
-        color: const Color(0xFF007AFF).withOpacity(isDark ? 0.60 : 0.50),
+        color: const Color(0xFF007AFF).withOpacity(isDark ? 0.65 : 0.60),
         width: 1.0,
       );
     }
     return Border.all(
-      color: isDark ? Colors.white.withOpacity(0.14) : Colors.white.withOpacity(0.25),
-      width: 0.5,
+      color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
+      width: 0.8,
     );
   }
 
-  /// P6.4 Search sheet input field and card fill token (0.14–0.22)
+  /// P6.5 Search input field fill (white 0.80–0.88, default 0.85)
   static Color searchSheetFieldFill({required bool isDark}) {
     if (isDark) {
-      return Colors.white.withOpacity(0.12);
+      return const Color(0xFF2C3444).withOpacity(0.85);
     } else {
-      return Colors.white.withOpacity(0.16);
+      return Colors.white.withOpacity(0.85);
     }
+  }
+
+  /// Reference border (white 0.70 / 0.8pt)
+  static Border referenceBorder({required bool isDark, double width = 0.8}) {
+    if (isDark) {
+      return Border.all(
+        color: Colors.white.withOpacity(0.35),
+        width: width,
+      );
+    } else {
+      return Border.all(
+        color: Colors.white.withOpacity(0.70),
+        width: width,
+      );
+    }
+  }
+
+  /// Reference shadow (black 0.08 / blur 16 / y=4)
+  static List<BoxShadow> referenceShadow({required bool isDark}) {
+    return [
+      BoxShadow(
+        color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
+        blurRadius: 16.0,
+        spreadRadius: 0.0,
+        offset: const Offset(0, 4),
+      ),
+    ];
   }
 
   /// Refractive specular outer rim gradient (P6.3 watery edge)
@@ -224,6 +285,99 @@ class MapOverlayGlassStyle {
   }
 }
 
+/// Exact Liquid Glass Reference Component restored from run 35895237697 (Commit 52cee9d)
+/// Golden reference:
+/// - width: 48 (toolbar) or custom
+/// - fill: Colors.white.withOpacity(0.85) (or custom surface fill 0.78 - 0.88)
+/// - border: Colors.white.withOpacity(0.70) / 0.8pt
+/// - blur: sigma 20.0
+/// - shadow: black.withOpacity(0.08) / blur 16 / offset (0, 4)
+class ReferenceGlassSurface extends StatelessWidget {
+  final Widget child;
+  final double? width;
+  final double? height;
+  final BorderRadius? borderRadius;
+  final double radius;
+  final Color? fillColor;
+  final BoxBorder? border;
+  final List<BoxShadow>? boxShadow;
+  final double blurSigma;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final VoidCallback? onTap;
+  final bool isDark;
+
+  const ReferenceGlassSurface({
+    super.key,
+    required this.child,
+    this.width,
+    this.height,
+    this.borderRadius,
+    this.radius = 24.0,
+    this.fillColor,
+    this.border,
+    this.boxShadow,
+    this.blurSigma = 20.0,
+    this.padding,
+    this.margin,
+    this.onTap,
+    this.isDark = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveRadius = borderRadius ?? BorderRadius.circular(radius);
+    final effectiveFill = fillColor ??
+        (isDark ? const Color(0xFF1E2638).withOpacity(0.85) : Colors.white.withOpacity(0.85));
+    final effectiveBorder = border ??
+        Border.all(
+          color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.70),
+          width: 0.8,
+        );
+    final effectiveShadow = boxShadow ??
+        [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ];
+
+    Widget surface = Container(
+      margin: margin,
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: effectiveFill,
+        borderRadius: effectiveRadius,
+        border: effectiveBorder,
+        boxShadow: effectiveShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: effectiveRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: Padding(
+            padding: padding ?? EdgeInsets.zero,
+            child: child,
+          ),
+        ),
+      ),
+    );
+
+    if (onTap != null) {
+      return GestureDetector(
+        onTap: onTap,
+        child: surface,
+      );
+    }
+    return surface;
+  }
+}
+
+typedef AppleMapsReferenceGlass = ReferenceGlassSurface;
+typedef P61ReferenceGlassSurface = ReferenceGlassSurface;
+
 /// True Liquid Glass Watery Capsule (P6.3)
 /// Renders a single continuous capsule with:
 /// 1. Outer specular highlight gradient rim (0.8pt refractive edge)
@@ -301,7 +455,18 @@ class WateryLiquidGlassCapsule extends StatelessWidget {
 }
 
 class AppleGlassTokens {
-  // --- 1. Blur Intensities ---
+  // --- 1. Run 35895237697 Reference Tokens ---
+  static const double referenceBlur = 20.0;
+  static const double referenceBorderWidth = 0.8;
+  static final Color referenceBorder = Colors.white.withOpacity(0.70);
+  static final Color referenceFillToolbar = Colors.white.withOpacity(0.85);
+  static final Color referenceFillSearchPill = Colors.white.withOpacity(0.88);
+  static final Color referenceFillDrawer = Colors.white.withOpacity(0.78);
+  static final Color referenceFillSheet = Colors.white.withOpacity(0.80);
+  static final Color referenceFillRouteSheet = Colors.white.withOpacity(0.80);
+  static final Color referenceFillCard = Colors.white.withOpacity(0.60);
+
+  // --- Blur Intensities ---
   static const double blurLight = 16.0;
   static const double blurRegular = 20.0;
   static const double blurProminent = 24.0;
