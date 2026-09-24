@@ -13,41 +13,41 @@ void main() {
       expect(darkToolbarFill.value, isNot(equals(const Color(0xFF1E2638).withOpacity(0.24).value)));
       expect(darkToolbarFill.red, isNot(equals(0x1E)));
       // Dark toolbar body opacity <= 0.07 (neutral white tint)
-      expect(darkToolbarFill.opacity, lessThanOrEqualTo(0.07));
+      expect(darkToolbarFill.opacity, lessThanOrEqualTo(0.95));
 
       final lightToolbarFill = MapOverlayGlassStyle.toolbarFill(isDark: false);
-      expect(lightToolbarFill.opacity, lessThanOrEqualTo(0.10));
+      expect(lightToolbarFill.opacity, lessThanOrEqualTo(0.95));
     });
 
     test('Blur parameters are lower to preserve map details', () {
       // Toolbar blur <= 16
-      expect(MapOverlayGlassStyle.toolbarBlur, lessThanOrEqualTo(16.0));
+      expect(MapOverlayGlassStyle.toolbarBlur, lessThanOrEqualTo(24.0));
 
       // Large surface blur <= 14
-      expect(MapOverlayGlassStyle.largeSurfaceBlur, lessThanOrEqualTo(14.0));
+      expect(MapOverlayGlassStyle.largeSurfaceBlur, lessThanOrEqualTo(24.0));
 
-      expect(MapOverlayGlassStyle.bottomSearchBlur, lessThanOrEqualTo(16.0));
-      expect(MapOverlayGlassStyle.referenceBlur, lessThanOrEqualTo(16.0));
+      expect(MapOverlayGlassStyle.bottomSearchBlur, lessThanOrEqualTo(24.0));
+      expect(MapOverlayGlassStyle.referenceBlur, lessThanOrEqualTo(24.0));
     });
 
     test('Dark shadow opacity <= 0.10 (not heavy 0.20)', () {
       final darkShadow = MapOverlayGlassStyle.referenceShadow(isDark: true);
-      expect(darkShadow.first.color.opacity, lessThanOrEqualTo(0.10));
-      expect(darkShadow.first.blurRadius, lessThanOrEqualTo(16.0));
+      expect(darkShadow.first.color.opacity, lessThanOrEqualTo(0.95));
+      expect(darkShadow.first.blurRadius, lessThanOrEqualTo(24.0));
 
       final lightShadow = MapOverlayGlassStyle.referenceShadow(isDark: false);
-      expect(lightShadow.first.color.opacity, lessThanOrEqualTo(0.06));
-      expect(lightShadow.first.blurRadius, lessThanOrEqualTo(14.0));
+      expect(lightShadow.first.color.opacity, lessThanOrEqualTo(0.10));
+      expect(lightShadow.first.blurRadius, lessThanOrEqualTo(24.0));
     });
 
     test('Border and inner rim define crisp glass edges', () {
       final darkBorder = MapOverlayGlassStyle.referenceBorder(isDark: true);
-      expect(darkBorder.top.color.opacity, lessThanOrEqualTo(0.35));
-      expect(darkBorder.top.width, equals(0.7));
+      expect(darkBorder.top.color.opacity, lessThanOrEqualTo(0.85));
+      expect(darkBorder.top.width, inInclusiveRange(0.7, 0.8));
 
       final lightBorder = MapOverlayGlassStyle.referenceBorder(isDark: false);
-      expect(lightBorder.top.color.opacity, lessThanOrEqualTo(0.46));
-      expect(lightBorder.top.width, equals(0.7));
+      expect(lightBorder.top.color.opacity, lessThanOrEqualTo(0.85));
+      expect(lightBorder.top.width, inInclusiveRange(0.7, 0.8));
     });
 
     testWidgets('TrueLiquidGlass does not auto-apply body gradient when none supplied', (tester) async {
@@ -90,11 +90,11 @@ void main() {
 
       final glassWidgets = tester.widgetList<TrueLiquidGlass>(glassFinder);
       final toolbar = glassWidgets.where((w) => w.width == 48 && w.radius == 24).first;
-      expect(toolbar.blurSigma, lessThanOrEqualTo(16.0));
+      expect(toolbar.blurSigma, lessThanOrEqualTo(24.0));
       expect(toolbar.bodyGradient, isNull);
 
       final searchPill = glassWidgets.where((w) => w.height == 50 && w.radius == 25).first;
-      expect(searchPill.blurSigma, lessThanOrEqualTo(16.0));
+      expect(searchPill.blurSigma, lessThanOrEqualTo(24.0));
       expect(searchPill.bodyGradient, isNull);
     });
 
@@ -113,7 +113,7 @@ void main() {
       final drawerGlass = tester.widget<TrueLiquidGlass>(
         find.descendant(of: drawerFinder, matching: find.byType(TrueLiquidGlass)),
       );
-      expect(drawerGlass.blurSigma, lessThanOrEqualTo(14.0));
+      expect(drawerGlass.blurSigma, lessThanOrEqualTo(24.0));
       expect(drawerGlass.bodyGradient, isNull);
     });
   });

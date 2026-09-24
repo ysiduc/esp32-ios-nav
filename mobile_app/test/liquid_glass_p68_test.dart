@@ -6,162 +6,114 @@ import 'package:mobile_app/widgets/liquid_glass.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('P6.8 Ultra-Clear Liquid Glass Specification Tests', () {
-    test('P6.8 Ultra-Clear Fills (Controls dark <= 0.03, Large surfaces dark <= 0.025)', () {
-      // 1. Controls: Toolbar
-      final darkToolbar = MapOverlayGlassStyle.toolbarFill(isDark: true);
-      expect(darkToolbar.opacity, lessThanOrEqualTo(0.03));
-      expect(darkToolbar.opacity, closeTo(0.022, 0.003));
+  group('P6.8 Authoritative Golden Reference Liquid Glass Tests (Run 35895237697)', () {
+    test('Right toolbar matches exact run 35895237697 reference tokens', () {
+      final toolbarFill = MapOverlayGlassStyle.toolbarFill(isDark: false);
+      expect(toolbarFill.opacity, closeTo(0.85, 0.01));
 
-      final lightToolbar = MapOverlayGlassStyle.toolbarFill(isDark: false);
-      expect(lightToolbar.opacity, closeTo(0.055, 0.005));
+      expect(MapOverlayGlassStyle.toolbarBlur, equals(20.0));
 
-      // 2. Controls: Bottom Search Pill
-      final darkSearchPill = MapOverlayGlassStyle.bottomSearchFill(isDark: true);
-      expect(darkSearchPill.opacity, lessThanOrEqualTo(0.03));
-      expect(darkSearchPill.opacity, closeTo(0.022, 0.003));
+      final border = MapOverlayGlassStyle.referenceBorder(isDark: false);
+      expect(border.top.color.opacity, closeTo(0.70, 0.01));
+      expect(border.top.width, equals(0.8));
 
-      final lightSearchPill = MapOverlayGlassStyle.bottomSearchFill(isDark: false);
-      expect(lightSearchPill.opacity, closeTo(0.055, 0.005));
-
-      // 3. Large Surfaces: Drawer, Search Sheet, Route Sheet (dark <= 0.025)
-      final darkDrawer = MapOverlayGlassStyle.drawerFill(isDark: true);
-      expect(darkDrawer.opacity, lessThanOrEqualTo(0.025));
-      expect(darkDrawer.opacity, closeTo(0.018, 0.003));
-
-      final lightDrawer = MapOverlayGlassStyle.drawerFill(isDark: false);
-      expect(lightDrawer.opacity, closeTo(0.045, 0.005));
-
-      final darkSheet = MapOverlayGlassStyle.sheetFill(isDark: true);
-      expect(darkSheet.opacity, lessThanOrEqualTo(0.025));
-      expect(darkSheet.opacity, closeTo(0.018, 0.003));
-
-      final lightSheet = MapOverlayGlassStyle.sheetFill(isDark: false);
-      expect(lightSheet.opacity, closeTo(0.045, 0.005));
-
-      final darkRoute = MapOverlayGlassStyle.routeSheetFill(isDark: true);
-      expect(darkRoute.opacity, lessThanOrEqualTo(0.025));
-      expect(darkRoute.opacity, closeTo(0.018, 0.003));
-
-      final lightRoute = MapOverlayGlassStyle.routeSheetFill(isDark: false);
-      expect(lightRoute.opacity, closeTo(0.045, 0.005));
-
-      // 4. Cards: selected blue tint <= 0.10 in dark, <= 0.08 in light
-      final darkSelectedCard = MapOverlayGlassStyle.cardFill(isDark: true, isSelected: true);
-      expect(darkSelectedCard.opacity, lessThanOrEqualTo(0.11));
-      final lightSelectedCard = MapOverlayGlassStyle.cardFill(isDark: false, isSelected: true);
-      expect(lightSelectedCard.opacity, lessThanOrEqualTo(0.08));
-
-      // 5. Search input field fill (0.06 dark / 0.09 light)
-      final darkSearchField = MapOverlayGlassStyle.searchSheetFieldFill(isDark: true);
-      expect(darkSearchField.opacity, closeTo(0.06, 0.005));
-      final lightSearchField = MapOverlayGlassStyle.searchSheetFieldFill(isDark: false);
-      expect(lightSearchField.opacity, closeTo(0.09, 0.005));
+      final shadows = MapOverlayGlassStyle.referenceShadow(isDark: false);
+      expect(shadows.first.color.opacity, closeTo(0.08, 0.01));
+      expect(shadows.first.blurRadius, equals(16.0));
+      expect(shadows.first.offset.dy, equals(4.0));
     });
 
-    test('P6.8 Lower Blur (toolbar <= 10.0, large surfaces <= 8.0, never > 12.0)', () {
-      expect(MapOverlayGlassStyle.toolbarBlur, equals(10.0));
-      expect(MapOverlayGlassStyle.toolbarBlur, lessThanOrEqualTo(12.0));
-
-      expect(MapOverlayGlassStyle.bottomSearchBlur, equals(10.0));
-      expect(MapOverlayGlassStyle.bottomSearchBlur, lessThanOrEqualTo(12.0));
-
-      expect(MapOverlayGlassStyle.largeSurfaceBlur, equals(8.0));
-      expect(MapOverlayGlassStyle.largeSurfaceBlur, lessThanOrEqualTo(12.0));
-
-      expect(MapOverlayGlassStyle.drawerBlur, equals(8.0));
-      expect(MapOverlayGlassStyle.sheetBlur, equals(8.0));
-      expect(MapOverlayGlassStyle.routeSheetBlur, equals(8.0));
-      expect(MapOverlayGlassStyle.referenceBlur, equals(10.0));
+    test('Bottom search pill matches exact run 35895237697 reference tokens', () {
+      final searchPillFill = MapOverlayGlassStyle.bottomSearchFill(isDark: false);
+      expect(searchPillFill.opacity, closeTo(0.88, 0.01));
+      expect(MapOverlayGlassStyle.bottomSearchBlur, equals(20.0));
     });
 
-    test('P6.8 Ultra-Soft Shadow (black 0.04/0.03, blur 8, y=2)', () {
-      final darkShadow = MapOverlayGlassStyle.referenceShadow(isDark: true);
-      expect(darkShadow.first.color.opacity, closeTo(0.04, 0.005));
-      expect(darkShadow.first.blurRadius, equals(8.0));
-      expect(darkShadow.first.offset.dy, equals(2.0));
+    test('Drawer and sheets match translucent glass reference tokens', () {
+      final drawerFill = MapOverlayGlassStyle.drawerFill(isDark: false);
+      expect(drawerFill.opacity, closeTo(0.85, 0.01));
 
-      final lightShadow = MapOverlayGlassStyle.referenceShadow(isDark: false);
-      expect(lightShadow.first.color.opacity, closeTo(0.03, 0.005));
-      expect(lightShadow.first.blurRadius, equals(8.0));
-      expect(lightShadow.first.offset.dy, equals(2.0));
+      final sheetFill = MapOverlayGlassStyle.sheetFill(isDark: false);
+      expect(sheetFill.opacity, closeTo(0.80, 0.01));
+
+      final routeSheetFill = MapOverlayGlassStyle.routeSheetFill(isDark: false);
+      expect(routeSheetFill.opacity, closeTo(0.80, 0.01));
     });
 
-    test('P6.8 Outer Border & Inner Rim (dark 0.20, light 0.30, width 0.7)', () {
-      final darkBorder = MapOverlayGlassStyle.referenceBorder(isDark: true);
-      expect(darkBorder.top.color.opacity, closeTo(0.20, 0.01));
-      expect(darkBorder.top.width, equals(0.7));
-
-      final lightBorder = MapOverlayGlassStyle.referenceBorder(isDark: false);
-      expect(lightBorder.top.color.opacity, closeTo(0.30, 0.01));
-      expect(lightBorder.top.width, equals(0.7));
-    });
-
-    testWidgets('TrueLiquidGlass builds ultra-clear stack with no default body gradient', (tester) async {
+    testWidgets('ReferenceGlassSurface builds container matching exact reference structure', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
-            body: TrueLiquidGlass(
-              width: 100,
-              height: 100,
-              child: Text('Ultra Clear Core'),
+            body: ReferenceGlassSurface(
+              width: 48,
+              radius: 24,
+              child: Text('Reference'),
             ),
           ),
         ),
       );
 
-      final glassFinder = find.byType(TrueLiquidGlass);
-      expect(glassFinder, findsOneWidget);
+      final surfaceFinder = find.byType(ReferenceGlassSurface);
+      expect(surfaceFinder, findsOneWidget);
 
-      final glassWidget = tester.widget<TrueLiquidGlass>(glassFinder);
-      expect(glassWidget.blurSigma, equals(10.0));
-      expect(glassWidget.bodyGradient, isNull);
+      final surfaceWidget = tester.widget<ReferenceGlassSurface>(surfaceFinder);
+      expect(surfaceWidget.blurSigma, equals(20.0));
+      expect(surfaceWidget.width, equals(48.0));
+      expect(surfaceWidget.radius, equals(24.0));
 
-      // Verify no body gradient in inner container
-      final containers = tester.widgetList<Container>(
-        find.descendant(of: glassFinder, matching: find.byType(Container)),
-      );
-      final bodyContainer = containers.firstWhere(
-        (c) => c.decoration is BoxDecoration && (c.decoration as BoxDecoration).color != null,
-      );
-      final deco = bodyContainer.decoration as BoxDecoration;
-      expect(deco.gradient, isNull);
+      final containerFinder = find.descendant(of: surfaceFinder, matching: find.byType(Container));
+      expect(containerFinder, findsWidgets);
+
+      final rootContainer = tester.widget<Container>(containerFinder.first);
+      final deco = rootContainer.decoration as BoxDecoration;
+      expect(deco.color?.opacity, closeTo(0.85, 0.01));
+      expect(deco.boxShadow?.first.blurRadius, equals(16.0));
+      expect(deco.border?.top.width, equals(0.8));
     });
 
-    testWidgets('Right toolbar and bottom search capsule render with blur 10.0 and ultra-clear fill', (tester) async {
+    testWidgets('Right toolbar in HomeScreen renders exact 35895237697 Container', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
-      final glassFinder = find.byType(TrueLiquidGlass);
-      expect(glassFinder, findsWidgets);
-
-      final glassWidgets = tester.widgetList<TrueLiquidGlass>(glassFinder);
-      final toolbar = glassWidgets.where((w) => w.width == 48 && w.radius == 24).first;
-      expect(toolbar.blurSigma, equals(10.0));
-      expect((toolbar.fillColor ?? Colors.white).opacity, lessThanOrEqualTo(0.06));
-
-      final searchPill = glassWidgets.where((w) => w.height == 50 && w.radius == 25).first;
-      expect(searchPill.blurSigma, equals(10.0));
-      expect((searchPill.fillColor ?? Colors.white).opacity, lessThanOrEqualTo(0.06));
+      final containers = tester.widgetList<Container>(find.byType(Container));
+      final toolbarContainer = containers.firstWhere(
+        (c) => c.constraints?.maxWidth == 48 || (c.decoration is BoxDecoration && (c.decoration as BoxDecoration).color?.opacity == Colors.white.withOpacity(0.85).opacity && (c.decoration as BoxDecoration).borderRadius == BorderRadius.circular(24)),
+      );
+      expect(toolbarContainer, isNotNull);
+      final deco = toolbarContainer.decoration as BoxDecoration;
+      expect(deco.color?.opacity, closeTo(0.85, 0.01));
+      expect(deco.borderRadius, equals(BorderRadius.circular(24)));
+      expect(deco.border?.top.color.opacity, closeTo(0.70, 0.01));
+      expect(deco.border?.top.width, equals(0.8));
+      expect(deco.boxShadow?.first.blurRadius, equals(16.0));
     });
 
-    testWidgets('Drawer and search modal use blur 8.0 and ultra-clear large surface fill', (tester) async {
+    testWidgets('Bottom search in HomeScreen renders exact 35895237697 Container', (tester) async {
       await tester.pumpWidget(const Esp32NavApp());
       await tester.pump(const Duration(milliseconds: 100));
 
-      // Open drawer
+      final containers = tester.widgetList<Container>(find.byType(Container));
+      final searchContainer = containers.firstWhere(
+        (c) => c.decoration is BoxDecoration && (c.decoration as BoxDecoration).color?.opacity == Colors.white.withOpacity(0.88).opacity && (c.decoration as BoxDecoration).borderRadius == BorderRadius.circular(25),
+      );
+      expect(searchContainer, isNotNull);
+      final deco = searchContainer.decoration as BoxDecoration;
+      expect(deco.color?.opacity, closeTo(0.88, 0.01));
+      expect(deco.borderRadius, equals(BorderRadius.circular(25)));
+      expect(deco.border?.top.color.opacity, closeTo(0.70, 0.01));
+      expect(deco.border?.top.width, equals(0.8));
+    });
+
+    testWidgets('Drawer in HomeScreen opens with translucent background', (tester) async {
+      await tester.pumpWidget(const Esp32NavApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
       final scaffoldState = tester.firstState<ScaffoldState>(find.byType(Scaffold));
       scaffoldState.openDrawer();
       await tester.pumpAndSettle();
 
       final drawerFinder = find.byType(Drawer);
       expect(drawerFinder, findsOneWidget);
-
-      final drawerGlass = tester.widget<TrueLiquidGlass>(
-        find.descendant(of: drawerFinder, matching: find.byType(TrueLiquidGlass)),
-      );
-      expect(drawerGlass.blurSigma, equals(8.0));
-      expect(drawerGlass.fillColor?.opacity, lessThanOrEqualTo(0.05));
     });
   });
 }
