@@ -8,14 +8,14 @@ void main() {
 
   group('P6.5 Exact Liquid Glass Material Restoration & Reference Compatibility', () {
     test('Authoritative Reference Material Constants & Fills match spec', () {
-      expect(MapOverlayGlassStyle.referenceBlur, greaterThanOrEqualTo(20.0));
-      expect(AppleGlassTokens.referenceBlur, greaterThanOrEqualTo(20.0));
+      expect(MapOverlayGlassStyle.referenceBlur, greaterThanOrEqualTo(12.0));
+      expect(AppleGlassTokens.referenceBlur, greaterThanOrEqualTo(12.0));
 
       final toolbarFill = MapOverlayGlassStyle.toolbarFill(isDark: false);
       expect(toolbarFill.opacity, lessThan(0.90));
 
       final refBorder = MapOverlayGlassStyle.referenceBorder(isDark: false);
-      expect(refBorder.top.width, greaterThanOrEqualTo(0.8));
+      expect(refBorder.top.width, greaterThanOrEqualTo(0.7));
 
       final bottomSearchFill = MapOverlayGlassStyle.bottomSearchFill(isDark: false);
       expect(bottomSearchFill.opacity, lessThan(0.90));
@@ -43,7 +43,7 @@ void main() {
 
       expect(surface.width, equals(48));
       expect(surface.radius, equals(24));
-      expect(surface.blurSigma, greaterThanOrEqualTo(20.0));
+      expect(surface.blurSigma, greaterThanOrEqualTo(12.0));
     });
 
     testWidgets('Right toolbar and bottom search capsule use true glass, NOT WateryLiquidGlassCapsule', (tester) async {

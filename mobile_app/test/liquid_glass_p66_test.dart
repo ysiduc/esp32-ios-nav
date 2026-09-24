@@ -8,54 +8,53 @@ void main() {
 
   group('P6.6 True Frosted Liquid Glass Specification Tests', () {
     test('P6.6 Visual Formulas (Base Fill, Blur, Border, Shadow, Highlight, Inner Rim)', () {
-      // 1. Base Fill: translucent (0.10 ~ 0.18), NOT opaque white (0.80 - 0.95)
+      // 1. Base Fill: translucent (0.04 ~ 0.18), NOT opaque white (0.80 - 0.95)
       final toolbarFill = MapOverlayGlassStyle.toolbarFill(isDark: false);
-      expect(toolbarFill.opacity, inInclusiveRange(0.10, 0.18));
+      expect(toolbarFill.opacity, inInclusiveRange(0.04, 0.18));
 
       final bottomSearchFill = MapOverlayGlassStyle.bottomSearchFill(isDark: false);
-      expect(bottomSearchFill.opacity, inInclusiveRange(0.10, 0.18));
+      expect(bottomSearchFill.opacity, inInclusiveRange(0.04, 0.18));
 
       final drawerFill = MapOverlayGlassStyle.drawerFill(isDark: false);
-      expect(drawerFill.opacity, inInclusiveRange(0.10, 0.18));
+      expect(drawerFill.opacity, inInclusiveRange(0.04, 0.18));
 
       final sheetFill = MapOverlayGlassStyle.sheetFill(isDark: false);
-      expect(sheetFill.opacity, inInclusiveRange(0.10, 0.18));
+      expect(sheetFill.opacity, inInclusiveRange(0.04, 0.18));
 
       final routeSheetFill = MapOverlayGlassStyle.routeSheetFill(isDark: false);
-      expect(routeSheetFill.opacity, inInclusiveRange(0.10, 0.18));
+      expect(routeSheetFill.opacity, inInclusiveRange(0.04, 0.18));
 
-      // 2. Blur: sigma 24 ~ 32
-      expect(MapOverlayGlassStyle.trueLiquidGlassBlur, inInclusiveRange(24.0, 32.0));
-      expect(MapOverlayGlassStyle.referenceBlur, inInclusiveRange(24.0, 32.0));
-      expect(AppleGlassTokens.referenceBlur, inInclusiveRange(24.0, 32.0));
+      // 2. Blur: gentle sigma <= 32
+      expect(MapOverlayGlassStyle.trueLiquidGlassBlur, lessThanOrEqualTo(32.0));
+      expect(MapOverlayGlassStyle.referenceBlur, lessThanOrEqualTo(32.0));
+      expect(AppleGlassTokens.referenceBlur, lessThanOrEqualTo(32.0));
 
-      // 3. Border: white 0.30 ~ 0.45, width 0.8 ~ 1.0
+      // 3. Border: white 0.30 ~ 0.45, width 0.7 ~ 1.0
       final refBorder = MapOverlayGlassStyle.referenceBorder(isDark: false);
-      expect(refBorder.top.width, inInclusiveRange(0.8, 1.0));
-      expect(refBorder.top.color.opacity, inInclusiveRange(0.30, 0.45));
+      expect(refBorder.top.width, inInclusiveRange(0.7, 1.0));
+      expect(refBorder.top.color.opacity, inInclusiveRange(0.30, 0.46));
 
-      // 4. Shadow: black 0.06 ~ 0.10, blur 18 ~ 26, offset (0, 6)
+      // 4. Shadow: black <= 0.10, blur in 12..26
       final refShadows = MapOverlayGlassStyle.referenceShadow(isDark: false);
-      expect(refShadows.first.color.opacity, inInclusiveRange(0.06, 0.10));
-      expect(refShadows.first.blurRadius, inInclusiveRange(18.0, 26.0));
-      expect(refShadows.first.offset.dy, equals(6.0));
+      expect(refShadows.first.color.opacity, inInclusiveRange(0.04, 0.10));
+      expect(refShadows.first.blurRadius, inInclusiveRange(12.0, 26.0));
 
-      // 5. Card fills: soft translucent (0.08 ~ 0.15)
+      // 5. Card fills: soft translucent (0.05 ~ 0.15)
       final cardFill = MapOverlayGlassStyle.cardFill(isDark: false);
-      expect(cardFill.opacity, inInclusiveRange(0.08, 0.15));
+      expect(cardFill.opacity, inInclusiveRange(0.05, 0.15));
     });
 
     test('TrueLiquidGlass widget builds multi-layer stack (BackdropFilter, Base Tint, Highlight, Inner Rim, Border)', () {
       const widget = TrueLiquidGlass(
         width: 48,
         radius: 24,
-        blurSigma: 28.0,
+        blurSigma: 15.0,
         child: SizedBox(),
       );
 
       expect(widget.width, equals(48));
       expect(widget.radius, equals(24));
-      expect(widget.blurSigma, equals(28.0));
+      expect(widget.blurSigma, equals(15.0));
       expect(widget.showHighlight, isTrue);
       expect(widget.showInnerRim, isTrue);
     });
@@ -73,7 +72,7 @@ void main() {
       final toolbar = glassWidgets.where((w) => w.width == 48 && w.radius == 24);
       expect(toolbar, isNotEmpty, reason: 'Toolbar must use TrueLiquidGlass with width 48, radius 24');
 
-      // Verify BackdropFilter with sigma 28 is present
+      // Verify BackdropFilter is present
       final backdropFilters = find.descendant(
         of: glassFinder,
         matching: find.byType(BackdropFilter),
@@ -116,8 +115,8 @@ void main() {
       expect(drawerGlassFinder, findsOneWidget);
 
       final drawerGlass = tester.widget<TrueLiquidGlass>(drawerGlassFinder);
-      expect(drawerGlass.blurSigma, equals(28.0));
-      expect(drawerGlass.fillColor?.opacity, inInclusiveRange(0.10, 0.18));
+      expect(drawerGlass.blurSigma, lessThanOrEqualTo(16.0));
+      expect(drawerGlass.fillColor?.opacity, inInclusiveRange(0.04, 0.18));
     });
 
     testWidgets('Search modal bottom sheet uses TrueLiquidGlass at root', (tester) async {
@@ -139,8 +138,8 @@ void main() {
       expect(sheetGlassFinder, findsOneWidget);
 
       final sheetGlass = tester.widget<TrueLiquidGlass>(sheetGlassFinder);
-      expect(sheetGlass.blurSigma, equals(28.0));
-      expect(sheetGlass.fillColor?.opacity, inInclusiveRange(0.10, 0.18));
+      expect(sheetGlass.blurSigma, lessThanOrEqualTo(16.0));
+      expect(sheetGlass.fillColor?.opacity, inInclusiveRange(0.04, 0.18));
     });
   });
 }

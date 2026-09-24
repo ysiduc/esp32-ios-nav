@@ -69,7 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
         fillColor: MapOverlayGlassStyle.drawerFill(isDark: isDark),
         border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-        blurSigma: 28.0,
+        blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
         child: SafeArea(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

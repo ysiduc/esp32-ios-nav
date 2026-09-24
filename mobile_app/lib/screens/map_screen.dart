@@ -1937,7 +1937,7 @@ class _MapScreenState extends State<MapScreen> {
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.toolbarFill(isDark: isDark),
       border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: 28.0,
+      blurSigma: MapOverlayGlassStyle.toolbarBlur,
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2311,7 +2311,7 @@ class _MapScreenState extends State<MapScreen> {
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.bottomSearchFill(isDark: isDark),
       border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: 28.0,
+      blurSigma: MapOverlayGlassStyle.bottomSearchBlur,
       onTap: _openAppleSearchModal,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -2393,7 +2393,7 @@ class _MapScreenState extends State<MapScreen> {
                   isDark: isDark,
                   fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
                   border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-                  blurSigma: 28.0,
+                  blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
                   child: Column(
                     children: [
                           // Top Drag Handle
@@ -3022,7 +3022,7 @@ class _MapScreenState extends State<MapScreen> {
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.sheetFill(isDark: isDark),
       border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: 28.0,
+      blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
       child: SafeArea(
         top: false,
         child: Padding(
@@ -3324,7 +3324,7 @@ class _MapScreenState extends State<MapScreen> {
       isDark: isDark,
       fillColor: MapOverlayGlassStyle.routeSheetFill(isDark: isDark),
       border: MapOverlayGlassStyle.referenceBorder(isDark: isDark),
-      blurSigma: 28.0,
+      blurSigma: MapOverlayGlassStyle.largeSurfaceBlur,
       child: SafeArea(
         top: false,
         child: Padding(

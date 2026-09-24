@@ -19,15 +19,18 @@ import 'package:flutter/services.dart';
 /// - Soft ambient diffuse shadow (blur 20, no harsh drop)
 /// - Unified across: Drawer, Search sheet, Right toolbar, Bottom search bar
 class MapOverlayGlassStyle {
-  static const double trueLiquidGlassBlur = 28.0;
-  static const double referenceBlur = 28.0;
-  static const double blurSigma = 22.0;
-  static const double largeSurfaceBlur = 16.0;
+  // P6.7 Clear-Core Blur Constants (lower blur preserves roads, buildings, labels)
+  static const double toolbarBlur = 15.0;
+  static const double bottomSearchBlur = 15.0;
+  static const double largeSurfaceBlur = 13.0;
+  static const double referenceBlur = 15.0;
+  static const double trueLiquidGlassBlur = 15.0;
+  static const double blurSigma = 22.0; // P6.2 backwards compat
   static const double capsuleBlur = 22.0;
 
   static double blur({bool isDark = false, bool isLargeSurface = false}) {
     if (isLargeSurface) return largeSurfaceBlur;
-    return capsuleBlur;
+    return blurSigma;
   }
 
   /// P6.2 Translucent fill (preserved for backwards-compatibility with P6.2 tests)
@@ -39,50 +42,51 @@ class MapOverlayGlassStyle {
     }
   }
 
-  /// P6.6 True Frosted Liquid Glass - Right toolbar fill (white 0.14)
+  /// P6.7 Clear-Core Liquid Glass - Right toolbar fill (dark: 0.055, light: 0.09)
+  /// NO DARK NAVY TINT: Dark maps need clear neutral glass, not dark paint.
   static Color toolbarFill({required bool isDark, double opacityFactor = 1.0}) {
     if (isDark) {
-      return const Color(0xFF1E2638).withOpacity(0.24 * opacityFactor);
+      return Colors.white.withOpacity(0.055 * opacityFactor);
     } else {
-      return Colors.white.withOpacity(0.14 * opacityFactor);
+      return Colors.white.withOpacity(0.09 * opacityFactor);
     }
   }
 
-  /// P6.6 True Frosted Liquid Glass - Bottom search pill fill (white 0.15)
+  /// P6.7 Clear-Core Liquid Glass - Bottom search pill fill (dark: 0.06, light: 0.10)
   static Color bottomSearchFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF1E2638).withOpacity(0.24);
+      return Colors.white.withOpacity(0.06);
     } else {
-      return Colors.white.withOpacity(0.15);
+      return Colors.white.withOpacity(0.10);
     }
   }
 
   static Color searchBarFill({required bool isDark}) => bottomSearchFill(isDark: isDark);
 
-  /// P6.6 True Frosted Liquid Glass - Drawer fill (white 0.16)
+  /// P6.7 Clear-Core Liquid Glass - Drawer fill (dark: 0.04, light: 0.08)
   static Color drawerFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF1E2638).withOpacity(0.24);
+      return Colors.white.withOpacity(0.04);
     } else {
-      return Colors.white.withOpacity(0.16);
+      return Colors.white.withOpacity(0.08);
     }
   }
 
-  /// P6.6 True Frosted Liquid Glass - Search sheet fill (white 0.16)
+  /// P6.7 Clear-Core Liquid Glass - Search sheet fill (dark: 0.045, light: 0.085)
   static Color sheetFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF1E2638).withOpacity(0.24);
+      return Colors.white.withOpacity(0.045);
     } else {
-      return Colors.white.withOpacity(0.16);
+      return Colors.white.withOpacity(0.085);
     }
   }
 
-  /// P6.6 True Frosted Liquid Glass - Route directions sheet fill (white 0.16)
+  /// P6.7 Clear-Core Liquid Glass - Route directions sheet fill (dark: 0.05, light: 0.09)
   static Color routeSheetFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF1E2638).withOpacity(0.24);
+      return Colors.white.withOpacity(0.05);
     } else {
-      return Colors.white.withOpacity(0.16);
+      return Colors.white.withOpacity(0.09);
     }
   }
 
@@ -95,8 +99,6 @@ class MapOverlayGlassStyle {
   }
 
   /// P6.4 Watery large surface gradient for Drawer & Search Sheet
-  /// light mode: top 0.10, center 0.055, bottom 0.09
-  /// dark mode: top 0.15, center 0.10, bottom 0.14
   static Gradient wateryLargeSurfaceGradient({
     required bool isDark,
     double opacityFactor = 1.0,
@@ -141,12 +143,12 @@ class MapOverlayGlassStyle {
     );
   }
 
-  /// P6.6 True Frosted Liquid Glass card fill (white 0.12, selected Apple blue tint 0.16)
+  /// P6.7 Clear-Core Liquid Glass card fill (0.06 - 0.12, selected Apple blue tint 0.14 - 0.22)
   static Color cardFill({required bool isDark, bool isSelected = false}) {
     if (isSelected) {
-      return const Color(0xFF007AFF).withOpacity(isDark ? 0.25 : 0.16);
+      return const Color(0xFF007AFF).withOpacity(isDark ? 0.22 : 0.14);
     }
-    return isDark ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.12);
+    return isDark ? Colors.white.withOpacity(0.06) : Colors.white.withOpacity(0.10);
   }
 
   static Color drawerCardFill({required bool isDark, bool isSelected = false}) =>
@@ -161,36 +163,46 @@ class MapOverlayGlassStyle {
     }
     return Border.all(
       color: isDark ? Colors.white.withOpacity(0.18) : Colors.white.withOpacity(0.32),
-      width: 0.8,
+      width: 0.7,
     );
   }
 
-  /// P6.6 Search input field fill (white 0.16)
+  /// P6.7 Search input field fill (0.12 dark / 0.16 light for crisp readability)
   static Color searchSheetFieldFill({required bool isDark}) {
     if (isDark) {
-      return const Color(0xFF2C3444).withOpacity(0.35);
+      return Colors.white.withOpacity(0.12);
     } else {
       return Colors.white.withOpacity(0.16);
     }
   }
 
-  /// P6.6 Reference border (white 0.38 / 0.9pt)
-  static Border referenceBorder({required bool isDark, double width = 0.9}) {
+  /// P6.7 Edge-defined reference border: dark 0.32, light 0.45, width 0.7
+  static Border referenceBorder({required bool isDark, double width = 0.7}) {
     return Border.all(
-      color: isDark ? Colors.white.withOpacity(0.22) : Colors.white.withOpacity(0.38),
+      color: isDark ? Colors.white.withOpacity(0.32) : Colors.white.withOpacity(0.45),
       width: width,
     );
   }
 
-  /// P6.6 Reference shadow (black 0.08 / blur 22 / y=6)
+  /// P6.7 Softer reference shadow (dark: black 0.08 / blur 16 / y=4; light: black 0.05 / blur 14 / y=4)
   static List<BoxShadow> referenceShadow({required bool isDark}) {
-    return [
-      BoxShadow(
-        color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
-        blurRadius: 22,
-        offset: const Offset(0, 6),
-      ),
-    ];
+    if (isDark) {
+      return [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.08),
+          blurRadius: 16.0,
+          offset: const Offset(0, 4),
+        ),
+      ];
+    } else {
+      return [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 14.0,
+          offset: const Offset(0, 4),
+        ),
+      ];
+    }
   }
 
   /// Refractive specular outer rim gradient (P6.3 watery edge)
@@ -302,7 +314,7 @@ class TrueLiquidGlass extends StatelessWidget {
   final double radius;
   final double blurSigma;
   final Color? fillColor;
-  final Gradient? fillGradient;
+  final Gradient? bodyGradient;
   final BoxBorder? border;
   final List<BoxShadow>? boxShadow;
   final EdgeInsetsGeometry? padding;
@@ -319,9 +331,9 @@ class TrueLiquidGlass extends StatelessWidget {
     this.height,
     this.borderRadius,
     this.radius = 24.0,
-    this.blurSigma = 28.0,
+    this.blurSigma = 15.0,
     this.fillColor,
-    this.fillGradient,
+    this.bodyGradient,
     this.border,
     this.boxShadow,
     this.padding,
@@ -336,42 +348,41 @@ class TrueLiquidGlass extends StatelessWidget {
   Widget build(BuildContext context) {
     final effectiveRadius = borderRadius ?? BorderRadius.circular(radius);
 
+    // 1. Ultra-light neutral transparent base fill (no dark navy tint!)
     final effectiveFill = fillColor ??
         (isDark
-            ? const Color(0xFF1E2638).withOpacity(0.24)
-            : Colors.white.withOpacity(0.14));
+            ? Colors.white.withOpacity(0.055)
+            : Colors.white.withOpacity(0.09));
 
-    final effectiveFillGradient = fillGradient ??
-        LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [
-                  Colors.white.withOpacity(0.12),
-                  Colors.white.withOpacity(0.04),
-                ]
-              : [
-                  Colors.white.withOpacity(0.22),
-                  Colors.white.withOpacity(0.08),
-                ],
-        );
+    // 2. Body gradient is purely optional (default null - no whole-body gradient overlay)
+    final effectiveBodyGradient = bodyGradient;
 
+    // 3. Crisp edge-defined specular border
     final effectiveBorder = border ??
         Border.all(
           color: isDark
-              ? Colors.white.withOpacity(0.22)
-              : Colors.white.withOpacity(0.38),
-          width: 0.9,
+              ? Colors.white.withOpacity(0.32)
+              : Colors.white.withOpacity(0.45),
+          width: 0.7,
         );
 
+    // 4. Soft shadow (dark: 0.08 / blur 16 / y=4; light: 0.05 / blur 14 / y=4)
     final effectiveShadow = boxShadow ??
-        [
-          BoxShadow(
-            color: Colors.black.withOpacity(isDark ? 0.20 : 0.08),
-            blurRadius: 22,
-            offset: const Offset(0, 6),
-          ),
-        ];
+        (isDark
+            ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 16.0,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 14.0,
+                  offset: const Offset(0, 4),
+                ),
+              ]);
 
     Widget content = Container(
       margin: margin,
@@ -385,67 +396,73 @@ class TrueLiquidGlass extends StatelessWidget {
         borderRadius: effectiveRadius,
         child: Stack(
           children: [
-            // 1. True BackdropFilter blurring real background map underneath
+            // Layer 1: True optical BackdropFilter with gentle blur (14–16 preserves map details)
             Positioned.fill(
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
                 child: Container(color: Colors.transparent),
               ),
             ),
-            // 2. Translucent Base Glass Tint & subtle angled gradient
+
+            // Layer 2: Ultra-light clear-core neutral fill (+ optional caller bodyGradient)
             Positioned.fill(
               child: Container(
                 decoration: BoxDecoration(
                   color: effectiveFill,
-                  gradient: effectiveFillGradient,
+                  gradient: effectiveBodyGradient,
                 ),
               ),
             ),
-            // 3. Highlight / Curved Glass Sheen Layer (top-left specular glint)
+
+            // Layer 3: Edge-Only Specular Highlight (center ~70% surface is completely transparent!)
             if (showHighlight)
               Positioned.fill(
                 child: IgnorePointer(
                   child: Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                         colors: isDark
                             ? [
                                 Colors.white.withOpacity(0.14),
                                 Colors.transparent,
+                                Colors.transparent,
                                 Colors.white.withOpacity(0.04),
                               ]
                             : [
-                                Colors.white.withOpacity(0.20),
+                                Colors.white.withOpacity(0.18),
                                 Colors.transparent,
-                                Colors.white.withOpacity(0.06),
+                                Colors.transparent,
+                                Colors.white.withOpacity(0.05),
                               ],
-                        stops: const [0.0, 0.4, 1.0],
+                        stops: const [0.0, 0.12, 0.82, 1.0],
                       ),
                     ),
                   ),
                 ),
               ),
-            // 4. Inner Rim / Curved Refractive Edge (droplet meniscus look)
+
+            // Layer 4: Subtle Inner Rim / Curved Refractive Edge (0.08 - 0.12, width 0.5)
             if (showInnerRim)
               Positioned.fill(
                 child: IgnorePointer(
                   child: Container(
-                    margin: const EdgeInsets.all(0.8),
+                    margin: const EdgeInsets.all(0.7),
                     decoration: BoxDecoration(
                       borderRadius: effectiveRadius,
                       border: Border.all(
                         color: isDark
-                            ? Colors.white.withOpacity(0.10)
-                            : Colors.white.withOpacity(0.18),
-                        width: 0.6,
+                            ? Colors.white.withOpacity(0.08)
+                            : Colors.white.withOpacity(0.12),
+                        width: 0.5,
                       ),
                     ),
                   ),
                 ),
               ),
-            // 5. Outer Crisp Specular Border
+
+            // Layer 5: Outer Crisp Specular Border
             Positioned.fill(
               child: IgnorePointer(
                 child: Container(
@@ -456,7 +473,8 @@ class TrueLiquidGlass extends StatelessWidget {
                 ),
               ),
             ),
-            // 6. Child Content
+
+            // Layer 6: Content
             Padding(
               padding: padding ?? EdgeInsets.zero,
               child: child,
@@ -505,7 +523,7 @@ class ReferenceGlassSurface extends StatelessWidget {
     this.fillColor,
     this.border,
     this.boxShadow,
-    this.blurSigma = 28.0,
+    this.blurSigma = 15.0,
     this.padding,
     this.margin,
     this.onTap,
@@ -610,15 +628,17 @@ class WateryLiquidGlassCapsule extends StatelessWidget {
 
 class AppleGlassTokens {
   // --- 1. Run 35895237697 Reference Tokens ---
-  static const double referenceBlur = 28.0;
-  static const double referenceBorderWidth = 0.9;
-  static final Color referenceBorder = Colors.white.withOpacity(0.38);
-  static final Color referenceFillToolbar = Colors.white.withOpacity(0.14);
-  static final Color referenceFillSearchPill = Colors.white.withOpacity(0.15);
-  static final Color referenceFillDrawer = Colors.white.withOpacity(0.16);
-  static final Color referenceFillSheet = Colors.white.withOpacity(0.16);
-  static final Color referenceFillRouteSheet = Colors.white.withOpacity(0.16);
-  static final Color referenceFillCard = Colors.white.withOpacity(0.12);
+  static const double referenceBlur = 15.0;
+  static const double toolbarBlur = 15.0;
+  static const double largeSurfaceBlur = 13.0;
+  static const double referenceBorderWidth = 0.7;
+  static final Color referenceBorder = Colors.white.withOpacity(0.45);
+  static final Color referenceFillToolbar = Colors.white.withOpacity(0.09);
+  static final Color referenceFillSearchPill = Colors.white.withOpacity(0.10);
+  static final Color referenceFillDrawer = Colors.white.withOpacity(0.08);
+  static final Color referenceFillSheet = Colors.white.withOpacity(0.085);
+  static final Color referenceFillRouteSheet = Colors.white.withOpacity(0.09);
+  static final Color referenceFillCard = Colors.white.withOpacity(0.10);
 
   // --- Blur Intensities ---
   static const double blurLight = 16.0;
