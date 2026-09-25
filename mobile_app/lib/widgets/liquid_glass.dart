@@ -45,39 +45,42 @@ class MapOverlayGlassStyle {
     }
   }
 
-  /// P6.8 Ultra-Clear Liquid Glass - Right toolbar fill (dark: 0.022, light: 0.055)
-  static Color toolbarFill({required bool isDark, double opacityFactor = 1.0}) {
-    return Colors.white.withOpacity(0.85 * opacityFactor);
+  /// P6.10 Clear Liquid Glass - Base clear glass fill (matches Image 1: 0.08 light, 0.05 dark)
+  static Color clearGlassFill({required bool isDark, double opacityFactor = 1.0}) {
+    return isDark
+        ? Colors.white.withOpacity(0.05 * opacityFactor)
+        : Colors.white.withOpacity(0.08 * opacityFactor);
   }
 
-  /// P6.8 Ultra-Clear Liquid Glass - Bottom search pill fill (dark: 0.022, light: 0.055)
+  /// P6.10 Clear Liquid Glass - Right toolbar fill (matches Image 1: 0.08 light, 0.05 dark)
+  static Color toolbarFill({required bool isDark, double opacityFactor = 1.0}) {
+    return clearGlassFill(isDark: isDark, opacityFactor: opacityFactor);
+  }
+
+  /// P6.10 Clear Liquid Glass - Bottom search pill fill (matches Image 1: 0.08 light, 0.05 dark)
   static Color bottomSearchFill({required bool isDark}) {
-    return Colors.white.withOpacity(0.88);
+    return clearGlassFill(isDark: isDark);
   }
 
   static Color searchBarFill({required bool isDark}) => bottomSearchFill(isDark: isDark);
 
-  /// P6.8 Ultra-Clear Liquid Glass - Drawer fill (dark: 0.018, light: 0.045)
+  /// P6.10 Clear Liquid Glass - Drawer fill (transparent base, map clearly visible through glass)
   static Color drawerFill({required bool isDark}) {
-    return isDark ? Colors.white.withOpacity(0.78) : Colors.white.withOpacity(0.85);
+    return clearGlassFill(isDark: isDark);
   }
 
-  /// P6.8 Ultra-Clear Liquid Glass - Search sheet fill (dark: 0.018, light: 0.045)
+  /// P6.10 Clear Liquid Glass - Search sheet fill (transparent base, not flat white modal sheet)
   static Color sheetFill({required bool isDark}) {
-    return isDark ? const Color(0xFF1C1C1E).withOpacity(0.80) : const Color(0xFFF2F2F7).withOpacity(0.80);
+    return clearGlassFill(isDark: isDark);
   }
 
-  /// P6.8 Ultra-Clear Liquid Glass - Route directions sheet fill (dark: 0.018, light: 0.045)
+  /// P6.10 Clear Liquid Glass - Route directions sheet fill
   static Color routeSheetFill({required bool isDark}) {
-    return isDark ? const Color(0xFF1C1C1E).withOpacity(0.80) : Colors.white.withOpacity(0.80);
+    return clearGlassFill(isDark: isDark);
   }
 
   static Color secondaryFill({required bool isDark}) {
-    if (isDark) {
-      return Colors.white.withOpacity(0.10);
-    } else {
-      return Colors.white.withOpacity(0.50);
-    }
+    return isDark ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.14);
   }
 
   /// P6.4 Watery large surface gradient for Drawer & Search Sheet
@@ -125,12 +128,13 @@ class MapOverlayGlassStyle {
     );
   }
 
-  /// P6.8 Ultra-Clear Liquid Glass card fill (0.025 - 0.05, selected Apple blue tint 0.08 - 0.10)
+  /// P6.10 Clear Liquid Glass card fill for items sitting on glass
+  /// (subtle local contrast 0.08 - 0.16 so background map still visibly bleeds through)
   static Color cardFill({required bool isDark, bool isSelected = false}) {
     if (isSelected) {
-      return const Color(0xFF007AFF).withOpacity(isDark ? 0.24 : 0.14);
+      return const Color(0xFF007AFF).withOpacity(isDark ? 0.22 : 0.14);
     }
-    return isDark ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.60);
+    return isDark ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.16);
   }
 
   static Color drawerCardFill({required bool isDark, bool isSelected = false}) =>
@@ -144,29 +148,29 @@ class MapOverlayGlassStyle {
       );
     }
     return Border.all(
-      color: isDark ? Colors.white.withOpacity(0.16) : Colors.white.withOpacity(0.25),
-      width: 0.7,
+      color: isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.35),
+      width: 0.5,
     );
   }
 
-  /// P6.8 Search input field fill (0.06 dark / 0.09 light for crisp readability)
+  /// P6.10 Search input field fill (sitting on glass, translucent 0.18 light / 0.10 dark)
   static Color searchSheetFieldFill({required bool isDark}) {
-    return isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.85);
+    return isDark ? Colors.white.withOpacity(0.10) : Colors.white.withOpacity(0.18);
   }
 
-  /// P6.8 Edge-defined reference border: dark 0.20, light 0.30, width 0.7
+  /// P6.10 Edge-defined reference border: dark 0.20, light 0.40, width 0.5
   static Border referenceBorder({required bool isDark, double width = 0.8}) {
     return Border.all(
-      color: Colors.white.withOpacity(0.70),
+      color: Colors.white.withOpacity(isDark ? 0.20 : 0.40),
       width: width,
     );
   }
 
-  /// P6.8 Ultra-soft reference shadow: dark black 0.04 / blur 8 / y=2; light black 0.03 / blur 8 / y=2
+  /// P6.10 Ultra-soft reference shadow
   static List<BoxShadow> referenceShadow({required bool isDark}) {
     return [
       BoxShadow(
-        color: Colors.black.withOpacity(0.08),
+        color: Colors.black.withOpacity(isDark ? 0.08 : 0.04),
         blurRadius: 16.0,
         offset: const Offset(0, 4),
       ),

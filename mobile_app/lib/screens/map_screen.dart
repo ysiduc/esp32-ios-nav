@@ -33,10 +33,12 @@ import '../widgets/common/saved_place_dialog.dart';
 // RoutePresentationMode is imported from route_render_controller.dart
 
 enum MapThemeMode {
-  streets,         // Apple Streets (clean light aesthetic)
-  satellite,       // Hybrid Satellite Streets
-  navigationNight, // Navigation Night (dark, driver-optimized)
-  dark,            // Dark minimal
+  streets,         // Apple Streets (Khám phá)
+  driving,         // Driving navigation mode (Lái xe)
+  transit,         // Public transit / outdoors (PT công cộng)
+  satellite,       // Hybrid Satellite Streets (Vệ tinh)
+  navigationNight, // Compatibility alias
+  dark,            // Compatibility alias
 }
 
 /// Pure UI presentation helper for resolving the effective display name of a place (P6.2a)
@@ -214,9 +216,12 @@ class _MapLibreLineDrawer implements MapLineDrawer {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  bool _isMapThemePickerOpen = false;
+
   bool get _isDarkMap =>
       _currentTheme == MapThemeMode.dark ||
       _currentTheme == MapThemeMode.navigationNight ||
+      _currentTheme == MapThemeMode.driving ||
       _currentTheme == MapThemeMode.satellite ||
       (mounted && Theme.of(context).brightness == Brightness.dark);
 
@@ -1552,10 +1557,18 @@ class _MapScreenState extends State<MapScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.96),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      barrierColor: Colors.transparent,
+      builder: (ctx) => AppGlassSurface(
+        surfaceId: 'incident-sheet',
+        variant: AppGlassVariant.clear,
+        radius: 24,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        overlayOwned: true,
+        border: Border(
+          top: BorderSide(
+            color: Colors.white.withOpacity(0.40),
+            width: 0.5,
+          ),
         ),
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
         child: Column(
@@ -1617,10 +1630,13 @@ class _MapScreenState extends State<MapScreen> {
     switch (_currentTheme) {
       case MapThemeMode.streets:
         return MapboxConfig.styleStreets;
-      case MapThemeMode.satellite:
-        return MapboxConfig.styleSatelliteStreets;
+      case MapThemeMode.driving:
       case MapThemeMode.navigationNight:
         return MapboxConfig.styleNavigationNight;
+      case MapThemeMode.transit:
+        return MapboxConfig.styleOutdoors;
+      case MapThemeMode.satellite:
+        return MapboxConfig.styleSatelliteStreets;
       case MapThemeMode.dark:
         return MapboxConfig.styleDark;
     }
@@ -1937,41 +1953,21 @@ class _MapScreenState extends State<MapScreen> {
       radius: 24,
       padding: const EdgeInsets.symmetric(vertical: 4),
       children: [
+        // Button 1: Bản đồ (Map) - opens map style chooser sheet
         IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: const Icon(Icons.layers_rounded, color: Color(0xFF1C1C1E), size: 22),
-          tooltip: 'Đổi nền bản đồ',
-          onPressed: _showMapThemePicker,
-        ),
-        Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
-        IconButton(
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          icon: const Icon(Icons.explore_rounded, color: Color(0xFFFF3B30), size: 22),
-          tooltip: 'Hướng Bắc',
-          onPressed: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-        ),
-        Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
-        IconButton(
+          key: const ValueKey('toolbar_btn_map'),
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
           icon: Icon(
-            _transportMode == 'driving' ? Icons.directions_car_rounded : Icons.two_wheeler_rounded,
-            color: _transportMode == 'bike' ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+            Icons.map_rounded,
+            color: _isMapThemePickerOpen ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
             size: 22,
           ),
-          tooltip: 'Chế độ phương tiện (Xe máy/Ô tô)',
-          onPressed: () {
-            setState(() {
-              _transportMode = _transportMode == 'bike' ? 'driving' : 'bike';
-            });
-            if (_selectedPlace != null) {
-              _calculateRoutesForPlace(_selectedPlace!);
-            }
-          },
+          tooltip: 'Bản đồ',
+          onPressed: _showMapThemePicker,
         ),
         Container(width: 26, height: 0.5, color: Colors.black.withOpacity(0.08)),
+        // Button 2: Điều hướng (Navigation) - recenter to vehicle/user
         Container(
           width: 40,
           height: 40,
@@ -1981,14 +1977,15 @@ class _MapScreenState extends State<MapScreen> {
             color: _isAutoCentering ? const Color(0xFF007AFF).withOpacity(0.12) : Colors.transparent,
           ),
           child: IconButton(
+            key: const ValueKey('toolbar_btn_navigation'),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             icon: Icon(
               _isAutoCentering ? Icons.navigation_rounded : Icons.navigation_outlined,
-              color: const Color(0xFF007AFF),
+              color: _isAutoCentering ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
               size: 22,
             ),
-            tooltip: 'Vị trí hiện tại',
+            tooltip: 'Điều hướng',
             onPressed: () {
               if (isDriving) {
                 _recenterToVehicle();
@@ -2159,7 +2156,11 @@ class _MapScreenState extends State<MapScreen> {
             height: 58,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: isDark ? const Color(0xFF007AFF).withOpacity(0.25) : const Color(0xFFE5F1FF),
+              color: const Color(0xFF007AFF).withOpacity(isDark ? 0.20 : 0.12),
+              border: Border.all(
+                color: const Color(0xFF007AFF).withOpacity(0.30),
+                width: 0.5,
+              ),
             ),
             child: Icon(
               icon,
@@ -2196,12 +2197,20 @@ class _MapScreenState extends State<MapScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      barrierColor: Colors.transparent,
+      builder: (ctx) => AppGlassSurface(
+        surfaceId: 'place-action-sheet',
+        variant: AppGlassVariant.clear,
+        radius: 20,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        overlayOwned: true,
+        border: Border(
+          top: BorderSide(
+            color: Colors.white.withOpacity(0.40),
+            width: 0.5,
+          ),
         ),
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
         child: SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2435,8 +2444,8 @@ class _MapScreenState extends State<MapScreen> {
                                       color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
                                       borderRadius: BorderRadius.circular(23),
                                       border: Border.all(
-                                        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.65),
-                                        width: 0.8,
+                                        color: isDark ? Colors.white.withOpacity(0.25) : Colors.white.withOpacity(0.50),
+                                        width: 0.5,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
@@ -2521,8 +2530,8 @@ class _MapScreenState extends State<MapScreen> {
                                       shape: BoxShape.circle,
                                       color: MapOverlayGlassStyle.searchSheetFieldFill(isDark: isDark),
                                       border: Border.all(
-                                        color: isDark ? Colors.white.withOpacity(0.35) : Colors.white.withOpacity(0.65),
-                                        width: 0.8,
+                                        color: isDark ? Colors.white.withOpacity(0.25) : Colors.white.withOpacity(0.50),
+                                        width: 0.5,
                                       ),
                                     ),
                                     child: Icon(
@@ -3174,12 +3183,20 @@ class _MapScreenState extends State<MapScreen> {
                               showModalBottomSheet(
                                 context: context,
                                 backgroundColor: Colors.transparent,
-                                builder: (ctx) => Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.surface,
-                                    borderRadius: AppRadius.sheetTop,
+                                barrierColor: Colors.transparent,
+                                builder: (ctx) => AppGlassSurface(
+                                  surfaceId: 'saved-place-sheet',
+                                  variant: AppGlassVariant.clear,
+                                  radius: 24,
+                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                                  overlayOwned: true,
+                                  border: Border(
+                                    top: BorderSide(
+                                      color: Colors.white.withOpacity(0.40),
+                                      width: 0.5,
+                                    ),
                                   ),
+                                  padding: const EdgeInsets.all(20),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -4218,84 +4235,313 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // -------------------------------------------------------------
-  // Map Theme Picker Dialog
+  // Map Style Chooser Bottom Sheet (P6.10 / Image 5 Match)
   // -------------------------------------------------------------
+  bool _isModeSelected(MapThemeMode mode) {
+    if (_currentTheme == mode) return true;
+    if (mode == MapThemeMode.driving &&
+        (_currentTheme == MapThemeMode.navigationNight || _currentTheme == MapThemeMode.dark)) {
+      return true;
+    }
+    return false;
+  }
+
   void _showMapThemePicker() {
     _setOverlayMode(MapOverlayMode.reportSheet);
+    setState(() {
+      _isMapThemePickerOpen = true;
+    });
+
+    final isDark = _isDarkMap;
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF1E293B),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('CHỌN GIAO DIỆN BẢN ĐỒ', style: TextStyle(color: Color(0xFF0084FF), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1)),
-              const SizedBox(height: 14),
-              _buildThemeOption(
-                title: 'Bản đồ Đường phố (Streets)',
-                subtitle: 'Giao diện vector sắc nét, tải nhanh chuẩn MapTiler',
-                mode: MapThemeMode.streets,
-                icon: Icons.map_rounded,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.transparent,
+      builder: (modalCtx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return AppGlassSurface(
+              surfaceId: 'map-theme-sheet',
+              variant: AppGlassVariant.clear,
+              radius: 26,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+              overlayOwned: true,
+              border: Border(
+                top: BorderSide(
+                  color: Colors.white.withOpacity(0.40),
+                  width: 0.5,
+                ),
               ),
-              _buildThemeOption(
-                title: 'Vệ tinh lai (Hybrid Satellite)',
-                subtitle: 'Ảnh chụp vệ tinh độ nét cao kèm tên đường tiếng Việt',
-                mode: MapThemeMode.satellite,
-                icon: Icons.satellite_alt_rounded,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Top Drag Handle
+                      Center(
+                        child: Container(
+                          width: 36,
+                          height: 5,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white30 : const Color(0xFFD1D1D6),
+                            borderRadius: BorderRadius.circular(2.5),
+                          ),
+                        ),
+                      ),
+
+                      // Header: Title & Close Button (Image 5 match)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Chế độ bản đồ',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : const Color(0xFF1C1C1E),
+                              letterSpacing: -0.4,
+                            ),
+                          ),
+                          GestureDetector(
+                            key: const ValueKey('close_map_theme_sheet'),
+                            onTap: () => Navigator.pop(modalCtx),
+                            child: Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: isDark ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.65),
+                                border: Border.all(
+                                  color: isDark ? Colors.white.withOpacity(0.25) : Colors.white.withOpacity(0.70),
+                                  width: 0.5,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 18,
+                                color: isDark ? Colors.white70 : const Color(0xFF3C3C43),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // 4 Style Cards in a Row: Khám phá, Lái xe, PT công cộng, Vệ tinh
+                      Row(
+                        children: [
+                          _buildMapStyleCard(
+                            title: 'Khám phá',
+                            mode: MapThemeMode.streets,
+                            icon: Icons.map_rounded,
+                            setSheetState: setSheetState,
+                            isDark: isDark,
+                          ),
+                          const SizedBox(width: 8),
+                          _buildMapStyleCard(
+                            title: 'Lái xe',
+                            mode: MapThemeMode.driving,
+                            icon: Icons.directions_car_rounded,
+                            setSheetState: setSheetState,
+                            isDark: isDark,
+                          ),
+                          const SizedBox(width: 8),
+                          _buildMapStyleCard(
+                            title: 'PT công cộng',
+                            mode: MapThemeMode.transit,
+                            icon: Icons.directions_transit_rounded,
+                            setSheetState: setSheetState,
+                            isDark: isDark,
+                          ),
+                          const SizedBox(width: 8),
+                          _buildMapStyleCard(
+                            title: 'Vệ tinh',
+                            mode: MapThemeMode.satellite,
+                            icon: Icons.satellite_alt_rounded,
+                            setSheetState: setSheetState,
+                            isDark: isDark,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              _buildThemeOption(
-                title: 'Chế độ Ban Đêm (Navigation Dark)',
-                subtitle: 'Theme tối độ tương phản cao, dịu mắt khi lái xe đêm',
-                mode: MapThemeMode.navigationNight,
-                icon: Icons.dark_mode_rounded,
-              ),
-              _buildThemeOption(
-                title: 'Giao diện Tối (Dark Minimal)',
-                subtitle: 'Theme tối tối giản',
-                mode: MapThemeMode.dark,
-                icon: Icons.nightlight_round,
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     ).whenComplete(() {
       _setOverlayMode(MapOverlayMode.none);
+      if (mounted) {
+        setState(() {
+          _isMapThemePickerOpen = false;
+        });
+      }
     });
   }
 
-  Widget _buildThemeOption({
+  Widget _buildMapStyleCard({
     required String title,
-    required String subtitle,
     required MapThemeMode mode,
     required IconData icon,
+    required StateSetter setSheetState,
+    required bool isDark,
   }) {
-    final isSelected = _currentTheme == mode;
-    return Material(
-      color: Colors.transparent,
-      child: ListTile(
-        leading: Icon(icon, color: isSelected ? const Color(0xFF0084FF) : Colors.white60),
-        title: Text(title, style: TextStyle(color: isSelected ? const Color(0xFF0084FF) : Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-        subtitle: Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-        trailing: isSelected ? const Icon(Icons.check_circle_rounded, color: Color(0xFF0084FF)) : null,
+    final isSelected = _isModeSelected(mode);
+
+    Gradient previewGradient;
+    Color iconColor;
+    Widget previewContent;
+
+    switch (mode) {
+      case MapThemeMode.streets:
+        previewGradient = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFE2F0D9), Color(0xFFD3E7EE), Color(0xFFFAF6EE)],
+        );
+        iconColor = const Color(0xFF34C759);
+        previewContent = const CustomPaint(painter: _StreetThumbnailPainter());
+        break;
+      case MapThemeMode.driving:
+      case MapThemeMode.navigationNight:
+      case MapThemeMode.dark:
+        previewGradient = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1E2638), Color(0xFF121824)],
+        );
+        iconColor = const Color(0xFF007AFF);
+        previewContent = const CustomPaint(painter: _DrivingThumbnailPainter());
+        break;
+      case MapThemeMode.transit:
+        previewGradient = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFFF7EB), Color(0xFFF1EAE0)],
+        );
+        iconColor = const Color(0xFFFF9500);
+        previewContent = const CustomPaint(painter: _TransitThumbnailPainter());
+        break;
+      case MapThemeMode.satellite:
+        previewGradient = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1A3323), Color(0xFF2C4A34), Color(0xFF1F2B1F)],
+        );
+        iconColor = const Color(0xFF5AC8FA);
+        previewContent = const CustomPaint(painter: _SatelliteThumbnailPainter());
+        break;
+    }
+
+    return Expanded(
+      child: GestureDetector(
+        key: ValueKey('map_style_card_${mode.name}'),
         onTap: () {
+          setSheetState(() => _currentTheme = mode);
           setState(() => _currentTheme = mode);
           try {
             final streamService = Provider.of<EspStreamService>(context, listen: false);
-            if (mode == MapThemeMode.dark || mode == MapThemeMode.navigationNight) {
+            if (mode == MapThemeMode.driving || mode == MapThemeMode.navigationNight || mode == MapThemeMode.dark) {
               streamService.streamMapStyle = 'streets-v2-dark';
             } else if (mode == MapThemeMode.satellite) {
               streamService.streamMapStyle = 'hybrid';
+            } else if (mode == MapThemeMode.transit) {
+              streamService.streamMapStyle = 'outdoor-v2';
             } else {
               streamService.streamMapStyle = 'streets-v2';
             }
           } catch (_) {}
-          Navigator.pop(context);
         },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 72,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                gradient: previewGradient,
+                border: Border.all(
+                  color: isSelected
+                      ? const Color(0xFF007AFF)
+                      : (isDark ? Colors.white.withOpacity(0.20) : Colors.black.withOpacity(0.12)),
+                  width: isSelected ? 2.5 : 1.0,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF007AFF).withOpacity(0.35),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.04),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    previewContent,
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: (mode == MapThemeMode.driving || mode == MapThemeMode.satellite)
+                              ? Colors.black.withOpacity(0.40)
+                              : Colors.white.withOpacity(0.75),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, size: 20, color: iconColor),
+                      ),
+                    ),
+                    if (isSelected)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF007AFF),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.check, size: 11, color: Colors.white),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                color: isSelected
+                    ? const Color(0xFF007AFF)
+                    : (isDark ? Colors.white : const Color(0xFF1C1C1E)),
+                letterSpacing: -0.2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -4329,4 +4575,85 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
+}
+
+
+class _StreetThumbnailPainter extends CustomPainter {
+  const _StreetThumbnailPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final roadPaint = Paint()
+      ..color = const Color(0xFFE5E7EB)
+      ..strokeWidth = 6
+      ..style = PaintingStyle.stroke;
+    final mainRoadPaint = Paint()
+      ..color = const Color(0xFFFDE68A)
+      ..strokeWidth = 3.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(Offset(0, size.height * 0.7), Offset(size.width, size.height * 0.3), roadPaint);
+    canvas.drawLine(Offset(size.width * 0.3, 0), Offset(size.width * 0.7, size.height), mainRoadPaint);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _DrivingThumbnailPainter extends CustomPainter {
+  const _DrivingThumbnailPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final roadPaint = Paint()
+      ..color = const Color(0xFF2B3548)
+      ..strokeWidth = 7
+      ..style = PaintingStyle.stroke;
+    final routePaint = Paint()
+      ..color = const Color(0xFF007AFF)
+      ..strokeWidth = 3.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(Offset(size.width * 0.2, size.height), Offset(size.width * 0.8, 0), roadPaint);
+    canvas.drawLine(Offset(size.width * 0.2, size.height), Offset(size.width * 0.8, 0), routePaint);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _TransitThumbnailPainter extends CustomPainter {
+  const _TransitThumbnailPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final transitOrange = Paint()
+      ..color = const Color(0xFFFF9500)
+      ..strokeWidth = 3.5
+      ..style = PaintingStyle.stroke;
+    final transitRed = Paint()
+      ..color = const Color(0xFFEF4444)
+      ..strokeWidth = 3.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(Offset(0, size.height * 0.4), Offset(size.width, size.height * 0.4), transitOrange);
+    canvas.drawLine(Offset(size.width * 0.5, 0), Offset(size.width * 0.5, size.height), transitRed);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _SatelliteThumbnailPainter extends CustomPainter {
+  const _SatelliteThumbnailPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final patchPaint = Paint()
+      ..color = const Color(0xFF2C4A34).withOpacity(0.5)
+      ..style = PaintingStyle.fill;
+    final roadPaint = Paint()
+      ..color = Colors.white.withOpacity(0.35)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawCircle(Offset(size.width * 0.3, size.height * 0.6), 14, patchPaint);
+    canvas.drawLine(Offset(0, size.height * 0.5), Offset(size.width, size.height * 0.5), roadPaint);
+    canvas.drawLine(Offset(size.width * 0.6, 0), Offset(size.width * 0.6, size.height), roadPaint);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

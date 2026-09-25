@@ -136,8 +136,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                              color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
-                              width: 0.8,
+                              color: isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.35),
+                              width: 0.5,
                             ),
                           ),
                           child: Row(
@@ -238,8 +238,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: MapOverlayGlassStyle.drawerCardFill(isDark: isDark),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
-                          width: 0.8,
+                          color: isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.35),
+                          width: 0.5,
                         ),
                       ),
                       child: Row(
@@ -280,8 +280,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final border = isSelected
         ? Border.all(color: const Color(0xFF007AFF).withOpacity(0.60), width: 1.0)
         : Border.all(
-            color: isDark ? Colors.white.withOpacity(0.20) : Colors.white.withOpacity(0.55),
-            width: 0.8,
+            color: isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.35),
+            width: 0.5,
           );
     final fg = isSelected
         ? const Color(0xFF007AFF)
