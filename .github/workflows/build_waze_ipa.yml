@@ -1,0 +1,97 @@
+name: Build Waze ESP32 HUD IPA
+
+on:
+  push:
+    paths:
+      - 'waze_esp32_tweak/**'
+      - '.github/workflows/build_waze_ipa.yml'
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      waze_ipa_url:
+        description: 'Direct download URL for decrypted Waze IPA (optional if already provided)'
+        required: false
+        default: ''
+
+jobs:
+  build-waze-tweak:
+    name: Build Waze ESP32 Tweak & Repackage IPA
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Verify Xcode & iOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: 3. Compile WazeESP32Nav.dylib
+        run: |
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "SDK Path: $SDK_PATH"
+          
+          mkdir -p waze_esp32_tweak/output
+          clang -target arm64-apple-ios14.0 \
+                -isysroot "$SDK_PATH" \
+                -dynamiclib \
+                -fobjc-arc \
+                -O2 \
+                -Wall \
+                -framework Foundation \
+                -framework UIKit \
+                -framework CoreBluetooth \
+                -framework CoreGraphics \
+                -framework QuartzCore \
+                -install_name "@rpath/WazeESP32Nav.dylib" \
+                -o "waze_esp32_tweak/output/WazeESP32Nav.dylib" \
+                waze_esp32_tweak/ESP32BLEManager.m \
+                waze_esp32_tweak/ESP32VirtualHUDView.m \
+                waze_esp32_tweak/WazeMapStreamServer.m \
+                waze_esp32_tweak/WazeESP32Tweak.m
+          
+          ls -lh waze_esp32_tweak/output/WazeESP32Nav.dylib
+
+      - name: 4. Download / Prepare Base Waze IPA
+        id: prepare_ipa
+        run: |
+          IPA_FILE=""
+          if [ -n "${{ github.event.inputs.waze_ipa_url }}" ]; then
+            echo "📥 Downloading Waze IPA from input URL..."
+            curl -L "${{ github.event.inputs.waze_ipa_url }}" -o /tmp/waze_base.ipa
+            IPA_FILE="/tmp/waze_base.ipa"
+          elif [ -f "waze_esp32_tweak/WazePlus_4.100.0.ipa" ]; then
+            IPA_FILE="waze_esp32_tweak/WazePlus_4.100.0.ipa"
+          fi
+
+          if [ -n "$IPA_FILE" ] && [ -f "$IPA_FILE" ]; then
+            echo "has_ipa=true" >> $GITHUB_OUTPUT
+            echo "ipa_path=$IPA_FILE" >> $GITHUB_OUTPUT
+          else
+            echo "has_ipa=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No base IPA provided. Only WazeESP32Nav.dylib will be packaged."
+          fi
+
+      - name: 5. Patch Waze & Repackage IPA (if IPA present)
+        if: steps.prepare_ipa.outputs.has_ipa == 'true'
+        run: |
+          chmod +x waze_esp32_tweak/build_and_patch.sh
+          chmod +x waze_esp32_tweak/inject_dylib.py
+          waze_esp32_tweak/build_and_patch.sh "${{ steps.prepare_ipa.outputs.ipa_path }}" "waze_esp32_tweak/output"
+
+      - name: 6. Upload Dylib Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WazeESP32Nav-dylib
+          path: waze_esp32_tweak/output/WazeESP32Nav.dylib
+          retention-days: 14
+
+      - name: 7. Upload Repackaged Waze IPA Artifact
+        if: steps.prepare_ipa.outputs.has_ipa == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Waze-ESP32-HUD-PRODUCTION-ipa
+          path: waze_esp32_tweak/output/Waze-ESP32-HUD-PRODUCTION.ipa
+          retention-days: 14
