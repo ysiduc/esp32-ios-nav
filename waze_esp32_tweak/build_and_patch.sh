@@ -3,55 +3,60 @@ set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IPA_INPUT="${1:-$HOME/Downloads/WazePlus_4.100.0.ipa}"
-OUTPUT_DIR="${2:-$DIR/output}"
+OUTPUT_DIR_ARG="${2:-$DIR/output}"
+mkdir -p "$OUTPUT_DIR_ARG"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR_ARG" && pwd)"
 OUTPUT_IPA="$OUTPUT_DIR/Waze-ESP32-HUD-PRODUCTION.ipa"
-
-echo "=================================================="
-echo "🚀 Building Waze ESP32 Navigation & Virtual HUD Tweak"
-echo "=================================================="
-
-mkdir -p "$OUTPUT_DIR"
 WORK_DIR=$(mktemp -d /tmp/waze_build_XXXXXX)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "📦 1. Compiling WazeESP32Nav.dylib (iOS arm64)..."
+echo "📦 1. Checking / Compiling WazeESP32Nav.dylib..."
 
-# Detect Clang / SDK
-SDK_PATH=""
-if command -v xcrun &>/dev/null; then
-    SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)"
+if [ -f "$OUTPUT_DIR/WazeESP32Nav.dylib" ]; then
+    echo "✅ Found precompiled dylib at $OUTPUT_DIR/WazeESP32Nav.dylib"
+    cp "$OUTPUT_DIR/WazeESP32Nav.dylib" "$WORK_DIR/WazeESP32Nav.dylib"
+elif [ -f "$DIR/output/WazeESP32Nav.dylib" ]; then
+    echo "✅ Found precompiled dylib at $DIR/output/WazeESP32Nav.dylib"
+    cp "$DIR/output/WazeESP32Nav.dylib" "$WORK_DIR/WazeESP32Nav.dylib"
+else
+    # Detect Clang / SDK
+    SDK_PATH=""
+    if command -v xcrun &>/dev/null; then
+        SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)"
+    fi
+
+    CLANG_FLAGS=(
+        -target arm64-apple-ios14.0
+        -dynamiclib
+        -fobjc-arc
+        -O2
+        -Wall
+        -framework Foundation
+        -framework UIKit
+        -framework CoreBluetooth
+        -framework CoreGraphics
+        -framework QuartzCore
+        -install_name "@rpath/WazeESP32Nav.dylib"
+        -o "$WORK_DIR/WazeESP32Nav.dylib"
+        "$DIR/ESP32BLEManager.m"
+        "$DIR/ESP32VirtualHUDView.m"
+        "$DIR/WazeMapStreamServer.m"
+        "$DIR/WazeESP32Tweak.m"
+    )
+
+    if [ -n "$SDK_PATH" ]; then
+        CLANG_FLAGS+=(-isysroot "$SDK_PATH")
+    fi
+
+    echo "⚙️ Compiling with clang..."
+    clang "${CLANG_FLAGS[@]}"
+    echo "✅ Compiled WazeESP32Nav.dylib successfully!"
+    cp "$WORK_DIR/WazeESP32Nav.dylib" "$OUTPUT_DIR/WazeESP32Nav.dylib"
 fi
-
-CLANG_FLAGS=(
-    -target arm64-apple-ios14.0
-    -dynamiclib
-    -fobjc-arc
-    -O2
-    -Wall
-    -framework Foundation
-    -framework UIKit
-    -framework CoreBluetooth
-    -framework CoreGraphics
-    -framework QuartzCore
-    -install_name "@rpath/WazeESP32Nav.dylib"
-    -o "$WORK_DIR/WazeESP32Nav.dylib"
-    "$DIR/ESP32BLEManager.m"
-    "$DIR/ESP32VirtualHUDView.m"
-    "$DIR/WazeMapStreamServer.m"
-    "$DIR/WazeESP32Tweak.m"
-)
-
-if [ -n "$SDK_PATH" ]; then
-    CLANG_FLAGS+=(-isysroot "$SDK_PATH")
-fi
-
-clang "${CLANG_FLAGS[@]}"
-echo "✅ Compiled WazeESP32Nav.dylib successfully!"
 
 if [ ! -f "$IPA_INPUT" ]; then
     echo "⚠️ Warning: Input IPA not found at $IPA_INPUT."
     echo "Compiled dylib saved at: $OUTPUT_DIR/WazeESP32Nav.dylib"
-    cp "$WORK_DIR/WazeESP32Nav.dylib" "$OUTPUT_DIR/WazeESP32Nav.dylib"
     exit 0
 fi
 
