@@ -64,6 +64,10 @@ jobs:
             IPA_FILE="/tmp/waze_base.ipa"
           elif [ -f "waze_esp32_tweak/WazePlus_4.100.0.ipa" ]; then
             IPA_FILE="waze_esp32_tweak/WazePlus_4.100.0.ipa"
+          else
+            echo "📥 Downloading base Waze IPA from GitHub Release v1.0.0-waze..."
+            curl -sL "https://github.com/ysiduc/esp32-ios-nav/releases/download/v1.0.0-waze/WazePlus_4.100.0.ipa" -o /tmp/waze_base.ipa
+            IPA_FILE="/tmp/waze_base.ipa"
           fi
 
           if [ -n "$IPA_FILE" ] && [ -f "$IPA_FILE" ]; then
