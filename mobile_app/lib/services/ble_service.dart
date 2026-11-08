@@ -558,6 +558,7 @@ class BleService extends ChangeNotifier {
   }
 
   DateTime _lastNavPayloadTime = DateTime.now().subtract(const Duration(seconds: 1));
+  bool? _lastSentIsNavigating;
 
   /// Send Navigation Payload to ESP32 (ALWAYS via BLE per architecture)
   Future<bool> sendNavPayload(EspNavPayload payload) async {
@@ -568,10 +569,12 @@ class BleService extends ChangeNotifier {
     }
 
     final now = DateTime.now();
-    if (now.difference(_lastNavPayloadTime).inMilliseconds < 80) {
-      return false; // Skip burst write collision
+    if (_lastSentIsNavigating == payload.isNavigating &&
+        now.difference(_lastNavPayloadTime).inMilliseconds < 80) {
+      return false; // Skip burst write collision for same state
     }
     _lastNavPayloadTime = now;
+    _lastSentIsNavigating = payload.isNavigating;
 
     try {
       final bytes = utf8.encode(jsonStr);

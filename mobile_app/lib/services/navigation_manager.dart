@@ -92,6 +92,70 @@ class NavigationManager extends ChangeNotifier {
     return _activeRoute!.steps[_currentStepIndex];
   }
 
+  /// Strips verbose Vietnamese navigation instruction prefixes to leave only the clean street name
+  static String cleanStreetName(String raw) {
+    var s = raw.trim();
+    const prefixes = [
+      'Bắt đầu di chuyển trên ',
+      'Bắt đầu đi từ ',
+      'Tiếp tục đi thẳng trên ',
+      'Đi thẳng trên ',
+      'Đi thẳng vào ',
+      'Rẽ trái vào ',
+      'Rẽ phải vào ',
+      'Rẽ gắt sang trái vào ',
+      'Rẽ gắt sang phải vào ',
+      'Chếch sang trái vào ',
+      'Chếch sang phải vào ',
+      'Quay đầu xe trên ',
+      'Nhập làn vào đường ',
+      'Rẽ vào lối ra đường ',
+      'Đi vào đường nhánh nhập làn ',
+      'Đi theo nhánh rẽ bên trái vào ',
+      'Đi theo nhánh rẽ bên phải vào ',
+      'Qua ',
+    ];
+    for (final p in prefixes) {
+      if (s.toLowerCase().startsWith(p.toLowerCase())) {
+        s = s.substring(p.length).trim();
+        break;
+      }
+    }
+    return s;
+  }
+
+  /// Returns the clean name of the road currently being traveled on (for the bottom-right purple pill)
+  String get currentStreetName {
+    final route = _activeRoute ?? _previewRoute;
+    if (route != null && route.steps.isNotEmpty) {
+      final int roadIdx = (_currentStepIndex > 0 && _currentStepIndex < route.steps.length)
+          ? _currentStepIndex - 1
+          : 0;
+      final s = cleanStreetName(route.steps[roadIdx].streetName);
+      if (s.isNotEmpty && s != 'Đường không tên' && s != 'Đường chính') {
+        return s;
+      }
+      final cur = cleanStreetName(route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)].streetName);
+      if (cur.isNotEmpty && cur != 'Đường không tên') {
+        return cur;
+      }
+    }
+    if (route != null && route.summary.isNotEmpty) {
+      return cleanStreetName(route.summary);
+    }
+    return 'Đường hiện tại';
+  }
+
+  /// Returns the upcoming turn maneuver step (for the top-left black maneuver card)
+  NavStep? get upcomingStep {
+    final route = _activeRoute ?? _previewRoute;
+    if (route == null || route.steps.isEmpty) return null;
+    if (_currentStepIndex == 0 && route.steps.length > 1) {
+      return route.steps[1];
+    }
+    return route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
+  }
+
   NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
     _initGps();
     _startIdleHeartbeat();
@@ -210,6 +274,13 @@ class NavigationManager extends ChangeNotifier {
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
 
+    if (route.steps.isNotEmpty) {
+      final startLoc = _currentLocation ?? (route.polylinePoints.isNotEmpty ? route.polylinePoints.first : route.steps.first.coordinate);
+      _currentLocation ??= startLoc;
+      final targetStep = route.steps.length > 1 ? route.steps[1] : route.steps.first;
+      _distanceToNextManeuver = const Distance().as(LengthUnit.Meter, startLoc, targetStep.coordinate);
+    }
+
     // Start location tracking with iOS background execution enabled
     final locationSettings = _buildLocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
@@ -246,7 +317,11 @@ class NavigationManager extends ChangeNotifier {
     if (polyline.isEmpty) return;
 
     _currentLocation = polyline.first;
-    _updateRemainingMetrics();
+    double initialHeading = _currentHeading;
+    if (polyline.length > 1) {
+      initialHeading = const Distance().bearing(polyline[0], polyline[1]);
+    }
+    _updateUserPosition(polyline.first, 38.0, initialHeading);
 
     _simulationTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
       if (_simulatedPolylineIndex < polyline.length - 1) {

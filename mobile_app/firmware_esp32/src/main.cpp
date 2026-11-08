@@ -22,9 +22,9 @@ static String wifiPass = "00000000";
 
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
-static uint8_t bleRxBuf[24576];
-static uint8_t renderBufA[24576];
-static uint8_t renderBufB[24576];
+static uint8_t bleRxBuf[32768];
+static uint8_t renderBufA[32768];
+static uint8_t renderBufB[32768];
 static volatile uint8_t* activeRenderBuf = renderBufA;
 static volatile size_t activeRenderBufLen = 0;
 static volatile bool newFrameAvailable = false;
@@ -91,33 +91,30 @@ enum AppleDiscState {
 
 static AppleDiscState appleDiscState = APPLE_DISC_IDLE;
 static unsigned long appleDiscTimer = 0;
-static bool secPending = false;
-static unsigned long secPendingTime = 0;
 static uint16_t bleConnectedHandle = 0;
 static unsigned long bleConnectedTime = 0;
 
-// Combined GAP event handler for AMS, ANCS & CTS
+// GAP event handler to monitor connection lifecycle and clean up bonds
 static int combinedGapHandler(ble_gap_event *event, void *arg) {
   if (event->type == BLE_GAP_EVENT_ENC_CHANGE) {
     Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
                   event->enc_change.status, event->enc_change.conn_handle);
-    if (event->enc_change.status == 0) {
-      secPending = false;
-      // Link encrypted and bonded! Start sequential discovery starting with CTS
-      appleDiscState = APPLE_DISC_START_CTS;
-      appleDiscTimer = millis() + 200;
-    } else {
-      Serial.printf("[BLE] Link encryption failed (status=%d). If previously bonded, please 'Forget This Device' in iPhone Bluetooth Settings.\n",
+    if (event->enc_change.status != 0) {
+      NimBLEDevice::deleteBond(event->enc_change.conn_handle);
+      Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
                     event->enc_change.status);
     }
+  }
+  if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
+    Serial.printf("[BLE] Repeat pairing request from conn_handle=%d. Resetting bond and retrying...\n",
+                  event->repeat_pairing.conn_handle);
+    NimBLEDevice::deleteBond(event->repeat_pairing.conn_handle);
+    return BLE_GAP_REPEAT_PAIRING_RETRY;
   }
   if (event->type == BLE_GAP_EVENT_DISCONNECT) {
     Serial.printf("[BLE] Disconnected event! reason=0x%04x (HCI 0x%02x)\n",
                   event->disconnect.reason, event->disconnect.reason - 0x200);
   }
-  AppleMediaService::handleGapEvent(event, arg);
-  AppleNotificationService::handleGapEvent(event, arg);
-  AppleCurrentTimeService::handleGapEvent(event, arg);
   return 0;
 }
 
@@ -128,55 +125,31 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
     display.setBleConnected(true);
-    Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
-                  desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
 
     bleConnectedHandle = desc->conn_handle;
     bleConnectedTime = millis();
 
-    AppleMediaService::connHandle = desc->conn_handle;
-    AppleNotificationService::connHandle = desc->conn_handle;
-    AppleCurrentTimeService::connHandle = desc->conn_handle;
+    // Request Apple-compliant connection parameters (20ms - 40ms interval, 6000ms supervision timeout)
+    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 600);
 
     // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
     NimBLEDevice::stopAdvertising();
 
-    if (desc->sec_state.encrypted) {
-      Serial.println("[BLE] Link already encrypted/bonded. Starting Apple sequential discovery...");
-      secPending = false;
-      appleDiscState = APPLE_DISC_START_CTS;
-      appleDiscTimer = millis() + 300;
-    } else {
-      // Slave security request must be sent 500ms after connection so iOS prompts "Bluetooth Pairing Request"
-      Serial.println("[BLE] Link connected (unencrypted). Scheduling slave security request in 500ms...");
-      secPending = true;
-      secPendingTime = millis() + 500;
-      appleDiscState = APPLE_DISC_IDLE;
-    }
+    appleDiscState = APPLE_DISC_IDLE;
   }
 
   void onAuthenticationComplete(ble_gap_conn_desc* desc) {
     Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
                   desc->sec_state.encrypted, desc->sec_state.bonded);
-    if (desc->sec_state.encrypted) {
-      secPending = false;
-      if (appleDiscState == APPLE_DISC_IDLE) {
-        appleDiscState = APPLE_DISC_START_CTS;
-        appleDiscTimer = millis() + 200;
-      }
-    }
   }
 
   void onDisconnect(NimBLEServer* pServer) {
     bleConnected = false;
     bleConnectedHandle = 0;
-    secPending = false;
     appleDiscState = APPLE_DISC_IDLE;
     display.setBleConnected(false);
     display.setAppConnected(false);
-    AppleMediaService::onDisconnected();
-    AppleNotificationService::onDisconnected();
-    AppleCurrentTimeService::onDisconnected();
     Serial.println("[BLE] Disconnected. Restarting advertising...");
     NimBLEDevice::startAdvertising();
   }
@@ -517,16 +490,9 @@ void setup() {
   NimBLEDevice::init("ESP32-S3 Navi");
   NimBLEDevice::setMTU(517);
 
-  // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
-  // bonding = true, mitm = false ("Just Works" - no PIN input needed), sc = true (LE Secure Connections)
-  NimBLEDevice::setSecurityAuth(true, false, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
-  NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+  // Disable BLE Security Auth to prevent iOS CoreOS bluetoothd from initiating 30s SMP timeout
+  NimBLEDevice::setSecurityAuth(false, false, false);
   NimBLEDevice::setCustomGapHandler(combinedGapHandler);
-  AppleMediaService::init();
-  AppleNotificationService::init();
-  AppleCurrentTimeService::init();
 
   // Restore last known battery level and clock from flash storage
   prefs.begin("nav_state", true);
@@ -552,8 +518,8 @@ void setup() {
   NimBLEService* pNavService = pServer->createService(navServiceUUID);
   pNavChar = pNavService->createCharacteristic(
     navCharUUID,
-    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC |
-    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC |
+    NIMBLE_PROPERTY::READ |
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
     NIMBLE_PROPERTY::NOTIFY
   );
   pNavChar->setCallbacks(new NavCharCallbacks());
@@ -561,24 +527,15 @@ void setup() {
 
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
 
-  // 1. Primary Advertisement Data (Max 31 bytes):
-  // Flags: 3 bytes (0x02, 0x01, 0x06)
-  // ANCS 128-bit Service Solicitation: 18 bytes (0x11, 0x15, ...UUID...)
-  // Total = 21 bytes <= 31 bytes!
-  // Placing ANCS Solicitation in advData is REQUIRED by Apple for iOS Settings to recognize the accessory,
-  // trigger pairing, and display the "Allow iPhone Notifications" prompt!
+  // Primary Advertisement Data: "ESP32-S3 Navi" + Service 0xFFE0
   NimBLEAdvertisementData advData;
   advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
-  advData.addData((char*)ancsSolicitData, sizeof(ancsSolicitData));
+  advData.setName("ESP32-S3 Navi");
+  advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setAdvertisementData(advData);
 
-  // 2. Scan Response Data (Max 31 bytes):
-  // Complete Local Name: "ESP32-S3 Navi" (15 bytes)
-  // Custom Nav Service: 0xFFE0 (4 bytes)
-  // Total = 19 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.setName("ESP32-S3 Navi");
-  scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setScanResponseData(scanResponseData);
 
   pAdvertising->setMinInterval(16); // 10ms fast advertising
@@ -633,19 +590,30 @@ void loop() {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
-    // Only render live map when in Navigation mode (app connected via BLE)
-    if (activeRenderBufLen > 100 && display.isAppConnected()) {
-      g_clipMapOnly = true;
-      tft.setViewport(6, 26, 144, 208, false);
-      TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
-      tft.resetViewport();
-      g_clipMapOnly = false;
+    // Render live map when app is connected via BLE or Hotspot WebSocket and no Call/SMS popup is active
+    if (activeRenderBufLen > 100 && (display.isAppConnected() || wsConnected) && !display.isPopupActive()) {
+      uint16_t jpgW = 0, jpgH = 0;
+      TJpgDec.getJpgSize(&jpgW, &jpgH, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      if (jpgW >= 300) {
+        display.setFullScreenStream(true);
+        g_clipMapOnly = false;
+        tft.resetViewport();
+        TJpgDec.drawJpg(0, 0, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      } else if (jpgW > 0) {
+        display.setFullScreenStream(false);
+        g_clipMapOnly = true;
+        tft.setViewport(6, 26, 144, 208, false);
+        TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        tft.resetViewport();
+        g_clipMapOnly = false;
+      }
     }
     #endif
 
     // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
     if (wsConnected) {
       webSocketClient.sendTXT("K");
+      webSocketClient.loop();
     }
   }
 
@@ -653,18 +621,7 @@ void loop() {
   bool isStreaming = (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
-
-  // 3. Delayed Security Request execution to prompt iOS native Pairing dialog
-  if (secPending && millis() >= secPendingTime) {
-    secPending = false;
-    if (bleConnected && bleConnectedHandle != 0) {
-      Serial.println("[BLE] Requesting security from iPhone (startSecurity) to trigger native Pairing dialog...");
-      int rc = NimBLEDevice::startSecurity(bleConnectedHandle);
-      Serial.printf("[BLE] NimBLEDevice::startSecurity returned rc=%d\n", rc);
-    }
-  }
-
-  // 4. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
+  // 3. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
   if (bleConnected && bleConnectedHandle != 0) {
     switch (appleDiscState) {
       case APPLE_DISC_START_CTS:

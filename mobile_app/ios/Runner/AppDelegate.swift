@@ -142,6 +142,41 @@ import AVFoundation
         } catch {
           result(FlutterError(code: "WRITE_ERROR", message: error.localizedDescription, details: nil))
         }
+      case "compressRgbaToJpeg":
+        guard let args = call.arguments as? [String: Any],
+              let rgbaTyped = args["rgba"] as? FlutterStandardTypedData,
+              let width = args["width"] as? Int,
+              let height = args["height"] as? Int else {
+          result(nil)
+          return
+        }
+        let quality = (args["quality"] as? Double) ?? 0.65
+        let data = rgbaTyped.data
+        let bitsPerComponent = 8
+        let bytesPerRow = width * 4
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        if let provider = CGDataProvider(data: data as CFData),
+           let cgImage = CGImage(
+             width: width,
+             height: height,
+             bitsPerComponent: bitsPerComponent,
+             bitsPerPixel: 32,
+             bytesPerRow: bytesPerRow,
+             space: colorSpace,
+             bitmapInfo: bitmapInfo,
+             provider: provider,
+             decode: nil,
+             shouldInterpolate: false,
+             intent: .defaultIntent
+           ) {
+          let uiImage = UIImage(cgImage: cgImage)
+          if let jpegData = uiImage.jpegData(compressionQuality: CGFloat(quality)) {
+            result(FlutterStandardTypedData(bytes: jpegData))
+            return
+          }
+        }
+        result(nil)
       case "renderMapSnapshot":
         guard let args = call.arguments as? [String: Any],
               let lat = args["lat"] as? Double,

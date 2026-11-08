@@ -66,6 +66,8 @@ private:
   bool _needFullRedraw = true;
   bool _lastIsNavigating = false;
   bool _lastStreamingState = false;
+  bool _lastFullNavStream = false;
+  bool _fullScreenStreamActive = false;
   unsigned long _lastRenderTime = 0;
   uint32_t _songScrollTick = 0;
   int _songScrollOffset = 0;
@@ -135,6 +137,9 @@ public:
   void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, int16_t head = 0) {
     if (_navData.isNavigating != isNav) {
       _needFullRedraw = true;
+      if (!isNav) {
+        _fullScreenStreamActive = false;
+      }
     }
     _navData.turnCode = turn;
     _navData.distMeters = dist;
@@ -248,6 +253,25 @@ public:
 
   bool isAppConnected() const {
     return _isAppConnected;
+  }
+
+  bool isNavigating() const {
+    return _navData.isNavigating;
+  }
+
+  bool isPopupActive() const {
+    return _currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS;
+  }
+
+  void setFullScreenStream(bool active) {
+    if (_fullScreenStreamActive != active) {
+      _fullScreenStreamActive = active;
+      if (!active) {
+        _lastFullNavStream = false;
+        _needFullRedraw = true;
+        _renderTft(true);
+      }
+    }
   }
 
   void setTime(uint8_t hour, uint8_t minute, uint8_t second = 0) {
@@ -417,9 +441,11 @@ public:
         _lastRenderTime = millis();
         _needFullRedraw = false;
       }
-      if (millis() - _lastSongScrollTime >= 35) {
-        uint16_t cDockBg = tft.color565(8, 12, 18);
-        _renderDockbarSongMarquee(cDockBg);
+      if (!((_navData.isNavigating || _fullScreenStreamActive) && isStreamingActive && !isPopupActive())) {
+        if (millis() - _lastSongScrollTime >= 35) {
+          uint16_t cDockBg = tft.color565(8, 12, 18);
+          _renderDockbarSongMarquee(cDockBg);
+        }
       }
     }
 #endif
@@ -1028,8 +1054,20 @@ private:
     }
 
     // =========================================================================
-    // STATE_NAVIGATION: EXACT 100% REPLICA OF TARGET DESIGN
+    // STATE_NAVIGATION: FULL-SCREEN 320x240 JPEG STREAM WHEN NAVIGATING
     // =========================================================================
+    if ((_navData.isNavigating || _fullScreenStreamActive) && isStreamingActive) {
+      _lastFullNavStream = true;
+      _lastIsNavigating = true;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
+      return;
+    }
+    if (_lastFullNavStream) {
+      _lastFullNavStream = false;
+      _needFullRedraw = true;
+    }
+
     uint16_t cCardBg = tft.color565(19, 27, 38);   // Pure Dark Charcoal (#131B26)
     uint16_t cPillBg = tft.color565(11, 17, 26);   // Deep Black Pill (#0B111A)
     uint16_t cBorder = tft.color565(32, 45, 61);   // Subtle Border (#202D3D)

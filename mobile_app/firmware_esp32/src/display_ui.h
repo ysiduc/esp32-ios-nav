@@ -66,6 +66,8 @@ private:
   bool _needFullRedraw = true;
   bool _lastIsNavigating = false;
   bool _lastStreamingState = false;
+  bool _lastFullNavStream = false;
+  bool _fullScreenStreamActive = false;
   unsigned long _lastRenderTime = 0;
   uint32_t _songScrollTick = 0;
   int _songScrollOffset = 0;
@@ -92,6 +94,15 @@ private:
   char _lastDrawnBigClock[16] = "";
   char _lastDockClock[16] = "";
   uint8_t _lastDockBat = 255;
+
+  // Cached state to eliminate left vector map blinking/flicker
+  bool _mapVectorDrawn = false;
+  bool _lastMapIsNavigating = false;
+  uint8_t _lastMapTurn = 255;
+  uint16_t _lastMapDist = 65535;
+  uint8_t _lastMapRouteCount = 255;
+  bool _hudCardDrawn = false;
+  bool _hudCardNavMode = false;
 
 public:
   void init() {
@@ -126,6 +137,9 @@ public:
   void setNavData(uint8_t turn, uint16_t dist, uint16_t totalDist, uint8_t speed, uint8_t eta, const char* street, const char* arrival = "18:26", const char* clock = "18:25", uint8_t battery = 89, const RoutePoint* pts = nullptr, uint8_t ptCount = 0, bool isNav = false, int16_t head = 0) {
     if (_navData.isNavigating != isNav) {
       _needFullRedraw = true;
+      if (!isNav) {
+        _fullScreenStreamActive = false;
+      }
     }
     _navData.turnCode = turn;
     _navData.distMeters = dist;
@@ -241,6 +255,25 @@ public:
     return _isAppConnected;
   }
 
+  bool isNavigating() const {
+    return _navData.isNavigating;
+  }
+
+  bool isPopupActive() const {
+    return _currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS;
+  }
+
+  void setFullScreenStream(bool active) {
+    if (_fullScreenStreamActive != active) {
+      _fullScreenStreamActive = active;
+      if (!active) {
+        _lastFullNavStream = false;
+        _needFullRedraw = true;
+        _renderTft(true);
+      }
+    }
+  }
+
   void setTime(uint8_t hour, uint8_t minute, uint8_t second = 0) {
     _clockHour = hour % 24;
     _clockMin = minute % 60;
@@ -252,8 +285,6 @@ public:
     if (strcmp(_navData.currentTime, timeStr) != 0) {
       strncpy(_navData.currentTime, timeStr, sizeof(_navData.currentTime) - 1);
       _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-      _lastDockClock[0] = '\0';
-      _needFullRedraw = true;
     }
   }
 
@@ -298,8 +329,6 @@ public:
 
     if (_navData.batteryLevel != finalBat) {
       _navData.batteryLevel = finalBat;
-      _lastDockBat = 255;
-      _needFullRedraw = true;
     }
   }
 
@@ -332,6 +361,8 @@ public:
     if (_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) {
       _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       if (!_isAppConnected) _pairingBgDrawn = false;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
       _needFullRedraw = true;
     }
   }
@@ -346,6 +377,8 @@ public:
 
   void forceRedraw() {
     _pairingBgDrawn = false;
+    _mapVectorDrawn = false;
+    _hudCardDrawn = false;
     _needFullRedraw = true;
   }
 
@@ -369,8 +402,6 @@ public:
           if (strcmp(_navData.currentTime, newTime) != 0) {
             strncpy(_navData.currentTime, newTime, sizeof(_navData.currentTime) - 1);
             _navData.currentTime[sizeof(_navData.currentTime) - 1] = '\0';
-            _lastDockClock[0] = '\0';
-            _needFullRedraw = true;
           }
         }
       }
@@ -379,6 +410,8 @@ public:
     if ((_currentState == STATE_POPUP_CALL || _currentState == STATE_POPUP_SMS) && millis() > _popupData.expireMillis) {
       _currentState = _isAppConnected ? STATE_NAVIGATION : STATE_PAIRING_WAIT;
       if (!_isAppConnected) _pairingBgDrawn = false;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
       _needFullRedraw = true;
     }
 
@@ -408,9 +441,11 @@ public:
         _lastRenderTime = millis();
         _needFullRedraw = false;
       }
-      if (millis() - _lastSongScrollTime >= 35) {
-        uint16_t cDockBg = tft.color565(8, 12, 18);
-        _renderDockbarSongMarquee(cDockBg);
+      if (!((_navData.isNavigating || _fullScreenStreamActive) && isStreamingActive && !isPopupActive())) {
+        if (millis() - _lastSongScrollTime >= 35) {
+          uint16_t cDockBg = tft.color565(8, 12, 18);
+          _renderDockbarSongMarquee(cDockBg);
+        }
       }
     }
 #endif
@@ -986,6 +1021,8 @@ private:
       if ((isStreamingActive && _isAppConnected) || _navData.isNavigating || _isAppConnected) {
         _currentState = STATE_NAVIGATION;
         _pairingBgDrawn = false;
+        _mapVectorDrawn = false;
+        _hudCardDrawn = false;
         _needFullRedraw = true;
       } else {
         _drawPairingScreenTft();
@@ -1017,21 +1054,34 @@ private:
     }
 
     // =========================================================================
-    // STATE_NAVIGATION: EXACT 100% REPLICA OF TARGET DESIGN
+    // STATE_NAVIGATION: FULL-SCREEN 320x240 JPEG STREAM WHEN NAVIGATING
     // =========================================================================
+    if ((_navData.isNavigating || _fullScreenStreamActive) && isStreamingActive) {
+      _lastFullNavStream = true;
+      _lastIsNavigating = true;
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
+      return;
+    }
+    if (_lastFullNavStream) {
+      _lastFullNavStream = false;
+      _needFullRedraw = true;
+    }
+
     uint16_t cCardBg = tft.color565(19, 27, 38);   // Pure Dark Charcoal (#131B26)
     uint16_t cPillBg = tft.color565(11, 17, 26);   // Deep Black Pill (#0B111A)
     uint16_t cBorder = tft.color565(32, 45, 61);   // Subtle Border (#202D3D)
     uint16_t cSubText = tft.color565(148, 163, 184); // Light Grey (#94A3B8)
     uint16_t cDimGrey = tft.color565(100, 116, 139); // Dim Grey (#64748B)
 
-    // Detect Navigation Mode Transitions
+    // Detect Navigation Mode Transitions (Standby vs Active Nav)
     if (_lastIsNavigating != _navData.isNavigating) {
       _lastIsNavigating = _navData.isNavigating;
       _needFullRedraw = true;
     }
 
     if (_needFullRedraw) {
+      _needFullRedraw = false;
       tft.fillScreen(TFT_BLACK);
 
       // Top Dockbar (Identical to Standby Screen!)
@@ -1040,11 +1090,46 @@ private:
       // Map border container
       tft.drawRoundRect(4, 24, 148, 212, 12, TFT_CYAN);
 
-      // Right Card Box Framework
+      _mapVectorDrawn = false;
+      _hudCardDrawn = false;
+    } else {
+      // Partial updates: refresh dockbar clock & battery with zero full-screen wipe
+      _drawUnifiedDockbar(false);
+    }
+
+    // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
+    if (isStreamingActive) {
+      _mapVectorDrawn = false;
+    } else {
+      bool needMapRedraw = !_mapVectorDrawn || (_lastMapIsNavigating != _navData.isNavigating);
+      if (_navData.isNavigating) {
+        if (_lastMapTurn != _navData.turnCode ||
+            abs((int)_lastMapDist - (int)_navData.distMeters) >= 10 ||
+            _lastMapRouteCount != _navData.routePointCount) {
+          needMapRedraw = true;
+        }
+      }
+      if (needMapRedraw) {
+        _renderStandbyVectorMap();
+        _mapVectorDrawn = true;
+        _lastMapIsNavigating = _navData.isNavigating;
+        _lastMapTurn = _navData.turnCode;
+        _lastMapDist = _navData.distMeters;
+        _lastMapRouteCount = _navData.routePointCount;
+      }
+    }
+
+    // 3. RIGHT 50%: HUD CARD (Drawn once per mode change, values updated with setTextPadding)
+    bool hudModeChanged = (!_hudCardDrawn || _hudCardNavMode != _navData.isNavigating);
+    if (hudModeChanged) {
+      _hudCardDrawn = true;
+      _hudCardNavMode = _navData.isNavigating;
+
+      // Draw Right Card Box Framework ONCE
       tft.fillRoundRect(158, 24, 158, 212, 12, cCardBg);
       tft.drawRoundRect(158, 24, 158, 212, 12, cBorder);
 
-      // Invalidate all cached drawing state
+      // Invalidate all cached drawing state so sub-elements will be rendered into the new card
       _lastDrawnTurn = 255;
       _lastDrawnDist = 65535;
       _lastDrawnSpeed = 255;
@@ -1055,14 +1140,21 @@ private:
       _lastDrawnSong[0] = '\0';
       _lastDrawnArtist[0] = '\0';
       _lastDrawnBigClock[0] = '\0';
-    } else {
-      // Partial updates: refresh dockbar clock & battery
-      _drawUnifiedDockbar(false);
-    }
 
-    // 2. LEFT 50%: LIVE MINI MAP CANVAS (x: 4, y: 24, w: 148, h: 212)
-    if (!isStreamingActive) {
-      _renderStandbyVectorMap();
+      if (!_navData.isNavigating) {
+        // Driver tag
+        tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
+        tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
+        tft.setTextColor(TFT_CYAN, cPillBg);
+        tft.drawCentreString("* ysiduc", 237, 68, 2);
+
+        // Status text
+        _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
+      } else {
+        // Section C Label
+        tft.fillRect(164, 136, 146, 78, cCardBg);
+        _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
+      }
     }
 
     if (!_navData.isNavigating) {
@@ -1070,7 +1162,7 @@ private:
       // STANDBY / IDLE DASHBOARD MODE: Clock, ysiduc, Current Song & Artist
       // =======================================================================
       // A. Large Elegant Digital Clock (y: 32 to 58)
-      if (_needFullRedraw || strcmp(_lastDrawnBigClock, _navData.currentTime) != 0) {
+      if (strcmp(_lastDrawnBigClock, _navData.currentTime) != 0) {
         strncpy(_lastDrawnBigClock, _navData.currentTime, sizeof(_lastDrawnBigClock) - 1);
         tft.setTextColor(TFT_WHITE, cCardBg);
         tft.setTextPadding(140);
@@ -1078,17 +1170,9 @@ private:
         tft.setTextPadding(0);
       }
 
-      // B. ysiduc Driver / Status Tag (y: 64 to 86)
-      if (_needFullRedraw) {
-        tft.fillRoundRect(172, 64, 130, 22, 6, cPillBg);
-        tft.drawRoundRect(172, 64, 130, 22, 6, tft.color565(0, 132, 255));
-        tft.setTextColor(TFT_CYAN, cPillBg);
-        tft.drawCentreString("* ysiduc", 237, 68, 2);
-      }
-
       // C. Media / Music Player Card (y: 94 to 174)
       bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
-      if (_needFullRedraw || strcmp(_lastDrawnSong, _navData.songTitle) != 0 || strcmp(_lastDrawnArtist, _navData.songArtist) != 0) {
+      if (strcmp(_lastDrawnSong, _navData.songTitle) != 0 || strcmp(_lastDrawnArtist, _navData.songArtist) != 0) {
         strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
         strncpy(_lastDrawnArtist, _navData.songArtist, sizeof(_lastDrawnArtist) - 1);
 
@@ -1122,23 +1206,18 @@ private:
         }
       }
 
-      // D. Bottom Status: "Sẵn sàng di chuyển" (y: 186)
-      if (_needFullRedraw) {
-        _drawCentreUtf8String("Sẵn sàng di chuyển", 237, 186, TFT_GREEN, cCardBg);
-      }
-
     } else {
       // =======================================================================
       // ACTIVE NAVIGATION MODE: Maneuver Icon + Distance + Speed + Street + ETA
       // =======================================================================
       // --- SECTION A: Maneuver Icon + Turn Distance + Speed (y: 30 to 82) ---
-      if (_needFullRedraw || _lastDrawnTurn != _navData.turnCode) {
+      if (_lastDrawnTurn != _navData.turnCode) {
         _lastDrawnTurn = _navData.turnCode;
         _drawManeuverArrow(164, 30, _navData.turnCode);
       }
 
       // Distance
-      if (_needFullRedraw || _lastDrawnDist != _navData.distMeters) {
+      if (_lastDrawnDist != _navData.distMeters) {
         _lastDrawnDist = _navData.distMeters;
         tft.setTextColor(TFT_WHITE, cCardBg);
         tft.setTextPadding(92);
@@ -1153,7 +1232,7 @@ private:
       }
 
       // Speed
-      if (_needFullRedraw || _lastDrawnSpeed != _navData.speedKmh) {
+      if (_lastDrawnSpeed != _navData.speedKmh) {
         _lastDrawnSpeed = _navData.speedKmh;
         tft.setTextColor(TFT_CYAN, cCardBg);
         tft.setTextPadding(92);
@@ -1164,7 +1243,7 @@ private:
       }
 
       // --- SECTION B: Street Name Pill Card (y: 86 to 126) ---
-      if (_needFullRedraw || strcmp(_lastDrawnStreet, _navData.streetName) != 0) {
+      if (strcmp(_lastDrawnStreet, _navData.streetName) != 0) {
         strncpy(_lastDrawnStreet, _navData.streetName, sizeof(_lastDrawnStreet) - 1);
         tft.fillRoundRect(164, 86, 146, 38, 8, cPillBg);
         tft.drawRoundRect(164, 86, 146, 38, 8, tft.color565(30, 41, 59));
@@ -1172,13 +1251,8 @@ private:
       }
 
       // --- SECTION C: ETA & Total Distance (y: 136 to 226) ---
-      if (_needFullRedraw) {
-        tft.fillRect(164, 136, 146, 78, cCardBg);
-        _drawUtf8String("Dự kiến", 168, 144, cDimGrey, cCardBg);
-      }
-
       // Total Distance
-      if (_needFullRedraw || _lastDrawnTotalDist != _navData.totalDistMeters) {
+      if (_lastDrawnTotalDist != _navData.totalDistMeters) {
         _lastDrawnTotalDist = _navData.totalDistMeters;
         tft.setTextColor(cSubText, cCardBg);
         tft.setTextPadding(70);
@@ -1193,7 +1267,7 @@ private:
       }
 
       // Arrival Time
-      if (_needFullRedraw || strcmp(_lastDrawnArrival, _navData.arrivalTime) != 0) {
+      if (strcmp(_lastDrawnArrival, _navData.arrivalTime) != 0) {
         strncpy(_lastDrawnArrival, _navData.arrivalTime, sizeof(_lastDrawnArrival) - 1);
         tft.setTextColor(TFT_CYAN, cCardBg);
         tft.setTextPadding(68);
@@ -1202,7 +1276,7 @@ private:
       }
 
       // ETA Minutes
-      if (_needFullRedraw || _lastDrawnEta != _navData.etaMinutes) {
+      if (_lastDrawnEta != _navData.etaMinutes) {
         _lastDrawnEta = _navData.etaMinutes;
         tft.setTextColor(TFT_GREEN, cCardBg);
         tft.setTextPadding(68);

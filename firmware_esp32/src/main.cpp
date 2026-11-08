@@ -22,9 +22,9 @@ static String wifiPass = "00000000";
 
 
 // Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
-static uint8_t bleRxBuf[24576];
-static uint8_t renderBufA[24576];
-static uint8_t renderBufB[24576];
+static uint8_t bleRxBuf[32768];
+static uint8_t renderBufA[32768];
+static uint8_t renderBufB[32768];
 static volatile uint8_t* activeRenderBuf = renderBufA;
 static volatile size_t activeRenderBufLen = 0;
 static volatile bool newFrameAvailable = false;
@@ -590,13 +590,23 @@ void loop() {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
-    // Only render live map when in Navigation mode (app connected via BLE)
-    if (activeRenderBufLen > 100 && display.isAppConnected()) {
-      g_clipMapOnly = true;
-      tft.setViewport(6, 26, 144, 208, false);
-      TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
-      tft.resetViewport();
-      g_clipMapOnly = false;
+    // Render live map when app is connected via BLE or Hotspot WebSocket and no Call/SMS popup is active
+    if (activeRenderBufLen > 100 && (display.isAppConnected() || wsConnected) && !display.isPopupActive()) {
+      uint16_t jpgW = 0, jpgH = 0;
+      TJpgDec.getJpgSize(&jpgW, &jpgH, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      if (jpgW >= 300) {
+        display.setFullScreenStream(true);
+        g_clipMapOnly = false;
+        tft.resetViewport();
+        TJpgDec.drawJpg(0, 0, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      } else if (jpgW > 0) {
+        display.setFullScreenStream(false);
+        g_clipMapOnly = true;
+        tft.setViewport(6, 26, 144, 208, false);
+        TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        tft.resetViewport();
+        g_clipMapOnly = false;
+      }
     }
     #endif
 

@@ -538,7 +538,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Center(
               child: Container(
                 width: 350,
-                height: 235,
+                height: navManager.isNavigating ? 262 : 235,
                 decoration: BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(20),
@@ -551,105 +551,120 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     ),
                   ],
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Column(
-                  children: [
-                    // Top Status Bar: ESP32 BLE (Cyan) | Time (White) | 100% (Green)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      child: Row(
+                padding: (navManager.isNavigating && !isCallActive && !isSmsActive)
+                    ? EdgeInsets.zero
+                    : const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: (navManager.isNavigating && !isCallActive && !isSmsActive)
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(15),
+                        child: streamService.latestJpegBytes != null
+                            ? Image.memory(
+                                streamService.latestJpegBytes!,
+                                width: double.infinity,
+                                height: double.infinity,
+                                fit: BoxFit.fill,
+                                gaplessPlayback: true,
+                              )
+                            : _buildSplitView(navManager, streamService, userLoc),
+                      )
+                    : Column(
                         children: [
-                          // 1/6: * ysiduc
-                          Expanded(
-                            flex: 1,
+                          // Top Status Bar: ESP32 BLE (Cyan) | Time (White) | 100% (Green)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                             child: Row(
                               children: [
-                                Icon(
-                                  bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
-                                  color: const Color(0xFF00F0FF),
-                                  size: 11,
+                                // 1/6: * ysiduc
+                                Expanded(
+                                  flex: 1,
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
+                                        color: const Color(0xFF00F0FF),
+                                        size: 11,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      const Text(
+                                        '* ysiduc',
+                                        style: TextStyle(
+                                          color: Color(0xFF00F0FF),
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                const SizedBox(width: 2),
-                                const Text(
-                                  '* ysiduc',
-                                  style: TextStyle(
-                                    color: Color(0xFF00F0FF),
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
+
+                                // 3/6: Marquee / Current Track Title & Artist
+                                Expanded(
+                                  flex: 3,
+                                  child: Center(
+                                    child: Text(
+                                      mediaService.hasMedia
+                                          ? '♫ ${mediaService.songTitle}${mediaService.songArtist.isNotEmpty ? " - ${mediaService.songArtist}" : ""}'
+                                          : '-- Chưa phát nhạc --',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: mediaService.hasMedia ? const Color(0xFFFBBF24) : Colors.white38,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // 1/6: Current Clock
+                                Expanded(
+                                  flex: 1,
+                                  child: Center(
+                                    child: Text(
+                                      _getCurrentClock(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+
+                                // 1/6: Battery & Icon
+                                const Expanded(
+                                  flex: 1,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        '89%',
+                                        style: TextStyle(
+                                          color: Color(0xFF05FFA1),
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      SizedBox(width: 2),
+                                      Icon(Icons.battery_5_bar_rounded, color: Color(0xFF05FFA1), size: 12),
+                                    ],
                                   ),
                                 ),
                               ],
                             ),
                           ),
+                          const SizedBox(height: 4),
 
-                          // 3/6: Marquee / Current Track Title & Artist
+                          // Main Split Screen Body (50% Map Zoom x16 | 50% HUD Cards)
                           Expanded(
-                            flex: 3,
-                            child: Center(
-                              child: Text(
-                                mediaService.hasMedia
-                                    ? '♫ ${mediaService.songTitle}${mediaService.songArtist.isNotEmpty ? " - ${mediaService.songArtist}" : ""}'
-                                    : '-- Chưa phát nhạc --',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: mediaService.hasMedia ? const Color(0xFFFBBF24) : Colors.white38,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // 1/6: Current Clock
-                          Expanded(
-                            flex: 1,
-                            child: Center(
-                              child: Text(
-                                _getCurrentClock(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // 1/6: Battery & Icon
-                          const Expanded(
-                            flex: 1,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                Text(
-                                  '89%',
-                                  style: TextStyle(
-                                    color: Color(0xFF05FFA1),
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                SizedBox(width: 2),
-                                Icon(Icons.battery_5_bar_rounded, color: Color(0xFF05FFA1), size: 12),
-                              ],
-                            ),
+                            child: isCallActive
+                                ? _buildCallPopup(activeCallerName, activeCallerNum)
+                                : isSmsActive
+                                    ? _buildSmsPopup(activeSmsSender, activeSmsMsg)
+                                    : _buildSplitView(navManager, streamService, userLoc),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 4),
-
-                    // Main Split Screen Body (50% Map Zoom x16 | 50% HUD Cards)
-                    Expanded(
-                      child: isCallActive
-                          ? _buildCallPopup(activeCallerName, activeCallerNum)
-                          : isSmsActive
-                              ? _buildSmsPopup(activeSmsSender, activeSmsMsg)
-                              : _buildSplitView(navManager, streamService, userLoc),
-                    ),
-                  ],
-                ),
               ),
             ),
 
