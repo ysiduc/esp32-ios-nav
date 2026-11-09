@@ -346,7 +346,8 @@ public:
   }
 
   bool isCallActive() const {
-    return _notifShown && _notif.isCall && (millis() < _notifExpire);
+    return (_popupData.active && _popupData.isCall && millis() < _popupData.expireMillis) ||
+           (_notifShown && _notif.isCall && millis() < _notifExpire);
   }
 
   // Unified Notification Popup (duration default 5000ms per request)
@@ -369,20 +370,12 @@ public:
     else if (a.indexOf("call") >= 0 || a.indexOf("phone") >= 0 || isCall) _popupData.appSource = APP_SOURCE_SIM;
     else _popupData.appSource = APP_SOURCE_OTHER;
 
-    // Remember for Màn 2 (Chờ Navigation) notification box
+    // Set dirty flags for main loop thread to render safely - NEVER DRAW FROM BLE CALLBACK!
     _notif = _popupData;
     _notifShown = true;
     _notifDirty = true;
-    _notifExpire = millis() + (isCall ? 60000UL : 30000UL);
-
-    if (_currentState == STATE_APP_IDLE_MAP) {
-      // Màn 2: Immediately render the bottom-right notification card!
-      _drawNotifBox();
-      return;
-    }
-
-    // Màn 1 & Màn 3: Draw popup banner overlay immediately
-    _drawPopupBanner();
+    _notifExpire = millis() + durationMs;
+    _wbForce = true;
   }
 
   void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr, AppSourceType app = APP_SOURCE_SIM) {
@@ -396,8 +389,22 @@ public:
   }
 
   void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
-    const char* appStr = (app == APP_SOURCE_ZALO) ? "zalo" : ((app == APP_SOURCE_MESSENGER) ? "messenger" : "call");
-    showNotificationPopup(appStr, title, msg, true, 60000);
+    if (title && strlen(title) > 0) {
+      strncpy(_popupData.title, title, sizeof(_popupData.title) - 1);
+      _popupData.title[sizeof(_popupData.title) - 1] = '\0';
+      strncpy(_notif.title, title, sizeof(_notif.title) - 1);
+      _notif.title[sizeof(_notif.title) - 1] = '\0';
+    }
+    if (msg && strlen(msg) > 0) {
+      strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
+      _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+      strncpy(_notif.message, msg, sizeof(_notif.message) - 1);
+      _notif.message[sizeof(_notif.message) - 1] = '\0';
+    }
+    _popupData.appSource = app;
+    _notif.appSource = app;
+    _notifDirty = true;
+    _wbForce = true;
   }
 
   void dismissPopup() {
@@ -408,9 +415,7 @@ public:
       _notifShown = false;
       _notifDirty = true;
     }
-    if (_currentState == STATE_APP_IDLE_MAP) {
-      _drawNotifBox();
-    } else if (wasActive) {
+    if (wasActive && (_currentState == STATE_NAVIGATION || _currentState == STATE_STANDBY_WATCHFACE)) {
       _needFullRedraw = true;
     }
   }
@@ -526,6 +531,7 @@ private:
   }
 
   void _drawUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
@@ -534,6 +540,7 @@ private:
   }
 
   void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
@@ -1088,6 +1095,10 @@ private:
 
   // Cắt chuỗi UTF-8 cho vừa chiều rộng maxW (px). Trả về số byte giữ lại.
   int _fitUtf8(const char* in, char* out, size_t outSz, int maxW) {
+    if (in == nullptr || in[0] == '\0' || out == nullptr || outSz <= 1) {
+      if (out && outSz > 0) out[0] = '\0';
+      return 0;
+    }
     strncpy(out, in, outSz - 1);
     out[outSz - 1] = '\0';
     u8f.setFont(u8g2_font_unifont_t_vietnamese1);
@@ -1103,6 +1114,7 @@ private:
   // Chữ thả trôi trong sprite (cuộn ngang khi dài hơn khung, đứng yên + căn giữa khi ngắn)
   void _marquee(Marquee& m, TFT_eSprite& spr, U8g2_for_TFT_eSPI& u8, int x, int y,
                 const char* text, uint16_t fg, uint16_t bg, bool force) {
+    if (text == nullptr) text = "";
     if (strcmp(text, m.text) != 0) {
       strncpy(m.text, text, sizeof(m.text) - 1);
       m.text[sizeof(m.text) - 1] = '\0';
@@ -1227,6 +1239,68 @@ private:
     }
   }
 
+  void _drawWrappedUtf8String(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, uint16_t bgColor, int lineHeight = 19) {
+    if (text == nullptr || text[0] == '\0') return;
+
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setForegroundColor(fgColor);
+    u8f.setBackgroundColor(bgColor);
+
+    char currentLine[128];
+    currentLine[0] = '\0';
+    int lineCount = 0;
+    int curY = startY;
+
+    const char* ptr = text;
+    while (*ptr != '\0' && lineCount < maxLines) {
+      while (*ptr == ' ') ptr++;
+      if (*ptr == '\0') break;
+
+      char word[64];
+      int wordLen = 0;
+      while (*ptr != '\0' && *ptr != ' ' && wordLen < (int)sizeof(word) - 1) {
+        word[wordLen++] = *ptr++;
+      }
+      word[wordLen] = '\0';
+
+      char candidate[128];
+      if (currentLine[0] == '\0') {
+        strncpy(candidate, word, sizeof(candidate) - 1);
+      } else {
+        snprintf(candidate, sizeof(candidate), "%s %s", currentLine, word);
+      }
+      candidate[sizeof(candidate) - 1] = '\0';
+
+      int w = u8f.getUTF8Width(candidate);
+      if (w <= maxWidth) {
+        strncpy(currentLine, candidate, sizeof(currentLine) - 1);
+        currentLine[sizeof(currentLine) - 1] = '\0';
+      } else {
+        if (currentLine[0] != '\0') {
+          u8f.setCursor(startX, curY + 13);
+          u8f.print(currentLine);
+          lineCount++;
+          curY += lineHeight;
+        }
+        if (lineCount < maxLines) {
+          strncpy(currentLine, word, sizeof(currentLine) - 1);
+          currentLine[sizeof(currentLine) - 1] = '\0';
+        } else {
+          currentLine[0] = '\0';
+          break;
+        }
+      }
+    }
+
+    if (currentLine[0] != '\0' && lineCount < maxLines) {
+      if (*ptr != '\0') {
+        strncat(currentLine, "...", sizeof(currentLine) - strlen(currentLine) - 1);
+      }
+      u8f.setCursor(startX, curY + 13);
+      u8f.print(currentLine);
+    }
+  }
+
   // Ô thông báo (tin nhắn / cuộc gọi) mở rộng ở góc dưới phải Màn 2: x164 y124 w146 h106
   void _drawNotifBox() {
     const uint16_t cPill = tft.color565(11, 17, 26);
@@ -1272,24 +1346,9 @@ private:
       char pLine[64];
       _fitUtf8(phone, pLine, sizeof(pLine), 132);
       _drawUtf8String(pLine, 172, 183, TFT_WHITE, cPill);
+      _drawUtf8String("Nhấc máy trên ĐT", 172, 203, tft.color565(100, 116, 139), cPill);
     } else {
-      char line1[64] = "";
-      char line2[64] = "";
-      char line3[64] = "";
-      int n1 = _fitUtf8(_notif.message, line1, sizeof(line1), 132);
-      _drawUtf8String(line1, 172, 163, TFT_WHITE, cPill);
-      if ((size_t)n1 < strlen(_notif.message)) {
-        const char* rem1 = _notif.message + n1;
-        while (*rem1 == ' ') rem1++;
-        int n2 = _fitUtf8(rem1, line2, sizeof(line2), 132);
-        _drawUtf8String(line2, 172, 183, tft.color565(226, 232, 240), cPill);
-        if ((size_t)n2 < strlen(rem1)) {
-          const char* rem2 = rem1 + n2;
-          while (*rem2 == ' ') rem2++;
-          _fitUtf8(rem2, line3, sizeof(line3), 132);
-          _drawUtf8String(line3, 172, 203, tft.color565(148, 163, 184), cPill);
-        }
-      }
+      _drawWrappedUtf8String(_notif.message, 172, 163, 132, 3, TFT_WHITE, cPill, 19);
     }
   }
 };
