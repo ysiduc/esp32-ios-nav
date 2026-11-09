@@ -696,18 +696,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           final p1 = screenPts[i];
           final p2 = screenPts[i + 1];
           if (inView(p1) || inView(p2)) {
-            img.drawLine(frame, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color: casingColor, thickness: 10);
-            img.fillCircle(frame, x: p1.x, y: p1.y, radius: 5, color: casingColor);
-            img.fillCircle(frame, x: p2.x, y: p2.y, radius: 5, color: casingColor);
+            img.drawLine(frame, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: casingColor, thickness: 10);
+            img.fillCircle(frame, x: p1.x.toInt(), y: p1.y.toInt(), radius: 5, color: casingColor);
+            img.fillCircle(frame, x: p2.x.toInt(), y: p2.y.toInt(), radius: 5, color: casingColor);
           }
         }
         for (int i = 0; i < screenPts.length - 1; i++) {
           final p1 = screenPts[i];
           final p2 = screenPts[i + 1];
           if (inView(p1) || inView(p2)) {
-            img.drawLine(frame, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color: coreColor, thickness: 6);
-            img.fillCircle(frame, x: p1.x, y: p1.y, radius: 3, color: coreColor);
-            img.fillCircle(frame, x: p2.x, y: p2.y, radius: 3, color: coreColor);
+            img.drawLine(frame, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: coreColor, thickness: 6);
+            img.fillCircle(frame, x: p1.x.toInt(), y: p1.y.toInt(), radius: 3, color: coreColor);
+            img.fillCircle(frame, x: p2.x.toInt(), y: p2.y.toInt(), radius: 3, color: coreColor);
           }
         }
       }
