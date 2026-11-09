@@ -605,9 +605,6 @@ private:
     const uint8_t* iconBitmap = icon_bell_20x20;
     _notifStyle(_popupData, cBorder, cIconCircle, iconBitmap);
 
-    // Xóa sạch vùng đệm 176x48 MCU block để chống sót pixel từ map
-    tft.fillRect(144, 25, 176, 48, tft.color565(11, 17, 26));
-
     // Outer card
     tft.fillRoundRect(px, py, pw, ph, 8, cBg);
     tft.drawRoundRect(px, py, pw, ph, 8, cBorder);
