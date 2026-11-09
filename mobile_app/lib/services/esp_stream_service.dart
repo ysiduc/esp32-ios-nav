@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -41,7 +40,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _streamTimer;
   Timer? _pauseTimer;
   Uint8List? _latestJpegBytes;
-  bool _isSendingBle = false;
 
   // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
   final Map<String, ui.Image> _tileCache = {};
@@ -358,7 +356,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   /// Render 144x208 (Standby) or 320x240 (Active Navigation) Real Street Map & Stream at 20 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
-    if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
+    if (!_isStreaming || _isCapturing || _isSendingWifi) return;
 
     // Do NOT stream map frames if user has not connected BLE in-app and is not navigating!
     // This keeps ESP32 quietly in Màn 1 (Watchface) without screen flickering or premature loading.
@@ -375,7 +373,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       final bool isNav = navManager?.isNavigating ?? false;
       final int w = isNav ? 320 : 144;
-      final int h = isNav ? 240 : 208;
+      final int h = isNav ? 216 : 224;
 
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double heading = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
@@ -642,14 +640,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
       final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
 
-      final int centerTileX = (worldX / 256.0).floor();
-      final int centerTileY = (worldY / 256.0).floor();
-      final double subTileX = worldX - (centerTileX * 256.0);
-      final double subTileY = worldY - (centerTileY * 256.0);
-
       // ===== Pseudo-3D "nổi khối" map: heading-up + tilt + extruded buildings (100% CPU) =====
       const int vx = 226;
-      const int vy = 182;
+      final int vy = (h * 0.74).round(); // ~160 for h=216
       const double tilt = 0.74; // vertical foreshortening (camera pitch)
       const int extrude = 10; // building height in screen px
       final double th = headingDeg * (math.pi / 180.0);
@@ -876,7 +869,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
       if (_frameCount % 25 == 0) {
-        bleService.logInfo('TX [Hotspot WS] Stream Frame #$_frameCount (${_frameSizeKb} KB, ${_actualFps.toStringAsFixed(1)} FPS)');
+        bleService.logInfo('TX [Hotspot WS] Stream Frame #$_frameCount ($_frameSizeKb KB, ${_actualFps.toStringAsFixed(1)} FPS)');
       }
       return; // Primary Hotspot WebSocket stream successful - return immediately
     }
@@ -889,10 +882,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       return; // Secondary SoftAP stream successful - return immediately
     }
 
-    // 3. Fallback: BLE Chunks (Stream map directly over Bluetooth when Wi-Fi is off or in background)
-    if (bleService.isConnected && !_isSendingBle) {
-      _sendJpegOverBle(jpegBytes);
-    }
+    // Never stream video/JPEG frames over BLE!
+    // Streaming 60+ chunks over BLE saturates iOS CoreBluetooth buffers, causing connection drops
+    // especially during phone calls or screen lock.
   }
 
   /// Broadcast JSON telemetry to connected WebSocket clients (ESP32)
@@ -1297,9 +1289,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFDFF5E8);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
-    // Vehicle anchor at bottom-right (x=226, y=182 on 320x240 canvas)
+    // Vehicle anchor at bottom-right (x=226, y=158 on 320x216 canvas)
     const double cx = 226.0;
-    const double cy = 182.0;
+    const double cy = 158.0;
 
     final int zoom = _minimapZoom;
     final double n = math.pow(2.0, zoom).toDouble();
@@ -1458,9 +1450,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     )..layout(maxWidth: 136.0);
 
     final double pillW = (curRoadTp.width + 18.0).clamp(78.0, 152.0);
-    final double pillH = (curRoadTp.height + 8.0).clamp(22.0, 34.0);
+    final double pillH = (curRoadTp.height + 8.0).clamp(22.0, 32.0);
     final double pillLeft = (cx - pillW / 2.0).clamp(150.0, w - pillW - 4.0);
-    final double pillTop = (cy + 13.0).clamp(195.0, h - pillH - 3.0);
+    final double pillTop = (cy + 13.0).clamp(170.0, h - pillH - 3.0);
     final roadPillRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(pillLeft, pillTop, pillW, pillH),
       const Radius.circular(11.0),
@@ -1552,9 +1544,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     )..layout(maxWidth: 134.0);
     streetTp.paint(canvas, const Offset(10.0, 28.0));
 
-    // --- 5. SPEEDOMETER BOX ABOVE BOTTOM-LEFT TIME CARD (x: 4, y: 136, w: 62, h: 46) ---
+    // --- 5. SPEEDOMETER BOX ABOVE BOTTOM-LEFT TIME CARD (x: 4, y: 118, w: 58, h: 42) ---
     final speedBoxRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 136.0, 62.0, 46.0),
+      const Rect.fromLTWH(4.0, 118.0, 58.0, 42.0),
       const Radius.circular(12.0),
     );
     canvas.drawRRect(speedBoxRect, Paint()..color = const Color(0xF218191E));
@@ -1571,7 +1563,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         text: '${speedKmh.round()}',
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 17.0,
+          fontSize: 16.5,
           fontWeight: FontWeight.w900,
           height: 1.0,
         ),
@@ -1580,7 +1572,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     )..layout();
     curSpdTp.paint(
       canvas,
-      Offset(4.0 + (62.0 - curSpdTp.width) / 2.0, 140.0),
+      Offset(4.0 + (58.0 - curSpdTp.width) / 2.0, 122.0),
     );
 
     final unitTp = TextPainter(
@@ -1588,7 +1580,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         text: 'km/h',
         style: TextStyle(
           color: Color(0xFF94A3B8),
-          fontSize: 9.5,
+          fontSize: 9.0,
           fontWeight: FontWeight.w700,
           height: 1.0,
         ),
@@ -1597,13 +1589,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     )..layout();
     unitTp.paint(
       canvas,
-      Offset(4.0 + (62.0 - unitTp.width) / 2.0, 165.0),
+      Offset(4.0 + (58.0 - unitTp.width) / 2.0, 144.0),
     );
 
-    // --- 6. ENLARGED BOTTOM-LEFT DARK TRIP SUMMARY PILL (x: 4, y: 186, w: 144, h: 50) ---
+    // --- 6. ENLARGED BOTTOM-LEFT DARK TRIP SUMMARY PILL (x: 4, y: 166, w: 138, h: 44) ---
     final summaryRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 186.0, 144.0, 50.0),
-      const Radius.circular(14.0),
+      const Rect.fromLTWH(4.0, 166.0, 138.0, 44.0),
+      const Radius.circular(13.0),
     );
     canvas.drawRRect(summaryRect, Paint()..color = const Color(0xF51E2025));
     canvas.drawRRect(
@@ -1615,14 +1607,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     );
 
     // Left dark grey circle with white '✕' icon
-    const Offset closeCenter = Offset(21.0, 211.0);
-    canvas.drawCircle(closeCenter, 12.0, Paint()..color = const Color(0xFF38393E));
+    const Offset closeCenter = Offset(19.0, 188.0);
+    canvas.drawCircle(closeCenter, 11.0, Paint()..color = const Color(0xFF38393E));
     final xPaint = Paint()
       ..color = Colors.white
       ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(const Offset(17.2, 207.2), const Offset(24.8, 214.8), xPaint);
-    canvas.drawLine(const Offset(24.8, 207.2), const Offset(17.2, 214.8), xPaint);
+    canvas.drawLine(const Offset(15.5, 184.5), const Offset(22.5, 191.5), xPaint);
+    canvas.drawLine(const Offset(22.5, 184.5), const Offset(15.5, 191.5), xPaint);
 
     // Right Line 1: Remaining duration ("2 phút" or "1 giờ 28 phút")
     final int etaMin = (navManager?.remainingEtaMinutes ?? 1).clamp(1, 999);
@@ -1634,15 +1626,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         text: etaText,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 13.5,
+          fontSize: 13.0,
           fontWeight: FontWeight.w900,
         ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: 102.0);
-    etaTp.paint(canvas, const Offset(38.0, 192.0));
+    )..layout(maxWidth: 98.0);
+    etaTp.paint(canvas, const Offset(36.0, 171.0));
 
     // Right Line 2: Arrival time • remaining distance ("11:34 • 1.2 km")
     final arrTime = DateTime.now().add(Duration(minutes: etaMin));
@@ -1659,15 +1651,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         text: '$arrStr • $totDistStr',
         style: const TextStyle(
           color: Color(0xFFE4E4E7),
-          fontSize: 11.0,
+          fontSize: 10.5,
           fontWeight: FontWeight.w600,
         ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: 102.0);
-    subTp.paint(canvas, const Offset(38.0, 213.0));
+    )..layout(maxWidth: 98.0);
+    subTp.paint(canvas, const Offset(36.0, 191.0));
   }
 
   /// Helper to draw crisp white maneuver arrow inside the top-left coral badge
@@ -1731,53 +1723,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         ..lineTo(cx + 3.5, cy - 1.0)
         ..close();
       canvas.drawPath(head, fillP);
-    }
-  }
-
-  /// Send JPEG frame over BLE in MTU-safe sequential chunks with micro-pacing
-  Future<void> _sendJpegOverBle(Uint8List jpegBytes) async {
-    if (!bleService.isConnected || _isSendingBle) return;
-    _isSendingBle = true;
-
-    try {
-      final chunkSize = bleService.safeChunkSize;
-      final totalLen = jpegBytes.length;
-      final totalChunks = (totalLen / chunkSize).ceil();
-      final frameId = (_frameCount % 255);
-
-      for (int i = 0; i < totalChunks; i++) {
-        // BLE stream remains active in background! Do NOT check !_isForeground here.
-        if (!bleService.isConnected || !_isStreaming) break;
-
-        final start = i * chunkSize;
-        final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
-        final slice = jpegBytes.sublist(start, end);
-
-        // Packet format: [0xAA, 0xBB, frameId, totalChunks, chunkIdx, ...bytes]
-        final packet = Uint8List(5 + slice.length);
-        packet[0] = 0xAA;
-        packet[1] = 0xBB;
-        packet[2] = frameId;
-        packet[3] = totalChunks;
-        packet[4] = i;
-        packet.setRange(5, 5 + slice.length, slice);
-
-        final success = await bleService.sendRawBytes(packet);
-        if (!success) {
-          bleService.logError('TX [BLE JPEG] Frame #$frameId: Chunk $i/$totalChunks thất bại');
-          break;
-        }
-        if (i < totalChunks - 1) {
-          await Future.delayed(const Duration(milliseconds: 6));
-        }
-      }
-      if (_frameCount % 15 == 0) {
-        bleService.logInfo('TX [BLE JPEG] Gửi thành công Frame #$frameId ($totalChunks chunks, $totalLen B)');
-      }
-    } catch (e) {
-      bleService.logError('TX [BLE JPEG] Lỗi truyền frame: $e');
-    } finally {
-      _isSendingBle = false;
     }
   }
 

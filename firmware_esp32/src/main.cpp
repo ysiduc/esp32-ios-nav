@@ -66,7 +66,7 @@ U8g2_for_TFT_eSPI u8f_marquee;
 bool g_clipMapOnly = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= tft.width()) return 1;
-  if (g_clipMapOnly && x >= 154) return 1;
+  if (g_clipMapOnly && (x < 6 || x >= 150 || y < 8 || y >= 232)) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
@@ -146,12 +146,15 @@ static int combinedGapHandler(ble_gap_event *event, void *arg) {
   return 0;
 }
 
+static unsigned long bleDisconnectTime = 0;
+
 // =========================================================================
 // 1. BLE Server Callbacks
 // =========================================================================
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
     bleConnected = true;
+    bleDisconnectTime = 0;
     display.setBleConnected(true);
     Serial.printf("[BLE] iPhone connected! conn_handle=%d, enc=%d, bond=%d\n",
                   desc->conn_handle, desc->sec_state.encrypted, desc->sec_state.bonded);
@@ -201,11 +204,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     secPending = false;
     appleDiscState = APPLE_DISC_IDLE;
     display.setBleConnected(false);
-    display.setAppConnected(false);
+    bleDisconnectTime = millis();
     AppleMediaService::onDisconnected();
     AppleNotificationService::onDisconnected();
     AppleCurrentTimeService::onDisconnected();
-    Serial.println("[BLE] Disconnected. Restarting advertising...");
+    Serial.println("[BLE] Disconnected. Grace period active (6s)...");
     NimBLEDevice::startAdvertising();
   }
 };
@@ -315,6 +318,15 @@ void processJsonPacket(const char* jsonStr) {
   } else if (typeStr == "CALL_END" || typeStr == "DISMISS_POPUP") {
     display.dismissPopup();
     return;
+  }
+
+  // Auto-heal app connected state upon receiving active navigation packet
+  if (!display.isAppConnected()) {
+    display.setAppConnected(true);
+  }
+  if (!doc["nav"].isNull()) {
+    int navVal = doc["nav"].as<int>();
+    display.setNavigating(navVal == 1);
   }
 
   curTurn = doc["turn"] | curTurn;
@@ -630,16 +642,17 @@ void loop() {
         display.setFullScreenStream(true);
         g_clipMapOnly = false;
         tft.resetViewport();
-        TJpgDec.drawJpg(0, 0, (uint8_t*)activeRenderBuf, activeRenderBufLen);
-        display.drawWaybarIfNav();
+        int mapY = (jpgH <= 216) ? 24 : 0;
+        TJpgDec.drawJpg(0, mapY, (uint8_t*)activeRenderBuf, activeRenderBufLen);
         display.onFrameRendered();
       } else if (jpgW > 0) {
         display.setFullScreenStream(false);
         g_clipMapOnly = true;
-        tft.setViewport(6, 6, 144, 224, false);
-        TJpgDec.drawJpg(6, 6, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        tft.setViewport(6, 8, 144, 224, false);
+        TJpgDec.drawJpg(6, 8, (uint8_t*)activeRenderBuf, activeRenderBufLen);
         tft.resetViewport();
         g_clipMapOnly = false;
+        tft.drawRoundRect(4, 6, 148, 228, 12, tft.color565(56, 189, 248));
         display.onFrameRendered();
       }
     }
@@ -649,6 +662,13 @@ void loop() {
     if (wsConnected && wsClientNum != 255) {
       webSocketServer.sendTXT(wsClientNum, "K");
     }
+  }
+
+  // Grace period before dropping to Standby if BLE disconnected
+  if (!bleConnected && display.isAppConnected() && bleDisconnectTime > 0 && (millis() - bleDisconnectTime > 6000)) {
+    display.setAppConnected(false);
+    bleDisconnectTime = 0;
+    Serial.println("[BLE] Grace period expired (>6s). Returned to Standby.");
   }
 
   // 2. Update HUD and status UI

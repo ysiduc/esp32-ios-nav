@@ -22,10 +22,33 @@ import AVFoundation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    NotificationCenter.default.addObserver(
+      forName: UIDevice.batteryLevelDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.notifyBatteryLevel()
+    }
+    NotificationCenter.default.addObserver(
+      forName: UIDevice.batteryStateDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.notifyBatteryLevel()
+    }
     if let controller = window?.rootViewController as? FlutterViewController {
       setupChannels(binaryMessenger: controller.binaryMessenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func notifyBatteryLevel() {
+    let rawLevel = UIDevice.current.batteryLevel
+    if rawLevel >= 0 {
+      let percentage = Int(round(rawLevel * 100.0))
+      locationChannel?.invokeMethod("onBatteryChanged", arguments: percentage)
+    }
   }
 
   override func applicationDidEnterBackground(_ application: UIApplication) {
@@ -261,7 +284,7 @@ import AVFoundation
     baseImage.draw(in: CGRect(origin: .zero, size: size))
 
     let vx = CGFloat((hud["vx"] as? Double) ?? 226.0)
-    let vy = CGFloat((hud["vy"] as? Double) ?? 182.0)
+    let vy = CGFloat((hud["vy"] as? Double) ?? (Double(height) * 0.74)) // ~158 on h=216
     let curRoad = (hud["curRoad"] as? String) ?? "Đường hiện tại"
     let nextStreet = (hud["nextStreet"] as? String) ?? "Đi thẳng"
     let distStr = (hud["distStr"] as? String) ?? "0 m"
@@ -320,9 +343,9 @@ import AVFoundation
       context: nil
     )
     let pillW = min(max(ceil(roadBox.width) + 18.0, 78.0), 152.0)
-    let pillH = min(max(ceil(roadBox.height) + 8.0, 22.0), 34.0)
+    let pillH = min(max(ceil(roadBox.height) + 8.0, 22.0), 32.0)
     let pillLeft = min(max(vx - pillW / 2.0, 150.0), width - pillW - 4.0)
-    let pillTop = min(max(vy + 13.0, 195.0), height - pillH - 3.0)
+    let pillTop = min(max(vy + 13.0, 168.0), height - pillH - 3.0)
     let pillRect = CGRect(x: pillLeft, y: pillTop, width: pillW, height: pillH)
     let pillPath = UIBezierPath(roundedRect: pillRect, cornerRadius: 11.0)
     UIColor(red: 0.114, green: 0.388, blue: 1.0, alpha: 1.0).setFill()
@@ -387,8 +410,8 @@ import AVFoundation
       withAttributes: streetAttrs
     )
 
-    // 4. Speedometer Box placed above Bottom-Left Time Card (x: 4, y: 136, w: 62, h: 46)
-    let speedRect = CGRect(x: 4.0, y: 150.0, width: 54.0, height: 38.0)
+    // 4. Speedometer Box placed above Bottom-Left Time Card (x: 4, y: 118, w: 54, h: 40)
+    let speedRect = CGRect(x: 4.0, y: 118.0, width: 54.0, height: 40.0)
     let speedPath = UIBezierPath(roundedRect: speedRect, cornerRadius: 12.0)
     UIColor(red: 0.094, green: 0.098, blue: 0.118, alpha: 0.95).setFill()
     speedPath.fill()
@@ -397,29 +420,29 @@ import AVFoundation
     speedPath.stroke()
 
     let spdNumAttrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 17.0, weight: .black),
+      .font: UIFont.systemFont(ofSize: 16.5, weight: .black),
       .foregroundColor: UIColor.white
     ]
     let spdNs = speedStr as NSString
     let spdSize = spdNs.size(withAttributes: spdNumAttrs)
     spdNs.draw(
-      at: CGPoint(x: 4.0 + (54.0 - spdSize.width) / 2.0, y: 152.0),
+      at: CGPoint(x: 4.0 + (54.0 - spdSize.width) / 2.0, y: 121.0),
       withAttributes: spdNumAttrs
     )
 
     let unitAttrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 9.5, weight: .bold),
+      .font: UIFont.systemFont(ofSize: 9.0, weight: .bold),
       .foregroundColor: UIColor(red: 0.580, green: 0.639, blue: 0.722, alpha: 1.0)
     ]
     let unitNs = "km/h" as NSString
     let unitSize = unitNs.size(withAttributes: unitAttrs)
     unitNs.draw(
-      at: CGPoint(x: 4.0 + (54.0 - unitSize.width) / 2.0, y: 172.0),
+      at: CGPoint(x: 4.0 + (54.0 - unitSize.width) / 2.0, y: 142.0),
       withAttributes: unitAttrs
     )
 
-    // 5. Enlarged Bottom-Left Dark Trip Summary Card (x: 4, y: 186, w: 144, h: 50)
-    let summaryRect = CGRect(x: 4.0, y: 192.0, width: 124.0, height: 42.0)
+    // 5. Enlarged Bottom-Left Dark Trip Summary Card (x: 4, y: 166, w: 124, h: 42)
+    let summaryRect = CGRect(x: 4.0, y: 166.0, width: 124.0, height: 42.0)
     let summaryPath = UIBezierPath(roundedRect: summaryRect, cornerRadius: 12.0)
     UIColor(red: 0.118, green: 0.125, blue: 0.145, alpha: 0.96).setFill()
     summaryPath.fill()
@@ -427,35 +450,35 @@ import AVFoundation
     summaryPath.lineWidth = 1.0
     summaryPath.stroke()
 
-    // Left '✕' circle at (21, 211), r=12
+    // Left '✕' circle at (19, 187), r=10
     UIColor(red: 0.220, green: 0.224, blue: 0.243, alpha: 1.0).setFill()
-    ctx.fillEllipse(in: CGRect(x: 19.0 - 10.0, y: 213.0 - 10.0, width: 20.0, height: 20.0))
+    ctx.fillEllipse(in: CGRect(x: 19.0 - 10.0, y: 187.0 - 10.0, width: 20.0, height: 20.0))
     ctx.saveGState()
     ctx.setStrokeColor(UIColor.white.cgColor)
     ctx.setLineWidth(2.0)
     ctx.setLineCap(.round)
-    ctx.move(to: CGPoint(x: 15.7, y: 209.7))
-    ctx.addLine(to: CGPoint(x: 22.3, y: 216.3))
-    ctx.move(to: CGPoint(x: 22.3, y: 209.7))
-    ctx.addLine(to: CGPoint(x: 15.7, y: 216.3))
+    ctx.move(to: CGPoint(x: 15.7, y: 183.7))
+    ctx.addLine(to: CGPoint(x: 22.3, y: 190.3))
+    ctx.move(to: CGPoint(x: 22.3, y: 183.7))
+    ctx.addLine(to: CGPoint(x: 15.7, y: 190.3))
     ctx.strokePath()
     ctx.restoreGState()
 
     let etaAttrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 13.5, weight: .heavy),
+      .font: UIFont.systemFont(ofSize: 13.0, weight: .heavy),
       .foregroundColor: UIColor.white
     ]
     (etaText as NSString).draw(
-      in: CGRect(x: 34.0, y: 196.0, width: 92.0, height: 18.0),
+      in: CGRect(x: 34.0, y: 170.0, width: 90.0, height: 18.0),
       withAttributes: etaAttrs
     )
 
     let subAttrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 11.0, weight: .semibold),
+      .font: UIFont.systemFont(ofSize: 10.5, weight: .semibold),
       .foregroundColor: UIColor(red: 0.894, green: 0.894, blue: 0.906, alpha: 1.0)
     ]
     (subText as NSString).draw(
-      in: CGRect(x: 34.0, y: 214.0, width: 92.0, height: 16.0),
+      in: CGRect(x: 34.0, y: 188.0, width: 90.0, height: 16.0),
       withAttributes: subAttrs
     )
 

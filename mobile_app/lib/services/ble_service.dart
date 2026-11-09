@@ -88,21 +88,19 @@ class BleService extends ChangeNotifier {
 
   Future<int> getBatteryLevel() async {
     int rawBat = -1;
-    // 1. Direct native iOS UIKit battery query (zero external pod dependencies, 100% reliable)
-    if (Platform.isIOS) {
+    // 1. Try battery_plus plugin
+    try {
+      final level = await _battery.batteryLevel;
+      if (level > 0 && level <= 100) {
+        rawBat = level;
+      }
+    } catch (_) {}
+    // 2. Direct native iOS UIKit battery query
+    if (rawBat <= 0 && Platform.isIOS) {
       try {
         final res = await _locationChannel.invokeMethod('getBatteryLevel');
         if (res is int && res > 0 && res <= 100) {
           rawBat = res;
-        }
-      } catch (_) {}
-    }
-    // 2. Fallback to battery_plus plugin
-    if (rawBat <= 0) {
-      try {
-        final level = await _battery.batteryLevel;
-        if (level > 0 && level <= 100) {
-          rawBat = level;
         }
       } catch (_) {}
     }
@@ -115,8 +113,21 @@ class BleService extends ChangeNotifier {
 
   BleService() {
     _initBle();
+    _initNativeChannels();
     _startWifiProbe();
     checkSystemDevices();
+  }
+
+  void _initNativeChannels() {
+    _locationChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onBatteryChanged') {
+        final bat = call.arguments as int? ?? 0;
+        if (bat > 0 && bat <= 100) {
+          _lastKnownBattery = bat;
+          notifyListeners();
+        }
+      }
+    });
   }
 
   void _startWifiProbe() {
@@ -417,6 +428,18 @@ class BleService extends ChangeNotifier {
                 _enableBackgroundKeepAlive();
                 notifyListeners();
                 _addLog('Đã tự động kết nối lại thành công!', isTx: false);
+                try {
+                  final now = DateTime.now();
+                  final clockStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+                  final bat = await getBatteryLevel();
+                  final handshake = jsonEncode({
+                    'type': 'APP_CONNECT',
+                    'clock': clockStr,
+                    'bat': bat,
+                  });
+                  await sendRawJson(handshake);
+                  _addLog('Đã gửi lại APP_CONNECT sau auto-reconnect (Pin: $bat%)', isTx: true);
+                } catch (_) {}
               } else {
                 _handleDisconnect();
               }
