@@ -1,65 +1,13 @@
-name: Build iOS IPA Packages
+name: Compile Flutter iOS IPA
 
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════════════════
-  # 1. Native iOS Swift/SwiftUI (Ferrostar + MapLibre + Photon + Valhalla + BLE)
-  # ═══════════════════════════════════════════════════════════════════════════
-  build-native-ios:
-    name: Compile Native iOS Swift/SwiftUI
-    runs-on: macos-15
-    timeout-minutes: 60
-
-    steps:
-      - name: 1. Checkout
-        uses: actions/checkout@v4
-
-      - name: 2. Install XcodeGen
-        run: |
-          brew install xcodegen
-
-      - name: 3. Generate Xcode Project
-        working-directory: mobile_app/ios_native
-        run: |
-          xcodegen generate
-
-      - name: 4. Build Native iOS App
-        working-directory: mobile_app/ios_native
-        run: |
-          xcodebuild -project ESP32NavApp.xcodeproj             -scheme ESP32NavApp             -configuration Release             -destination 'generic/platform=iOS'             -derivedDataPath build/derivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             clean build
-
-      - name: 5. Package Native IPA
-        working-directory: mobile_app/ios_native
-        run: |
-          APP_PATH=$(find build/derivedData -name "ESP32NavApp.app" -type d | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            APP_PATH=$(find build/derivedData -name "*.app" -type d | head -n 1)
-          fi
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ ERROR: App bundle not found!"
-            exit 1
-          fi
-          echo "✅ Found App at: $APP_PATH"
-          rm -rf Payload esp32_nav_native_app.ipa
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
-          zip -r -y -q esp32_nav_native_app.ipa Payload/
-          ls -lh esp32_nav_native_app.ipa
-
-      - name: 6. Upload Native IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32_nav_native_ios_ipa
-          path: mobile_app/ios_native/esp32_nav_native_app.ipa
-          retention-days: 14
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # 2. Flutter iOS App (OSRM / MapTiler / MapLibre Flutter)
-  # ═══════════════════════════════════════════════════════════════════════════
   build-flutter-ios:
     name: Compile Flutter iOS IPA
     runs-on: macos-15
@@ -100,13 +48,20 @@ jobs:
         working-directory: mobile_app
         run: |
           set -o pipefail
-          flutter build ios             --release             --no-codesign             --verbose             2>&1 | tee ../build_full.log
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --verbose \
+            2>&1 | tee ../build_full.log
 
       - name: 7. Package Flutter IPA
         working-directory: mobile_app
         run: |
           APP_PATH=""
-          for CANDIDATE in             "build/ios/iphoneos/Runner.app"             "build/ios/Release-iphoneos/Runner.app"             "build/ios/Debug-iphoneos/Runner.app"; do
+          for CANDIDATE in \
+            "build/ios/iphoneos/Runner.app" \
+            "build/ios/Release-iphoneos/Runner.app" \
+            "build/ios/Debug-iphoneos/Runner.app"; do
             if [ -d "$CANDIDATE" ]; then
               APP_PATH="$CANDIDATE"
               break
