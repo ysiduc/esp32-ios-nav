@@ -108,7 +108,7 @@ class PhoneCallService extends ChangeNotifier {
     _bleService.sendRawString('{"type":"SMS","app":"$appType","title":"$_lastSmsSender","msg":"$_lastSmsMessage"}');
 
     _smsDismissTimer?.cancel();
-    _smsDismissTimer = Timer(const Duration(seconds: 6), () {
+    _smsDismissTimer = Timer(const Duration(seconds: 5), () {
       _showSmsNotification = false;
       notifyListeners();
     });

@@ -64,9 +64,11 @@ TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
 U8g2_for_TFT_eSPI u8f_marquee;
 #include <TJpg_Decoder.h>
 bool g_clipMapOnly = false;
+bool g_skipNavPopup = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= tft.width()) return 1;
   if (g_clipMapOnly && (x < 6 || x >= 150 || y < 8 || y >= 232)) return 1;
+  if (g_skipNavPopup && x >= 160 && y >= 24 && y < 88) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }
@@ -312,7 +314,9 @@ void processJsonPacket(const char* jsonStr) {
     String title = String(doc["title"] | doc["caller"] | doc["sender"] | "Thông báo");
     String msg = String(doc["msg"] | doc["message"] | doc["phone"] | "");
     bool isCall = (typeStr == "CALL" || app == "call" || doc["isCall"] == true);
-    display.showNotificationPopup(app.c_str(), title.c_str(), msg.c_str(), isCall, isCall ? 60000 : 8000);
+    bool isMissed = (title.indexOf("nhỡ") >= 0 || title.indexOf("Missed") >= 0);
+    uint32_t dur = (isCall && !isMissed) ? 60000UL : 5000UL;
+    display.showNotificationPopup(app.c_str(), title.c_str(), msg.c_str(), isCall, dur);
     return;
 
   } else if (typeStr == "CALL_END" || typeStr == "DISMISS_POPUP") {
@@ -643,11 +647,13 @@ void loop() {
         g_clipMapOnly = false;
         tft.resetViewport();
         int mapY = (jpgH <= 216) ? 24 : 0;
+        g_skipNavPopup = display.isPopupActive() && (display.getCurrentState() == STATE_NAVIGATION);
         TJpgDec.drawJpg(0, mapY, (uint8_t*)activeRenderBuf, activeRenderBufLen);
         display.onFrameRendered();
       } else if (jpgW > 0) {
         display.setFullScreenStream(false);
         g_clipMapOnly = true;
+        g_skipNavPopup = false;
         tft.setViewport(6, 8, 144, 224, false);
         TJpgDec.drawJpg(6, 8, (uint8_t*)activeRenderBuf, activeRenderBufLen);
         tft.resetViewport();

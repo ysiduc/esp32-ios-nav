@@ -134,6 +134,7 @@ private:
   NotificationPopup _notif;
   bool _notifShown = false;
   bool _notifDirty = true;
+  bool _navPopupDirty = false;
   unsigned long _notifExpire = 0;
 
 public:
@@ -345,6 +346,10 @@ public:
     }
   }
 
+  DisplayState getCurrentState() const {
+    return _currentState;
+  }
+
   bool isCallActive() const {
     return (_popupData.active && _popupData.isCall && millis() < _popupData.expireMillis) ||
            (_notifShown && _notif.isCall && millis() < _notifExpire);
@@ -374,6 +379,7 @@ public:
     _notif = _popupData;
     _notifShown = true;
     _notifDirty = true;
+    _navPopupDirty = true;
     _notifExpire = millis() + durationMs;
     _wbForce = true;
   }
@@ -385,7 +391,7 @@ public:
 
   void showSmsAlert(const char* sender, const char* msg, AppSourceType app = APP_SOURCE_SMS) {
     const char* appStr = (app == APP_SOURCE_ZALO) ? "zalo" : ((app == APP_SOURCE_MESSENGER) ? "messenger" : "sms");
-    showNotificationPopup(appStr, sender, msg, false, 8000);
+    showNotificationPopup(appStr, sender, msg, false, 5000);
   }
 
   void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
@@ -404,6 +410,7 @@ public:
     _popupData.appSource = app;
     _notif.appSource = app;
     _notifDirty = true;
+    _navPopupDirty = true;
     _wbForce = true;
   }
 
@@ -411,6 +418,7 @@ public:
     bool wasActive = _popupData.active;
     _popupData.active = false;
     _popupData.expireMillis = 0;
+    _navPopupDirty = false;
     if (_notifShown && _notif.isCall) {
       _notifShown = false;
       _notifDirty = true;
@@ -435,8 +443,15 @@ public:
 
   // Called after JPEG frame decode in main.cpp
   void onFrameRendered() {
-    if (isPopupActive() && _currentState != STATE_APP_IDLE_MAP) {
-      _drawPopupBanner();
+    if (isPopupActive()) {
+      if (_currentState == STATE_NAVIGATION) {
+        if (_navPopupDirty) {
+          _drawNavPopupCard();
+          _navPopupDirty = false;
+        }
+      } else if (_currentState == STATE_STANDBY_WATCHFACE) {
+        _drawPopupBanner();
+      }
     }
   }
 
@@ -478,6 +493,7 @@ public:
     if (_popupData.active && millis() >= _popupData.expireMillis) {
       _popupData.active = false;
       _popupData.expireMillis = 0;
+      _navPopupDirty = false;
       _needFullRedraw = true;
     }
 
@@ -500,18 +516,24 @@ public:
         _needFullRedraw = false;
         _lastState = _currentState;
       }
-      if (!isPopupActive()) {
-        _updateWaybar(_wbForce);
-        _wbForce = false;
-      }
+      // Waybar at y: 0..24 is ALWAYS visible and updated, never hidden by popup
+      _updateWaybar(_wbForce);
+      _wbForce = false;
     }
 
-    // Draw popup banner overlay if active (Màn 1 and Màn 3)
-    if (isPopupActive() && _currentState != STATE_APP_IDLE_MAP) {
-      static unsigned long lastBanner = 0;
-      if (millis() - lastBanner > 400) {
-        lastBanner = millis();
-        _drawPopupBanner();
+    // Draw popup if active
+    if (isPopupActive()) {
+      if (_currentState == STATE_NAVIGATION) {
+        if (_navPopupDirty) {
+          _drawNavPopupCard();
+          _navPopupDirty = false;
+        }
+      } else if (_currentState == STATE_STANDBY_WATCHFACE) {
+        static unsigned long lastBanner = 0;
+        if (millis() - lastBanner > 400) {
+          lastBanner = millis();
+          _drawPopupBanner();
+        }
       }
     }
   }
@@ -567,7 +589,57 @@ private:
   }
 
   // =========================================================================
-  // POPUP BANNER (5-10 Seconds on Top for Màn 1 & Màn 3)
+  // POPUP CARD CHO MÀN 3 (ĐANG DẪN ĐƯỜNG):
+  // Dưới Waybar (y: 28), bên phải (x: 160), ngang hàng ô chỉ hướng (w: 156, h: 58)
+  // =========================================================================
+  void _drawNavPopupCard() {
+    const int px = 160;
+    const int py = 28;
+    const int pw = 156;
+    const int ph = 58;
+
+    uint16_t cBg = tft.color565(15, 23, 42); // Deep Slate 900
+    uint16_t cBorder;
+    uint16_t cIconCircle;
+    const uint8_t* iconBitmap = icon_bell_20x20;
+    _notifStyle(_popupData, cBorder, cIconCircle, iconBitmap);
+
+    // Xóa sạch vùng đệm 160x64 MCU block để chống sót pixel từ map
+    tft.fillRect(160, 25, 160, 63, tft.color565(11, 17, 26));
+
+    // Outer card
+    tft.fillRoundRect(px, py, pw, ph, 8, cBg);
+    tft.drawRoundRect(px, py, pw, ph, 8, cBorder);
+    if (_popupData.isCall) {
+      tft.drawRoundRect(px + 1, py + 1, pw - 2, ph - 2, 7, cBorder);
+    }
+
+    // Left App Icon (Circle 24px with centered 20x20 bitmap)
+    const int iconCx = px + 17;
+    const int iconCy = py + (ph / 2);
+    tft.fillCircle(iconCx, iconCy, 12, cIconCircle);
+    tft.drawBitmap(iconCx - 10, iconCy - 10, iconBitmap, 20, 20, TFT_WHITE);
+
+    // Text area: x = px + 34 = 194. Max text width = pw - 38 = 118px.
+    const int textX = px + 34;
+    const int maxW = pw - 38;
+
+    char titleLine[48];
+    _fitUtf8(_popupData.title, titleLine, sizeof(titleLine), maxW);
+
+    if (_popupData.message[0] != '\0') {
+      _drawUtf8String(titleLine, textX, py + 8, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
+
+      char msgLine[48];
+      _fitUtf8(_popupData.message, msgLine, sizeof(msgLine), maxW);
+      _drawUtf8String(msgLine, textX, py + 28, TFT_WHITE, cBg);
+    } else {
+      _drawUtf8String(titleLine, textX, py + 18, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
+    }
+  }
+
+  // =========================================================================
+  // POPUP BANNER (Cho Màn 1 Standby Watchface)
   // =========================================================================
   void _drawPopupBanner() {
     uint16_t cBg = tft.color565(15, 23, 42); // Deep Slate 900

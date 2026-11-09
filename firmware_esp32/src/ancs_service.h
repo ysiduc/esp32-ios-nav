@@ -510,7 +510,8 @@ private:
       }
     } else if (pendingCategoryID == 2) { // Missed Call
       const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuộc gọi nhỡ";
-      display.showCallAlert("Cuộc gọi nhỡ", name, appType);
+      const char* phone = currentMessage[0] != '\0' ? currentMessage : "";
+      display.showNotificationPopup("call", name, phone, true, 5000);
     } else { // Messages & Social Notifications (Category 0, 4, 6, etc.)
       const char* sender = currentTitle[0] != '\0' ? currentTitle : "Tin nhắn";
       const char* content = currentMessage[0] != '\0' ? currentMessage : "Thông báo mới";
