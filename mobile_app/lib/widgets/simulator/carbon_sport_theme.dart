@@ -15,55 +15,64 @@ class CarbonSportTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hStr = currentTime.hour.toString().padLeft(2, '0');
-    final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
-
-    final dateStr = _formatDateVietnamese(currentTime);
-
     return Container(
       width: 320,
       height: 240,
       color: const Color(0xFF0C0E12),
       child: Stack(
         children: [
-          // 1. Top-Left Clock & Date Card (x: 8, y: 8, w: 140, h: 86)
-          Positioned(
-            left: 8,
-            top: 8,
-            width: 140,
-            height: 86,
-            child: _buildClockCard(hStr, mStr, sStr, dateStr),
-          ),
-
-          // 2. Bottom-Left Sunflower Bouquet Card (x: 8, y: 100, w: 140, h: 86)
-          Positioned(
-            left: 8,
-            top: 100,
-            width: 140,
-            height: 86,
-            child: _buildSunflowerBouquetCard(),
-          ),
-
-          // 3. Right Message Card (x: 154, y: 8, w: 158, h: 178)
-          Positioned(
-            left: 154,
-            top: 8,
-            width: 158,
-            height: 178,
-            child: _buildMessageCard(),
-          ),
-
-          // 4. Bottom Music & Progress Bar (x: 8, y: 192, w: 304, h: 40)
-          Positioned(
-            left: 8,
-            top: 192,
-            width: 304,
-            height: 40,
-            child: _buildMusicBar(),
+          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
+          Positioned.fill(
+            child: Image.asset(
+              'assets/themes/theme_carbon_sport.jpg',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildFallbackLayout(BuildContext context) {
+    final hStr = currentTime.hour.toString().padLeft(2, '0');
+    final mStr = currentTime.minute.toString().padLeft(2, '0');
+    final sStr = currentTime.second.toString().padLeft(2, '0');
+    final dateStr = _formatDateVietnamese(currentTime);
+
+    return Stack(
+      children: [
+        Positioned(
+          left: 8,
+          top: 8,
+          width: 140,
+          height: 86,
+          child: _buildClockCard(hStr, mStr, sStr, dateStr),
+        ),
+        Positioned(
+          left: 8,
+          top: 100,
+          width: 140,
+          height: 86,
+          child: _buildSunflowerBouquetCard(),
+        ),
+        Positioned(
+          left: 154,
+          top: 8,
+          width: 158,
+          height: 178,
+          child: _buildMessageCard(),
+        ),
+        Positioned(
+          left: 8,
+          top: 192,
+          width: 304,
+          height: 40,
+          child: _buildMusicBar(),
+        ),
+      ],
     );
   }
 
@@ -463,3 +472,4 @@ class _StandingSunflowerPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+

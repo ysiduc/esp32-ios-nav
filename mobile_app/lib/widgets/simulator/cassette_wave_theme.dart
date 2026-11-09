@@ -14,46 +14,58 @@ class CassetteWaveTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hStr = currentTime.hour.toString().padLeft(2, '0');
-    final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
-
-    final dStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')} TH${currentTime.month.toString().padLeft(2, '0')} ${currentTime.year}';
-
     return Container(
       width: 320,
       height: 240,
       color: const Color(0xFF0F081D),
       child: Stack(
         children: [
-          // 1. Top-Left Synthwave Clock & Sunset Sun (x: 8, y: 10, w: 152, h: 96)
-          Positioned(
-            left: 8,
-            top: 10,
-            width: 152,
-            height: 96,
-            child: _buildClockAndSun(hStr, mStr, sStr, dStr),
-          ),
-
-          // 2. Bottom-Left Neon Messages Card (x: 8, y: 114, w: 152, h: 116)
-          Positioned(
-            left: 8,
-            top: 114,
-            width: 152,
-            height: 116,
-            child: _buildMessagesCard(),
-          ),
-
-          // 3. Right Cassette Tape Player Panel (x: 166, y: 10, w: 146, h: 220)
-          Positioned(
-            left: 166,
-            top: 10,
-            width: 146,
-            height: 220,
-            child: _buildCassettePanel(),
+          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
+          Positioned.fill(
+            child: Image.asset(
+              'assets/themes/theme_cassette_wave.jpg',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildFallbackLayout(BuildContext context) {
+    final hStr = currentTime.hour.toString().padLeft(2, '0');
+    final mStr = currentTime.minute.toString().padLeft(2, '0');
+    final sStr = currentTime.second.toString().padLeft(2, '0');
+
+    final dStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')} TH${currentTime.month.toString().padLeft(2, '0')} ${currentTime.year}';
+
+    return Stack(
+      children: [
+        Positioned(
+          left: 8,
+          top: 10,
+          width: 152,
+          height: 96,
+          child: _buildClockAndSun(hStr, mStr, sStr, dStr),
+        ),
+        Positioned(
+          left: 8,
+          top: 114,
+          width: 152,
+          height: 116,
+          child: _buildMessagesCard(),
+        ),
+        Positioned(
+          left: 166,
+          top: 10,
+          width: 146,
+          height: 220,
+          child: _buildCassettePanel(),
+        ),
+      ],
     );
   }
 

@@ -54,6 +54,12 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    try {
+      final ble = context.read<BleService>();
+      if (ble.isConnected) {
+        ble.sendRawJson(jsonEncode({'type': 'EXIT_SIMULATOR'}));
+      }
+    } catch (_) {}
     super.dispose();
   }
 
@@ -160,8 +166,11 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
         final resized = img.copyResize(decoded, width: 320, height: 240);
         final jpgBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 80));
 
-        // Gửi thông tin sang ESP32
+        // 1. Gửi cấu hình theme sang ESP32
         _syncThemeToEsp32(ESP32Interface.customStatic, bgBytes: jpgBytes);
+
+        // 2. Nạp ảnh nền tùy chọn lên Flash SPIFFS của ESP32 qua BLE chunks (Magic 0xBC)
+        await _uploadCustomBgToEsp32(jpgBytes);
       }
     } catch (e) {
       debugPrint('[Simulator] Lỗi nén ảnh nền: $e');
@@ -169,6 +178,39 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
       if (mounted) {
         setState(() => _isCompressingBg = false);
       }
+    }
+  }
+
+  Future<void> _uploadCustomBgToEsp32(Uint8List jpegBytes) async {
+    try {
+      final bleService = context.read<BleService>();
+      if (!bleService.isConnected) return;
+
+      final int chunkSize = bleService.safeChunkSize;
+      final int totalLen = jpegBytes.length;
+      final int totalChunks = (totalLen / chunkSize).ceil();
+      const int magic2 = 0xBC; // 0xBC: standby pairing background /bg_wait.jpg
+
+      for (int i = 0; i < totalChunks; i++) {
+        if (!mounted || !bleService.isConnected) break;
+        final start = i * chunkSize;
+        final end = (start + chunkSize > totalLen) ? totalLen : start + chunkSize;
+        final slice = jpegBytes.sublist(start, end);
+
+        final packet = Uint8List(5 + slice.length);
+        packet[0] = 0xAA;
+        packet[1] = magic2;
+        packet[2] = 0;
+        packet[3] = totalChunks;
+        packet[4] = i;
+        packet.setRange(5, 5 + slice.length, slice);
+
+        await bleService.sendRawBytes(packet);
+        await Future.delayed(const Duration(milliseconds: 15));
+      }
+      debugPrint('[Simulator] Đã nạp ảnh nền tùy chọn lên ESP32 Flash SPIFFS');
+    } catch (e) {
+      debugPrint('[Simulator] Lỗi tải ảnh nền lên ESP32: $e');
     }
   }
 

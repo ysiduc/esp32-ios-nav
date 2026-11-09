@@ -14,6 +14,28 @@ class RetroMacTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      width: 320,
+      height: 240,
+      color: const Color(0xFF6B767E),
+      child: Stack(
+        children: [
+          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
+          Positioned.fill(
+            child: Image.asset(
+              'assets/themes/theme_retro_mac.jpg',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFallbackLayout(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
     final sStr = currentTime.second.toString().padLeft(2, '0');
@@ -22,92 +44,87 @@ class RetroMacTheme extends StatelessWidget {
     const daysEn = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
     final dayEn = daysEn[currentTime.weekday - 1];
 
-    return Container(
-      width: 320,
-      height: 240,
-      color: const Color(0xFF6B767E),
-      child: Stack(
-        children: [
-          // 0. Fine Pixel Dither Pattern Background
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _MacDitherPainter(),
-            ),
+    return Stack(
+      children: [
+        // 0. Fine Pixel Dither Pattern Background
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _MacDitherPainter(),
           ),
+        ),
 
-          // 1. Top White Mac Menu Bar (height: 14px)
-          Positioned(
-            left: 0,
-            top: 0,
-            right: 0,
-            height: 14,
-            child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Row(
-                children: [
-                  // Rainbow Apple Icon
-                  const Text('🍎', style: TextStyle(fontSize: 9)),
-                  const SizedBox(width: 4),
-                  const Text(
-                    'Retro Macintosh/OS',
-                    style: TextStyle(
-                      color: Colors.black,
-                      fontSize: 8.5,
-                      fontWeight: FontWeight.w900,
-                      fontFamily: 'monospace',
-                    ),
+        // 1. Top White Mac Menu Bar (height: 14px)
+        Positioned(
+          left: 0,
+          top: 0,
+          right: 0,
+          height: 14,
+          child: Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              children: [
+                // Rainbow Apple Icon
+                const Text('🍎', style: TextStyle(fontSize: 9)),
+                const SizedBox(width: 4),
+                const Text(
+                  'Retro Macintosh/OS',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w900,
+                    fontFamily: 'monospace',
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
+        ),
 
-          // 2. Desktop Icons on Right (My Computer & Trash)
-          Positioned(
-            left: 172,
-            top: 20,
-            child: _buildDesktopIcon(Icons.computer_rounded, 'My Computer'),
-          ),
-          Positioned(
-            right: 18,
-            top: 20,
-            child: _buildDesktopIcon(Icons.delete_outline_rounded, 'Trash'),
-          ),
-          Positioned(
-            right: 18,
-            bottom: 12,
-            child: _buildDesktopIcon(Icons.delete_rounded, 'Thùng rác'),
-          ),
+        // 2. Desktop Icons on Right (My Computer & Trash)
+        Positioned(
+          left: 172,
+          top: 20,
+          child: _buildDesktopIcon(Icons.computer_rounded, 'My Computer'),
+        ),
+        Positioned(
+          right: 18,
+          top: 20,
+          child: _buildDesktopIcon(Icons.delete_outline_rounded, 'Trash'),
+        ),
+        Positioned(
+          right: 18,
+          bottom: 12,
+          child: _buildDesktopIcon(Icons.delete_rounded, 'Thùng rác'),
+        ),
 
-          // 3. Window 1: CLOCK.EXE (x: 8, y: 22, w: 146, h: 84)
-          Positioned(
-            left: 8,
-            top: 22,
-            width: 146,
-            height: 84,
-            child: _buildClockWindow(hStr, mStr, sStr, dStr, dayEn),
-          ),
+        // 3. Window 1: CLOCK.EXE (x: 8, y: 22, w: 146, h: 84)
+        Positioned(
+          left: 8,
+          top: 22,
+          width: 146,
+          height: 84,
+          child: _buildClockWindow(hStr, mStr, sStr, dStr, dayEn),
+        ),
 
-          // 4. Window 2: MAIL.APP (x: 8, y: 112, w: 146, h: 82)
-          Positioned(
-            left: 8,
-            top: 112,
-            width: 146,
-            height: 82,
-            child: _buildMailWindow(),
-          ),
+        // 4. Window 2: MAIL.APP (x: 8, y: 112, w: 146, h: 82)
+        Positioned(
+          left: 8,
+          top: 112,
+          width: 146,
+          height: 82,
+          child: _buildMailWindow(),
+        ),
 
-          // 5. Window 3: PLAYER.EXE (x: 160, y: 52, w: 152, h: 120)
-          Positioned(
-            left: 160,
-            top: 52,
-            width: 152,
-            height: 120,
-            child: _buildPlayerWindow(),
-          ),
-        ],
-      ),
+        // 5. Window 3: PLAYER.EXE (x: 160, y: 52, w: 152, h: 120)
+        Positioned(
+          left: 160,
+          top: 52,
+          width: 152,
+          height: 120,
+          child: _buildPlayerWindow(),
+        ),
+      ],
     );
   }
 

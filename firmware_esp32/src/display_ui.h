@@ -21,6 +21,7 @@ extern U8g2_for_TFT_eSPI u8f_marquee;
 #endif
 
 #include "icons.h"
+#include "theme_assets.h"
 
 enum DisplayState {
   STATE_STANDBY_WATCHFACE, // Màn 1: Chờ kết nối (kết nối BLE ngoài app, không waybar, nhiều kiểu watchface)
@@ -168,7 +169,7 @@ public:
     // Load saved watchface style
     Preferences prefs;
     prefs.begin("nav_ui", true);
-    _watchfaceStyle = prefs.getUChar("wf_style", 0) % 4;
+    _watchfaceStyle = prefs.getUChar("wf_style", 0) % 6;
     prefs.end();
 
     _needFullRedraw = true;
@@ -176,13 +177,27 @@ public:
   }
 
   void setWatchfaceStyle(uint8_t style) {
-    _watchfaceStyle = style % 4;
+    _watchfaceStyle = style % 6;
     Preferences prefs;
     prefs.begin("nav_ui", false);
     prefs.putUChar("wf_style", _watchfaceStyle);
     prefs.end();
     _needFullRedraw = true;
-    Serial.printf("[UI] Watchface style set to %d\n", _watchfaceStyle);
+    Serial.printf("[UI] Watchface/Theme style set to %d\n", _watchfaceStyle);
+  }
+
+  void forceShowWatchfaceTheme() {
+    _currentState = STATE_STANDBY_WATCHFACE;
+    _needFullRedraw = true;
+    Serial.println(F("[UI] Switched to Watchface/Theme display mode"));
+  }
+
+  void restoreIdleMap() {
+    if (_isAppConnected) {
+      _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+      _needFullRedraw = true;
+      Serial.println(F("[UI] Restored Idle Map state"));
+    }
   }
 
   uint8_t getWatchfaceStyle() const {
@@ -671,23 +686,11 @@ private:
   }
 
   // =========================================================================
-  // MÀN 1: STANDBY WATCHFACE (No Waybar, Multiple Styles, Flicker-Free)
+  // MÀN 1: STANDBY WATCHFACE / SIMULATOR THEMES (Styles 0..5)
   // =========================================================================
   void _renderStandbyWatchface() {
     if (_needFullRedraw) {
       tft.fillScreen(TFT_BLACK);
-
-      // Check optional custom background image /bg_wait.jpg
-      if (SPIFFS.exists("/bg_wait.jpg")) {
-        File f = SPIFFS.open("/bg_wait.jpg", "r");
-        if (f) {
-          size_t fSize = f.size();
-          f.close();
-          if (fSize > 500) {
-            TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
-          }
-        }
-      }
 
       _lastState = _currentState;
       _lastWatchfaceStyle = _watchfaceStyle;
@@ -700,7 +703,47 @@ private:
       _lastDrawnSong[0] = '\0';
       _needFullRedraw = false;
 
-      _drawStaticWatchfaceLayout();
+      // Draw high-resolution base graphics matching each simulator interface
+      switch (_watchfaceStyle) {
+        case 0: { // customStatic: Màn chờ mặc định + Waybar (hoặc /bg_wait.jpg nếu có)
+          if (SPIFFS.exists("/bg_wait.jpg")) {
+            File f = SPIFFS.open("/bg_wait.jpg", "r");
+            if (f) {
+              size_t fSize = f.size();
+              f.close();
+              if (fSize > 500) {
+                TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+              }
+            }
+          }
+          _drawStaticWatchfaceLayout();
+          break;
+        }
+        case 1: { // Sunflower Carbon HUD
+          TJpgDec.drawJpg(0, 0, THEME_SUNFLOWER_JPG, THEME_SUNFLOWER_JPG_LEN);
+          break;
+        }
+        case 2: { // Cyberpunk Neon Radar
+          TJpgDec.drawJpg(0, 0, THEME_CYBERPUNK_JPG, THEME_CYBERPUNK_JPG_LEN);
+          break;
+        }
+        case 3: { // Retro Macintosh OS
+          TJpgDec.drawJpg(0, 0, THEME_RETRO_MAC_JPG, THEME_RETRO_MAC_JPG_LEN);
+          break;
+        }
+        case 4: { // Cassette Retro Wave
+          TJpgDec.drawJpg(0, 0, THEME_CASSETTE_JPG, THEME_CASSETTE_JPG_LEN);
+          break;
+        }
+        case 5: { // Comic Strip Manga
+          TJpgDec.drawJpg(0, 0, THEME_COMIC_JPG, THEME_COMIC_JPG_LEN);
+          break;
+        }
+        default: {
+          _drawStaticWatchfaceLayout();
+          break;
+        }
+      }
     }
 
     switch (_watchfaceStyle) {
@@ -708,17 +751,93 @@ private:
         _updateWatchfaceDigitalMinimal();
         break;
       case 1:
-        _updateWatchfaceAnalog();
+        _updateThemeSunflower();
         break;
       case 2:
-        _updateWatchfaceDashboard();
+        _updateThemeCyberpunk();
         break;
       case 3:
-        _updateWatchfaceCyberpunkNeon();
+        _updateThemeRetroMac();
+        break;
+      case 4:
+        _updateThemeCassette();
+        break;
+      case 5:
+        _updateThemeComic();
         break;
       default:
         _updateWatchfaceDigitalMinimal();
         break;
+    }
+  }
+
+  void _updateThemeSunflower() {
+    if (!_clockValid) return;
+    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      uint16_t cCardBg = tft.color565(30, 27, 21);
+      tft.fillRect(20, 22, 100, 38, cCardBg);
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(tft.color565(250, 204, 21), cCardBg);
+      tft.drawString(timeBuf, 22, 22, 6);
+    }
+  }
+
+  void _updateThemeCyberpunk() {
+    if (!_clockValid) return;
+    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      uint16_t cBg = tft.color565(6, 12, 25);
+      tft.fillRect(20, 24, 110, 42, cBg);
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(tft.color565(0, 240, 255), cBg);
+      tft.drawString(timeBuf, 20, 24, 6);
+    }
+  }
+
+  void _updateThemeRetroMac() {
+    if (!_clockValid) return;
+    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      uint16_t cBg = tft.color565(165, 165, 165);
+      tft.fillRect(20, 32, 90, 26, cBg);
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(TFT_BLACK, cBg);
+      tft.drawString(timeBuf, 22, 34, 4);
+    }
+  }
+
+  void _updateThemeCassette() {
+    if (!_clockValid) return;
+    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      uint16_t cBg = tft.color565(18, 14, 30);
+      tft.fillRect(16, 20, 105, 38, cBg);
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(tft.color565(255, 64, 160), cBg);
+      tft.drawString(timeBuf, 18, 20, 6);
+    }
+  }
+
+  void _updateThemeComic() {
+    if (!_clockValid) return;
+    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      uint16_t cBg = TFT_WHITE;
+      tft.fillRect(20, 20, 95, 38, cBg);
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(TFT_BLACK, cBg);
+      tft.drawString(timeBuf, 22, 20, 6);
     }
   }
 

@@ -148,3 +148,4 @@ class Esp32Bezel extends StatelessWidget {
     );
   }
 }
+

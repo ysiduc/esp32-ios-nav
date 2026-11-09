@@ -72,3 +72,4 @@ class SimulatorMockData {
 
   static const SimulatorMockData defaultPreset = SimulatorMockData();
 }
+

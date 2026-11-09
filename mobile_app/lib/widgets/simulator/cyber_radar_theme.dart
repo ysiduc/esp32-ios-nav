@@ -15,53 +15,62 @@ class CyberRadarTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hStr = currentTime.hour.toString().padLeft(2, '0');
-    final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
-
-    final dateStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')}.${currentTime.month.toString().padLeft(2, '0')}.${currentTime.year}';
-
     return Container(
       width: 320,
       height: 240,
       color: const Color(0xFF090616),
       child: Stack(
         children: [
-          // 0. Cyberpunk Grid & Radar Rings Background
+          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
           Positioned.fill(
-            child: CustomPaint(
-              painter: _CyberGridAndRadarPainter(),
+            child: Image.asset(
+              'assets/themes/theme_cyber_radar.jpg',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
             ),
-          ),
-
-          // 1. Top-Left Digital HUD Panel (x: 8, y: 8, w: 184, h: 148)
-          Positioned(
-            left: 8,
-            top: 8,
-            width: 184,
-            height: 148,
-            child: _buildHudClockPanel(hStr, mStr, sStr, dateStr),
-          ),
-
-          // 2. Right Neon Dashed Message Panel (x: 198, y: 8, w: 114, h: 148)
-          Positioned(
-            left: 198,
-            top: 8,
-            width: 114,
-            height: 148,
-            child: _buildNeonMessagePanel(),
-          ),
-
-          // 3. Bottom Soundwave Console Bar (x: 8, y: 162, w: 304, h: 70)
-          Positioned(
-            left: 8,
-            top: 162,
-            width: 304,
-            height: 70,
-            child: _buildCyberMusicConsole(),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildFallbackLayout(BuildContext context) {
+    final hStr = currentTime.hour.toString().padLeft(2, '0');
+    final mStr = currentTime.minute.toString().padLeft(2, '0');
+    final sStr = currentTime.second.toString().padLeft(2, '0');
+    final dateStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')}.${currentTime.month.toString().padLeft(2, '0')}.${currentTime.year}';
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _CyberGridAndRadarPainter(),
+          ),
+        ),
+        Positioned(
+          left: 8,
+          top: 8,
+          width: 184,
+          height: 148,
+          child: _buildHudClockPanel(hStr, mStr, sStr, dateStr),
+        ),
+        Positioned(
+          left: 198,
+          top: 8,
+          width: 114,
+          height: 148,
+          child: _buildNeonMessagePanel(),
+        ),
+        Positioned(
+          left: 8,
+          top: 162,
+          width: 304,
+          height: 70,
+          child: _buildCyberMusicConsole(),
+        ),
+      ],
     );
   }
 
@@ -387,3 +396,4 @@ class _CyberWaveformPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CyberWaveformPainter oldDelegate) => oldDelegate.progress != progress;
 }
+

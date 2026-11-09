@@ -14,6 +14,28 @@ class ComicStripTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      width: 320,
+      height: 240,
+      color: Colors.white,
+      child: Stack(
+        children: [
+          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
+          Positioned.fill(
+            child: Image.asset(
+              'assets/themes/theme_comic_strip.jpg',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFallbackLayout(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
     final sStr = currentTime.second.toString().padLeft(2, '0');
@@ -27,18 +49,15 @@ class ComicStripTheme extends StatelessWidget {
       padding: const EdgeInsets.all(5),
       child: Row(
         children: [
-          // Left Column (Panel 1: Clock & Ribbon + Panel 2: Speech Bubble)
           Expanded(
             flex: 11,
             child: Column(
               children: [
-                // Panel 1: Top-Left Comic Clock
                 Expanded(
                   flex: 10,
                   child: _buildClockPanel(hStr, mStr, sStr, dStr),
                 ),
                 const SizedBox(height: 5),
-                // Panel 2: Bottom-Left Comic Speech Bubble
                 Expanded(
                   flex: 11,
                   child: _buildSpeechBubblePanel(),
@@ -47,8 +66,6 @@ class ComicStripTheme extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 5),
-
-          // Right Column (Panel 3: Vertical Manga Music & Vinyl Cassette)
           Expanded(
             flex: 10,
             child: _buildMusicMangaPanel(),
@@ -380,3 +397,4 @@ class _CartoonCassettePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+

@@ -73,3 +73,4 @@ extension ESP32InterfaceExt on ESP32Interface {
     return ESP32Interface.customStatic;
   }
 }
+

@@ -263,3 +263,4 @@ class _SunflowerWatermarkPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
+
