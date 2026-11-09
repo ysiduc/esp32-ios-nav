@@ -362,7 +362,7 @@ import AVFoundation
     roadNs.draw(in: roadDrawRect, withAttributes: roadAttrs)
 
     // 3. Top-Left Enlarged Black Maneuver Card + Coral-Red Top Badge
-    let blackCardRect = CGRect(x: 4.0, y: 5.0, width: 134.0, height: 48.0)
+    let blackCardRect = CGRect(x: 4.0, y: 6.0, width: 138.0, height: 50.0)
     let blackCardShadow = UIBezierPath(roundedRect: blackCardRect.offsetBy(dx: 0, dy: 2), cornerRadius: 12.0)
     UIColor(white: 0.0, alpha: 0.30).setFill()
     blackCardShadow.fill()
@@ -374,8 +374,8 @@ import AVFoundation
     blackCardPath.lineWidth = 1.0
     blackCardPath.stroke()
 
-    let coralRect = CGRect(x: 0.0, y: 1.0, width: 80.0, height: 20.0)
-    let coralPath = UIBezierPath(roundedRect: coralRect, cornerRadius: 9.0)
+    let coralRect = CGRect(x: 0.0, y: 2.0, width: 84.0, height: 24.0)
+    let coralPath = UIBezierPath(roundedRect: coralRect, cornerRadius: 11.0)
     UIColor(red: 0.941, green: 0.384, blue: 0.380, alpha: 1.0).setFill()
     coralPath.fill()
     let coralInner = UIBezierPath(roundedRect: coralRect.insetBy(dx: 1.2, dy: 1.2), cornerRadius: 10.0)
@@ -383,7 +383,7 @@ import AVFoundation
     coralInner.lineWidth = 1.0
     coralInner.stroke()
 
-    drawTurnArrow(ctx: ctx, cx: 14.0, cy: 11.0, turnCode: turnCode)
+    drawTurnArrow(ctx: ctx, cx: 15.0, cy: 14.0, turnCode: turnCode)
 
     let distAttrs: [NSAttributedString.Key: Any] = [
       .font: UIFont.systemFont(ofSize: 12.0, weight: .heavy),
@@ -392,23 +392,41 @@ import AVFoundation
     let distNs = distStr as NSString
     let distSize = distNs.size(withAttributes: distAttrs)
     distNs.draw(
-      at: CGPoint(x: 25.0, y: 1.0 + (20.0 - distSize.height) / 2.0),
+      at: CGPoint(x: 27.0, y: 2.0 + (24.0 - distSize.height) / 2.0),
       withAttributes: distAttrs
     )
 
-    let streetParagraph = NSMutableParagraphStyle()
-    streetParagraph.lineBreakMode = .byTruncatingTail
-    streetParagraph.maximumLineHeight = 13.5
     let streetAttrs: [NSAttributedString.Key: Any] = [
-      .font: UIFont.systemFont(ofSize: 11.5, weight: .bold),
-      .foregroundColor: UIColor(red: 0.973, green: 0.980, blue: 0.988, alpha: 1.0),
-      .paragraphStyle: streetParagraph
+      .font: UIFont.systemFont(ofSize: 12.0, weight: .bold),
+      .foregroundColor: UIColor(red: 0.973, green: 0.980, blue: 0.988, alpha: 1.0)
     ]
     let streetNs = (nextStreet.isEmpty ? "Đi thẳng" : nextStreet) as NSString
-    streetNs.draw(
-      in: CGRect(x: 9.0, y: 24.0, width: 122.0, height: 26.0),
-      withAttributes: streetAttrs
-    )
+    let streetSize = streetNs.size(withAttributes: streetAttrs)
+    let textW = ceil(streetSize.width)
+    let availW: CGFloat = 120.0
+
+    if textW > availW {
+      let loopDist = textW + 36.0
+      let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+      let cycleMs = Int(loopDist * 35.0)
+      let totalCycle = cycleMs + 2000
+      let phaseMs = nowMs % totalCycle
+      let scrollX: CGFloat = (phaseMs < 1200)
+        ? 0.0
+        : (phaseMs > cycleMs + 1200)
+            ? 0.0
+            : CGFloat(phaseMs - 1200) / 35.0
+
+      ctx.saveGState()
+      let clipRect = CGRect(x: 8.0, y: 26.0, width: availW + 4.0, height: 22.0)
+      ctx.clip(to: clipRect)
+      let off = scrollX.truncatingRemainder(dividingBy: loopDist)
+      streetNs.draw(at: CGPoint(x: 10.0 - off, y: 27.5), withAttributes: streetAttrs)
+      streetNs.draw(at: CGPoint(x: 10.0 - off + loopDist, y: 27.5), withAttributes: streetAttrs)
+      ctx.restoreGState()
+    } else {
+      streetNs.draw(at: CGPoint(x: 10.0, y: 27.5), withAttributes: streetAttrs)
+    }
 
     // 4. Speedometer Box placed above Bottom-Left Time Card (x: 4, y: 118, w: 54, h: 40)
     let speedRect = CGRect(x: 4.0, y: 118.0, width: 54.0, height: 40.0)

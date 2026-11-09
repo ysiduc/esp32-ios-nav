@@ -590,14 +590,14 @@ private:
 
   // =========================================================================
   // POPUP CARD CHO MÀN 3 (ĐANG DẪN ĐƯỜNG):
-  // Dưới Waybar (y: 30, cách Waybar 6px), bên phải (x: 178..316),
-  // Chiều rộng và chiều cao bằng với ô hướng rẽ bên trái (w: 138, h: 50)
+  // Dưới Waybar (y: 28, cách Waybar 4px), bên phải (x: 152..316),
+  // Chiều ngang dài ra (w: 164), chiều rộng/cao ngắn lại (h: 40)
   // =========================================================================
   void _drawNavPopupCard() {
-    const int px = 178;
-    const int py = 30;
-    const int pw = 138;
-    const int ph = 50;
+    const int px = 152;
+    const int py = 28;
+    const int pw = 164;
+    const int ph = 40;
 
     uint16_t cBg = tft.color565(15, 23, 42); // Deep Slate 900
     uint16_t cBorder;
@@ -605,8 +605,8 @@ private:
     const uint8_t* iconBitmap = icon_bell_20x20;
     _notifStyle(_popupData, cBorder, cIconCircle, iconBitmap);
 
-    // Xóa sạch vùng đệm 144x64 MCU block để chống sót pixel từ map
-    tft.fillRect(176, 25, 144, 63, tft.color565(11, 17, 26));
+    // Xóa sạch vùng đệm 176x48 MCU block để chống sót pixel từ map
+    tft.fillRect(144, 25, 176, 48, tft.color565(11, 17, 26));
 
     // Outer card
     tft.fillRoundRect(px, py, pw, ph, 8, cBg);
@@ -615,27 +615,27 @@ private:
       tft.drawRoundRect(px + 1, py + 1, pw - 2, ph - 2, 7, cBorder);
     }
 
-    // Left App Icon (Circle 22px with centered 20x20 bitmap)
-    const int iconCx = px + 15;
+    // Left App Icon (Circle 20px with centered 20x20 bitmap)
+    const int iconCx = px + 14;
     const int iconCy = py + (ph / 2);
-    tft.fillCircle(iconCx, iconCy, 11, cIconCircle);
+    tft.fillCircle(iconCx, iconCy, 10, cIconCircle);
     tft.drawBitmap(iconCx - 10, iconCy - 10, iconBitmap, 20, 20, TFT_WHITE);
 
-    // Text area: x = px + 30 = 208. Max text width = pw - 34 = 104px.
-    const int textX = px + 30;
-    const int maxW = pw - 34;
+    // Text area: x = px + 28 = 180. Max text width = pw - 32 = 132px.
+    const int textX = px + 28;
+    const int maxW = pw - 32;
 
     char titleLine[48];
     _fitUtf8(_popupData.title, titleLine, sizeof(titleLine), maxW);
 
     if (_popupData.message[0] != '\0') {
-      _drawUtf8String(titleLine, textX, py + 5, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
+      _drawUtf8String(titleLine, textX, py + 3, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
 
       char msgLine[48];
       _fitUtf8(_popupData.message, msgLine, sizeof(msgLine), maxW);
-      _drawUtf8String(msgLine, textX, py + 21, TFT_WHITE, cBg);
+      _drawUtf8String(msgLine, textX, py + 19, TFT_WHITE, cBg);
     } else {
-      _drawUtf8String(titleLine, textX, py + 13, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
+      _drawUtf8String(titleLine, textX, py + 11, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
     }
   }
 
