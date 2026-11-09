@@ -68,7 +68,7 @@ bool g_skipNavPopup = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= tft.width()) return 1;
   if (g_clipMapOnly && (x < 6 || x >= 150 || y < 8 || y >= 232)) return 1;
-  if (g_skipNavPopup && x >= 160 && y >= 24 && y < 88) return 1;
+  if (g_skipNavPopup && x >= 176 && y >= 24 && y < 88) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
 }

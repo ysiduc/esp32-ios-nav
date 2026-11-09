@@ -1479,10 +1479,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
         : '${distToTurn.round()} m';
 
-    // Pitch-black rounded rectangle (x: 4, y: 6, w: 148, h: 58)
+    // Pitch-black rounded rectangle (x: 4, y: 6, w: 138, h: 50)
     final blackCardRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 6.0, 148.0, 58.0),
-      const Radius.circular(12.0),
+      const Rect.fromLTWH(4.0, 6.0, 138.0, 50.0),
+      const Radius.circular(10.0),
     );
     canvas.drawRRect(
       blackCardRect.shift(const Offset(0, 2)),
@@ -1499,7 +1499,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
     // Top-left Coral-Red Badge (#F06261 with thin white inner border)
     final coralBadgeRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(0.0, 2.0, 88.0, 24.0),
+      const Rect.fromLTWH(0.0, 2.0, 84.0, 24.0),
       const Radius.circular(11.0),
     );
     canvas.drawRRect(coralBadgeRect, Paint()..color = const Color(0xFFF06261));
@@ -1524,25 +1524,48 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
-    )..layout(maxWidth: 58.0);
+    )..layout(maxWidth: 56.0);
     distTp.paint(canvas, Offset(27.0, 2.0 + (24.0 - distTp.height) / 2.0));
 
-    // Upcoming street name inside black card ("Phố Nguyễn Hữu Thọ", up to 2 lines)
+    // Upcoming street name inside black card ("Phố Nguyễn Hữu Thọ", thả trôi khi dài)
     final streetTp = TextPainter(
       text: TextSpan(
         text: nextStreet.isNotEmpty ? nextStreet : 'Đi thẳng',
         style: const TextStyle(
           color: Color(0xFFF8FAFC),
-          fontSize: 11.5,
+          fontSize: 12.0,
           fontWeight: FontWeight.w700,
-          height: 1.15,
         ),
       ),
       textDirection: TextDirection.ltr,
-      maxLines: 2,
-      ellipsis: '…',
-    )..layout(maxWidth: 134.0);
-    streetTp.paint(canvas, const Offset(10.0, 28.0));
+      maxLines: 1,
+    )..layout();
+
+    const double availW = 120.0;
+    if (streetTp.width > availW) {
+      final double textW = streetTp.width;
+      final double loopDist = textW + 36.0;
+      final int nowMs = DateTime.now().millisecondsSinceEpoch;
+      final int cycleMs = (loopDist * 35).round();
+      final int phaseMs = nowMs % (cycleMs + 2000);
+      final double scrollX = (phaseMs < 1200)
+          ? 0.0
+          : (phaseMs > cycleMs + 1200)
+              ? 0.0
+              : (phaseMs - 1200) / 35.0;
+
+      canvas.save();
+      canvas.clipRRect(RRect.fromRectAndRadius(
+        const Rect.fromLTWH(8.0, 26.0, availW + 4.0, 22.0),
+        const Radius.circular(4.0),
+      ));
+      final double off = scrollX % loopDist;
+      streetTp.paint(canvas, Offset(10.0 - off, 27.5));
+      streetTp.paint(canvas, Offset(10.0 - off + loopDist, 27.5));
+      canvas.restore();
+    } else {
+      streetTp.paint(canvas, const Offset(10.0, 27.5));
+    }
 
     // --- 5. SPEEDOMETER BOX ABOVE BOTTOM-LEFT TIME CARD (x: 4, y: 118, w: 58, h: 42) ---
     final speedBoxRect = RRect.fromRectAndRadius(
