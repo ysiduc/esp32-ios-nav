@@ -4,20 +4,38 @@
 #include <WiFi.h>
 #include <WiFiServer.h>
 #include <WiFiClient.h>
-#include <WebSocketsClient.h>
+#include <WebSocketsServer.h>
+#include <esp_wifi.h>
+#include <tcpip_adapter.h>
 #include <Preferences.h>
 #include "display_ui.h"
 #include "ancs_service.h"
 #include "cts_service.h"
 #include "ams_service.h"
 
-// Pure WiFi STA Client for iPhone Hotspot (IP 172.20.10.1:8080)
-static WebSocketsClient webSocketClient;
+// ESP32 SoftAP (no Internet) + WebSocket server 192.168.4.1:8080 - iPhone joins this Wi-Fi and connects as client
+static WebSocketsServer webSocketServer(8080);
+static uint8_t wsClientNum = 255;
 static bool wsConnected = false;
-static bool staConnected = false;
 static Preferences prefs;
-static String wifiSsid = "#ysiduc";
-static String wifiPass = "00000000";
+static String wifiSsid = "ESP32-NAV";
+static String wifiPass = "12345678";
+
+// Start SoftAP WITHOUT offering a default gateway/DNS via DHCP, so iOS immediately sees
+// "no Internet on this Wi-Fi" and keeps using cellular data (no slow captive-portal detection).
+static void startSoftAp() {
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+  WiFi.softAP(wifiSsid.c_str(), wifiPass.c_str(), 6, 0, 2);
+  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence
+
+  tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+  uint8_t offerRouter = 0; // 0 = do NOT offer router (default gateway) option
+  tcpip_adapter_dhcps_option(TCPIP_ADAPTER_OP_SET, TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS, &offerRouter, sizeof(offerRouter));
+  tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
+  Serial.printf("[WiFi AP] SSID '%s' (no Internet), IP %s\n", wifiSsid.c_str(), WiFi.softAPIP().toString().c_str());
+}
 
 
 
@@ -223,20 +241,21 @@ void processJsonPacket(const char* jsonStr) {
     return;
   } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
     if (doc["ssid"].is<const char*>() && doc["pass"].is<const char*>()) {
-      wifiSsid = String(doc["ssid"].as<const char*>());
-      wifiPass = String(doc["pass"].as<const char*>());
-      prefs.begin("nav_wifi", false);
-      prefs.putString("ssid", wifiSsid);
-      prefs.putString("pass", wifiPass);
-      prefs.end();
-      Serial.printf("[WiFi STA] Saved & Reconnecting with SSID: '%s'\n", wifiSsid.c_str());
-      WiFi.disconnect();
-      WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+      String newSsid = String(doc["ssid"].as<const char*>());
+      String newPass = String(doc["pass"].as<const char*>());
+      if (newSsid.length() > 0 && newPass.length() >= 8) {
+        wifiSsid = newSsid;
+        wifiPass = newPass;
+        prefs.begin("nav_wifi", false);
+        prefs.putString("ap_ssid", wifiSsid);
+        prefs.putString("ap_pass", wifiPass);
+        prefs.end();
+        Serial.printf("[WiFi AP] Saved new AP SSID: '%s' - restarting SoftAP\n", wifiSsid.c_str());
+        startSoftAp();
+      }
     }
     if (pNavChar != nullptr && bleConnected) {
-      String staIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "none";
-      String statusStr = (WiFi.status() == WL_CONNECTED) ? "connected" : "connecting";
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"" + statusStr + "\",\"mode\":\"STA\",\"sta_ip\":\"" + staIp + "\",\"ws\":" + (wsConnected ? "1" : "0") + ",\"port\":8080,\"hotspot\":\"" + wifiSsid + "\"}";
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"mode\":\"AP\",\"ip\":\"192.168.4.1\",\"ws\":" + String(wsConnected ? 1 : 0) + ",\"port\":8080,\"hotspot\":\"" + wifiSsid + "\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
@@ -342,16 +361,20 @@ void processJsonPacket(const char* jsonStr) {
   }
 }
 
-// WebSocket Event Handler for iPhone Hotspot stream
-void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+// WebSocket Server Event Handler (iPhone connects to ESP32 SoftAP)
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      wsConnected = false;
-      Serial.println("[WebSocket] Disconnected from iPhone Hotspot!");
+      if (num == wsClientNum) {
+        wsConnected = false;
+        wsClientNum = 255;
+      }
+      Serial.printf("[WebSocket] iPhone #%u disconnected\n", num);
       break;
     case WStype_CONNECTED:
+      wsClientNum = num;
       wsConnected = true;
-      Serial.printf("[WebSocket] Connected to iPhone Hotspot Server: %s\n", (const char*)payload);
+      Serial.printf("[WebSocket] iPhone #%u connected to ESP32 SoftAP\n", num);
       break;
     case WStype_TEXT:
       if (length > 0) {
@@ -471,10 +494,10 @@ void setup() {
 
   // Load saved Hotspot credentials from Preferences NVS
   prefs.begin("nav_wifi", false);
-  wifiSsid = prefs.getString("ssid", "#ysiduc");
-  wifiPass = prefs.getString("pass", "00000000");
+  wifiSsid = prefs.getString("ap_ssid", "ESP32-NAV");
+  wifiPass = prefs.getString("ap_pass", "12345678");
   prefs.end();
-  Serial.printf("[NVS] Loaded Hotspot SSID: '%s'\n", wifiSsid.c_str());
+  Serial.printf("[NVS] Loaded SoftAP SSID: '%s'\n", wifiSsid.c_str());
 
   // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
@@ -543,46 +566,18 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  // 3. Start WiFi in Pure Station Mode (STA only - ESP32 connects to iPhone Hotspot, no SoftAP)
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence in ESP-IDF!
-  WiFi.setAutoReconnect(true);
+  // 3. Start ESP32 SoftAP (no Internet) + WebSocket server on 192.168.4.1:8080
+  startSoftAp();
+  webSocketServer.begin();
+  webSocketServer.onEvent(webSocketEvent);
+  webSocketServer.enableHeartbeat(15000, 3000, 2);
 
-  // Connect to iPhone Personal Hotspot using loaded/configured credentials
-  Serial.printf("[WiFi STA] Connecting to iPhone Hotspot ('%s')...\n", wifiSsid.c_str());
-  WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
-
-  // Configure SNTP for automatic time sync (UTC+7 Vietnam)
-  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
-
-  // Configure WebSocket Client callbacks (begin() is called when WiFi connects)
-  webSocketClient.onEvent(webSocketEvent);
-  webSocketClient.setReconnectInterval(2000);
-  webSocketClient.enableHeartbeat(15000, 3000, 2);
-
-  Serial.printf("[BLE & WiFi STA] ESP32-S3 Navi ready for Hotspot ('%s') + AMS & ANCS!\n", wifiSsid.c_str());
+  Serial.printf("[BLE & WiFi AP] ESP32-S3 Navi ready: join Wi-Fi '%s' (pass '%s') + AMS & ANCS!\n", wifiSsid.c_str(), wifiPass.c_str());
 }
 
 void loop() {
-  // 0. Manage iPhone Hotspot STA connection & WebSocket loop
-  if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
-    if (!staConnected) {
-      staConnected = true;
-      IPAddress gw = WiFi.gatewayIP();
-      String host = (gw != IPAddress(0, 0, 0, 0)) ? gw.toString() : "172.20.10.1";
-      Serial.printf("[WiFi STA] Connected to iPhone Hotspot! ESP32 IP: %s, Gateway: %s, Target: %s:8080\n",
-                    WiFi.localIP().toString().c_str(), gw.toString().c_str(), host.c_str());
-      webSocketClient.disconnect();
-      webSocketClient.begin(host.c_str(), 8080, "/");
-    }
-    webSocketClient.loop();
-  } else {
-    if (staConnected) {
-      staConnected = false;
-      Serial.println("[WiFi STA] Disconnected from iPhone Hotspot. Reconnecting...");
-      webSocketClient.disconnect();
-    }
-  }
+  // 0. Serve iPhone WebSocket client on SoftAP
+  webSocketServer.loop();
 
 
   // 1. Decode & push new JPEG Map Frame safely on the Main thread
@@ -611,9 +606,8 @@ void loop() {
     #endif
 
     // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
-    if (wsConnected) {
-      webSocketClient.sendTXT("K");
-      webSocketClient.loop();
+    if (wsConnected && wsClientNum != 255) {
+      webSocketServer.sendTXT(wsClientNum, "K");
     }
   }
 

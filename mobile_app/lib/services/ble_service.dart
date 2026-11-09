@@ -178,28 +178,9 @@ class BleService extends ChangeNotifier {
 
   /// Automatically probe ESP32 SoftAP TCP port on 192.168.4.1:8080 (fallback only)
   Future<void> probeEsp32Wifi() async {
-    // If currently connected via Hotspot WebSocket (172.20.10.1), keep connected
-    if (_wifiIp == '172.20.10.1' && _wifiStatus == 'connected') {
-      return;
-    }
-
-    try {
-      final socket = await Socket.connect('192.168.4.1', 8080, timeout: const Duration(milliseconds: 400));
-      socket.destroy();
-      if (_wifiStatus != 'connected') {
-        _wifiStatus = 'connected';
-        _wifiIp = '192.168.4.1';
-        _wifiPort = 8080;
-        _addLog('Đã kết nối Wi-Fi ESP32: ysiduc navi (192.168.4.1:8080)', isTx: false);
-        notifyListeners();
-      }
-    } catch (_) {
-      if (_wifiStatus == 'connected' && _wifiIp != '172.20.10.1') {
-        _wifiStatus = 'disconnected';
-        _wifiIp = null;
-        notifyListeners();
-      }
-    }
+    // Disabled: the ESP32 SoftAP link (192.168.4.1:8080) is now a WebSocket managed by
+    // EspStreamService. A raw TCP probe would only create a bogus 'connected' state.
+    return;
   }
 
 

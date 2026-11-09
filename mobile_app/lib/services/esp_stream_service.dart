@@ -97,6 +97,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
     _startWebSocketServer();
+    _startEspApConnector();
   }
 
   /// Start internal HTTP/WebSocket server listening on port 8080
@@ -110,40 +111,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           try {
             final socket = await WebSocketTransformer.upgrade(request);
-            _wsClients.add(socket);
-            bleService.setHotspotConnected('172.20.10.1', 8080);
-            if (_latestJpegBytes != null) {
-              try {
-                socket.add(_latestJpegBytes!);
-              } catch (_) {}
-            }
-            notifyListeners();
-
-            socket.listen(
-              (data) {
-                // Incoming messages from ESP32 client (ACK 'K' when frame is rendered)
-                final msg = data is String
-                    ? data.trim()
-                    : (data is List<int> ? utf8.decode(data, allowMalformed: true).trim() : '');
-                if (msg == 'K' || msg == 'ACK' || msg.contains('K')) {
-                  _wsReadyForNextFrame = true;
-                }
-              },
-              onDone: () {
-                _wsClients.remove(socket);
-                if (_wsClients.isEmpty) {
-                  bleService.setHotspotDisconnected();
-                }
-                notifyListeners();
-              },
-              onError: (_) {
-                _wsClients.remove(socket);
-                if (_wsClients.isEmpty) {
-                  bleService.setHotspotDisconnected();
-                }
-                notifyListeners();
-              },
-            );
+            _registerWsClient(socket);
           } catch (e) {
             debugPrint('[WebSocket Upgrade Error] $e');
           }
@@ -156,6 +124,74 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('[WebSocket Server Error] $e');
     }
+  }
+
+
+  // ───────────────────────────────────────────────────────────────────────
+  // ESP32 SoftAP mode: ESP32 phát Wi-Fi "ESP32-NAV" (không Internet) + WebSocket server 192.168.4.1:8080.
+  // iPhone vào Wi-Fi đó (vẫn dùng 4G/5G để ra mạng) và app chủ động kết nối tới ESP32.
+  // ───────────────────────────────────────────────────────────────────────
+  static const String espApWsUrl = 'ws://192.168.4.1:8080';
+  Timer? _apConnectTimer;
+  WebSocket? _apSocket;
+  bool _apConnecting = false;
+
+  void _startEspApConnector() {
+    _apConnectTimer?.cancel();
+    _apConnectTimer = Timer.periodic(const Duration(seconds: 2), (_) => _tryConnectEspAp());
+    _tryConnectEspAp();
+  }
+
+  Future<void> _tryConnectEspAp() async {
+    if (_apSocket != null || _apConnecting) return;
+    _apConnecting = true;
+    try {
+      final ws = await WebSocket.connect(espApWsUrl).timeout(const Duration(milliseconds: 1500));
+      ws.pingInterval = const Duration(seconds: 5);
+      _apSocket = ws;
+      _registerWsClient(ws);
+      bleService.logInfo('Đã kết nối Wi-Fi ESP32-NAV (192.168.4.1:8080)');
+    } catch (_) {
+      // Không ở trong Wi-Fi của ESP32 -> thử lại sau 2s
+    } finally {
+      _apConnecting = false;
+    }
+  }
+
+  /// Register a WebSocket peer (either iPhone-hosted server client or ESP32 SoftAP connection)
+  void _registerWsClient(WebSocket socket) {
+    _wsClients.add(socket);
+    _wsReadyForNextFrame = true;
+    bleService.setHotspotConnected('172.20.10.1', 8080);
+    if (_latestJpegBytes != null) {
+      try {
+        socket.add(_latestJpegBytes!);
+      } catch (_) {}
+    }
+    notifyListeners();
+
+    void onGone() {
+      _wsClients.remove(socket);
+      if (identical(_apSocket, socket)) _apSocket = null;
+      if (_wsClients.isEmpty) {
+        bleService.setHotspotDisconnected();
+      }
+      notifyListeners();
+    }
+
+    socket.listen(
+      (data) {
+        // ACK 'K' from ESP32 when frame is rendered
+        final msg = data is String
+            ? data.trim()
+            : (data is List<int> ? utf8.decode(data, allowMalformed: true).trim() : '');
+        if (msg == 'K' || msg == 'ACK' || msg.contains('K')) {
+          _wsReadyForNextFrame = true;
+        }
+      },
+      onDone: onGone,
+      onError: (_) => onGone(),
+    );
   }
 
   void updateReferences(BleService newBle, NavigationManager newNav) {
@@ -185,6 +221,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _isForeground = true;
+      _tryConnectEspAp();
       if (_isStreaming) {
         _startTimer();
       }
@@ -214,6 +251,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       } catch (_) {}
     }
     _wsClients.clear();
+    _apConnectTimer?.cancel();
+    _apSocket = null;
     _wsServer?.close(force: true);
     _wsServer = null;
     _pauseTimer?.cancel();
