@@ -112,6 +112,21 @@ private:
   // Minimap cached state
   bool _minimapDrawn = false;
 
+  // Marquee (thả trôi) state
+  struct Marquee { char text[96]; int textW; int off; unsigned long last; unsigned long pauseUntil; };
+  Marquee _mqIdle = {"", 0, 0, 0, 0};
+  Marquee _mqBar = {"", 0, 0, 0, 0};
+  TFT_eSprite _wbSpr = TFT_eSprite(&tft);
+  U8g2_for_TFT_eSPI _wbU8;
+  bool _wbForce = true;
+  uint16_t _lastIdleElapsed = 0xFFFF;
+
+  // Last notification shown in the Màn 2 notification box
+  NotificationPopup _notif;
+  bool _notifShown = false;
+  bool _notifDirty = true;
+  unsigned long _notifExpire = 0;
+
 public:
   void init() {
 #if defined(DISPLAY_TFT_ST7789)
@@ -128,7 +143,13 @@ public:
     u8f.setFontDirection(0);
     u8f.setFont(u8g2_font_unifont_t_vietnamese1);
 
-    marqueeSpr.createSprite(146, 24);
+    _wbSpr.createSprite(168, 24);
+    _wbU8.begin(_wbSpr);
+    _wbU8.setFontMode(0);
+    _wbU8.setFontDirection(0);
+    _wbU8.setFont(u8g2_font_unifont_t_vietnamese1);
+
+    marqueeSpr.createSprite(140, 24);
     u8f_marquee.begin(marqueeSpr);
     u8f_marquee.setFontMode(0);
     u8f_marquee.setFontDirection(0);
@@ -324,6 +345,17 @@ public:
     _popupData.expireMillis = millis() + durationMs;
     _popupData.active = true;
 
+    // Remember for the Màn 2 notification box
+    _notif = _popupData;
+    _notifShown = true;
+    _notifDirty = true;
+    _notifExpire = millis() + 120000UL;
+    if (_currentState == STATE_APP_IDLE_MAP) {
+      // Màn 2 shows notifications in the bottom-right box (no banner, map keeps streaming)
+      _popupData.active = false;
+      return;
+    }
+
     // Draw popup banner immediately
     _drawPopupBanner();
   }
@@ -337,9 +369,14 @@ public:
   }
 
   void dismissPopup() {
+    if (_notifShown && _notif.isCall) {
+      _notifShown = false;
+      _notifDirty = true;
+    }
+    bool wasActive = _popupData.active;
     _popupData.active = false;
     _popupData.expireMillis = 0;
-    _needFullRedraw = true;
+    if (_currentState != STATE_APP_IDLE_MAP || wasActive) _needFullRedraw = true;
   }
 
   bool isPopupActive() const {
@@ -360,9 +397,7 @@ public:
 
   // Draw top waybar on Navigation screen (Màn 3)
   void drawWaybarIfNav() {
-    if (_currentState == STATE_NAVIGATION && !isPopupActive()) {
-      _drawWaybar();
-    }
+    _wbForce = true;
   }
 
   void update(bool isStreamingActive = false) {
@@ -415,26 +450,24 @@ public:
       if (!isStreamingActive) {
         _renderNavigationHudFallback();
       }
-      // Waybar update: only redraws when time, song, or battery changes (Zero Flicker!)
+      if (isStreamingActive && _needFullRedraw) {
+        _wbForce = true;
+        _needFullRedraw = false;
+        _lastState = _currentState;
+      }
       if (!isPopupActive()) {
-        bool needWaybar = _needFullRedraw ||
-                          (strcmp(_lastWaybarTime, _navData.currentTime) != 0) ||
-                          (strcmp(_lastWaybarSong, _navData.songTitle) != 0) ||
-                          (_lastWaybarElapsed != _navData.songElapsedSec) ||
-                          (_lastWaybarBat != _navData.batteryLevel);
-        if (needWaybar) {
-          strncpy(_lastWaybarTime, _navData.currentTime, sizeof(_lastWaybarTime) - 1);
-          strncpy(_lastWaybarSong, _navData.songTitle, sizeof(_lastWaybarSong) - 1);
-          _lastWaybarElapsed = _navData.songElapsedSec;
-          _lastWaybarBat = _navData.batteryLevel;
-          _drawWaybar();
-        }
+        _updateWaybar(_wbForce);
+        _wbForce = false;
       }
     }
 
-    // Draw popup banner overlay if active
-    if (isPopupActive()) {
-      _drawPopupBanner();
+    // Draw popup banner overlay if active (throttled, avoids flicker)
+    if (isPopupActive() && !isStreamingActive) {
+      static unsigned long lastBanner = 0;
+      if (millis() - lastBanner > 700) {
+        lastBanner = millis();
+        _drawPopupBanner();
+      }
     }
   }
 
@@ -849,6 +882,7 @@ private:
     uint16_t cCardBg = tft.color565(19, 27, 38);
     uint16_t cPillBg = tft.color565(11, 17, 26);
     uint16_t cBorder = tft.color565(32, 45, 61);
+    bool musicRedraw = false;
 
     if (_needFullRedraw) {
       tft.fillScreen(TFT_BLACK);
@@ -860,21 +894,21 @@ private:
       _lastDrawnDay = 255;
       _lastDrawnBat = 255;
       _lastDrawnSong[0] = '\0';
+      _lastIdleElapsed = 0xFFFF;
+      _mqIdle.text[0] = '\0';
+      _notifDirty = true;
+      musicRedraw = true;
 
-      // 1. LEFT 50%: LIVE STANDBY MINIMAP (x: 4, y: 6, w: 148, h: 228)
       _renderStandbyVectorMap();
 
-      // 2. RIGHT 50%: HUD CARD (x: 158, y: 6, w: 158, h: 228)
       tft.fillRoundRect(158, 6, 158, 228, 12, cCardBg);
       tft.drawRoundRect(158, 6, 158, 228, 12, cBorder);
 
-      // Music Player Pill Box (x: 164, y: 88, w: 146, h: 138)
-      tft.fillRoundRect(164, 88, 146, 138, 10, cPillBg);
-      tft.drawRoundRect(164, 88, 146, 138, 10, tft.color565(30, 41, 59));
+      // Music pill (x164 y88 w146 h58)
+      tft.fillRoundRect(164, 88, 146, 58, 10, cPillBg);
+      tft.drawRoundRect(164, 88, 146, 58, 10, tft.color565(30, 41, 59));
     }
 
-    // Dynamic partial updates:
-    // A. Big Digital Clock
     if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
       _lastDrawnHour = _clockHour;
       _lastDrawnMin = _clockMin;
@@ -884,7 +918,6 @@ private:
       tft.setTextPadding(0);
     }
 
-    // B. Day & Date in Vietnamese
     if (_clockDay != _lastDrawnDay) {
       _lastDrawnDay = _clockDay;
       tft.fillRect(160, 48, 154, 26, cCardBg);
@@ -894,41 +927,52 @@ private:
       tft.drawFastHLine(172, 80, 130, cBorder);
     }
 
-    // C. Media / Music Player Card (No Equalizer, No Battery)
-    static uint16_t lastIdleElapsed = 0xFFFF;
+    // Music: "Tên bài • Tác giả" thả trôi trên 1 dòng + thời gian phát
+    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
     bool songChanged = (strcmp(_navData.songTitle, _lastDrawnSong) != 0);
-    bool elapsedChanged = (_navData.songElapsedSec != lastIdleElapsed);
-
-    if (songChanged || elapsedChanged) {
-      if (songChanged) {
-        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+    if (songChanged) {
+      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+      _lastDrawnSong[sizeof(_lastDrawnSong) - 1] = '\0';
+      musicRedraw = true;
+      tft.fillRect(166, 92, 142, 52, cPillBg);
+      _mqIdle.text[0] = '\0';
+      _lastIdleElapsed = 0xFFFF;
+      if (!hasSong) {
+        _drawCentreUtf8String("Chưa phát nhạc", 237, 108, tft.color565(100, 116, 139), cPillBg);
       }
-      lastIdleElapsed = _navData.songElapsedSec;
+    }
+    if (hasSong) {
+      char full[100];
+      if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
+      else snprintf(full, sizeof(full), "%s", _navData.songTitle);
+      _marquee(_mqIdle, marqueeSpr, u8f_marquee, 167, 94, full, TFT_WHITE, cPillBg, musicRedraw);
 
-      tft.fillRect(166, 90, 142, 134, cPillBg);
-      bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
-      if (hasSong) {
-        _drawUtf8String("[>] Đang phát", 172, 96, TFT_YELLOW, cPillBg);
-        _drawCentreUtf8String(_navData.songTitle, 237, 126, TFT_WHITE, cPillBg);
-        _drawCentreUtf8String(_navData.songArtist, 237, 156, tft.color565(148, 163, 184), cPillBg);
-
-        if (_navData.songDurationSec > 0 || _navData.songElapsedSec > 0) {
-          int elM = _navData.songElapsedSec / 60;
-          int elS = _navData.songElapsedSec % 60;
+      uint16_t elKey = (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0) ? _navData.songElapsedSec : 0xFFFE;
+      if (_lastIdleElapsed != elKey) {
+        _lastIdleElapsed = elKey;
+        tft.fillRect(166, 120, 142, 22, cPillBg);
+        if (elKey != 0xFFFE) {
           char timeStr[32];
+          int elM = _navData.songElapsedSec / 60, elS = _navData.songElapsedSec % 60;
           if (_navData.songDurationSec > 0) {
-            int durM = _navData.songDurationSec / 60;
-            int durS = _navData.songDurationSec % 60;
-            snprintf(timeStr, sizeof(timeStr), "%02d:%02d / %02d:%02d", elM, elS, durM, durS);
+            snprintf(timeStr, sizeof(timeStr), "%02d:%02d / %02d:%02d", elM, elS,
+                     _navData.songDurationSec / 60, _navData.songDurationSec % 60);
           } else {
             snprintf(timeStr, sizeof(timeStr), "%02d:%02d", elM, elS);
           }
-          _drawCentreUtf8String(timeStr, 237, 192, TFT_CYAN, cPillBg);
+          _drawCentreUtf8String(timeStr, 237, 122, TFT_CYAN, cPillBg);
         }
-      } else {
-        _drawUtf8String("[--] Chưa phát", 172, 96, tft.color565(100, 116, 139), cPillBg);
-        _drawCentreUtf8String("Nhạc iPhone", 237, 140, tft.color565(71, 85, 105), cPillBg);
       }
+    }
+
+    // Notification box (messages / calls)
+    if (_notifShown && millis() > _notifExpire) {
+      _notifShown = false;
+      _notifDirty = true;
+    }
+    if (_notifDirty) {
+      _notifDirty = false;
+      _drawNotifBox();
     }
   }
 
@@ -983,7 +1027,7 @@ private:
   void _renderNavigationHudFallback() {
     if (_needFullRedraw) {
       tft.fillScreen(TFT_BLACK);
-      _drawWaybar();
+      _wbForce = true;
       tft.fillRoundRect(4, 28, 148, 206, 12, tft.color565(11, 17, 26));
       tft.drawRoundRect(4, 28, 148, 206, 12, TFT_CYAN);
       tft.fillRoundRect(158, 28, 158, 206, 12, tft.color565(19, 27, 38));
@@ -1020,55 +1064,165 @@ private:
     _drawCentreUtf8String(etaStr, 237, 160, TFT_GREEN, tft.color565(19, 27, 38));
   }
 
-  // Waybar for Navigation Screen (y: 0..24)
-  // Layout requested: Left: Clock, Center: Song title, Right: Battery
-  void _drawWaybar() {
-    uint16_t cBarBg = tft.color565(8, 12, 18);
-    tft.fillRect(0, 0, 320, 24, cBarBg);
-    tft.drawFastHLine(0, 24, 320, tft.color565(25, 38, 55));
+  // Cắt chuỗi UTF-8 cho vừa chiều rộng maxW (px). Trả về số byte giữ lại.
+  int _fitUtf8(const char* in, char* out, size_t outSz, int maxW) {
+    strncpy(out, in, outSz - 1);
+    out[outSz - 1] = '\0';
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    int n = strlen(out);
+    while (n > 0 && u8f.getUTF8Width(out) > maxW) {
+      n--;
+      while (n > 0 && (((uint8_t)out[n]) & 0xC0) == 0x80) n--;
+      out[n] = '\0';
+    }
+    return n;
+  }
 
-    // 1. Góc trái: Đồng hồ
-    tft.setTextColor(TFT_WHITE, cBarBg);
-    tft.drawString(_navData.currentTime, 8, 4, 2);
+  // Chữ thả trôi trong sprite (cuộn ngang khi dài hơn khung, đứng yên + căn giữa khi ngắn)
+  void _marquee(Marquee& m, TFT_eSprite& spr, U8g2_for_TFT_eSPI& u8, int x, int y,
+                const char* text, uint16_t fg, uint16_t bg, bool force) {
+    if (strcmp(text, m.text) != 0) {
+      strncpy(m.text, text, sizeof(m.text) - 1);
+      m.text[sizeof(m.text) - 1] = '\0';
+      u8.setFont(u8g2_font_unifont_t_vietnamese1);
+      m.textW = u8.getUTF8Width(m.text);
+      m.off = 0;
+      m.pauseUntil = millis() + 1500;
+      force = true;
+    }
+    const int w = spr.width();
+    u8.setForegroundColor(fg);
+    u8.setBackgroundColor(bg);
+    if (m.textW <= w) {
+      if (force) {
+        spr.fillSprite(bg);
+        u8.setCursor((w - m.textW) / 2, 17);
+        u8.print(m.text);
+        spr.pushSprite(x, y);
+      }
+      return;
+    }
+    unsigned long now = millis();
+    if (!force) {
+      if (now < m.pauseUntil || now - m.last < 45) return;
+      m.last = now;
+      m.off += 2;
+      if (m.off >= m.textW + 28) {
+        m.off = 0;
+        m.pauseUntil = now + 1200;
+      }
+    }
+    spr.fillSprite(bg);
+    u8.setCursor(-m.off, 17);
+    u8.print(m.text);
+    u8.setCursor(-m.off + m.textW + 28, 17);
+    u8.print(m.text);
+    spr.pushSprite(x, y);
+  }
 
-    // 2. Góc phải: Pin iPhone
-    char batStr[16];
-    snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
-    uint16_t cBat = _navData.batteryLevel <= 20 ? TFT_RED : TFT_GREEN;
-    tft.setTextColor(cBat, cBarBg);
-    tft.drawRightString(batStr, 296, 4, 2);
+  // Waybar Màn 3 (y: 0..24): giờ (trái) | tên bài hát thả trôi (giữa) | pin (phải).
+  // Chỉ vẽ lại phần thay đổi => không nháy.
+  void _updateWaybar(bool force) {
+    const uint16_t cBarBg = tft.color565(8, 12, 18);
+    if (force) {
+      tft.fillRect(0, 0, 320, 24, cBarBg);
+      tft.drawFastHLine(0, 24, 320, tft.color565(25, 38, 55));
+      _lastWaybarTime[0] = '\0';
+      _lastWaybarElapsed = 0xFFFF;
+      _lastWaybarBat = 255;
+      _lastWaybarSong[0] = '\1';
+      _mqBar.text[0] = '\0';
+    }
 
-    // Battery icon (x: 300, y: 6, w: 16, h: 11)
-    tft.drawRect(300, 6, 16, 11, cBat);
-    tft.fillRect(316, 9, 2, 5, cBat);
-    tft.fillRect(302, 8, 12, 7, cBarBg);
-    int fillW = constrain((_navData.batteryLevel * 12) / 100, 0, 12);
-    if (fillW > 0) tft.fillRect(302, 8, fillW, 7, cBat);
+    if (strcmp(_lastWaybarTime, _navData.currentTime) != 0) {
+      strncpy(_lastWaybarTime, _navData.currentTime, sizeof(_lastWaybarTime) - 1);
+      tft.setTextColor(TFT_WHITE, cBarBg);
+      tft.setTextPadding(44);
+      tft.drawString(_navData.currentTime, 6, 4, 2);
+      tft.setTextPadding(0);
+    }
 
-    // 3. Ở giữa: Tên bài hát đang phát (kèm thời gian phát nếu có)
-    bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
-    if (hasSong) {
-      char songDesc[96];
-      if (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0) {
-        int elM = _navData.songElapsedSec / 60;
-        int elS = _navData.songElapsedSec % 60;
-        snprintf(songDesc, sizeof(songDesc), "♪ %s [%02d:%02d]", _navData.songTitle, elM, elS);
+    if (_lastWaybarBat != _navData.batteryLevel) {
+      _lastWaybarBat = _navData.batteryLevel;
+      char batStr[8];
+      snprintf(batStr, sizeof(batStr), "%d%%", _navData.batteryLevel);
+      uint16_t cBat = _navData.batteryLevel <= 20 ? TFT_RED : TFT_GREEN;
+      tft.setTextColor(cBat, cBarBg);
+      tft.setTextPadding(34);
+      tft.drawRightString(batStr, 290, 4, 2);
+      tft.setTextPadding(0);
+      tft.drawRect(294, 6, 20, 11, cBat);
+      tft.fillRect(314, 9, 2, 5, cBat);
+      tft.fillRect(296, 8, 16, 7, cBarBg);
+      int fillW = constrain((_navData.batteryLevel * 16) / 100, 0, 16);
+      if (fillW > 0) tft.fillRect(296, 8, fillW, 7, cBat);
+    }
+
+    bool hasSong = (_navData.songTitle[0] != '\0' && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
+    bool hasElapsed = hasSong && (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0);
+    uint16_t elKey = hasElapsed ? _navData.songElapsedSec : 0xFFFE;
+    if (_lastWaybarElapsed != elKey) {
+      _lastWaybarElapsed = elKey;
+      if (hasElapsed) {
+        char t[12];
+        snprintf(t, sizeof(t), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        tft.setTextColor(TFT_CYAN, cBarBg);
+        tft.setTextPadding(42);
+        tft.drawString(t, 226, 4, 2);
+        tft.setTextPadding(0);
       } else {
-        snprintf(songDesc, sizeof(songDesc), "♪ %s", _navData.songTitle);
+        tft.fillRect(224, 2, 46, 20, cBarBg);
       }
-      u8f.setFont(u8g2_font_unifont_t_vietnamese1);
-      while (strlen(songDesc) > 8 && u8f.getUTF8Width(songDesc) > 195) {
-        songDesc[strlen(songDesc) - 1] = '\0';
+    }
+
+    if (hasSong) {
+      char full[100];
+      if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
+      else snprintf(full, sizeof(full), "%s", _navData.songTitle);
+      _marquee(_mqBar, _wbSpr, _wbU8, 54, 0, full, tft.color565(250, 204, 21), cBarBg, false);
+    } else if (_lastWaybarSong[0] != '\0') {
+      _lastWaybarSong[0] = '\0';
+      _mqBar.text[0] = '\0';
+      tft.fillRect(54, 0, 168, 24, cBarBg);
+    }
+  }
+
+  void _notifStyle(const NotificationPopup& n, uint16_t& border, uint16_t& circle, const uint8_t*& icon) {
+    String a = String(n.app);
+    a.toLowerCase();
+    if (n.isCall || a == "call" || a == "phone") { border = TFT_GREEN; circle = tft.color565(34, 197, 94); icon = icon_call_20x20; }
+    else if (a.indexOf("zalo") >= 0) { border = tft.color565(0, 136, 255); circle = border; icon = icon_zalo_20x20; }
+    else if (a.indexOf("messenger") >= 0) { border = tft.color565(168, 85, 247); circle = border; icon = icon_messenger_20x20; }
+    else if (a.indexOf("telegram") >= 0) { border = tft.color565(0, 175, 240); circle = border; icon = icon_telegram_20x20; }
+    else if (a.indexOf("sms") >= 0 || a.indexOf("message") >= 0) { border = tft.color565(34, 197, 94); circle = border; icon = icon_sms_20x20; }
+    else { border = tft.color565(250, 204, 21); circle = tft.color565(234, 179, 8); icon = icon_bell_20x20; }
+  }
+
+  // Ô thông báo (tin nhắn / cuộc gọi) ở góc dưới phải Màn 2: x164 y152 w146 h74
+  void _drawNotifBox() {
+    const uint16_t cPill = tft.color565(11, 17, 26);
+    if (_notifShown && millis() > _notifExpire) _notifShown = false;
+    uint16_t border = tft.color565(30, 41, 59), circle = 0;
+    const uint8_t* icon = icon_bell_20x20;
+    if (_notifShown) _notifStyle(_notif, border, circle, icon);
+    tft.fillRoundRect(164, 152, 146, 74, 10, cPill);
+    tft.drawRoundRect(164, 152, 146, 74, 10, border);
+    if (!_notifShown) {
+      _drawCentreUtf8String("Chưa có thông báo", 237, 181, tft.color565(71, 85, 105), cPill);
+      return;
+    }
+    tft.fillCircle(181, 168, 12, circle);
+    tft.drawBitmap(171, 158, icon, 20, 20, TFT_WHITE);
+    char line[64];
+    _fitUtf8(_notif.title, line, sizeof(line), 106);
+    _drawUtf8String(line, 197, 160, _notif.isCall ? TFT_GREEN : TFT_YELLOW, cPill);
+    if (_notif.message[0] != '\0') {
+      int n = _fitUtf8(_notif.message, line, sizeof(line), 134);
+      _drawUtf8String(line, 171, 184, TFT_WHITE, cPill);
+      if ((size_t)n < strlen(_notif.message)) {
+        _fitUtf8(_notif.message + n, line, sizeof(line), 134);
+        _drawUtf8String(line, 171, 202, tft.color565(148, 163, 184), cPill);
       }
-      if (u8f.getUTF8Width(songDesc) > 190) {
-        int len = strlen(songDesc);
-        while (len > 6 && u8f.getUTF8Width(songDesc) > 175) {
-          len--;
-          songDesc[len] = '\0';
-        }
-        strcat(songDesc, "...");
-      }
-      _drawCentreUtf8String(songDesc, 168, 4, tft.color565(250, 204, 21), cBarBg);
     }
   }
 };
