@@ -46,6 +46,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
   final Map<String, ui.Image> _tileCache = {};
   final Map<String, img.Image> _cpuTileCache = {};
+  final Map<String, Uint8List> _tileMasks = {}; // 1 = building footprint (for pseudo-3D extrusion)
   final Set<String> _pendingTileFetches = {};
 
   // Persistent TCP Socket for continuous screen-off background streaming (SoftAP mode)
@@ -72,6 +73,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
       _cpuTileCache.clear();
+      _tileMasks.clear();
       _lastPrefetchPos = null;
       notifyListeners();
     }
@@ -86,6 +88,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
       _cpuTileCache.clear();
+      _tileMasks.clear();
       _lastPrefetchPos = null;
       notifyListeners();
     }
@@ -217,6 +220,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
     _cpuTileCache.clear();
+      _tileMasks.clear();
     super.dispose();
   }
 
@@ -338,7 +342,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       Uint8List? jpegBytes;
 
-      if (_isForeground) {
+      if (_isForeground && !isNav) {
         // 1. In foreground: High-Speed Flutter Canvas rendering
         try {
           final recorder = ui.PictureRecorder();
@@ -597,102 +601,156 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double subTileX = worldX - (centerTileX * 256.0);
       final double subTileY = worldY - (centerTileY * 256.0);
 
-      const int patchSize = 560;
-      final patch = img.Image(width: patchSize, height: patchSize, numChannels: 4);
-      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(223, 245, 232, 255);
-      img.fill(patch, color: bgColor);
+      // ===== Pseudo-3D "nổi khối" map: heading-up + tilt + extruded buildings (100% CPU) =====
+      const int vx = 226;
+      const int vy = 182;
+      const double tilt = 0.74; // vertical foreshortening (camera pitch)
+      const int extrude = 10; // building height in screen px
+      final double th = headingDeg * (math.pi / 180.0);
+      final double cosT = math.cos(th);
+      final double sinT = math.sin(th);
+      final bool hasTiles3d = !isDark;
 
-      const double patchCenter = patchSize / 2.0;
+      final frame = img.Image(width: w, height: h, numChannels: 4);
+      final Uint8List buf = frame.buffer.asUint8List();
+      final int fh = h + extrude + 1; // footprint rows (buildings below frame still extrude into it)
+      final Uint8List foot = Uint8List(w * fh);
 
-      bool tilesDrawn = false;
-      for (int dx = -2; dx <= 2; dx++) {
-        for (int dy = -2; dy <= 2; dy++) {
-          final int dstX = (patchCenter + (dx * 256.0) - subTileX).round();
-          final int dstY = (patchCenter + (dy * 256.0) - subTileY).round();
-          if (dstX + 256 <= 0 || dstX >= patchSize || dstY + 256 <= 0 || dstY >= patchSize) {
-            continue;
+      final int baseR = isDark ? 11 : 223;
+      final int baseG = isDark ? 17 : 245;
+      final int baseB = isDark ? 26 : 232;
+      final int wallR = isDark ? 40 : 156, wallG = isDark ? 52 : 174, wallB = isDark ? 66 : 164;
+
+      int lastTx = -999999, lastTy = -999999;
+      img.Image? curTile;
+      Uint8List? curMask;
+
+      // 1. Ground + footprint (inverse mapping screen -> world tile pixel, no patch/rotate allocation)
+      for (int sy = 0; sy < fh; sy++) {
+        final double dy = (sy - vy) / tilt;
+        for (int sx = 0; sx < w; sx++) {
+          final double dx = (sx - vx).toDouble();
+          final double wx = worldX + dx * cosT - dy * sinT;
+          final double wy = worldY + dx * sinT + dy * cosT;
+          final int tx = (wx / 256.0).floor();
+          final int ty = (wy / 256.0).floor();
+          if (tx != lastTx || ty != lastTy) {
+            lastTx = tx;
+            lastTy = ty;
+            final String key = '$zoom/$tx/$ty';
+            curTile = _cpuTileCache[key];
+            curMask = _tileMasks[key];
           }
-
-          final tx = centerTileX + dx;
-          final ty = centerTileY + dy;
-          final key = '$zoom/$tx/$ty';
-          final tileImg = _cpuTileCache[key];
-          if (tileImg != null) {
-            img.compositeImage(patch, tileImg, dstX: dstX, dstY: dstY);
-            tilesDrawn = true;
+          final tile = curTile;
+          int r = baseR, g = baseG, b = baseB;
+          bool isBuilding = false;
+          if (tile != null) {
+            final int px = (wx - tx * 256.0).floor().clamp(0, 255);
+            final int py = (wy - ty * 256.0).floor().clamp(0, 255);
+            final pix = tile.getPixel(px, py);
+            r = pix.r.toInt();
+            g = pix.g.toInt();
+            b = pix.b.toInt();
+            if (hasTiles3d) {
+              final mask = curMask;
+              if (mask != null && mask[py * 256 + px] == 1) {
+                isBuilding = true;
+              }
+            }
+          }
+          if (isBuilding) foot[sy * w + sx] = 1;
+          if (sy < h) {
+            final int o = (sy * w + sx) * 4;
+            if (isBuilding) {
+              buf[o] = wallR;
+              buf[o + 1] = wallG;
+              buf[o + 2] = wallB;
+            } else {
+              buf[o] = r;
+              buf[o + 1] = g;
+              buf[o + 2] = b;
+            }
+            buf[o + 3] = 255;
           }
         }
       }
 
-      if (!tilesDrawn) {
-        final gridColor = isDark ? img.ColorRgba8(30, 45, 66, 255) : img.ColorRgba8(195, 218, 204, 255);
-        for (int gx = 0; gx <= patchSize; gx += 32) {
-          img.drawLine(patch, x1: gx, y1: 0, x2: gx, y2: patchSize, color: gridColor);
-        }
-        for (int gy = 0; gy <= patchSize; gy += 32) {
-          img.drawLine(patch, x1: 0, y1: gy, x2: patchSize, y2: gy, color: gridColor);
-        }
-      }
-
-      // Draw active route polyline in Vibrant Navigation Blue (#003EB3 casing + #0066FF core) matching iPhone map
+      // 2. Route polyline projected through the same transform (drawn on the ground)
       if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
         final pts = activeRoute.polylinePoints;
         final casingColor = img.ColorRgba8(0, 62, 179, 255);
         final coreColor = img.ColorRgba8(0, 102, 255, 255);
-
         final screenPts = <img.Point>[];
         for (final pt in pts) {
           final double ptLatRad = pt.latitude * (math.pi / 180.0);
           final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
           final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
-          final int px = (patchCenter + (ptWorldX - worldX)).round();
-          final int py = (patchCenter + (ptWorldY - worldY)).round();
-          screenPts.add(img.Point(px, py));
+          final double px = ptWorldX - worldX;
+          final double py = ptWorldY - worldY;
+          final double rx = px * cosT + py * sinT;
+          final double ry = (-px * sinT + py * cosT) * tilt;
+          screenPts.add(img.Point((vx + rx).round(), (vy + ry).round()));
         }
-
+        bool inView(img.Point p) => p.x >= -40 && p.x <= w + 40 && p.y >= -40 && p.y <= h + 40;
         for (int i = 0; i < screenPts.length - 1; i++) {
           final p1 = screenPts[i];
           final p2 = screenPts[i + 1];
-          if ((p1.x >= -40 && p1.x <= patchSize + 40 && p1.y >= -40 && p1.y <= patchSize + 40) ||
-              (p2.x >= -40 && p2.x <= patchSize + 40 && p2.y >= -40 && p2.y <= patchSize + 40)) {
-            img.drawLine(patch, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: casingColor, thickness: 10);
-            img.fillCircle(patch, x: p1.x.toInt(), y: p1.y.toInt(), radius: 5, color: casingColor);
-            img.fillCircle(patch, x: p2.x.toInt(), y: p2.y.toInt(), radius: 5, color: casingColor);
+          if (inView(p1) || inView(p2)) {
+            img.drawLine(frame, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color: casingColor, thickness: 10);
+            img.fillCircle(frame, x: p1.x, y: p1.y, radius: 5, color: casingColor);
+            img.fillCircle(frame, x: p2.x, y: p2.y, radius: 5, color: casingColor);
           }
         }
-
         for (int i = 0; i < screenPts.length - 1; i++) {
           final p1 = screenPts[i];
           final p2 = screenPts[i + 1];
-          if ((p1.x >= -40 && p1.x <= patchSize + 40 && p1.y >= -40 && p1.y <= patchSize + 40) ||
-              (p2.x >= -40 && p2.x <= patchSize + 40 && p2.y >= -40 && p2.y <= patchSize + 40)) {
-            img.drawLine(patch, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: coreColor, thickness: 6);
-            img.fillCircle(patch, x: p1.x.toInt(), y: p1.y.toInt(), radius: 3, color: coreColor);
-            img.fillCircle(patch, x: p2.x.toInt(), y: p2.y.toInt(), radius: 3, color: coreColor);
+          if (inView(p1) || inView(p2)) {
+            img.drawLine(frame, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, color: coreColor, thickness: 6);
+            img.fillCircle(frame, x: p1.x, y: p1.y, radius: 3, color: coreColor);
+            img.fillCircle(frame, x: p2.x, y: p2.y, radius: 3, color: coreColor);
           }
         }
       }
 
-      img.Image rotatedPatch = patch;
-      if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
+      // 3. Extrude buildings upward (painter's algorithm: far rows first, near rows overlap)
+      if (hasTiles3d) {
+        for (int sy = 0; sy < fh; sy++) {
+          for (int sx = 0; sx < w; sx++) {
+            if (foot[sy * w + sx] != 1) continue;
+            // walls
+            for (int dh = 1; dh < extrude; dh++) {
+              final int ny = sy - dh;
+              if (ny < 0 || ny >= h) continue;
+              final int o = (ny * w + sx) * 4;
+              buf[o] = wallR;
+              buf[o + 1] = wallG;
+              buf[o + 2] = wallB;
+            }
+            // roof
+            final int ry = sy - extrude;
+            if (ry >= 0 && ry < h) {
+              final bool edge = sx == 0 ||
+                  sx == w - 1 ||
+                  sy == 0 ||
+                  sy >= fh - 1 ||
+                  foot[(sy - 1) * w + sx] == 0 ||
+                  foot[(sy + 1) * w + sx] == 0 ||
+                  foot[sy * w + sx - 1] == 0 ||
+                  foot[sy * w + sx + 1] == 0;
+              final int o = (ry * w + sx) * 4;
+              if (edge) {
+                buf[o] = 144;
+                buf[o + 1] = 162;
+                buf[o + 2] = 152;
+              } else {
+                buf[o] = 192;
+                buf[o + 1] = 209;
+                buf[o + 2] = 198;
+              }
+            }
+          }
+        }
       }
-
-      // Vehicle anchor at bottom-right (226, 182) on 320x240 frame
-      const int vx = 226;
-      const int vy = 182;
-      final int rotCx = rotatedPatch.width ~/ 2;
-      final int rotCy = rotatedPatch.height ~/ 2;
-      final int cropX = (rotCx - vx).clamp(0, math.max(0, rotatedPatch.width - w));
-      final int cropY = (rotCy - vy).clamp(0, math.max(0, rotatedPatch.height - h));
-
-      final frame = img.copyCrop(
-        rotatedPatch,
-        x: cropX,
-        y: cropY,
-        width: w,
-        height: h,
-      );
 
       final String curRoad = navManager?.currentStreetName ?? 'Đường hiện tại';
       final upcoming = navManager?.upcomingStep ?? navManager?.currentStep;
@@ -892,7 +950,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   static const String _goongMapApiStyle =
-      's.e%3Al.t%7Cp.v%3Aoff%2Cs.t%3A2%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A4%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A5%7Cs.e%3Ag%7Cp.c%3A%23dff5e8%2Cs.t%3A81%7Cs.e%3Ag.f%7Cp.c%3A%23dff5e8%2Cs.t%3A1297%7Cs.e%3Ag.f%7Cp.c%3A%23b8c9be%2Cs.t%3A1297%7Cs.e%3Ag.s%7Cp.c%3A%239bb0a3%2Cs.t%3A3%7Cs.e%3Ag.f%7Cp.c%3A%23e2e8f0%2Cs.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%2394a3b8%2Cs.t%3A2%7Cs.e%3Ag%7Cp.c%3A%23a7e3b8%2Cs.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2360a5fa';
+      's.e%3Al.t%7Cp.v%3Aoff%2Cs.t%3A2%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A4%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A5%7Cs.e%3Ag%7Cp.c%3A%23dff5e8%2Cs.t%3A81%7Cs.e%3Ag.f%7Cp.c%3A%23dff5e8%2Cs.t%3A1297%7Cs.e%3Ag.f%7Cp.c%3A%23d4b8c8%2Cs.t%3A1297%7Cs.e%3Ag.s%7Cp.v%3Aoff%2Cs.t%3A3%7Cs.e%3Ag.f%7Cp.c%3A%23e2e8f0%2Cs.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%2394a3b8%2Cs.t%3A2%7Cs.e%3Ag%7Cp.c%3A%23a7e3b8%2Cs.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2360a5fa';
 
   Future<void> _fetchTileImage(String key, int x, int y, int z) async {
     _pendingTileFetches.add(key);
@@ -946,6 +1004,26 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             // Downsample @2x (512x512) to 256x256 for crisp Retina labels
             if (cpuImg.width > 256) {
               cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
+            }
+            if (isGoong && cpuImg.width == 256 && cpuImg.height == 256) {
+              // Building fill uses marker color #d4b8c8 (r > g); extract footprint mask, recolor to flat roof color
+              final mask = Uint8List(256 * 256);
+              for (int my = 0; my < 256; my++) {
+                for (int mx = 0; mx < 256; mx++) {
+                  final p = cpuImg.getPixel(mx, my);
+                  if (p.r.toInt() - p.g.toInt() >= -3) {
+                    mask[my * 256 + mx] = 1;
+                    p.r = 192;
+                    p.g = 209;
+                    p.b = 198;
+                  }
+                }
+              }
+              _tileMasks[key] = mask;
+              if (_tileMasks.length > 100) {
+                _tileMasks.remove(_tileMasks.keys.first);
+              }
+              finalBytes = Uint8List.fromList(img.encodePng(cpuImg));
             }
             if (isDark && isGoong) {
               // Convert light tile to sleek dark mode

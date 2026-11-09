@@ -339,20 +339,20 @@ import AVFoundation
     roadNs.draw(in: roadDrawRect, withAttributes: roadAttrs)
 
     // 3. Top-Left Enlarged Black Maneuver Card + Coral-Red Top Badge
-    let blackCardRect = CGRect(x: 4.0, y: 6.0, width: 148.0, height: 58.0)
+    let blackCardRect = CGRect(x: 4.0, y: 5.0, width: 134.0, height: 48.0)
     let blackCardShadow = UIBezierPath(roundedRect: blackCardRect.offsetBy(dx: 0, dy: 2), cornerRadius: 12.0)
     UIColor(white: 0.0, alpha: 0.30).setFill()
     blackCardShadow.fill()
 
-    let blackCardPath = UIBezierPath(roundedRect: blackCardRect, cornerRadius: 12.0)
+    let blackCardPath = UIBezierPath(roundedRect: blackCardRect, cornerRadius: 10.0)
     UIColor(red: 0.035, green: 0.039, blue: 0.059, alpha: 0.96).setFill()
     blackCardPath.fill()
     UIColor(red: 0.18, green: 0.19, blue: 0.22, alpha: 1.0).setStroke()
     blackCardPath.lineWidth = 1.0
     blackCardPath.stroke()
 
-    let coralRect = CGRect(x: 0.0, y: 2.0, width: 88.0, height: 24.0)
-    let coralPath = UIBezierPath(roundedRect: coralRect, cornerRadius: 11.0)
+    let coralRect = CGRect(x: 0.0, y: 1.0, width: 80.0, height: 20.0)
+    let coralPath = UIBezierPath(roundedRect: coralRect, cornerRadius: 9.0)
     UIColor(red: 0.941, green: 0.384, blue: 0.380, alpha: 1.0).setFill()
     coralPath.fill()
     let coralInner = UIBezierPath(roundedRect: coralRect.insetBy(dx: 1.2, dy: 1.2), cornerRadius: 10.0)
@@ -360,7 +360,7 @@ import AVFoundation
     coralInner.lineWidth = 1.0
     coralInner.stroke()
 
-    drawTurnArrow(ctx: ctx, cx: 15.0, cy: 14.0, turnCode: turnCode)
+    drawTurnArrow(ctx: ctx, cx: 14.0, cy: 11.0, turnCode: turnCode)
 
     let distAttrs: [NSAttributedString.Key: Any] = [
       .font: UIFont.systemFont(ofSize: 12.0, weight: .heavy),
@@ -369,7 +369,7 @@ import AVFoundation
     let distNs = distStr as NSString
     let distSize = distNs.size(withAttributes: distAttrs)
     distNs.draw(
-      at: CGPoint(x: 27.0, y: 2.0 + (24.0 - distSize.height) / 2.0),
+      at: CGPoint(x: 25.0, y: 1.0 + (20.0 - distSize.height) / 2.0),
       withAttributes: distAttrs
     )
 
@@ -383,12 +383,12 @@ import AVFoundation
     ]
     let streetNs = (nextStreet.isEmpty ? "Đi thẳng" : nextStreet) as NSString
     streetNs.draw(
-      in: CGRect(x: 10.0, y: 28.0, width: 134.0, height: 32.0),
+      in: CGRect(x: 9.0, y: 24.0, width: 122.0, height: 26.0),
       withAttributes: streetAttrs
     )
 
     // 4. Speedometer Box placed above Bottom-Left Time Card (x: 4, y: 136, w: 62, h: 46)
-    let speedRect = CGRect(x: 4.0, y: 136.0, width: 62.0, height: 46.0)
+    let speedRect = CGRect(x: 4.0, y: 150.0, width: 54.0, height: 38.0)
     let speedPath = UIBezierPath(roundedRect: speedRect, cornerRadius: 12.0)
     UIColor(red: 0.094, green: 0.098, blue: 0.118, alpha: 0.95).setFill()
     speedPath.fill()
@@ -403,7 +403,7 @@ import AVFoundation
     let spdNs = speedStr as NSString
     let spdSize = spdNs.size(withAttributes: spdNumAttrs)
     spdNs.draw(
-      at: CGPoint(x: 4.0 + (62.0 - spdSize.width) / 2.0, y: 139.0),
+      at: CGPoint(x: 4.0 + (54.0 - spdSize.width) / 2.0, y: 152.0),
       withAttributes: spdNumAttrs
     )
 
@@ -414,13 +414,13 @@ import AVFoundation
     let unitNs = "km/h" as NSString
     let unitSize = unitNs.size(withAttributes: unitAttrs)
     unitNs.draw(
-      at: CGPoint(x: 4.0 + (62.0 - unitSize.width) / 2.0, y: 164.0),
+      at: CGPoint(x: 4.0 + (54.0 - unitSize.width) / 2.0, y: 172.0),
       withAttributes: unitAttrs
     )
 
     // 5. Enlarged Bottom-Left Dark Trip Summary Card (x: 4, y: 186, w: 144, h: 50)
-    let summaryRect = CGRect(x: 4.0, y: 186.0, width: 144.0, height: 50.0)
-    let summaryPath = UIBezierPath(roundedRect: summaryRect, cornerRadius: 14.0)
+    let summaryRect = CGRect(x: 4.0, y: 192.0, width: 124.0, height: 42.0)
+    let summaryPath = UIBezierPath(roundedRect: summaryRect, cornerRadius: 12.0)
     UIColor(red: 0.118, green: 0.125, blue: 0.145, alpha: 0.96).setFill()
     summaryPath.fill()
     UIColor(red: 0.247, green: 0.247, blue: 0.275, alpha: 1.0).setStroke()
@@ -429,15 +429,15 @@ import AVFoundation
 
     // Left '✕' circle at (21, 211), r=12
     UIColor(red: 0.220, green: 0.224, blue: 0.243, alpha: 1.0).setFill()
-    ctx.fillEllipse(in: CGRect(x: 21.0 - 12.0, y: 211.0 - 12.0, width: 24.0, height: 24.0))
+    ctx.fillEllipse(in: CGRect(x: 19.0 - 10.0, y: 213.0 - 10.0, width: 20.0, height: 20.0))
     ctx.saveGState()
     ctx.setStrokeColor(UIColor.white.cgColor)
     ctx.setLineWidth(2.0)
     ctx.setLineCap(.round)
-    ctx.move(to: CGPoint(x: 17.2, y: 207.2))
-    ctx.addLine(to: CGPoint(x: 24.8, y: 214.8))
-    ctx.move(to: CGPoint(x: 24.8, y: 207.2))
-    ctx.addLine(to: CGPoint(x: 17.2, y: 214.8))
+    ctx.move(to: CGPoint(x: 15.7, y: 209.7))
+    ctx.addLine(to: CGPoint(x: 22.3, y: 216.3))
+    ctx.move(to: CGPoint(x: 22.3, y: 209.7))
+    ctx.addLine(to: CGPoint(x: 15.7, y: 216.3))
     ctx.strokePath()
     ctx.restoreGState()
 
@@ -446,7 +446,7 @@ import AVFoundation
       .foregroundColor: UIColor.white
     ]
     (etaText as NSString).draw(
-      in: CGRect(x: 38.0, y: 192.0, width: 104.0, height: 18.0),
+      in: CGRect(x: 34.0, y: 196.0, width: 92.0, height: 18.0),
       withAttributes: etaAttrs
     )
 
@@ -455,7 +455,7 @@ import AVFoundation
       .foregroundColor: UIColor(red: 0.894, green: 0.894, blue: 0.906, alpha: 1.0)
     ]
     (subText as NSString).draw(
-      in: CGRect(x: 38.0, y: 213.0, width: 104.0, height: 16.0),
+      in: CGRect(x: 34.0, y: 214.0, width: 92.0, height: 16.0),
       withAttributes: subAttrs
     )
 
