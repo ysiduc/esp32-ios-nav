@@ -887,6 +887,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     // especially during phone calls or screen lock.
   }
 
+  /// Transmit a single 320x240 simulator frame to ESP32 (via WebSocket or WiFi TCP)
+  void transmitSimulatorFrame(Uint8List jpegBytes) {
+    _latestJpegBytes = jpegBytes;
+    _dispatchTransmission(jpegBytes);
+  }
+
   /// Broadcast JSON telemetry to connected WebSocket clients (ESP32)
   void broadcastTelemetry(String jsonStr) {
     if (_wsClients.isEmpty) return;

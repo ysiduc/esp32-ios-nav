@@ -21,7 +21,6 @@ extern U8g2_for_TFT_eSPI u8f_marquee;
 #endif
 
 #include "icons.h"
-#include "theme_assets.h"
 
 enum DisplayState {
   STATE_STANDBY_WATCHFACE, // Màn 1: Chờ kết nối (kết nối BLE ngoài app, không waybar, nhiều kiểu watchface)
@@ -703,47 +702,19 @@ private:
       _lastDrawnSong[0] = '\0';
       _needFullRedraw = false;
 
-      // Draw high-resolution base graphics matching each simulator interface
-      switch (_watchfaceStyle) {
-        case 0: { // customStatic: Màn chờ mặc định + Waybar (hoặc /bg_wait.jpg nếu có)
-          if (SPIFFS.exists("/bg_wait.jpg")) {
-            File f = SPIFFS.open("/bg_wait.jpg", "r");
-            if (f) {
-              size_t fSize = f.size();
-              f.close();
-              if (fSize > 500) {
-                TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
-              }
-            }
+      // Check optional custom background for Theme 0 (/bg_wait.jpg)
+      if (_watchfaceStyle == 0 && SPIFFS.exists("/bg_wait.jpg")) {
+        File f = SPIFFS.open("/bg_wait.jpg", "r");
+        if (f) {
+          size_t fSize = f.size();
+          f.close();
+          if (fSize > 500) {
+            TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
           }
-          _drawStaticWatchfaceLayout();
-          break;
-        }
-        case 1: { // Sunflower Carbon HUD
-          TJpgDec.drawJpg(0, 0, THEME_SUNFLOWER_JPG, THEME_SUNFLOWER_JPG_LEN);
-          break;
-        }
-        case 2: { // Cyberpunk Neon Radar
-          TJpgDec.drawJpg(0, 0, THEME_CYBERPUNK_JPG, THEME_CYBERPUNK_JPG_LEN);
-          break;
-        }
-        case 3: { // Retro Macintosh OS
-          TJpgDec.drawJpg(0, 0, THEME_RETRO_MAC_JPG, THEME_RETRO_MAC_JPG_LEN);
-          break;
-        }
-        case 4: { // Cassette Retro Wave
-          TJpgDec.drawJpg(0, 0, THEME_CASSETTE_JPG, THEME_CASSETTE_JPG_LEN);
-          break;
-        }
-        case 5: { // Comic Strip Manga
-          TJpgDec.drawJpg(0, 0, THEME_COMIC_JPG, THEME_COMIC_JPG_LEN);
-          break;
-        }
-        default: {
-          _drawStaticWatchfaceLayout();
-          break;
         }
       }
+
+      _drawStaticWatchfaceLayout();
     }
 
     switch (_watchfaceStyle) {
@@ -751,19 +722,19 @@ private:
         _updateWatchfaceDigitalMinimal();
         break;
       case 1:
-        _updateThemeSunflower();
+        _updateWatchfaceSunflowerVector();
         break;
       case 2:
-        _updateThemeCyberpunk();
+        _updateWatchfaceCyberpunkNeon();
         break;
       case 3:
-        _updateThemeRetroMac();
+        _updateWatchfaceDashboard();
         break;
       case 4:
-        _updateThemeCassette();
+        _updateWatchfaceAnalog();
         break;
       case 5:
-        _updateThemeComic();
+        _updateWatchfaceDigitalMinimal();
         break;
       default:
         _updateWatchfaceDigitalMinimal();
@@ -771,73 +742,17 @@ private:
     }
   }
 
-  void _updateThemeSunflower() {
-    if (!_clockValid) return;
+  void _updateWatchfaceSunflowerVector() {
+    uint16_t cBg = tft.color565(18, 16, 14);
     if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
       _lastDrawnHour = _clockHour;
       _lastDrawnMin = _clockMin;
-      uint16_t cCardBg = tft.color565(30, 27, 21);
-      tft.fillRect(20, 22, 100, 38, cCardBg);
+      tft.fillRect(10, 10, 140, 80, tft.color565(41, 35, 28));
+      tft.drawRoundRect(10, 10, 140, 80, 8, tft.color565(107, 91, 69));
       char timeBuf[16];
       snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(tft.color565(250, 204, 21), cCardBg);
-      tft.drawString(timeBuf, 22, 22, 6);
-    }
-  }
-
-  void _updateThemeCyberpunk() {
-    if (!_clockValid) return;
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      uint16_t cBg = tft.color565(6, 12, 25);
-      tft.fillRect(20, 24, 110, 42, cBg);
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(tft.color565(0, 240, 255), cBg);
-      tft.drawString(timeBuf, 20, 24, 6);
-    }
-  }
-
-  void _updateThemeRetroMac() {
-    if (!_clockValid) return;
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      uint16_t cBg = tft.color565(165, 165, 165);
-      tft.fillRect(20, 32, 90, 26, cBg);
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(TFT_BLACK, cBg);
-      tft.drawString(timeBuf, 22, 34, 4);
-    }
-  }
-
-  void _updateThemeCassette() {
-    if (!_clockValid) return;
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      uint16_t cBg = tft.color565(18, 14, 30);
-      tft.fillRect(16, 20, 105, 38, cBg);
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(tft.color565(255, 64, 160), cBg);
-      tft.drawString(timeBuf, 18, 20, 6);
-    }
-  }
-
-  void _updateThemeComic() {
-    if (!_clockValid) return;
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      uint16_t cBg = TFT_WHITE;
-      tft.fillRect(20, 20, 95, 38, cBg);
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(TFT_BLACK, cBg);
-      tft.drawString(timeBuf, 22, 20, 6);
+      tft.setTextColor(tft.color565(250, 204, 21), tft.color565(41, 35, 28));
+      tft.drawString(timeBuf, 20, 20, 6);
     }
   }
 

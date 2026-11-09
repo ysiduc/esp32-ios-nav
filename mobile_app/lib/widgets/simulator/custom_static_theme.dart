@@ -122,72 +122,100 @@ class CustomStaticTheme extends StatelessWidget {
           ),
         ),
 
-        // 4. Top Status Waybar (18px high, Linux Hybrid style)
+        // 4. Top Status Waybar (26px high, Waybar Pill Modules)
         Positioned(
           top: 0,
           left: 0,
           right: 0,
-          height: 18,
+          height: 26,
           child: Container(
-            color: Colors.black.withValues(alpha: 0.65),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            color: const Color(0xFF0F172A).withValues(alpha: 0.82),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Left: WiFi + Connection + ESP32-S3
-                Row(
-                  children: [
-                    Icon(
-                      mockData.isWifiConnected ? Icons.wifi : Icons.wifi_off,
-                      color: mockData.isWifiConnected ? const Color(0xFF38BDF8) : Colors.white38,
-                      size: 11,
-                    ),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.link_rounded, color: Color(0xFF05FFA1), size: 11),
-                    const SizedBox(width: 4),
-                    const Text(
-                      'ESP32-S3',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
+                // Module Pill 1: [🕒 Giờ]
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF334155), width: 0.8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.access_time_filled_rounded, color: Color(0xFF38BDF8), size: 11),
+                      const SizedBox(width: 3),
+                      Text(
+                        timeStr,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-
-                // Center: Real-time clock
-                Text(
-                  timeStr,
-                  style: const TextStyle(
-                    color: Color(0xFFF8FAFC),
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.5,
+                    ],
                   ),
                 ),
 
-                // Right: Battery % + Icon + BT
-                Row(
-                  children: [
-                    Text(
-                      '${mockData.batteryLevel}%',
-                      style: const TextStyle(
-                        color: Color(0xFF10B981),
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.bold,
+                // Module Pill 2: [💬 Tin nhắn rút gọn]
+                Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF334155), width: 0.8),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.chat_bubble_rounded, color: Color(0xFFFB923C), size: 10),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            '${mockData.sender}: ${mockData.message}',
+                            style: const TextStyle(
+                              color: Color(0xFFE2E8F0),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Module Pill 3: [🎵 Bài hát đang phát]
+                Container(
+                  constraints: const BoxConstraints(maxWidth: 100),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF334155), width: 0.8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.music_note_rounded, color: Color(0xFFFACC15), size: 11),
+                      const SizedBox(width: 2),
+                      Expanded(
+                        child: Text(
+                          mockData.songTitle,
+                          style: const TextStyle(
+                            color: Color(0xFFFEF08A),
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 3),
-                    const Icon(Icons.battery_5_bar_rounded, color: Color(0xFF10B981), size: 11),
-                    const SizedBox(width: 4),
-                    Icon(
-                      mockData.isBleConnected ? Icons.bluetooth : Icons.bluetooth_disabled,
-                      color: mockData.isBleConnected ? const Color(0xFF38BDF8) : Colors.white38,
-                      size: 10,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),

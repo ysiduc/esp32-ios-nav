@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../config/simulator_presets.dart';
 
-/// Theme 2: Cyberpunk Neon Radar (cyberRadar) - Matches Photo 2 Pixel-by-Pixel
+/// GIAO DIỆN 2: CYBERPUNK NEON HUD (100% Pure Flutter Canvas & Widgets 320x240)
 class CyberRadarTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -15,167 +15,172 @@ class CyberRadarTheme extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hStr = currentTime.hour.toString().padLeft(2, '0');
+    final mStr = currentTime.minute.toString().padLeft(2, '0');
+    final sStr = currentTime.second.toString().padLeft(2, '0');
+    final dateStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')}.${currentTime.month.toString().padLeft(2, '0')}.${currentTime.year}';
+
     return Container(
       width: 320,
       height: 240,
-      color: const Color(0xFF090616),
+      color: const Color(0xFF070614),
       child: Stack(
         children: [
-          // 1. High-fidelity graphic matching reference photo 100% pixel-by-pixel
+          // 0. Background 3D Perspective Grid & Concentric Radar Rings
           Positioned.fill(
-            child: Image.asset(
-              'assets/themes/theme_cyber_radar.jpg',
-              width: 320,
-              height: 240,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) => _buildFallbackLayout(context),
+            child: CustomPaint(
+              painter: _CyberGridAndRadarPainter(),
             ),
+          ),
+
+          // Khung Trái - Đồng hồ Neon (x: 8, y: 8, w: 184, h: 176)
+          Positioned(
+            left: 8,
+            top: 8,
+            width: 184,
+            height: 176,
+            child: _buildClockPanel(hStr, mStr, sStr, dateStr),
+          ),
+
+          // Khung Phải - Tin nhắn Cyber (x: 196, y: 8, w: 116, h: 176)
+          Positioned(
+            left: 196,
+            top: 8,
+            width: 116,
+            height: 176,
+            child: _buildMessagePanel(),
+          ),
+
+          // Thanh Đáy - Sóng Nhạc Cyber (x: 8, y: 190, w: 304, h: 42)
+          Positioned(
+            left: 8,
+            top: 190,
+            width: 304,
+            height: 42,
+            child: _buildMusicConsole(),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildFallbackLayout(BuildContext context) {
-    final hStr = currentTime.hour.toString().padLeft(2, '0');
-    final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
-    final dateStr = 'T${currentTime.weekday == 7 ? 'CN' : currentTime.weekday + 1}, ${currentTime.day.toString().padLeft(2, '0')}.${currentTime.month.toString().padLeft(2, '0')}.${currentTime.year}';
-
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: CustomPaint(
-            painter: _CyberGridAndRadarPainter(),
-          ),
-        ),
-        Positioned(
-          left: 8,
-          top: 8,
-          width: 184,
-          height: 148,
-          child: _buildHudClockPanel(hStr, mStr, sStr, dateStr),
-        ),
-        Positioned(
-          left: 198,
-          top: 8,
-          width: 114,
-          height: 148,
-          child: _buildNeonMessagePanel(),
-        ),
-        Positioned(
-          left: 8,
-          top: 162,
-          width: 304,
-          height: 70,
-          child: _buildCyberMusicConsole(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHudClockPanel(String h, String m, String s, String dateStr) {
+  // --- Khung Trái: Đồng hồ Neon & HUD ---
+  Widget _buildClockPanel(String h, String m, String s, String dateStr) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0B24).withValues(alpha: 0.75),
-        border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.5), width: 1.2),
+        color: const Color(0xFF070614).withValues(alpha: 0.65),
+        border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF00F0FF).withValues(alpha: 0.20),
+            blurRadius: 10,
+          ),
+        ],
       ),
+      padding: const EdgeInsets.all(8),
       child: Stack(
         children: [
-          // HUD Corner Tags
+          // 4 HUD Corner Brackets and Status Tags
           const Positioned(
-            left: 4,
-            top: 3,
-            child: Text('SYS_OK', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 7, fontWeight: FontWeight.bold)),
+            left: 0,
+            top: 0,
+            child: Text(
+              'SYS_OK',
+              style: TextStyle(color: Color(0xFF00F0FF), fontSize: 7, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
           ),
           const Positioned(
-            right: 4,
-            top: 3,
-            child: Text('BT_WS_ON', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 7, fontWeight: FontWeight.bold)),
+            right: 0,
+            top: 0,
+            child: Text(
+              'BT_WS_ON',
+              style: TextStyle(color: Color(0xFF00F0FF), fontSize: 7, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
           ),
           const Positioned(
-            left: 4,
-            bottom: 3,
-            child: Text('BT_WS_ON', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 7, fontWeight: FontWeight.bold)),
+            left: 0,
+            bottom: 0,
+            child: Text(
+              'BT_WS_ON',
+              style: TextStyle(color: Color(0xFF00F0FF), fontSize: 7, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
           ),
           const Positioned(
-            right: 4,
-            bottom: 3,
-            child: Text('SYS_OK', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 7, fontWeight: FontWeight.bold)),
+            right: 0,
+            bottom: 0,
+            child: Text(
+              'SYS_OK',
+              style: TextStyle(color: Color(0xFF00F0FF), fontSize: 7, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
           ),
 
-          // Clock Content
           Center(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
+                // Giờ HH:mm (LED cyan phát sáng) + Giây ss (hồng neon)
                 Row(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    // Digital Cyan Clock
                     Text(
                       '$h:$m',
-                      style: TextStyle(
-                        color: const Color(0xFF00E5FF),
-                        fontSize: 42,
+                      style: const TextStyle(
+                        color: Color(0xFF00F0FF),
+                        fontSize: 44,
                         fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5,
+                        fontFamily: 'monospace',
+                        letterSpacing: -1.5,
                         shadows: [
-                          BoxShadow(
-                            color: const Color(0xFF00E5FF).withValues(alpha: 0.8),
-                            blurRadius: 16,
-                          ),
+                          Shadow(color: Color(0xFF00F0FF), blurRadius: 14),
+                          Shadow(color: Color(0xFF0891B2), blurRadius: 24),
                         ],
                       ),
                     ),
                     const SizedBox(width: 4),
-                    // Neon Pink Seconds
                     Text(
                       s,
-                      style: TextStyle(
-                        color: const Color(0xFFFF2A85),
-                        fontSize: 22,
+                      style: const TextStyle(
+                        color: Color(0xFFFF007F),
+                        fontSize: 18,
                         fontWeight: FontWeight.w900,
+                        fontFamily: 'monospace',
                         shadows: [
-                          BoxShadow(
-                            color: const Color(0xFFFF2A85).withValues(alpha: 0.8),
-                            blurRadius: 10,
-                          ),
+                          Shadow(color: Color(0xFFFF007F), blurRadius: 10),
                         ],
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      dateStr,
-                      style: const TextStyle(
-                        color: Color(0xFF00E5FF),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.5,
-                      ),
+
+                // Ngày tháng & Progress bar
+                Text(
+                  dateStr,
+                  style: const TextStyle(
+                    color: Color(0xFF00F0FF),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Rectangular progress bar
+                Container(
+                  width: 120,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFF00F0FF), width: 1.2),
+                  ),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      width: 120 * mockData.songProgress,
+                      color: const Color(0xFF00F0FF),
                     ),
-                    const SizedBox(width: 6),
-                    // Progress capsule
-                    Container(
-                      width: 32,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: const Color(0xFF00E5FF), width: 0.8),
-                      ),
-                      padding: const EdgeInsets.all(0.8),
-                      child: Container(
-                        width: 18,
-                        color: const Color(0xFF00E5FF),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ],
             ),
@@ -185,140 +190,152 @@ class CyberRadarTheme extends StatelessWidget {
     );
   }
 
-  Widget _buildNeonMessagePanel() {
+  // --- Khung Phải: Tin nhắn Cyber ---
+  Widget _buildMessagePanel() {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0B24).withValues(alpha: 0.85),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFFF2A85), width: 1.4),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF2A85).withValues(alpha: 0.35),
-            blurRadius: 10,
-          ),
-        ],
+        color: const Color(0xFF070614).withValues(alpha: 0.70),
+        border: Border.all(color: const Color(0xFF00F0FF), width: 1.2),
       ),
-      padding: const EdgeInsets.all(8),
-      child: Stack(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header: MSG_INCOMING
-              Row(
-                children: const [
-                  Icon(Icons.chat_bubble_outline_rounded, color: Color(0xFFFF2A85), size: 11),
-                  SizedBox(width: 4),
-                  Text(
-                    'MSG_INCOMING',
-                    style: TextStyle(
-                      color: Color(0xFFFF2A85),
-                      fontSize: 8.5,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.8,
+      padding: const EdgeInsets.all(4),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: const Color(0xFFFF007F),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFF007F).withValues(alpha: 0.18),
+              blurRadius: 8,
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.all(6),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header: MSG_INCOMING
+                Row(
+                  children: const [
+                    Icon(Icons.chat_bubble_outline_rounded, color: Color(0xFFFF007F), size: 10),
+                    SizedBox(width: 3),
+                    Text(
+                      'MSG_INCOMING',
+                      style: TextStyle(
+                        color: Color(0xFFFF007F),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Container(height: 1, color: const Color(0xFFFF007F).withValues(alpha: 0.7)),
+                const SizedBox(height: 6),
+
+                // Dynamic Message Body
+                Expanded(
+                  child: Text(
+                    '${mockData.sender}:\n"${mockData.message}"',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.25,
+                      fontFamily: 'monospace',
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Message Body
-              Text(
-                '${mockData.sender}: "${mockData.message}"',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  height: 1.25,
-                  fontFamily: 'monospace',
                 ),
-              ),
-            ],
-          ),
-
-          // Bottom right radar emitter icon
-          Positioned(
-            right: 2,
-            bottom: 2,
-            child: Icon(
-              Icons.sensors_rounded,
-              color: const Color(0xFFFF2A85).withValues(alpha: 0.8),
-              size: 16,
+              ],
             ),
-          ),
-        ],
+
+            // Bottom-right pink warning triangle / radar icon
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: const Color(0xFFFF007F).withValues(alpha: 0.85),
+                size: 16,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildCyberMusicConsole() {
+  // --- Thanh Đáy: Sóng Nhạc Cyber ---
+  Widget _buildMusicConsole() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0B24),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFF2A85), width: 1.2),
+        color: const Color(0xFF070614).withValues(alpha: 0.85),
+        border: Border.all(color: const Color(0xFFFF007F), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFFF2A85).withValues(alpha: 0.3),
-            blurRadius: 8,
+            color: const Color(0xFFFF007F).withValues(alpha: 0.22),
+            blurRadius: 10,
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      child: Row(
         children: [
-          // Top Row: Equalizer + Song title + 01:24/03:52
-          Row(
-            children: [
-              const Icon(Icons.equalizer_rounded, color: Color(0xFF00E5FF), size: 16),
-              const SizedBox(width: 3),
-              const Icon(Icons.music_note_rounded, color: Color(0xFFFF2A85), size: 15),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  mockData.fullSongTitle,
-                  style: const TextStyle(
-                    color: Color(0xFF00E5FF),
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w800,
+          // Left: Equalizer bars + note
+          const Icon(Icons.equalizer_rounded, color: Color(0xFF00F0FF), size: 16),
+          const SizedBox(width: 3),
+          const Icon(Icons.music_note_rounded, color: Color(0xFFFF007F), size: 15),
+          const SizedBox(width: 8),
+
+          // Center: Song title, Artist, and Soundwave Equalizer
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${mockData.songTitle} - ${mockData.songArtist}',
+                        style: const TextStyle(
+                          color: Color(0xFF67E8F9),
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      mockData.timeRatioStr,
+                      style: const TextStyle(
+                        color: Color(0xFFFF007F),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+
+                // Audio Equalizer bars & Tick gauge
+                SizedBox(
+                  height: 12,
+                  child: CustomPaint(
+                    size: const Size(double.infinity, 12),
+                    painter: _EqualizerBarsPainter(progress: mockData.songProgress),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              Text(
-                mockData.timeRatioStr,
-                style: const TextStyle(
-                  color: Color(0xFFFF2A85),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-
-          // Waveform Audio Visualizer Bar
-          SizedBox(
-            height: 14,
-            child: CustomPaint(
-              size: const Size(double.infinity, 14),
-              painter: _CyberWaveformPainter(mockData.songProgress),
+              ],
             ),
-          ),
-          const SizedBox(height: 3),
-
-          // Bottom Ruler Ticks
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: List.generate(24, (i) {
-              return Container(
-                width: 1.5,
-                height: 4,
-                color: const Color(0xFFFF2A85).withValues(alpha: i % 4 == 0 ? 0.9 : 0.4),
-              );
-            }),
           ),
         ],
       ),
@@ -326,74 +343,67 @@ class CyberRadarTheme extends StatelessWidget {
   }
 }
 
+/// 3D Perspective Grid & Concentric Radar Circles
 class _CyberGridAndRadarPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Grid Lines
-    final gridP = Paint()
-      ..color = const Color(0xFF3B1E6D).withValues(alpha: 0.3)
+    final purpleGrid = Paint()
+      ..color = const Color(0xFF3B0764).withValues(alpha: 0.45)
       ..strokeWidth = 0.8;
 
-    for (double x = 0; x <= size.width; x += 20) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridP);
+    final cyanRadar = Paint()
+      ..color = const Color(0xFF083344).withValues(alpha: 0.55)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+
+    // Grid lines
+    for (double x = 0; x <= size.width; x += 16) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), purpleGrid);
     }
-    for (double y = 0; y <= size.height; y += 20) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridP);
+    for (double y = 0; y <= size.height; y += 16) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), purpleGrid);
     }
 
-    // 2. Concentric Radar Rings around clock area
-    final radarP = Paint()
-      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.16)
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
-
-    const cx = 100.0;
-    const cy = 82.0;
-
-    canvas.drawCircle(const Offset(cx, cy), 32, radarP);
-    canvas.drawCircle(const Offset(cx, cy), 58, radarP);
-    canvas.drawCircle(const Offset(cx, cy), 84, radarP);
-
-    // Crosshairs
-    canvas.drawLine(const Offset(cx - 90, cy), const Offset(cx + 90, cy), radarP);
-    canvas.drawLine(const Offset(cx, cy - 90), const Offset(cx, cy + 90), radarP);
+    // Concentric Radar Rings centered at (100, 96)
+    const center = Offset(100, 96);
+    canvas.drawCircle(center, 30, cyanRadar);
+    canvas.drawCircle(center, 55, cyanRadar);
+    canvas.drawCircle(center, 80, cyanRadar);
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-class _CyberWaveformPainter extends CustomPainter {
+/// Dãy vạch sóng âm Equalizer bars & Thước đo
+class _EqualizerBarsPainter extends CustomPainter {
   final double progress;
-  _CyberWaveformPainter(this.progress);
+  _EqualizerBarsPainter({required this.progress});
 
   @override
   void paint(Canvas canvas, Size size) {
-    const bars = 48;
-    final barW = size.width / bars;
-    final activeBars = (bars * progress).round();
+    final barCyan = Paint()..color = const Color(0xFF00F0FF);
+    final barDim = Paint()..color = const Color(0xFF083344);
 
-    final activeP = Paint()
-      ..color = const Color(0xFF00E5FF)
-      ..style = PaintingStyle.fill;
-    final inactiveP = Paint()
-      ..color = const Color(0xFF381A59)
-      ..style = PaintingStyle.fill;
+    const int totalBars = 32;
+    final barWidth = (size.width / totalBars) - 1.5;
+    final activeCount = (progress * totalBars).round();
 
-    for (int i = 0; i < bars; i++) {
-      final h = (math.sin(i * 0.45).abs() * 10.0 + 3.0).clamp(2.0, size.height);
-      final y = size.height - h;
+    for (int i = 0; i < totalBars; i++) {
+      final x = i * (barWidth + 1.5);
+      // Realistic equalizer pattern
+      final hFactor = (math.sin(i * 0.7) * 0.5 + 0.5);
+      final barHeight = (size.height * (0.3 + 0.7 * hFactor)).clamp(2.0, size.height);
+      final y = size.height - barHeight;
+
+      final p = (i <= activeCount) ? barCyan : barDim;
       canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(i * barW + 1, y, barW - 2, h),
-          const Radius.circular(1),
-        ),
-        i <= activeBars ? activeP : inactiveP,
+        RRect.fromRectAndRadius(Rect.fromLTWH(x, y, barWidth, barHeight), const Radius.circular(1)),
+        p,
       );
     }
   }
 
   @override
-  bool shouldRepaint(covariant _CyberWaveformPainter oldDelegate) => oldDelegate.progress != progress;
+  bool shouldRepaint(covariant _EqualizerBarsPainter oldDelegate) => oldDelegate.progress != progress;
 }
-

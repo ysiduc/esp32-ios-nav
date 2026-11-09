@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -11,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/simulator_presets.dart';
 import '../models/esp32_interface.dart';
 import '../services/ble_service.dart';
+import '../services/esp_stream_service.dart';
 import '../services/phone_call_service.dart';
 import '../services/phone_media_service.dart';
 import '../widgets/simulator/carbon_sport_theme.dart';
@@ -43,6 +46,8 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
   final SimulatorMockData _mockData = SimulatorMockData.defaultPreset;
   bool _useRealMedia = true;
   bool _isCompressingBg = false;
+  final GlobalKey _simulatorKey = GlobalKey();
+  bool _isCapturingFrame = false;
 
   @override
   void initState() {
@@ -69,8 +74,43 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
         setState(() {
           _currentTime = DateTime.now();
         });
+        _captureAndStreamFrame();
       }
     });
+  }
+
+  Future<void> _captureAndStreamFrame() async {
+    if (_isCapturingFrame) return;
+    _isCapturingFrame = true;
+    try {
+      final boundary = _simulatorKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null || !boundary.hasSize) return;
+
+      final double pixelRatio = (320.0 / boundary.size.width).clamp(0.5, 2.0);
+      final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      image.dispose();
+
+      if (byteData != null) {
+        final rawRgba = byteData.buffer.asUint8List();
+        final imgObj = img.Image.fromBytes(
+          width: 320,
+          height: 240,
+          bytes: rawRgba.buffer,
+          order: img.ChannelOrder.rgba,
+        );
+
+        final jpgBytes = Uint8List.fromList(img.encodeJpg(imgObj, quality: 75));
+
+        if (mounted) {
+          final streamService = context.read<EspStreamService>();
+          streamService.transmitSimulatorFrame(jpgBytes);
+        }
+      }
+    } catch (_) {
+    } finally {
+      _isCapturingFrame = false;
+    }
   }
 
   Future<void> _loadSavedPreferences() async {
@@ -103,6 +143,10 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
 
       // Đồng bộ sang ESP32 qua BLE và WebSocket
       _syncThemeToEsp32(theme);
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _captureAndStreamFrame();
+      });
     } catch (e) {
       debugPrint('[Simulator] Lỗi lưu theme: $e');
     }
@@ -278,7 +322,14 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             // ─── 1. ESP32 BEZEL SIMULATOR (Ratio 4:3) ───
             Esp32Bezel(
               scale: 1.05, // Phóng to nhẹ để xem rõ ràng sắc nét trên iPhone
-              child: _buildCurrentInterfaceView(effectiveMock),
+              child: RepaintBoundary(
+                key: _simulatorKey,
+                child: SizedBox(
+                  width: 320,
+                  height: 240,
+                  child: _buildCurrentInterfaceView(effectiveMock),
+                ),
+              ),
             ),
 
             const SizedBox(height: 16),
