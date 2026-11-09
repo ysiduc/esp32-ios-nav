@@ -60,6 +60,7 @@ public:
   // Pending notification context
   static uint32_t pendingUID;
   static uint8_t pendingCategoryID;
+  static char currentAppId[64];
   static char currentTitle[64];
   static char currentMessage[128];
 
@@ -77,6 +78,7 @@ public:
     svcEndHandle = 0;
     pendingUID = 0;
     pendingCategoryID = 0;
+    currentAppId[0] = '\0';
     currentTitle[0] = '\0';
     currentMessage[0] = '\0';
   }
@@ -268,20 +270,22 @@ private:
     if (eventId == 0 || eventId == 1) {
       pendingUID = uid;
       pendingCategoryID = categoryId;
+      currentAppId[0] = '\0';
       currentTitle[0] = '\0';
       currentMessage[0] = '\0';
 
-      // Request attributes: Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
+      // Request attributes: AppIdentifier (Attr 0), Title (Attr 1), Subtitle (Attr 2), Message (Attr 3)
       if (controlPointValHandle != 0 && connHandle != 0) {
-        uint8_t cmd[14];
+        uint8_t cmd[15];
         cmd[0] = 0x00; // CommandIDGetNotificationAttributes
         memcpy(&cmd[1], &buf[4], 4); // 4-byte UID
-        cmd[5] = 0x01; // Attr 1: Title (Caller name or Message sender)
-        cmd[6] = 64; cmd[7] = 0; // max 64 bytes
-        cmd[8] = 0x02; // Attr 2: Subtitle
-        cmd[9] = 32; cmd[10] = 0;
-        cmd[11] = 0x03; // Attr 3: Message (Phone number or Message body)
-        cmd[12] = 128; cmd[13] = 0; // max 128 bytes
+        cmd[5] = 0x00; // Attr 0: AppIdentifier (no max length per ANCS spec)
+        cmd[6] = 0x01; // Attr 1: Title
+        cmd[7] = 64; cmd[8] = 0; // max 64 bytes
+        cmd[9] = 0x02; // Attr 2: Subtitle
+        cmd[10] = 32; cmd[11] = 0; // max 32 bytes
+        cmd[12] = 0x03; // Attr 3: Message
+        cmd[13] = 128; cmd[14] = 0; // max 128 bytes
 
         int rc = ble_gattc_write_flat(connHandle, controlPointValHandle, cmd, sizeof(cmd), NULL, NULL);
         Serial.printf("[ANCS] Sent GetNotificationAttributes for UID=%lu (rc=%d)\n", (unsigned long)uid, rc);
@@ -291,7 +295,7 @@ private:
     else if (eventId == 2) {
       if (categoryId == 1) { // Incoming Call ended
         Serial.println("[ANCS] Call ended, clearing alert.");
-        display.dismissAlert();
+        display.dismissPopup();
       }
     }
   }
@@ -323,7 +327,10 @@ private:
       attrStr[safeLen] = '\0';
       offset += attrLen;
 
-      if (attrId == 1) { // Title (Caller name or Message sender)
+      if (attrId == 0) { // AppIdentifier (e.g. com.vng.zalo, com.facebook.Messenger, com.apple.MobileSMS)
+        strncpy(currentAppId, attrStr, sizeof(currentAppId) - 1);
+        currentAppId[sizeof(currentAppId) - 1] = '\0';
+      } else if (attrId == 1) { // Title (Caller name or Message sender)
         strncpy(currentTitle, attrStr, sizeof(currentTitle) - 1);
         currentTitle[sizeof(currentTitle) - 1] = '\0';
       } else if (attrId == 2) { // Subtitle
@@ -336,20 +343,37 @@ private:
       }
     }
 
-    Serial.printf("[ANCS] Details -> Cat=%d, Title: '%s', Msg: '%s'\n", pendingCategoryID, currentTitle, currentMessage);
+    Serial.printf("[ANCS] App: '%s', Cat=%d, Title: '%s', Msg: '%s'\n", currentAppId, pendingCategoryID, currentTitle, currentMessage);
 
-    if (pendingCategoryID == 1) { // Category 1: Incoming Call (Cellular, Zalo, FaceTime, etc.)
-      const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuoc goi den";
-      const char* phone = currentMessage[0] != '\0' ? currentMessage : "Dang do chuong...";
-      display.showCallAlert(name, phone);
-    } else if (pendingCategoryID == 2) { // Category 2: Missed Call
-      const char* name = currentTitle[0] != '\0' ? currentTitle : "Cuoc goi nho";
-      display.showCallAlert("Cuoc goi nho", name);
-    } else { // Category 0 (Other/SMS), 4 (Social - Zalo/iMessage/Messenger), 6 (Email)
-      const char* sender = currentTitle[0] != '\0' ? currentTitle : "Tin nhan";
-      const char* content = currentMessage[0] != '\0' ? currentMessage : "Thong bao moi";
-      display.showSmsAlert(sender, content);
+    // Identify app icon type
+    String appType = "bell";
+    bool isCall = false;
+    String idLower = String(currentAppId);
+    idLower.toLowerCase();
+
+    if (pendingCategoryID == 1 || idLower.indexOf("phone") >= 0 || idLower.indexOf("call") >= 0) {
+      appType = "call";
+      isCall = true;
+    } else if (idLower.indexOf("zalo") >= 0) {
+      appType = "zalo";
+    } else if (idLower.indexOf("messenger") >= 0) {
+      appType = "messenger";
+    } else if (idLower.indexOf("telegra") >= 0) {
+      appType = "telegram";
+    } else if (idLower.indexOf("sms") >= 0 || idLower.indexOf("mobilesms") >= 0 || idLower.indexOf("imessage") >= 0) {
+      appType = "sms";
+    } else if (pendingCategoryID == 2) {
+      appType = "call";
+      isCall = true;
+    } else if (pendingCategoryID == 4) {
+      appType = "sms";
     }
+
+    const char* titleToShow = currentTitle[0] != '\0' ? currentTitle : (isCall ? "Cuộc gọi đến" : "Thông báo mới");
+    const char* msgToShow = currentMessage[0] != '\0' ? currentMessage : (isCall ? "Đang đổ chuông..." : "");
+
+    // Show popup banner on top for 5 seconds per user request
+    display.showNotificationPopup(appType.c_str(), titleToShow, msgToShow, isCall, 5000);
   }
 };
 
@@ -366,6 +390,7 @@ uint16_t AppleNotificationService::svcStartHandle = 0;
 uint16_t AppleNotificationService::svcEndHandle = 0;
 uint32_t AppleNotificationService::pendingUID = 0;
 uint8_t AppleNotificationService::pendingCategoryID = 0;
+char AppleNotificationService::currentAppId[64] = "";
 char AppleNotificationService::currentTitle[64] = "";
 char AppleNotificationService::currentMessage[128] = "";
 

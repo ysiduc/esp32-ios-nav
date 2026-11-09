@@ -162,7 +162,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void _registerWsClient(WebSocket socket) {
     _wsClients.add(socket);
     _wsReadyForNextFrame = true;
-    bleService.setHotspotConnected('172.20.10.1', 8080);
+    final ip = identical(socket, _apSocket) ? '192.168.4.1' : '172.20.10.1';
+    bleService.setHotspotConnected(ip, 8080);
     if (_latestJpegBytes != null) {
       try {
         socket.add(_latestJpegBytes!);
@@ -358,6 +359,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi || _isSendingBle) return;
+
+    // Do NOT stream map frames if user has not connected BLE in-app and is not navigating!
+    // This keeps ESP32 quietly in Màn 1 (Watchface) without screen flickering or premature loading.
+    if (!bleService.isConnected && !(navManager?.isNavigating ?? false)) {
+      return;
+    }
 
     // Strict 1-in-flight queue control: if ESP32 hasn't rendered previous frame, skip tick to prevent queue buildup
     if (_wsClients.isNotEmpty && !_wsReadyForNextFrame && DateTime.now().difference(_lastWsSendTime).inMilliseconds < 250) {

@@ -572,6 +572,7 @@ class NavigationManager extends ChangeNotifier {
     final m = now.minute.toString().padLeft(2, '0');
     final curClock = '$h:$m';
 
+    _currentBattery = bleService.lastKnownBattery;
     final payload = EspNavPayload(
       isNavigating: true,
       turnCode: step.turnCode,
@@ -590,6 +591,8 @@ class NavigationManager extends ChangeNotifier {
       batteryLevel: _currentBattery,
       songTitle: _currentSongTitle,
       songArtist: _currentSongArtist,
+      songElapsed: mediaService?.elapsedTime.round() ?? 0,
+      songDuration: mediaService?.duration.round() ?? 0,
     );
 
     bleService.getBatteryLevel().then((b) => _currentBattery = b);
@@ -605,6 +608,7 @@ class NavigationManager extends ChangeNotifier {
     final curClock = '$h:$m';
     final upcomingPts = _isNavigating ? computeUpcomingRoutePoints() : <List<int>>[];
 
+    _currentBattery = bleService.lastKnownBattery;
     final payload = EspNavPayload(
       isNavigating: _isNavigating,
       turnCode: _isNavigating ? (currentStep?.turnCode ?? 0) : 0,
@@ -623,6 +627,8 @@ class NavigationManager extends ChangeNotifier {
       batteryLevel: _currentBattery,
       songTitle: _currentSongTitle,
       songArtist: _currentSongArtist,
+      songElapsed: mediaService?.elapsedTime.round() ?? 0,
+      songDuration: mediaService?.duration.round() ?? 0,
     );
 
     bleService.getBatteryLevel().then((b) => _currentBattery = b);

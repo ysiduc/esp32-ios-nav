@@ -84,8 +84,7 @@ class BleService extends ChangeNotifier {
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
   int _lastKnownBattery = 85;
-  int _lastRawAnchorBattery = -1;
-  DateTime _anchorTimestamp = DateTime.now();
+  int get lastKnownBattery => _lastKnownBattery;
 
   Future<int> getBatteryLevel() async {
     int rawBat = -1;
@@ -107,23 +106,8 @@ class BleService extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    if (rawBat <= 0) rawBat = _lastKnownBattery;
-
-    final now = DateTime.now();
-    // High-resolution 1% estimator between Apple's 5% quantization steps:
-    if (_lastRawAnchorBattery != rawBat) {
-      // New 5% anchor reached from iOS!
-      _lastRawAnchorBattery = rawBat;
-      _anchorTimestamp = now;
+    if (rawBat > 0 && rawBat <= 100) {
       _lastKnownBattery = rawBat;
-    } else {
-      // While running (GPS, BLE, Screen, Hotspot), simulate realistic 1% drop every 150 seconds (~2.5 minutes)
-      final secondsSinceAnchor = now.difference(_anchorTimestamp).inSeconds;
-      final dropPercent = (secondsSinceAnchor / 150).floor();
-      // Keep strictly within [anchor - 4, anchor]
-      final minBound = _lastRawAnchorBattery > 4 ? _lastRawAnchorBattery - 4 : 1;
-      final estimatedBat = (_lastRawAnchorBattery - dropPercent).clamp(minBound, _lastRawAnchorBattery);
-      _lastKnownBattery = estimatedBat;
     }
 
     return _lastKnownBattery;
@@ -147,30 +131,30 @@ class BleService extends ChangeNotifier {
 
   /// Reset WiFi status to disconnected when stream socket fails
   void setWifiDisconnected() {
-    if (_wifiStatus == 'connected' && _wifiIp != '172.20.10.1') {
+    if (_wifiStatus == 'connected') {
       _wifiStatus = 'disconnected';
       _wifiIp = null;
+      _addLog('WiFi: Đã ngắt kết nối với ESP32', isTx: false);
       notifyListeners();
     }
   }
 
-  /// Mark Hotspot WebSocket stream active from iPhone
+  /// Mark WebSocket stream active with ESP32 (SoftAP 192.168.4.1 or Hotspot 172.20.10.1)
   void setHotspotConnected(String ip, int port) {
     _wifiStatus = 'connected';
     _wifiIp = ip;
     _wifiPort = port;
-    _addLog('Hotspot WebSocket: ESP32 đã kết nối vào iPhone ($ip:$port)', isTx: false);
+    if (ip.startsWith('192.168.4')) {
+      _addLog('WiFi SoftAP: iPhone đã kết nối với ESP32 ($ip:$port)', isTx: false);
+    } else {
+      _addLog('Hotspot WebSocket: ESP32 đã kết nối vào iPhone ($ip:$port)', isTx: false);
+    }
     notifyListeners();
   }
 
   /// Mark Hotspot WebSocket disconnected
   void setHotspotDisconnected() {
-    if (_wifiIp == '172.20.10.1') {
-      _wifiStatus = 'disconnected';
-      _wifiIp = null;
-      _addLog('Hotspot WebSocket: ESP32 đã ngắt kết nối', isTx: false);
-      notifyListeners();
-    }
+    setWifiDisconnected();
   }
 
   /// Send Wi-Fi credentials to ESP32 over BLE so it connects to iPhone Personal Hotspot

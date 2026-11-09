@@ -19,6 +19,8 @@ class EspNavPayload {
   final bool isNavigating;       // True if user started route navigation, false if idle/standby
   final String songTitle;        // Current playing song title on phone
   final String songArtist;       // Current song artist name
+  final int songElapsed;         // Current playback elapsed seconds
+  final int songDuration;        // Track total duration seconds
 
   EspNavPayload({
     required this.turnCode,
@@ -38,6 +40,8 @@ class EspNavPayload {
     this.isNavigating = false,
     this.songTitle = '',
     this.songArtist = '',
+    this.songElapsed = 0,
+    this.songDuration = 0,
   });
 
   /// Remove Vietnamese diacritics so standard ESP32 display fonts (U8g2 / Adafruit / TFT_eSPI)
@@ -114,6 +118,8 @@ class EspNavPayload {
     }
     if (sanitizedSong.isNotEmpty) {
       map['song'] = sanitizedSong.length > 14 ? sanitizedSong.substring(0, 14) : sanitizedSong;
+      if (songElapsed > 0) map['el'] = songElapsed;
+      if (songDuration > 0) map['dur'] = songDuration;
     }
     if (sanitizedArtist.isNotEmpty) {
       map['artist'] = sanitizedArtist.length > 10 ? sanitizedArtist.substring(0, 10) : sanitizedArtist;

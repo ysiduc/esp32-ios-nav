@@ -110,11 +110,13 @@ private:
     uint8_t hours = buf[4];
     uint8_t minutes = buf[5];
     uint8_t seconds = buf[6];
+    uint8_t dayOfWeek = (pktLen >= 8) ? buf[7] : 1; // 1 = Monday ... 7 = Sunday
 
-    Serial.printf("[CTS] Current Time from iOS: %02d:%02d:%02d (Day %d/%d/%d)\n",
-                  hours, minutes, seconds, day, month, year);
+    Serial.printf("[CTS] Current Time from iOS: %02d:%02d:%02d (Day %d/%d/%d, DoW %d)\n",
+                  hours, minutes, seconds, day, month, year, dayOfWeek);
 
     display.setTime(hours, minutes, seconds);
+    display.setDate(day, month, year, dayOfWeek);
   }
 
   static int ctsReadCb(uint16_t conn_hdl, const struct ble_gatt_error *error, struct ble_gatt_attr *attr, void *arg) {

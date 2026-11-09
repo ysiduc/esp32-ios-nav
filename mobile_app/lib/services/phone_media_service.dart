@@ -11,11 +11,15 @@ class PhoneMediaService extends ChangeNotifier {
   String _songTitle = '';
   String _songArtist = '';
   bool _isPlaying = false;
+  double _duration = 0.0;
+  double _elapsedTime = 0.0;
   Timer? _pollTimer;
 
   String get songTitle => _songTitle;
   String get songArtist => _songArtist;
   bool get isPlaying => _isPlaying;
+  double get duration => _duration;
+  double get elapsedTime => _elapsedTime;
   bool get hasMedia => _songTitle.trim().isNotEmpty;
 
   // Callback to inform NavigationManager when real song changes
@@ -43,6 +47,8 @@ class PhoneMediaService extends ChangeNotifier {
         (data['title'] as String?) ?? '',
         (data['artist'] as String?) ?? '',
         (data['isPlaying'] as bool?) ?? false,
+        ((data['duration'] as num?) ?? 0.0).toDouble(),
+        ((data['elapsedTime'] as num?) ?? 0.0).toDouble(),
       );
     }
   }
@@ -57,6 +63,8 @@ class PhoneMediaService extends ChangeNotifier {
           (data['title'] as String?) ?? '',
           (data['artist'] as String?) ?? '',
           (data['isPlaying'] as bool?) ?? false,
+          ((data['duration'] as num?) ?? 0.0).toDouble(),
+          ((data['elapsedTime'] as num?) ?? 0.0).toDouble(),
         );
       }
     } catch (_) {
@@ -64,14 +72,25 @@ class PhoneMediaService extends ChangeNotifier {
     }
   }
 
-  void _updateMedia(String title, String artist, bool isPlaying) {
+  void _updateMedia(String title, String artist, bool isPlaying, [double dur = 0.0, double elapsed = 0.0]) {
     final cleanTitle = title.trim();
     final cleanArtist = artist.trim();
 
+    bool changed = false;
     if (_songTitle != cleanTitle || _songArtist != cleanArtist || _isPlaying != isPlaying) {
-      _songTitle = cleanTitle;
-      _songArtist = cleanArtist;
-      _isPlaying = isPlaying;
+      changed = true;
+    }
+    if ((_duration - dur).abs() > 1.0 || (_elapsedTime - elapsed).abs() > 1.0) {
+      changed = true;
+    }
+
+    _songTitle = cleanTitle;
+    _songArtist = cleanArtist;
+    _isPlaying = isPlaying;
+    _duration = dur;
+    _elapsedTime = elapsed;
+
+    if (changed) {
       notifyListeners();
       onMediaChanged?.call(_songTitle, _songArtist, _isPlaying);
     }
@@ -79,7 +98,7 @@ class PhoneMediaService extends ChangeNotifier {
 
   /// Allow manual test injection from UI or simulation
   void setMockSong(String title, String artist) {
-    _updateMedia(title, artist, true);
+    _updateMedia(title, artist, true, 210.0, 45.0);
   }
 
   @override
