@@ -67,7 +67,7 @@ class PhoneCallService extends ChangeNotifier {
 
     final title = !isGeneric ? name : 'Cuộc gọi đến';
     final msg = hasRealNumber && !isGeneric ? number : 'Đang đổ chuông...';
-    _bleService.sendRawString('{"type":"CALL","title":"$title","msg":"$msg"}');
+    _bleService.sendRawString('{"type":"CALL","app":"call","title":"$title","msg":"$msg"}');
   }
 
   void _onCallEnded() {
@@ -101,7 +101,11 @@ class PhoneCallService extends ChangeNotifier {
     notifyListeners();
 
     // Send to ESP32 via BLE
-    _bleService.sendRawString('{"type":"SMS","title":"$_lastSmsSender","msg":"$_lastSmsMessage"}');
+    final sLower = _lastSmsSender.toLowerCase();
+    final appType = sLower.contains('zalo')
+        ? 'zalo'
+        : (sLower.contains('messenger') ? 'messenger' : 'sms');
+    _bleService.sendRawString('{"type":"SMS","app":"$appType","title":"$_lastSmsSender","msg":"$_lastSmsMessage"}');
 
     _smsDismissTimer?.cancel();
     _smsDismissTimer = Timer(const Duration(seconds: 6), () {

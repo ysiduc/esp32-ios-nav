@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../models/esp_payload.dart';
 import '../services/ble_service.dart';
+import '../services/phone_call_service.dart';
 
 class BleScreen extends StatefulWidget {
   final VoidCallback? onBackToMap;
@@ -480,6 +481,16 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                         totalSteps: 5,
                       );
                       bleService.sendNavPayload(p);
+                    }, bleService.isConnected),
+                    const SizedBox(width: 8),
+                    _buildTestButton('📞 Test Cuộc gọi', () {
+                      final callService = Provider.of<PhoneCallService>(context, listen: false);
+                      callService.triggerMockCall(name: 'Mẹ (0912.345.678)', number: '0912 345 678');
+                    }, bleService.isConnected),
+                    const SizedBox(width: 8),
+                    _buildTestButton('💬 Test Tin nhắn', () {
+                      final callService = Provider.of<PhoneCallService>(context, listen: false);
+                      callService.triggerMockSms(sender: 'Zalo: Anh Nam', message: 'Bạn đang ở đâu đấy? Về ăn cơm nhé!');
                     }, bleService.isConnected),
                   ],
                 ),

@@ -28,6 +28,14 @@ enum DisplayState {
   STATE_NAVIGATION         // Màn 3: Đang dẫn đường (waybar trên hiển thị nhạc + pin chuẩn + popup 5s)
 };
 
+enum AppSourceType : uint8_t {
+  APP_SOURCE_SIM = 0,
+  APP_SOURCE_ZALO = 1,
+  APP_SOURCE_MESSENGER = 2,
+  APP_SOURCE_SMS = 3,
+  APP_SOURCE_OTHER = 4
+};
+
 struct RoutePoint {
   int8_t dx;
   int8_t dy;
@@ -56,11 +64,12 @@ struct NavStateData {
 
 struct NotificationPopup {
   char app[16] = "";     // "call", "sms", "zalo", "messenger", "telegram", "bell"
-  char title[48] = "";
-  char message[96] = "";
+  char title[64] = "";
+  char message[128] = "";
   unsigned long expireMillis = 0;
   bool isCall = false;
   bool active = false;
+  AppSourceType appSource = APP_SOURCE_OTHER;
 };
 
 class DisplayManager {
@@ -336,47 +345,78 @@ public:
     }
   }
 
+  bool isCallActive() const {
+    return _notifShown && _notif.isCall && (millis() < _notifExpire);
+  }
+
   // Unified Notification Popup (duration default 5000ms per request)
   void showNotificationPopup(const char* app, const char* title, const char* msg, bool isCall = false, uint32_t durationMs = 5000) {
     strncpy(_popupData.app, (app && strlen(app) > 0) ? app : (isCall ? "call" : "bell"), sizeof(_popupData.app) - 1);
+    _popupData.app[sizeof(_popupData.app) - 1] = '\0';
     strncpy(_popupData.title, (title && strlen(title) > 0) ? title : (isCall ? "Cuộc gọi đến" : "Thông báo"), sizeof(_popupData.title) - 1);
+    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
     strncpy(_popupData.message, (msg && strlen(msg) > 0) ? msg : (isCall ? "Đang đổ chuông..." : ""), sizeof(_popupData.message) - 1);
+    _popupData.message[sizeof(_popupData.message) - 1] = '\0';
     _popupData.isCall = isCall;
     _popupData.expireMillis = millis() + durationMs;
     _popupData.active = true;
 
-    // Remember for the Màn 2 notification box
+    String a = String(_popupData.app);
+    a.toLowerCase();
+    if (a.indexOf("zalo") >= 0) _popupData.appSource = APP_SOURCE_ZALO;
+    else if (a.indexOf("messenger") >= 0 || a.indexOf("orca") >= 0) _popupData.appSource = APP_SOURCE_MESSENGER;
+    else if (a.indexOf("sms") >= 0 || a.indexOf("message") >= 0) _popupData.appSource = APP_SOURCE_SMS;
+    else if (a.indexOf("call") >= 0 || a.indexOf("phone") >= 0 || isCall) _popupData.appSource = APP_SOURCE_SIM;
+    else _popupData.appSource = APP_SOURCE_OTHER;
+
+    // Remember for Màn 2 (Chờ Navigation) notification box
     _notif = _popupData;
     _notifShown = true;
     _notifDirty = true;
-    _notifExpire = millis() + 120000UL;
+    _notifExpire = millis() + (isCall ? 60000UL : 30000UL);
+
     if (_currentState == STATE_APP_IDLE_MAP) {
-      // Màn 2 shows notifications in the bottom-right box (no banner, map keeps streaming)
-      _popupData.active = false;
+      // Màn 2: Immediately render the bottom-right notification card!
+      _drawNotifBox();
       return;
     }
 
-    // Draw popup banner immediately
+    // Màn 1 & Màn 3: Draw popup banner overlay immediately
     _drawPopupBanner();
   }
 
-  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr) {
-    showNotificationPopup("call", callerName, phoneOrMsg, true, 5000);
+  void showCallAlert(const char* callerName, const char* phoneOrMsg = nullptr, AppSourceType app = APP_SOURCE_SIM) {
+    const char* appStr = (app == APP_SOURCE_ZALO) ? "zalo" : ((app == APP_SOURCE_MESSENGER) ? "messenger" : "call");
+    showNotificationPopup(appStr, callerName, phoneOrMsg, true, 60000);
   }
 
-  void showSmsAlert(const char* sender, const char* msg) {
-    showNotificationPopup("sms", sender, msg, false, 5000);
+  void showSmsAlert(const char* sender, const char* msg, AppSourceType app = APP_SOURCE_SMS) {
+    const char* appStr = (app == APP_SOURCE_ZALO) ? "zalo" : ((app == APP_SOURCE_MESSENGER) ? "messenger" : "sms");
+    showNotificationPopup(appStr, sender, msg, false, 8000);
+  }
+
+  void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
+    const char* appStr = (app == APP_SOURCE_ZALO) ? "zalo" : ((app == APP_SOURCE_MESSENGER) ? "messenger" : "call");
+    showNotificationPopup(appStr, title, msg, true, 60000);
   }
 
   void dismissPopup() {
+    bool wasActive = _popupData.active;
+    _popupData.active = false;
+    _popupData.expireMillis = 0;
     if (_notifShown && _notif.isCall) {
       _notifShown = false;
       _notifDirty = true;
     }
-    bool wasActive = _popupData.active;
-    _popupData.active = false;
-    _popupData.expireMillis = 0;
-    if (_currentState != STATE_APP_IDLE_MAP || wasActive) _needFullRedraw = true;
+    if (_currentState == STATE_APP_IDLE_MAP) {
+      _drawNotifBox();
+    } else if (wasActive) {
+      _needFullRedraw = true;
+    }
+  }
+
+  void dismissAlert() {
+    dismissPopup();
   }
 
   bool isPopupActive() const {
@@ -390,7 +430,7 @@ public:
 
   // Called after JPEG frame decode in main.cpp
   void onFrameRendered() {
-    if (isPopupActive()) {
+    if (isPopupActive() && _currentState != STATE_APP_IDLE_MAP) {
       _drawPopupBanner();
     }
   }
@@ -429,7 +469,7 @@ public:
       }
     }
 
-    // 2. Check Popup expiration (auto dismiss after 5s)
+    // 2. Check Popup expiration (auto dismiss after expiry)
     if (_popupData.active && millis() >= _popupData.expireMillis) {
       _popupData.active = false;
       _popupData.expireMillis = 0;
@@ -461,10 +501,10 @@ public:
       }
     }
 
-    // Draw popup banner overlay if active (throttled, avoids flicker)
-    if (isPopupActive() && !isStreamingActive) {
+    // Draw popup banner overlay if active (Màn 1 and Màn 3)
+    if (isPopupActive() && _currentState != STATE_APP_IDLE_MAP) {
       static unsigned long lastBanner = 0;
-      if (millis() - lastBanner > 700) {
+      if (millis() - lastBanner > 400) {
         lastBanner = millis();
         _drawPopupBanner();
       }
@@ -520,57 +560,36 @@ private:
   }
 
   // =========================================================================
-  // POPUP BANNER (5 Seconds on Top for All Screens)
+  // POPUP BANNER (5-10 Seconds on Top for Màn 1 & Màn 3)
   // =========================================================================
   void _drawPopupBanner() {
     uint16_t cBg = tft.color565(15, 23, 42); // Deep Slate 900
     uint16_t cBorder;
     uint16_t cIconCircle;
     const uint8_t* iconBitmap = icon_bell_20x20;
+    _notifStyle(_popupData, cBorder, cIconCircle, iconBitmap);
 
-    String appStr = String(_popupData.app);
-    appStr.toLowerCase();
-
-    if (_popupData.isCall || appStr == "call" || appStr == "phone") {
-      cBorder = TFT_GREEN;
-      cIconCircle = tft.color565(34, 197, 94);
-      iconBitmap = icon_call_20x20;
-    } else if (appStr.indexOf("zalo") >= 0) {
-      cBorder = tft.color565(0, 136, 255);
-      cIconCircle = tft.color565(0, 136, 255);
-      iconBitmap = icon_zalo_20x20;
-    } else if (appStr.indexOf("messenger") >= 0) {
-      cBorder = tft.color565(168, 85, 247);
-      cIconCircle = tft.color565(168, 85, 247);
-      iconBitmap = icon_messenger_20x20;
-    } else if (appStr.indexOf("telegram") >= 0) {
-      cBorder = tft.color565(0, 175, 240);
-      cIconCircle = tft.color565(0, 175, 240);
-      iconBitmap = icon_telegram_20x20;
-    } else if (appStr.indexOf("sms") >= 0) {
-      cBorder = tft.color565(34, 197, 94);
-      cIconCircle = tft.color565(34, 197, 94);
-      iconBitmap = icon_sms_20x20;
-    } else {
-      cBorder = tft.color565(250, 204, 21);
-      cIconCircle = tft.color565(234, 179, 8);
-      iconBitmap = icon_bell_20x20;
+    // Outer card (x: 8, y: 4, w: 304, h: 48)
+    tft.fillRoundRect(8, 4, 304, 48, 10, cBg);
+    tft.drawRoundRect(8, 4, 304, 48, 10, cBorder);
+    if (_popupData.isCall) {
+      tft.drawRoundRect(9, 5, 302, 46, 9, cBorder);
     }
 
-    // Outer card (x: 8, y: 6, w: 304, h: 48)
-    tft.fillRoundRect(8, 6, 304, 48, 10, cBg);
-    tft.drawRoundRect(8, 6, 304, 48, 10, cBorder);
-
     // Left App Icon (Circle 26px with centered 20x20 bitmap)
-    tft.fillCircle(25, 30, 13, cIconCircle);
-    tft.drawBitmap(15, 20, iconBitmap, 20, 20, TFT_WHITE);
+    tft.fillCircle(24, 28, 13, cIconCircle);
+    tft.drawBitmap(14, 18, iconBitmap, 20, 20, TFT_WHITE);
 
     // Sender / Caller Title
-    _drawUtf8String(_popupData.title, 45, 10, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
+    char tLine[64];
+    _fitUtf8(_popupData.title, tLine, sizeof(tLine), 250);
+    _drawUtf8String(tLine, 44, 8, _popupData.isCall ? TFT_GREEN : TFT_YELLOW, cBg);
 
     // Message Body or Phone Number
     if (_popupData.message[0] != '\0') {
-      _drawUtf8String(_popupData.message, 45, 28, TFT_WHITE, cBg);
+      char mLine[64];
+      _fitUtf8(_popupData.message, mLine, sizeof(mLine), 250);
+      _drawUtf8String(mLine, 44, 26, TFT_WHITE, cBg);
     }
   }
 
@@ -904,9 +923,12 @@ private:
       tft.fillRoundRect(158, 6, 158, 228, 12, cCardBg);
       tft.drawRoundRect(158, 6, 158, 228, 12, cBorder);
 
-      // Music pill (x164 y88 w146 h58)
-      tft.fillRoundRect(164, 88, 146, 58, 10, cPillBg);
-      tft.drawRoundRect(164, 88, 146, 58, 10, tft.color565(30, 41, 59));
+      // Music pill (compact height: 40px, x164 y80 w146 h40)
+      tft.fillRoundRect(164, 80, 146, 40, 8, cPillBg);
+      tft.drawRoundRect(164, 80, 146, 40, 8, tft.color565(30, 41, 59));
+
+      // Notification pill (expanded height: 106px, x164 y124 w146 h106)
+      _drawNotifBox();
     }
 
     if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
@@ -914,17 +936,17 @@ private:
       _lastDrawnMin = _clockMin;
       tft.setTextPadding(140);
       tft.setTextColor(TFT_WHITE, cCardBg);
-      tft.drawCentreString(_navData.currentTime, 237, 16, 4);
+      tft.drawCentreString(_navData.currentTime, 237, 14, 4);
       tft.setTextPadding(0);
     }
 
     if (_clockDay != _lastDrawnDay) {
       _lastDrawnDay = _clockDay;
-      tft.fillRect(160, 48, 154, 26, cCardBg);
+      tft.fillRect(160, 44, 154, 26, cCardBg);
       char dateStr[32];
       snprintf(dateStr, sizeof(dateStr), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
-      _drawCentreUtf8String(dateStr, 237, 50, tft.color565(148, 163, 184), cCardBg);
-      tft.drawFastHLine(172, 80, 130, cBorder);
+      _drawCentreUtf8String(dateStr, 237, 46, tft.color565(148, 163, 184), cCardBg);
+      tft.drawFastHLine(172, 74, 130, cBorder);
     }
 
     // Music: "Tên bài • Tác giả" thả trôi trên 1 dòng + thời gian phát
@@ -934,23 +956,23 @@ private:
       strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
       _lastDrawnSong[sizeof(_lastDrawnSong) - 1] = '\0';
       musicRedraw = true;
-      tft.fillRect(166, 92, 142, 52, cPillBg);
+      tft.fillRect(166, 82, 142, 36, cPillBg);
       _mqIdle.text[0] = '\0';
       _lastIdleElapsed = 0xFFFF;
       if (!hasSong) {
-        _drawCentreUtf8String("Chưa phát nhạc", 237, 108, tft.color565(100, 116, 139), cPillBg);
+        _drawCentreUtf8String("Chưa phát nhạc", 237, 92, tft.color565(100, 116, 139), cPillBg);
       }
     }
     if (hasSong) {
       char full[100];
       if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
       else snprintf(full, sizeof(full), "%s", _navData.songTitle);
-      _marquee(_mqIdle, marqueeSpr, u8f_marquee, 167, 94, full, TFT_WHITE, cPillBg, musicRedraw);
+      _marquee(_mqIdle, marqueeSpr, u8f_marquee, 167, 82, full, tft.color565(250, 204, 21), cPillBg, musicRedraw);
 
       uint16_t elKey = (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0) ? _navData.songElapsedSec : 0xFFFE;
       if (_lastIdleElapsed != elKey) {
         _lastIdleElapsed = elKey;
-        tft.fillRect(166, 120, 142, 22, cPillBg);
+        tft.fillRect(166, 102, 142, 16, cPillBg);
         if (elKey != 0xFFFE) {
           char timeStr[32];
           int elM = _navData.songElapsedSec / 60, elS = _navData.songElapsedSec % 60;
@@ -960,7 +982,7 @@ private:
           } else {
             snprintf(timeStr, sizeof(timeStr), "%02d:%02d", elM, elS);
           }
-          _drawCentreUtf8String(timeStr, 237, 122, TFT_CYAN, cPillBg);
+          _drawCentreUtf8String(timeStr, 237, 102, TFT_CYAN, cPillBg);
         }
       }
     }
@@ -1190,38 +1212,83 @@ private:
   void _notifStyle(const NotificationPopup& n, uint16_t& border, uint16_t& circle, const uint8_t*& icon) {
     String a = String(n.app);
     a.toLowerCase();
-    if (n.isCall || a == "call" || a == "phone") { border = TFT_GREEN; circle = tft.color565(34, 197, 94); icon = icon_call_20x20; }
-    else if (a.indexOf("zalo") >= 0) { border = tft.color565(0, 136, 255); circle = border; icon = icon_zalo_20x20; }
-    else if (a.indexOf("messenger") >= 0) { border = tft.color565(168, 85, 247); circle = border; icon = icon_messenger_20x20; }
-    else if (a.indexOf("telegram") >= 0) { border = tft.color565(0, 175, 240); circle = border; icon = icon_telegram_20x20; }
-    else if (a.indexOf("sms") >= 0 || a.indexOf("message") >= 0) { border = tft.color565(34, 197, 94); circle = border; icon = icon_sms_20x20; }
-    else { border = tft.color565(250, 204, 21); circle = tft.color565(234, 179, 8); icon = icon_bell_20x20; }
+    if (n.isCall || n.appSource == APP_SOURCE_SIM || a == "call" || a == "phone") {
+      border = TFT_GREEN; circle = tft.color565(34, 197, 94); icon = icon_call_20x20;
+    } else if (n.appSource == APP_SOURCE_ZALO || a.indexOf("zalo") >= 0) {
+      border = tft.color565(0, 136, 255); circle = border; icon = icon_zalo_20x20;
+    } else if (n.appSource == APP_SOURCE_MESSENGER || a.indexOf("messenger") >= 0 || a.indexOf("orca") >= 0) {
+      border = tft.color565(168, 85, 247); circle = border; icon = icon_messenger_20x20;
+    } else if (a.indexOf("telegram") >= 0) {
+      border = tft.color565(0, 175, 240); circle = border; icon = icon_telegram_20x20;
+    } else if (n.appSource == APP_SOURCE_SMS || a.indexOf("sms") >= 0 || a.indexOf("message") >= 0) {
+      border = tft.color565(34, 197, 94); circle = border; icon = icon_sms_20x20;
+    } else {
+      border = tft.color565(250, 204, 21); circle = tft.color565(234, 179, 8); icon = icon_bell_20x20;
+    }
   }
 
-  // Ô thông báo (tin nhắn / cuộc gọi) ở góc dưới phải Màn 2: x164 y152 w146 h74
+  // Ô thông báo (tin nhắn / cuộc gọi) mở rộng ở góc dưới phải Màn 2: x164 y124 w146 h106
   void _drawNotifBox() {
     const uint16_t cPill = tft.color565(11, 17, 26);
-    if (_notifShown && millis() > _notifExpire) _notifShown = false;
-    uint16_t border = tft.color565(30, 41, 59), circle = 0;
+    if (_notifShown && millis() > _notifExpire) {
+      _notifShown = false;
+    }
+
+    uint16_t border = tft.color565(30, 41, 59);
+    uint16_t circle = 0;
     const uint8_t* icon = icon_bell_20x20;
-    if (_notifShown) _notifStyle(_notif, border, circle, icon);
-    tft.fillRoundRect(164, 152, 146, 74, 10, cPill);
-    tft.drawRoundRect(164, 152, 146, 74, 10, border);
+
+    if (_notifShown) {
+      _notifStyle(_notif, border, circle, icon);
+    }
+
+    tft.fillRoundRect(164, 124, 146, 106, 8, cPill);
+    tft.drawRoundRect(164, 124, 146, 106, 8, border);
+    if (_notifShown && _notif.isCall) {
+      tft.drawRoundRect(165, 125, 144, 104, 7, border);
+    }
+
     if (!_notifShown) {
-      _drawCentreUtf8String("Chưa có thông báo", 237, 181, tft.color565(71, 85, 105), cPill);
+      tft.fillCircle(237, 155, 12, tft.color565(20, 28, 40));
+      tft.drawBitmap(227, 145, icon_bell_20x20, 20, 20, tft.color565(71, 85, 105));
+      _drawCentreUtf8String("Chưa có thông báo", 237, 185, tft.color565(71, 85, 105), cPill);
       return;
     }
-    tft.fillCircle(181, 168, 12, circle);
-    tft.drawBitmap(171, 158, icon, 20, 20, TFT_WHITE);
-    char line[64];
-    _fitUtf8(_notif.title, line, sizeof(line), 106);
-    _drawUtf8String(line, 197, 160, _notif.isCall ? TFT_GREEN : TFT_YELLOW, cPill);
-    if (_notif.message[0] != '\0') {
-      int n = _fitUtf8(_notif.message, line, sizeof(line), 134);
-      _drawUtf8String(line, 171, 184, TFT_WHITE, cPill);
-      if ((size_t)n < strlen(_notif.message)) {
-        _fitUtf8(_notif.message + n, line, sizeof(line), 134);
-        _drawUtf8String(line, 171, 202, tft.color565(148, 163, 184), cPill);
+
+    // Header: App icon + Sender/Caller Title
+    tft.fillCircle(181, 142, 12, circle);
+    tft.drawBitmap(171, 132, icon, 20, 20, TFT_WHITE);
+
+    char titleLine[64];
+    _fitUtf8(_notif.title, titleLine, sizeof(titleLine), 104);
+    _drawUtf8String(titleLine, 198, 133, _notif.isCall ? TFT_GREEN : TFT_YELLOW, cPill);
+
+    tft.drawFastHLine(170, 158, 134, tft.color565(28, 38, 52));
+
+    // Body: Lines 1, 2, 3
+    if (_notif.isCall) {
+      _drawUtf8String("Cuộc gọi đến", 172, 163, tft.color565(148, 163, 184), cPill);
+      const char* phone = (_notif.message[0] != '\0') ? _notif.message : "Đang đổ chuông...";
+      char pLine[64];
+      _fitUtf8(phone, pLine, sizeof(pLine), 132);
+      _drawUtf8String(pLine, 172, 183, TFT_WHITE, cPill);
+    } else {
+      char line1[64] = "";
+      char line2[64] = "";
+      char line3[64] = "";
+      int n1 = _fitUtf8(_notif.message, line1, sizeof(line1), 132);
+      _drawUtf8String(line1, 172, 163, TFT_WHITE, cPill);
+      if ((size_t)n1 < strlen(_notif.message)) {
+        const char* rem1 = _notif.message + n1;
+        while (*rem1 == ' ') rem1++;
+        int n2 = _fitUtf8(rem1, line2, sizeof(line2), 132);
+        _drawUtf8String(line2, 172, 183, tft.color565(226, 232, 240), cPill);
+        if ((size_t)n2 < strlen(rem1)) {
+          const char* rem2 = rem1 + n2;
+          while (*rem2 == ' ') rem2++;
+          _fitUtf8(rem2, line3, sizeof(line3), 132);
+          _drawUtf8String(line3, 172, 203, tft.color565(148, 163, 184), cPill);
+        }
       }
     }
   }

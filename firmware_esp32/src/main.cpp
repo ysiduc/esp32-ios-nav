@@ -312,7 +312,7 @@ void processJsonPacket(const char* jsonStr) {
     String title = String(doc["title"] | doc["caller"] | doc["sender"] | "Thông báo");
     String msg = String(doc["msg"] | doc["message"] | doc["phone"] | "");
     bool isCall = (typeStr == "CALL" || app == "call" || doc["isCall"] == true);
-    display.showNotificationPopup(app.c_str(), title.c_str(), msg.c_str(), isCall, 5000);
+    display.showNotificationPopup(app.c_str(), title.c_str(), msg.c_str(), isCall, isCall ? 60000 : 8000);
     return;
 
   } else if (typeStr == "CALL_END" || typeStr == "DISMISS_POPUP") {
@@ -634,8 +634,8 @@ void loop() {
     newFrameAvailable = false;
     lastFrameTime = millis();
     #if defined(DISPLAY_TFT_ST7789)
-    // Render live map ONLY when app has established handshake (isAppConnected) and no Call/SMS popup is active
-    if (activeRenderBufLen > 100 && display.isAppConnected() && !display.isPopupActive()) {
+    // Render live map ONLY when app has established handshake (isAppConnected)
+    if (activeRenderBufLen > 100 && display.isAppConnected()) {
       uint16_t jpgW = 0, jpgH = 0;
       TJpgDec.getJpgSize(&jpgW, &jpgH, (uint8_t*)activeRenderBuf, activeRenderBufLen);
       if (jpgW >= 300) {
@@ -774,6 +774,7 @@ void loop() {
 
     // 5. Periodic Apple Time sync check (once every 60s when connected & subscribed)
     AppleCurrentTimeService::checkPeriodic();
+    AppleNotificationService::checkPeriodic();
   }
 
   // 5. Periodic real-time clock check from SNTP
