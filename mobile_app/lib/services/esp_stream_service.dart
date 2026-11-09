@@ -272,22 +272,26 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Hardware-accelerated RGBA-to-JPEG encoding on iOS (with pure-Dart fallback)
   /// Ensures output is always <= 14500 bytes to fit within ESP32 WebSockets 15KB max frame limit
-  Future<Uint8List?> _compressRgbaToJpeg(Uint8List rawBytes, int w, int h, {int quality = 65}) async {
+  Future<Uint8List?> _compressRgbaToJpeg(
+    Uint8List rawBytes,
+    int w,
+    int h, {
+    int quality = 65,
+    Map<String, dynamic>? hud,
+  }) async {
     if (Platform.isIOS) {
       try {
-        var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', {
+        final args = <String, dynamic>{
           'rgba': rawBytes,
           'width': w,
           'height': h,
           'quality': quality / 100.0,
-        });
+          if (hud != null) 'hud': hud,
+        };
+        var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         if (res != null && res.length > 14500) {
-          res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', {
-            'rgba': rawBytes,
-            'width': w,
-            'height': h,
-            'quality': 0.36,
-          });
+          args['quality'] = 0.38;
+          res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         }
         if (res != null && res.isNotEmpty) {
           return res;
@@ -372,13 +376,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
           if (byteData != null) {
             final rawBytes = byteData.buffer.asUint8List();
-            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 54 : 65);
+            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 60 : 65);
           }
         } catch (_) {}
       }
 
-      // 2. In background / screen-off: Pure CPU Software Map Renderer (100% CPU RAM, 0% GPU)
-      jpegBytes ??= isNav ? _renderCpuNavigationFrame(w, h) : _renderCpuMapFrame(w, h);
+      // 2. In background / screen-off: Pure CPU Software Map + CoreGraphics HUD Renderer (100% CPU RAM, 0% GPU)
+      jpegBytes ??= isNav ? await _renderCpuNavigationFrame(w, h) : _renderCpuMapFrame(w, h);
 
 
       if (jpegBytes == null) {
@@ -430,8 +434,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       // Create a 320x320 CPU patch centered on user (covers 144x208 frame at all rotation angles)
       const int patchSize = 320;
-      final patch = img.Image(width: patchSize, height: patchSize);
-      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(235, 240, 240, 255);
+      final patch = img.Image(width: patchSize, height: patchSize, numChannels: 4);
+      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(223, 245, 232, 255);
       img.fill(patch, color: bgColor);
 
       const double patchCenter = patchSize / 2.0;
@@ -524,7 +528,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Rotate patch by -headingDeg so ahead is UP
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.nearest);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
       }
 
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
@@ -570,15 +574,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Pure CPU Software 320x240 Full-Screen Navigation Frame Renderer (for background / screen-off)
-  Uint8List? _renderCpuNavigationFrame(int w, int h) {
+  /// Uses CPU CoreGraphics + CoreText on iOS so background ("treo app") looks 100% identical to foreground ("trong app")!
+  Future<Uint8List?> _renderCpuNavigationFrame(int w, int h) async {
     try {
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute ?? navManager?.previewRoute;
       final double speedKmh = navManager?.currentSpeedKmh ?? 0.0;
       final double distToTurn = navManager?.distanceToNextManeuver ?? 200.0;
-      final double totalDist = navManager?.remainingTotalDistance ?? 0.0;
-      final int etaMin = navManager?.remainingEtaMinutes ?? 1;
+      final double totalDistM = navManager?.remainingTotalDistance ?? 0.0;
+      final int etaMin = (navManager?.remainingEtaMinutes ?? 1).clamp(1, 999);
       final int zoom = _minimapZoom;
       final isDark = _streamMapStyle.contains('dark');
 
@@ -593,8 +598,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double subTileY = worldY - (centerTileY * 256.0);
 
       const int patchSize = 560;
-      final patch = img.Image(width: patchSize, height: patchSize);
-      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(244, 243, 238, 255);
+      final patch = img.Image(width: patchSize, height: patchSize, numChannels: 4);
+      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(223, 245, 232, 255);
       img.fill(patch, color: bgColor);
 
       const double patchCenter = patchSize / 2.0;
@@ -620,7 +625,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       if (!tilesDrawn) {
-        final gridColor = isDark ? img.ColorRgba8(30, 45, 66, 255) : img.ColorRgba8(221, 227, 227, 255);
+        final gridColor = isDark ? img.ColorRgba8(30, 45, 66, 255) : img.ColorRgba8(195, 218, 204, 255);
         for (int gx = 0; gx <= patchSize; gx += 32) {
           img.drawLine(patch, x1: gx, y1: 0, x2: gx, y2: patchSize, color: gridColor);
         }
@@ -629,11 +634,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Draw active route polyline in Vibrant Purple (#4C1D95 casing + #6D28D9 core)
+      // Draw active route polyline in Vibrant Navigation Blue (#003EB3 casing + #0066FF core) matching iPhone map
       if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
         final pts = activeRoute.polylinePoints;
-        final casingColor = img.ColorRgba8(76, 29, 149, 255);
-        final coreColor = img.ColorRgba8(109, 40, 217, 255);
+        final casingColor = img.ColorRgba8(0, 62, 179, 255);
+        final coreColor = img.ColorRgba8(0, 102, 255, 255);
 
         final screenPts = <img.Point>[];
         for (final pt in pts) {
@@ -670,12 +675,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.nearest);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
       }
 
-      // Vehicle anchor at bottom-right (232, 190) on 320x240 frame
-      const int vx = 232;
-      const int vy = 190;
+      // Vehicle anchor at bottom-right (226, 182) on 320x240 frame
+      const int vx = 226;
+      const int vy = 182;
       final int rotCx = rotatedPatch.width ~/ 2;
       final int rotCy = rotatedPatch.height ~/ 2;
       final int cropX = (rotCx - vx).clamp(0, math.max(0, rotatedPatch.width - w));
@@ -689,44 +694,48 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         height: h,
       );
 
-      // 1. Vehicle Cyan 3D Chevron at (232, 190) + Purple Current Street Pill
-      img.fillCircle(frame, x: vx, y: vy, radius: 14, color: img.ColorRgba8(100, 116, 139, 90));
-      img.fillPolygon(frame, vertices: [
-        img.Point(vx, vy - 11),
-        img.Point(vx + 10, vy + 7),
-        img.Point(vx, vy + 3),
-        img.Point(vx - 10, vy + 7),
-      ], color: img.ColorRgba8(6, 182, 212, 255));
-      img.fillRect(frame, x1: 176, y1: 206, x2: 288, y2: 226, radius: 9, color: img.ColorRgba8(91, 33, 182, 255));
+      final String curRoad = navManager?.currentStreetName ?? 'Đường hiện tại';
+      final upcoming = navManager?.upcomingStep ?? navManager?.currentStep;
+      final int turnCode = upcoming?.turnCode ?? 0;
+      final String nextStreetRaw = upcoming?.streetName ?? curRoad;
+      final String nextStreet = NavigationManager.cleanStreetName(nextStreetRaw);
+      final String distStr = distToTurn >= 1000
+          ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
+          : '${distToTurn.round()} m';
+      final String etaText = etaMin >= 60
+          ? '${etaMin ~/ 60} giờ ${etaMin % 60} phút'
+          : '$etaMin phút';
+      final arrTime = DateTime.now().add(Duration(minutes: etaMin));
+      final String arrStr =
+          '${arrTime.hour.toString().padLeft(2, '0')}:${arrTime.minute.toString().padLeft(2, '0')}';
+      final String totDistStr = totalDistM >= 10000
+          ? '${(totalDistM / 1000.0).round()} km'
+          : (totalDistM >= 1000
+              ? '${(totalDistM / 1000.0).toStringAsFixed(1)} km'
+              : '${totalDistM.round()} m');
 
-      // 2. Top-Left Black Maneuver Card + Coral-Red Top Badge
-      img.fillRect(frame, x1: 4, y1: 6, x2: 112, y2: 54, radius: 10, color: img.ColorRgba8(5, 5, 5, 255));
-      img.fillRect(frame, x1: 0, y1: 2, x2: 66, y2: 22, radius: 10, color: img.ColorRgba8(240, 98, 97, 255));
-      final distStr = distToTurn >= 1000 ? '${(distToTurn / 1000.0).toStringAsFixed(1)}km' : '${distToTurn.round()}m';
-      img.drawString(frame, distStr, font: img.arial14, x: 14, y: 5, color: img.ColorRgba8(255, 255, 255, 255));
+      final hudData = <String, dynamic>{
+        'vx': vx.toDouble(),
+        'vy': vy.toDouble(),
+        'curRoad': curRoad,
+        'nextStreet': nextStreet.isNotEmpty ? nextStreet : 'Đi thẳng',
+        'distStr': distStr,
+        'turnCode': turnCode,
+        'speedStr': '${speedKmh.round()}',
+        'etaText': etaText,
+        'subText': '$arrStr • $totDistStr',
+      };
 
-      // 3. Top-Center-Left 3-Circle Speed Cluster (80, 60, currentSpeed)
-      img.fillCircle(frame, x: 132, y: 56, radius: 18, color: img.ColorRgba8(220, 38, 38, 255));
-      img.fillCircle(frame, x: 132, y: 56, radius: 14, color: img.ColorRgba8(255, 255, 255, 255));
-      img.drawString(frame, '80', font: img.arial14, x: 124, y: 49, color: img.ColorRgba8(17, 24, 39, 255));
+      if (Platform.isIOS) {
+        final rawRgba = frame.toUint8List();
+        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 60, hud: hudData);
+        if (iosJpg != null && iosJpg.isNotEmpty) {
+          return iosJpg;
+        }
+      }
 
-      img.fillCircle(frame, x: 148, y: 68, radius: 11, color: img.ColorRgba8(29, 78, 216, 255));
-      img.drawString(frame, '60', font: img.arial14, x: 140, y: 61, color: img.ColorRgba8(255, 255, 255, 255));
-
-      img.fillCircle(frame, x: 153, y: 44, radius: 11, color: img.ColorRgba8(229, 231, 235, 255));
-      img.drawCircle(frame, x: 153, y: 44, radius: 11, color: img.ColorRgba8(100, 116, 139, 255));
-      img.drawString(frame, '${speedKmh.round()}', font: img.arial14, x: 145, y: 37, color: img.ColorRgba8(17, 24, 39, 255));
-
-      // 4. Bottom-Left Dark Trip Summary Pill
-      img.fillRect(frame, x1: 4, y1: 196, x2: 116, y2: 234, radius: 14, color: img.ColorRgba8(36, 37, 41, 255));
-      img.fillCircle(frame, x: 20, y: 215, radius: 10, color: img.ColorRgba8(56, 57, 62, 255));
-      img.drawLine(frame, x1: 17, y1: 212, x2: 23, y2: 218, color: img.ColorRgba8(255, 255, 255, 255));
-      img.drawLine(frame, x1: 23, y1: 212, x2: 17, y2: 218, color: img.ColorRgba8(255, 255, 255, 255));
-      final etaLabel = etaMin >= 60 ? '${etaMin ~/ 60}h${(etaMin % 60).toString().padLeft(2, '0')}p' : '${etaMin}p';
-      final totKm = totalDist >= 1000 ? '${(totalDist / 1000.0).round()}km' : '${totalDist.round()}m';
-      img.drawString(frame, '$etaLabel $totKm', font: img.arial14, x: 35, y: 208, color: img.ColorRgba8(255, 255, 255, 255));
-
-      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 54));
+      // Pure-Dart fallback if non-iOS
+      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 58));
       if (jpg.length > 14500) {
         jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 40));
       }
@@ -875,12 +884,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final ty = cy + dy;
         final key = '$zoom/$tx/$ty';
 
-        if (!_tileCache.containsKey(key) && !_cpuTileCache.containsKey(key) && !_pendingTileFetches.contains(key)) {
+        if (((_isForeground && !_tileCache.containsKey(key)) || !_cpuTileCache.containsKey(key)) && !_pendingTileFetches.contains(key)) {
           _fetchTileImage(key, tx, ty, zoom);
         }
       }
     }
   }
+
+  static const String _goongMapApiStyle =
+      's.e%3Al.t%7Cp.v%3Aoff%2Cs.t%3A2%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A4%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A5%7Cs.e%3Ag%7Cp.c%3A%23dff5e8%2Cs.t%3A81%7Cs.e%3Ag.f%7Cp.c%3A%23dff5e8%2Cs.t%3A1297%7Cs.e%3Ag.f%7Cp.c%3A%23b8c9be%2Cs.t%3A1297%7Cs.e%3Ag.s%7Cp.c%3A%239bb0a3%2Cs.t%3A3%7Cs.e%3Ag.f%7Cp.c%3A%23e2e8f0%2Cs.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%2394a3b8%2Cs.t%3A2%7Cs.e%3Ag%7Cp.c%3A%23a7e3b8%2Cs.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2360a5fa';
 
   Future<void> _fetchTileImage(String key, int x, int y, int z) async {
     _pendingTileFetches.add(key);
@@ -893,8 +905,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final apiKey = MapboxConfig.maptilerApiKey;
       String url;
       if (isGoong) {
-        // High-definition Google Vietnam localized raster tiles (100% authentic Vietnamese labels: Sông Lừ, Đ. Trường Chinh, etc.)
-        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi';
+        // High-contrast Goong/iPhone-styled tiles (mint-green land #dff5e8, distinct buildings #b8c9be, crisp roads #e2e8f0, no upside-down text on rotation)
+        url = 'https://mt1.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&apistyle=$_goongMapApiStyle';
       } else {
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
@@ -911,7 +923,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Fallback
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isGoong
-            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi'
+            ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&apistyle=$_goongMapApiStyle'
             : (isDark
                 ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
                 : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
@@ -923,11 +935,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
         Uint8List finalBytes = response.bodyBytes;
-        // 1. Decode for CPU background map rendering (0% GPU)
+        // 1. Decode for CPU background map rendering (0% GPU, 4-channel RGBA)
         try {
           var cpuImg = img.decodeImage(response.bodyBytes);
           if (cpuImg != null) {
-            // Downsample @2x (512x512) to 256x256 for crisp Retina labels ("Sông Lừ", etc.)
+            // Convert palette / 3-channel PNG to direct 4-channel RGBA
+            if (cpuImg.hasPalette || cpuImg.numChannels != 4) {
+              cpuImg = cpuImg.convert(numChannels: 4);
+            }
+            // Downsample @2x (512x512) to 256x256 for crisp Retina labels
             if (cpuImg.width > 256) {
               cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
             }
@@ -1140,7 +1156,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.drawPath(arrowPath, arrowPaint);
   }
 
-  /// Draw 320x240 Full-Screen 3D Tilted Navigation Map + Floating HUD Overlays (100% Match to Reference Image)
+  /// Draw 320x240 Full-Screen Navigation Map + Enlarged Floating HUD Overlays
   void _drawNavigationFullMapCanvas({
     required Canvas canvas,
     required double w,
@@ -1153,13 +1169,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }) {
     final isDark = _streamMapStyle.contains('dark');
 
-    // 1. Background Fill: Clean Daylight Map (#F4F3EE) or Dark Mode (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF4F3EE);
+    // 1. Background Fill: Mint-Green Goong Daylight Map (#DFF5E8) or Dark Mode (#0B111A)
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFDFF5E8);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
-    // Vehicle anchor at bottom-right (x=232, y=190 on 320x240 canvas)
-    const double cx = 232.0;
-    const double cy = 190.0;
+    // Vehicle anchor at bottom-right (x=226, y=182 on 320x240 canvas)
+    const double cx = 226.0;
+    const double cy = 182.0;
 
     final int zoom = _minimapZoom;
     final double n = math.pow(2.0, zoom).toDouble();
@@ -1173,13 +1189,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final double subTileY = worldY - (centerTileY * 256.0);
     final double headingRad = headingDeg * (math.pi / 180.0);
 
-    // --- 2. 3D PERSPECTIVE TILTED MAP PLANE & PURPLE ROUTE POLYLINE ---
+    // --- 2. CRISP HEADING-UP MAP PLANE & VIBRANT BLUE ROUTE POLYLINE (Matches iPhone Map) ---
     canvas.save();
     canvas.translate(cx, cy);
-    final perspective = Matrix4.identity()
-      ..setEntry(3, 2, 0.0014)
-      ..rotateX(-42.0 * (math.pi / 180.0));
-    canvas.transform(perspective.storage);
     canvas.rotate(-headingRad);
 
     bool tilesDrawn = false;
@@ -1205,7 +1217,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
     if (!tilesDrawn) {
       final gridPaint = Paint()
-        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFDDE3E3)
+        ..color = isDark ? const Color(0xFF1E2D42) : const Color(0xFFC3DACC)
         ..strokeWidth = 1.0;
       for (double gx = -450; gx <= 450; gx += 36) {
         canvas.drawLine(Offset(gx, -450), Offset(gx, 450), gridPaint);
@@ -1215,7 +1227,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Active Route Polyline in Deep Purple Casing (#4C1D95) + Vibrant Purple Core (#6D28D9)
+    // Active Route Polyline in Vibrant iPhone Navigation Blue (#003EB3 casing + #0066FF core)
     final effectiveRoute = activeRoute ?? navManager?.previewRoute;
     final points = (effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
         ? effectiveRoute.polylinePoints
@@ -1239,7 +1251,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       final casingPaint = Paint()
-        ..color = const Color(0xFF4C1D95)
+        ..color = const Color(0xFF003EB3)
         ..strokeWidth = 10.0
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -1247,7 +1259,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       canvas.drawPath(routePath, casingPaint);
 
       final corePaint = Paint()
-        ..color = const Color(0xFF6D28D9)
+        ..color = const Color(0xFF0066FF)
         ..strokeWidth = 6.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -1268,52 +1280,50 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
     canvas.restore();
 
-    // --- 3. BOTTOM-RIGHT 3D CYAN NAVIGATION CHEVRON & PURPLE CURRENT ROAD PILL ---
-    // Soft grey shadow halo beneath vehicle chevron
+    // --- 3. BOTTOM-RIGHT 3D CYAN/BLUE NAVIGATION CHEVRON & ENLARGED BLUE CURRENT ROAD PILL ---
     canvas.drawCircle(
       const Offset(cx, cy + 1),
       15.0,
-      Paint()..color = const Color(0x5564748B),
+      Paint()..color = const Color(0x472563EB),
     );
 
-    // 3D Cyan/Teal Chevron (left wing #22D3EE, right wing #06B6D4, white outline)
     final chevronFull = ui.Path()
-      ..moveTo(cx, cy - 11.5)
+      ..moveTo(cx, cy - 12.0)
       ..lineTo(cx + 10.5, cy + 7.5)
       ..lineTo(cx, cy + 3.0)
       ..lineTo(cx - 10.5, cy + 7.5)
       ..close();
     final chevronLeft = ui.Path()
-      ..moveTo(cx, cy - 11.5)
+      ..moveTo(cx, cy - 12.0)
       ..lineTo(cx, cy + 3.0)
       ..lineTo(cx - 10.5, cy + 7.5)
       ..close();
     final chevronRight = ui.Path()
-      ..moveTo(cx, cy - 11.5)
+      ..moveTo(cx, cy - 12.0)
       ..lineTo(cx + 10.5, cy + 7.5)
       ..lineTo(cx, cy + 3.0)
       ..close();
 
-    canvas.drawPath(chevronLeft, Paint()..color = const Color(0xFF22D3EE));
-    canvas.drawPath(chevronRight, Paint()..color = const Color(0xFF06B6D4));
+    canvas.drawPath(chevronLeft, Paint()..color = const Color(0xFF38BDF8));
+    canvas.drawPath(chevronRight, Paint()..color = const Color(0xFF0284C7));
     canvas.drawPath(
       chevronFull,
       Paint()
         ..color = Colors.white
-        ..strokeWidth = 1.8
+        ..strokeWidth = 2.0
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke,
     );
 
-    // Current Street Purple Pill Badge below chevron (e.g. "CT. Biên Hoà - Vũng Tàu")
+    // Current Street Blue Pill Badge below chevron (e.g. "Phố Nguyễn Cảnh Dị")
     final String curRoad = navManager?.currentStreetName ?? 'Đường hiện tại';
     final curRoadTp = TextPainter(
       text: TextSpan(
         text: curRoad,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 8.5,
-          fontWeight: FontWeight.w800,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w900,
           height: 1.15,
         ),
       ),
@@ -1321,22 +1331,22 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       textDirection: TextDirection.ltr,
       maxLines: 2,
       ellipsis: '…',
-    )..layout(maxWidth: 112.0);
+    )..layout(maxWidth: 136.0);
 
-    final double pillW = (curRoadTp.width + 18.0).clamp(64.0, 128.0);
-    final double pillH = (curRoadTp.height + 7.0).clamp(18.0, 30.0);
-    final double pillLeft = (cx - pillW / 2.0).clamp(148.0, w - pillW - 4.0);
-    final double pillTop = (cy + 14.0).clamp(200.0, h - pillH - 2.0);
+    final double pillW = (curRoadTp.width + 18.0).clamp(78.0, 152.0);
+    final double pillH = (curRoadTp.height + 8.0).clamp(22.0, 34.0);
+    final double pillLeft = (cx - pillW / 2.0).clamp(150.0, w - pillW - 4.0);
+    final double pillTop = (cy + 13.0).clamp(195.0, h - pillH - 3.0);
     final roadPillRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(pillLeft, pillTop, pillW, pillH),
-      const Radius.circular(10.0),
+      const Radius.circular(11.0),
     );
-    canvas.drawRRect(roadPillRect, Paint()..color = const Color(0xFF5B21B6));
+    canvas.drawRRect(roadPillRect, Paint()..color = const Color(0xFF1D63FF));
     canvas.drawRRect(
       roadPillRect,
       Paint()
-        ..color = const Color(0xFF7C3AED)
-        ..strokeWidth = 1.0
+        ..color = const Color(0xFF60A5FA)
+        ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke,
     );
     curRoadTp.paint(
@@ -1344,7 +1354,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       Offset(pillLeft + (pillW - curRoadTp.width) / 2.0, pillTop + (pillH - curRoadTp.height) / 2.0),
     );
 
-    // --- 4. TOP-LEFT BLACK MANEUVER CARD WITH CORAL-RED TOP BADGE ---
+    // --- 4. TOP-LEFT ENLARGED BLACK MANEUVER CARD WITH CORAL-RED TOP BADGE ---
     final upcoming = navManager?.upcomingStep ?? navManager?.currentStep;
     final int turnCode = upcoming?.turnCode ?? 0;
     final String nextStreetRaw = upcoming?.streetName ?? curRoad;
@@ -1353,162 +1363,144 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
         : '${distToTurn.round()} m';
 
-    // Pitch-black rounded rectangle (x: 4, y: 6, w: 108, h: 48)
+    // Pitch-black rounded rectangle (x: 4, y: 6, w: 148, h: 58)
     final blackCardRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 6.0, 108.0, 48.0),
-      const Radius.circular(10.0),
+      const Rect.fromLTWH(4.0, 6.0, 148.0, 58.0),
+      const Radius.circular(12.0),
     );
     canvas.drawRRect(
       blackCardRect.shift(const Offset(0, 2)),
-      Paint()..color = const Color(0x44000000),
+      Paint()..color = const Color(0x4D000000),
     );
-    canvas.drawRRect(blackCardRect, Paint()..color = const Color(0xFF050505));
+    canvas.drawRRect(blackCardRect, Paint()..color = const Color(0xF5090A0F));
+    canvas.drawRRect(
+      blackCardRect,
+      Paint()
+        ..color = const Color(0xFF2E3038)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke,
+    );
 
     // Top-left Coral-Red Badge (#F06261 with thin white inner border)
     final coralBadgeRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(0.0, 2.0, 68.0, 20.0),
-      const Radius.circular(10.0),
+      const Rect.fromLTWH(0.0, 2.0, 88.0, 24.0),
+      const Radius.circular(11.0),
     );
     canvas.drawRRect(coralBadgeRect, Paint()..color = const Color(0xFFF06261));
     canvas.drawRRect(
       coralBadgeRect.deflate(1.2),
       Paint()
-        ..color = Colors.white.withAlpha(210)
+        ..color = Colors.white.withAlpha(216)
         ..strokeWidth = 1.0
         ..style = PaintingStyle.stroke,
     );
 
-    // Mini turn icon + distance inside coral badge
-    _drawCanvasTurnIcon(canvas, 12.0, 12.0, turnCode);
+    // Turn icon + larger distance inside coral badge
+    _drawCanvasTurnIcon(canvas, 15.0, 14.0, turnCode);
     final distTp = TextPainter(
       text: TextSpan(
         text: distStr,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 9.5,
-          fontWeight: FontWeight.w800,
+          fontSize: 12.0,
+          fontWeight: FontWeight.w900,
         ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
-    )..layout(maxWidth: 44.0);
-    distTp.paint(canvas, Offset(22.0, 2.0 + (20.0 - distTp.height) / 2.0));
+    )..layout(maxWidth: 58.0);
+    distTp.paint(canvas, Offset(27.0, 2.0 + (24.0 - distTp.height) / 2.0));
 
-    // Upcoming street name inside black card ("Nam Kỳ Khởi Nghĩa")
+    // Upcoming street name inside black card ("Phố Nguyễn Hữu Thọ", up to 2 lines)
     final streetTp = TextPainter(
       text: TextSpan(
         text: nextStreet.isNotEmpty ? nextStreet : 'Đi thẳng',
         style: const TextStyle(
           color: Color(0xFFF8FAFC),
-          fontSize: 10.0,
-          fontWeight: FontWeight.w600,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+          height: 1.15,
         ),
       ),
       textDirection: TextDirection.ltr,
-      maxLines: 1,
+      maxLines: 2,
       ellipsis: '…',
-    )..layout(maxWidth: 96.0);
-    streetTp.paint(canvas, const Offset(10.0, 29.0));
+    )..layout(maxWidth: 134.0);
+    streetTp.paint(canvas, const Offset(10.0, 28.0));
 
-    // --- 5. TOP-CENTER-LEFT 3-CIRCLE SPEED CLUSTER (80, 60, liveSpeed) ---
-    // Circle 1: Red-bordered Speed Limit 80 (cx=132, cy=56, r=18)
-    const Offset limitCenter = Offset(132.0, 56.0);
-    canvas.drawCircle(limitCenter, 18.0, Paint()..color = Colors.white);
-    canvas.drawCircle(
-      limitCenter,
-      16.2,
+    // --- 5. SPEEDOMETER BOX ABOVE BOTTOM-LEFT TIME CARD (x: 4, y: 136, w: 62, h: 46) ---
+    final speedBoxRect = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(4.0, 136.0, 62.0, 46.0),
+      const Radius.circular(12.0),
+    );
+    canvas.drawRRect(speedBoxRect, Paint()..color = const Color(0xF218191E));
+    canvas.drawRRect(
+      speedBoxRect,
       Paint()
-        ..color = const Color(0xFFDC2626)
-        ..strokeWidth = 3.8
+        ..color = const Color(0xE638BDF8)
+        ..strokeWidth = 1.4
         ..style = PaintingStyle.stroke,
     );
-    final limit80Tp = TextPainter(
-      text: const TextSpan(
-        text: '80',
-        style: TextStyle(
-          color: Color(0xFF111827),
-          fontSize: 13.0,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    limit80Tp.paint(
-      canvas,
-      Offset(limitCenter.dx - limit80Tp.width / 2.0, limitCenter.dy - limit80Tp.height / 2.0),
-    );
 
-    // Circle 2: Bottom-Right Solid Blue Circle 60 (cx=148, cy=68, r=11.5)
-    const Offset blueCenter = Offset(148.0, 68.0);
-    canvas.drawCircle(blueCenter, 11.5, Paint()..color = const Color(0xFF1D4ED8));
-    final blue60Tp = TextPainter(
-      text: const TextSpan(
-        text: '60',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 9.5,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    blue60Tp.paint(
-      canvas,
-      Offset(blueCenter.dx - blue60Tp.width / 2.0, blueCenter.dy - blue60Tp.height / 2.0),
-    );
-
-    // Circle 3: Top-Right Current Speed Circle with Dashed Border (cx=153, cy=44, r=11.5)
-    const Offset curSpdCenter = Offset(153.0, 44.0);
-    canvas.drawCircle(curSpdCenter, 11.5, Paint()..color = const Color(0xFFE5E7EB));
-    final dashPaint = Paint()
-      ..color = const Color(0xFF64748B)
-      ..strokeWidth = 1.4
-      ..style = PaintingStyle.stroke;
-    for (int i = 0; i < 12; i++) {
-      final double startAngle = (i * 30.0) * (math.pi / 180.0);
-      final double sweepAngle = 16.0 * (math.pi / 180.0);
-      canvas.drawArc(
-        Rect.fromCircle(center: curSpdCenter, radius: 11.0),
-        startAngle,
-        sweepAngle,
-        false,
-        dashPaint,
-      );
-    }
     final curSpdTp = TextPainter(
       text: TextSpan(
         text: '${speedKmh.round()}',
         style: const TextStyle(
-          color: Color(0xFF111827),
-          fontSize: 9.5,
+          color: Colors.white,
+          fontSize: 17.0,
           fontWeight: FontWeight.w900,
+          height: 1.0,
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
     curSpdTp.paint(
       canvas,
-      Offset(curSpdCenter.dx - curSpdTp.width / 2.0, curSpdCenter.dy - curSpdTp.height / 2.0),
+      Offset(4.0 + (62.0 - curSpdTp.width) / 2.0, 140.0),
     );
 
-    // --- 6. BOTTOM-LEFT DARK TRIP SUMMARY PILL (x: 4, y: 196, w: 112, h: 38) ---
+    final unitTp = TextPainter(
+      text: const TextSpan(
+        text: 'km/h',
+        style: TextStyle(
+          color: Color(0xFF94A3B8),
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    unitTp.paint(
+      canvas,
+      Offset(4.0 + (62.0 - unitTp.width) / 2.0, 165.0),
+    );
+
+    // --- 6. ENLARGED BOTTOM-LEFT DARK TRIP SUMMARY PILL (x: 4, y: 186, w: 144, h: 50) ---
     final summaryRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 196.0, 112.0, 38.0),
+      const Rect.fromLTWH(4.0, 186.0, 144.0, 50.0),
       const Radius.circular(14.0),
     );
-    canvas.drawRRect(summaryRect, Paint()..color = const Color(0xFF242529));
+    canvas.drawRRect(summaryRect, Paint()..color = const Color(0xF51E2025));
+    canvas.drawRRect(
+      summaryRect,
+      Paint()
+        ..color = const Color(0xFF3F3F46)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke,
+    );
 
     // Left dark grey circle with white '✕' icon
-    const Offset closeCenter = Offset(20.0, 215.0);
-    canvas.drawCircle(closeCenter, 10.5, Paint()..color = const Color(0xFF38393E));
+    const Offset closeCenter = Offset(21.0, 211.0);
+    canvas.drawCircle(closeCenter, 12.0, Paint()..color = const Color(0xFF38393E));
     final xPaint = Paint()
       ..color = Colors.white
-      ..strokeWidth = 1.6
+      ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(const Offset(16.8, 211.8), const Offset(23.2, 218.2), xPaint);
-    canvas.drawLine(const Offset(23.2, 211.8), const Offset(16.8, 218.2), xPaint);
+    canvas.drawLine(const Offset(17.2, 207.2), const Offset(24.8, 214.8), xPaint);
+    canvas.drawLine(const Offset(24.8, 207.2), const Offset(17.2, 214.8), xPaint);
 
-    // Right Line 1: Remaining duration ("1 giờ 28 phút" or "28 phút")
+    // Right Line 1: Remaining duration ("2 phút" or "1 giờ 28 phút")
     final int etaMin = (navManager?.remainingEtaMinutes ?? 1).clamp(1, 999);
     final String etaText = etaMin >= 60
         ? '${etaMin ~/ 60} giờ ${etaMin % 60} phút'
@@ -1518,17 +1510,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         text: etaText,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 10.0,
-          fontWeight: FontWeight.w700,
+          fontSize: 13.5,
+          fontWeight: FontWeight.w900,
         ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: 76.0);
-    etaTp.paint(canvas, const Offset(35.0, 202.0));
+    )..layout(maxWidth: 102.0);
+    etaTp.paint(canvas, const Offset(38.0, 192.0));
 
-    // Right Line 2: Arrival time • remaining distance ("21:49 • 80 km")
+    // Right Line 2: Arrival time • remaining distance ("11:34 • 1.2 km")
     final arrTime = DateTime.now().add(Duration(minutes: etaMin));
     final String arrStr =
         '${arrTime.hour.toString().padLeft(2, '0')}:${arrTime.minute.toString().padLeft(2, '0')}';
@@ -1542,16 +1534,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       text: TextSpan(
         text: '$arrStr • $totDistStr',
         style: const TextStyle(
-          color: Color(0xFFA1A1AA),
-          fontSize: 9.0,
-          fontWeight: FontWeight.w500,
+          color: Color(0xFFE4E4E7),
+          fontSize: 11.0,
+          fontWeight: FontWeight.w600,
         ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: 76.0);
-    subTp.paint(canvas, const Offset(35.0, 216.0));
+    )..layout(maxWidth: 102.0);
+    subTp.paint(canvas, const Offset(38.0, 213.0));
   }
 
   /// Helper to draw crisp white maneuver arrow inside the top-left coral badge
