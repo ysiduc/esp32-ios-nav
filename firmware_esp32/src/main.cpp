@@ -303,10 +303,13 @@ void processJsonPacket(const char* jsonStr) {
     }
     return;
 
-  } else if (typeStr == "SET_UI_STYLE" || typeStr == "SET_WATCHFACE") {
-    int s = doc["style"] | 0;
+  } else if (typeStr == "SET_UI_STYLE" || typeStr == "SET_WATCHFACE" || typeStr == "THEME_SELECT") {
+    int s = doc["theme"] | doc["style"] | 0;
     display.setWatchfaceStyle((uint8_t)s);
-    Serial.printf("[JSON] Set Watchface style: %d\n", s);
+    prefs.begin("nav_state", false);
+    prefs.putUChar("theme", (uint8_t)s);
+    prefs.end();
+    Serial.printf("[JSON] Set Watchface/Theme style: %d\n", s);
     return;
 
   } else if (typeStr == "POPUP" || typeStr == "POPUP_NOTIF" || typeStr == "CALL" || typeStr == "SMS") {

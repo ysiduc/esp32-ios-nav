@@ -4,6 +4,7 @@ import '../services/ble_service.dart';
 import '../services/navigation_manager.dart';
 import 'ble_screen.dart';
 import 'esp_preview_screen.dart';
+import 'esp_simulator_screen.dart';
 import 'map_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -27,6 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
         onOpenMenu: () => _scaffoldKey.currentState?.openDrawer(),
       ),
       BleScreen(
+        onBackToMap: () => setState(() => _currentIndex = 0),
+      ),
+      EspSimulatorScreen(
         onBackToMap: () => setState(() => _currentIndex = 0),
       ),
       EspPreviewScreen(
@@ -160,11 +164,21 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildDrawerTile(
               icon: Icons.screenshot_monitor_rounded,
               title: 'Mô phỏng Màn hình ESP32',
-              subtitle: 'Xem trước HUD, Mini Map & FPS stream',
+              subtitle: '6 Themes, chọn ảnh nền Màn Chờ & Giả lập live',
               isSelected: _currentIndex == 2,
               onTap: () {
                 Navigator.pop(context);
                 setState(() => _currentIndex = 2);
+              },
+            ),
+            _buildDrawerTile(
+              icon: Icons.stream_rounded,
+              title: 'Giám sát Luồng Stream Map',
+              subtitle: 'Xem trước HUD, Mini Map & FPS stream',
+              isSelected: _currentIndex == 3,
+              onTap: () {
+                Navigator.pop(context);
+                setState(() => _currentIndex = 3);
               },
             ),
 
