@@ -518,6 +518,10 @@ public:
 
     // 3. Render appropriate screen based on state
     if (_currentState == STATE_STANDBY_WATCHFACE) {
+      if (isStreamingActive) {
+        // When simulator or phone is actively streaming frames, do not overwrite with standby watchface
+        return;
+      }
       _renderStandbyWatchface();
     } else if (_currentState == STATE_APP_IDLE_MAP) {
       _renderAppIdleMap();
