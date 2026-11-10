@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 import 'marquee_text.dart';
 
-/// GIAO DIỆN 1: SUNFLOWER BENTO (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_1_bg.png)
+/// GIAO DIỆN 1: SUNFLOWER BENTO (Căn chỉnh pixel-perfect: tên bài hát nhỏ 2px dời xuống 3px, thông báo thả trôi)
 class CarbonSportTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -90,7 +90,7 @@ class CarbonSportTheme extends StatelessWidget {
             child: Text(
               'TIN NHẮN MỚI',
               style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFFFB923C),
                 letterSpacing: 0.6,
@@ -98,55 +98,54 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // Tên người gửi + Nội dung tin nhắn (nằm gọn phần trên, không đè bông hoa ở đáy)
+          // Tên người gửi + Nội dung tin nhắn (thu nhỏ, thả trôi marquee nếu dài)
           Positioned(
             left: 184,
-            top: 50,
+            top: 48,
             width: 110,
-            height: 75,
+            height: 78,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  mockData.sender,
+                MarqueeText(
+                  text: mockData.sender,
+                  width: 110,
                   style: GoogleFonts.plusJakartaSans(
                     color: const Color(0xFFFACC15),
                     fontWeight: FontWeight.w700,
-                    fontSize: 12.5,
+                    fontSize: 11.0,
                     height: 1.2,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 4),
                 Expanded(
-                  child: Text(
-                    mockData.message,
-                    style: GoogleFonts.plusJakartaSans(
-                      color: Colors.white,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                      height: 1.25,
+                  child: ClipRect(
+                    child: MarqueeText(
+                      text: mockData.message,
+                      width: 110,
+                      style: GoogleFonts.plusJakartaSans(
+                        color: Colors.white,
+                        fontSize: 10.0,
+                        fontWeight: FontWeight.w500,
+                        height: 1.25,
+                      ),
                     ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
           ),
 
-          // --- Thanh Nhạc (Dưới đáy: pill y: 190..231) ---
-          // Tên bài hát - Ca sĩ (thả trôi marquee nếu dài hơn 175px)
+          // --- Thanh Nhạc (Dưới đáy: nhỏ lại 2px, dời xuống 3px: top: 201) ---
           Positioned(
             left: 60,
-            top: 198,
+            top: 201,
             child: MarqueeText(
               text: mockData.fullSongTitle,
               width: 175,
               style: GoogleFonts.plusJakartaSans(
-                fontSize: 11,
+                fontSize: 9.0, // Nhỏ lại 2px (từ 11px xuống 9px)
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFFFEF08A),
               ),
@@ -157,7 +156,7 @@ class CarbonSportTheme extends StatelessWidget {
           if (mockData.durationSec > 0)
             Positioned(
               right: 20,
-              top: 198,
+              top: 201,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
@@ -165,7 +164,7 @@ class CarbonSportTheme extends StatelessWidget {
                   Text(
                     mockData.elapsedStr,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 9,
+                      fontSize: 8.5,
                       fontWeight: FontWeight.w700,
                       color: const Color(0xFFFB923C),
                       height: 1.1,
@@ -174,7 +173,7 @@ class CarbonSportTheme extends StatelessWidget {
                   Text(
                     mockData.durationStr,
                     style: GoogleFonts.plusJakartaSans(
-                      fontSize: 9,
+                      fontSize: 8.5,
                       fontWeight: FontWeight.w600,
                       color: Colors.white,
                       height: 1.1,

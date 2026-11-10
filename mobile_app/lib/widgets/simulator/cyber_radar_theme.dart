@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 import 'marquee_text.dart';
 
-/// GIAO DIỆN 2: CYBERPUNK NEON HUD (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_2_bg.png)
+/// GIAO DIỆN 2: CYBERPUNK NEON HUD (Ảnh nền zoom to khớp 4 góc màn hình, thông báo & nhạc thả trôi)
 class CyberRadarTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -29,7 +29,7 @@ class CyberRadarTheme extends StatelessWidget {
       height: 240,
       child: Stack(
         children: [
-          // Lớp dưới: Ảnh nền 320x240 phẳng 2D
+          // Lớp dưới: Ảnh nền 320x240 phóng to khớp 4 góc
           Positioned.fill(
             child: Image.asset(
               'assets/themes/theme_2_bg.png',
@@ -39,14 +39,14 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Đồng hồ (Bên trái: x: 22..195, y: 24..160, chỉ hiện HH:mm) ---
+          // --- Khung Đồng hồ (Bên trái: x: 12..205, y: 15..165, chỉ hiện HH:mm) ---
           Positioned(
-            left: 24,
-            top: 44,
+            left: 14,
+            top: 38,
             child: Text(
               '$hStr:$mStr',
               style: GoogleFonts.orbitron(
-                fontSize: 42,
+                fontSize: 44,
                 fontWeight: FontWeight.w900,
                 color: const Color(0xFF00F0FF),
                 letterSpacing: -1,
@@ -60,7 +60,7 @@ class CyberRadarTheme extends StatelessWidget {
 
           // Ngày tháng (bên dưới đồng hồ)
           Positioned(
-            left: 26,
+            left: 16,
             top: 116,
             child: Text(
               dateStr,
@@ -73,15 +73,15 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Tin nhắn (Bên phải: viền hồng nét đứt x: 214..303, y: 22..160) ---
-          // Tiêu đề MSG_INCOMING (nằm sau icon 💬 ở x: 218)
+          // --- Khung Tin nhắn (Bên phải: viền hồng nét đứt x: 212..308, y: 27..170) ---
+          // Tiêu đề MSG_INCOMING
           Positioned(
-            left: 232,
-            top: 31,
+            left: 230,
+            top: 32,
             child: Text(
               'MSG_INCOMING',
               style: GoogleFonts.orbitron(
-                fontSize: 8.5,
+                fontSize: 8.0,
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFFFF007F),
                 letterSpacing: 0.8,
@@ -89,33 +89,51 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Nội dung tin nhắn (bắt đầu từ x: 220 để nằm hoàn toàn bên trong khung viền x: 214..303)
+          // Tên người gửi & Nội dung tin nhắn (nằm lọt trong khung hồng w: 86, thả trôi)
           Positioned(
-            left: 220,
-            top: 52,
-            width: 80,
-            height: 98,
-            child: Text(
-              '${mockData.sender}:\n"${mockData.message}"',
-              style: GoogleFonts.chakraPetch(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-                height: 1.25,
-              ),
-              maxLines: 5,
-              overflow: TextOverflow.ellipsis,
+            left: 218,
+            top: 50,
+            width: 86,
+            height: 105,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                MarqueeText(
+                  text: mockData.sender,
+                  width: 86,
+                  style: GoogleFonts.chakraPetch(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFFFF007F),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Expanded(
+                  child: ClipRect(
+                    child: MarqueeText(
+                      text: mockData.message,
+                      width: 86,
+                      style: GoogleFonts.chakraPetch(
+                        fontSize: 10.0,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
 
-          // --- Thanh Nhạc (Dưới đáy: khung y: 173..210) ---
-          // Tên bài hát - Ca sĩ (thả trôi marquee nếu dài hơn 160px)
+          // --- Thanh Nhạc (Dưới đáy: khung y: 172..232) ---
+          // Tên bài hát - Ca sĩ (thả trôi marquee nếu dài hơn 180px)
           Positioned(
-            left: 60,
-            top: 178,
+            left: 52,
+            top: 188,
             child: MarqueeText(
               text: mockData.fullSongTitle,
-              width: 160,
+              width: 180,
               style: GoogleFonts.chakraPetch(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
@@ -124,15 +142,15 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Thời lượng 01:24 / 03:52 (chỉ hiện khi có tiến trình thực tế)
+          // Thời lượng (chỉ hiện khi có tiến trình thực tế)
           if (mockData.durationSec > 0)
             Positioned(
-              right: 20,
-              top: 178,
+              right: 14,
+              top: 188,
               child: Text(
                 mockData.timeRatioStr,
                 style: GoogleFonts.orbitron(
-                  fontSize: 9.5,
+                  fontSize: 9.0,
                   fontWeight: FontWeight.w700,
                   color: const Color(0xFFFB923C),
                 ),

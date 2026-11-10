@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 import 'marquee_text.dart';
 
-/// GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_3_bg.png)
+/// GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS (Căn giữa đồng hồ, thông báo nằm lọt trong ô Mail thả trôi)
 class RetroMacTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -38,7 +38,7 @@ class RetroMacTheme extends StatelessWidget {
       height: 240,
       child: Stack(
         children: [
-          // Lớp dưới: Ảnh nền 320x240 phẳng 2D (Đã có sẵn menu bar, CLOCK.EXE, MAIL.APP, PLAYER.EXE)
+          // Lớp dưới: Ảnh nền 320x240 phẳng 2D
           Positioned.fill(
             child: Image.asset(
               'assets/themes/theme_3_bg.png',
@@ -48,16 +48,16 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 1 - Đồng hồ (Vùng bên trong: x: 9..144, y: 34..118, chỉ hiện HH:mm) ---
+          // --- Cửa sổ 1 - Đồng hồ (Vùng bên trong: x: 9..144, y: 34..118, căn giữa chuẩn) ---
           Positioned(
-            left: 10,
-            top: 42,
-            width: 134,
+            left: 9,
+            top: 38,
+            width: 135,
             child: Text(
               '$hStr:$mStr',
               textAlign: TextAlign.center,
               style: GoogleFonts.vt323(
-                fontSize: 38,
+                fontSize: 40,
                 color: Colors.black,
                 fontWeight: FontWeight.w900,
                 height: 1.0,
@@ -67,9 +67,9 @@ class RetroMacTheme extends StatelessWidget {
 
           // Ngày tháng tiếng Anh (Căn giữa ngang trong cửa sổ đồng hồ)
           Positioned(
-            left: 10,
+            left: 9,
             top: 82,
-            width: 134,
+            width: 135,
             child: Text(
               dateStr,
               textAlign: TextAlign.center,
@@ -82,13 +82,14 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 2 - Tin nhắn (Vùng bên trong: x: 8..152, y: 141..217) ---
-          // "From: Người gửi" (Nằm ngang hàng bên phải icon phong bì x: 14..36, y: 144..162)
+          // --- Cửa sổ 2 - Tin nhắn (Vùng bên trong: x: 14..146, y: 142..218, thả trôi nếu dài) ---
+          // "From: Người gửi" (thả trôi nếu dài hơn 124px)
           Positioned(
-            left: 42,
-            top: 148,
-            child: Text(
-              'From: ${mockData.sender}',
+            left: 16,
+            top: 146,
+            child: MarqueeText(
+              text: 'From: ${mockData.sender}',
+              width: 124,
               style: GoogleFonts.vt323(
                 fontSize: 12,
                 color: Colors.black,
@@ -97,25 +98,26 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // Nội dung tin nhắn (Nằm bên dưới phong bì và tiêu đề người gửi)
+          // Nội dung tin nhắn (Nằm bên dưới phong bì, thả trôi nếu dài hơn 124px)
           Positioned(
             left: 16,
-            top: 168,
-            width: 132,
-            height: 44,
-            child: Text(
-              mockData.message,
-              style: GoogleFonts.vt323(
-                fontSize: 11.5,
-                color: Colors.black,
-                height: 1.15,
+            top: 166,
+            width: 124,
+            height: 48,
+            child: ClipRect(
+              child: MarqueeText(
+                text: mockData.message,
+                width: 124,
+                style: GoogleFonts.vt323(
+                  fontSize: 11.5,
+                  color: Colors.black,
+                  height: 1.15,
+                ),
               ),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // --- Cửa sổ 3 - Nhạc (Bên phải) ---
+          // --- Cửa sổ 3 - Nhạc (Bên phải: thanh đen w: 110) ---
           // Tên bài hát (thả trôi marquee nếu dài hơn 110px)
           Positioned(
             left: 178,
@@ -130,7 +132,7 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // Thời lượng 01:24 / 03:52 (chỉ hiện khi có tiến trình bài hát)
+          // Thời lượng (chỉ hiện khi có tiến trình bài hát)
           if (mockData.durationSec > 0)
             Positioned(
               left: 226,

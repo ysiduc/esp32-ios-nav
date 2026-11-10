@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 import 'marquee_text.dart';
 
-/// GIAO DIỆN 5: POP-ART COMIC STRIP (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_5_bg.png)
+/// GIAO DIỆN 5: POP-ART COMIC STRIP (Bóng thoại có tên người gửi, bài hát trong badge vàng nổi bật)
 class ComicStripTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -108,60 +108,70 @@ class ComicStripTheme extends StatelessWidget {
           // --- Khung 2 - Bóng thoại Tin nhắn (Bóng thoại trắng x: 21..166, y: 136..222) ---
           Positioned(
             left: 28,
-            top: 142,
+            top: 140,
             width: 130,
-            height: 68,
+            height: 70,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  '💬 TIN MỚI!',
-                  style: GoogleFonts.fredoka(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.black,
-                  ),
+                // Tên người gửi nổi bật
+                MarqueeText(
+                  text: '💬 ${mockData.sender.toUpperCase()}:',
+                  width: 120,
                   textAlign: TextAlign.center,
+                  style: GoogleFonts.fredoka(
+                    fontSize: 11.0,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFFEA580C),
+                  ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  '${mockData.sender}: "${mockData.message}"',
+                // Nội dung tin nhắn thả trôi
+                MarqueeText(
+                  text: mockData.message,
+                  width: 120,
+                  textAlign: TextAlign.center,
                   style: GoogleFonts.fredoka(
-                    fontSize: 10.5,
+                    fontSize: 10.0,
                     fontWeight: FontWeight.w700,
                     color: Colors.black,
-                    height: 1.15,
                   ),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
 
-          // --- Khung 3 - Nhạc (Cột xanh bên phải: bầu trời x: 180..311, y: 12..74) ---
-          // Tên bài hát & Ca sĩ in hoa, chữ vàng viền đen (thả trôi marquee nếu dài)
+          // --- Khung 3 - Nhạc (Cột xanh bên phải: Badge vàng viền đen nổi bật chất Comic) ---
           Positioned(
             left: 184,
-            top: 20,
-            child: MarqueeText(
-              text: '${mockData.songTitle} - ${mockData.songArtist}'.toUpperCase(),
-              width: 124,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.bangers(
-                fontSize: 13,
-                letterSpacing: 0.8,
+            top: 16,
+            width: 124,
+            height: 26,
+            child: Container(
+              decoration: BoxDecoration(
                 color: const Color(0xFFFACC15),
-                shadows: const [
-                  Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 2),
-                  Shadow(color: Colors.black, offset: Offset(-1, -1), blurRadius: 2),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.black, width: 2),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black, offset: Offset(2, 2)),
                 ],
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              alignment: Alignment.center,
+              child: MarqueeText(
+                text: '${mockData.songTitle} - ${mockData.songArtist}'.toUpperCase(),
+                width: 112,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.bangers(
+                  fontSize: 12,
+                  letterSpacing: 0.8,
+                  color: Colors.black,
+                ),
               ),
             ),
           ),
 
-          // Thời lượng 01:24 và 03:52 (chỉ hiện khi có tiến trình bài hát)
+          // Thời lượng 01:24 và 03:52 (bên dưới thanh tiến trình đáy)
           if (mockData.durationSec > 0)
             Positioned(
               left: 184,
