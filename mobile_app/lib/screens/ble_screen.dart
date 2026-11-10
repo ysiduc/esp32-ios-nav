@@ -64,7 +64,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
           children: [
             Icon(Icons.bluetooth_searching_rounded, color: Color(0xFF00F0FF)),
             SizedBox(width: 10),
-            Text('Kết nối ESP32 BLE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            Text('Kết nối ysiducnaga BLE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           ],
         ),
         actions: [
@@ -201,7 +201,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ESP32-S3 Navi" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
+                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ysiducnaga" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
                   style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5, height: 1.35),
                 ),
               ),
@@ -242,7 +242,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       Text(
                         bleService.systemBondedDevice!.platformName.isNotEmpty
                             ? bleService.systemBondedDevice!.platformName
-                            : 'ESP32-S3 Navi',
+                            : 'ysiducnaga',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                       ),
                       const SizedBox(height: 3),
@@ -265,7 +265,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     bleService.systemBondedDevice!,
                     displayName: bleService.systemBondedDevice!.platformName.isNotEmpty
                         ? bleService.systemBondedDevice!.platformName
-                        : 'ESP32-S3 Navi',
+                        : 'ysiducnaga',
                   ),
                   child: const Text('KẾT NỐI VÀO APP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                 ),
@@ -306,7 +306,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                       Icon(Icons.bluetooth_searching, size: 56, color: Colors.white.withAlpha(50)),
                       const SizedBox(height: 12),
                       Text(
-                        bleService.isScanning ? 'Đang tìm kiếm ESP32...' : 'Chưa tìm thấy thiết bị nào\nBấm nút quét ở góc trên để bắt đầu',
+                        bleService.isScanning ? 'Đang tìm kiếm ysiducnaga...' : 'Chưa tìm thấy thiết bị nào\nBấm nút quét ở góc trên để bắt đầu',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white54, fontSize: 14),
                       ),
@@ -320,7 +320,10 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   itemBuilder: (context, index) {
                     final item = bleService.discoveredDevices[index];
                     final isThisConnected = bleService.connectedDevice?.remoteId == item.device.remoteId;
-                    final isEsp32 = item.name.toLowerCase().contains('esp32') || item.name.toLowerCase().contains('nav');
+                    final lowerName = item.name.toLowerCase();
+                    final isEsp32 = lowerName.contains('ysiduc') ||
+                        lowerName.contains('esp32') ||
+                        lowerName.contains('nav');
 
                     return Container(
                       decoration: BoxDecoration(

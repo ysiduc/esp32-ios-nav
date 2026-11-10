@@ -555,7 +555,7 @@ void setup() {
   display.init();
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
-  NimBLEDevice::init("ESP32-S3 Navi");
+  NimBLEDevice::init("ysiducnaga");
   NimBLEDevice::setMTU(517);
 
   // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
@@ -614,11 +614,11 @@ void setup() {
   pAdvertising->setAdvertisementData(advData);
 
   // 2. Scan Response Data (Max 31 bytes):
-  // Complete Local Name: "ESP32-S3 Navi" (15 bytes)
+  // Complete Local Name: "ysiducnaga" (12 bytes)
   // Custom Nav Service: 0xFFE0 (4 bytes)
-  // Total = 19 bytes <= 31 bytes!
+  // Total = 16 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.setName("ESP32-S3 Navi");
+  scanResponseData.setName("ysiducnaga");
   scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setScanResponseData(scanResponseData);
 
@@ -633,7 +633,7 @@ void setup() {
   webSocketServer.onEvent(webSocketEvent);
   webSocketServer.enableHeartbeat(15000, 3000, 2);
 
-  Serial.printf("[BLE & WiFi AP] ESP32-S3 Navi ready: join Wi-Fi '%s' (pass '%s') + AMS & ANCS!\n", wifiSsid.c_str(), wifiPass.c_str());
+  Serial.printf("[BLE & WiFi AP] ysiducnaga ready: join Wi-Fi '%s' (pass '%s') + AMS & ANCS!\n", wifiSsid.c_str(), wifiPass.c_str());
 }
 
 void loop() {

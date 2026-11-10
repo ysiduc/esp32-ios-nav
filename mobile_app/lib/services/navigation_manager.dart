@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/esp_payload.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
@@ -44,6 +45,13 @@ class NavigationManager extends ChangeNotifier {
   DateTime _lastGpsFixTime = DateTime.now();
   DateTime _lastUiNotifyTime = DateTime.now();
 
+  // Voice guidance (TTS) state & initial GPS fix tracking
+  static const String _prefVoiceKey = 'ysiducnaga_voice_guidance_enabled';
+  bool _isVoiceEnabled = true;
+  int _lastSpokenStepIndex = -1;
+  int _lastSpokenStage = 0; // 0: chưa đọc, 1: báo trước ~180m, 2: báo rẽ ngay <= 45m
+  bool _hasInitialLiveGpsFix = false;
+
   StreamSubscription<Position>? _positionStream;
   Timer? _blePushTimer;
   Timer? _simulationTimer;
@@ -60,6 +68,8 @@ class NavigationManager extends ChangeNotifier {
   bool get isNavigating => _isNavigating;
   bool get isSimulating => _isSimulating;
   bool get isRerouting => _isRerouting;
+  bool get isVoiceEnabled => _isVoiceEnabled;
+  bool get hasInitialLiveGpsFix => _hasInitialLiveGpsFix;
   NavRoute? get activeRoute => _activeRoute;
   NavRoute? get previewRoute => _previewRoute;
   int get closestPointIndex => _closestPointIndex;
@@ -215,11 +225,61 @@ class NavigationManager extends ChangeNotifier {
   NavStep? get upcomingStep => currentStep;
 
   NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
+    _loadVoicePreference();
     _initGps();
     _startIdleHeartbeat();
     bleService.getBatteryLevel().then((b) => _currentBattery = b);
     if (mediaService != null) {
       attachMediaService(mediaService);
+    }
+  }
+
+  Future<void> _loadVoicePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_prefVoiceKey);
+      if (saved != null) {
+        _isVoiceEnabled = saved;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setVoiceEnabled(bool enabled) async {
+    _isVoiceEnabled = enabled;
+    if (!enabled && Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('stopGuidance');
+      } catch (_) {}
+    }
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefVoiceKey, enabled);
+    } catch (_) {}
+  }
+
+  void speakVoicePrompt(String text, {bool force = false}) {
+    if ((!_isVoiceEnabled && !force) || text.trim().isEmpty) return;
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('speakGuidance', {'text': text.trim()});
+      } catch (_) {}
+    }
+  }
+
+  void testVoiceGuidance() {
+    if (_isNavigating && currentStep != null) {
+      final dist = _distanceToNextManeuver.round();
+      speakVoicePrompt(
+        dist > 30 ? 'Còn $dist mét, ${currentStep!.instruction}' : currentStep!.instruction,
+        force: true,
+      );
+    } else {
+      speakVoicePrompt(
+        'Hệ thống dẫn đường ysiducnaga đã sẵn sàng. Sau 150 mét, rẽ phải vào đường chính.',
+        force: true,
+      );
     }
   }
 
@@ -275,10 +335,25 @@ class NavigationManager extends ChangeNotifier {
         final lastPos = await Geolocator.getLastKnownPosition();
         if (lastPos != null) {
           _currentLocation = LatLng(lastPos.latitude, lastPos.longitude);
+          _rawGpsLocation = _currentLocation;
+          onLocationChanged?.call(_currentLocation!, effectiveHeading);
           notifyListeners();
         }
 
         _startContinuousGpsStream();
+
+        // Lấy ngay vị trí thực tế mới nhất khi mở app để bản đồ căn giữa chính xác tức thì
+        Geolocator.getCurrentPosition(
+          locationSettings: _buildLocationSettings(accuracy: LocationAccuracy.high),
+        ).then((pos) {
+          if (_isSimulating) return;
+          final liveLoc = LatLng(pos.latitude, pos.longitude);
+          _rawGpsLocation = liveLoc;
+          _currentLocation = liveLoc;
+          _hasInitialLiveGpsFix = true;
+          onLocationChanged?.call(liveLoc, effectiveHeading);
+          notifyListeners();
+        }).catchError((_) {});
       }
     } catch (_) {
       // Default fallback (Hanoi)
@@ -309,10 +384,12 @@ class NavigationManager extends ChangeNotifier {
       _lastGpsFixTime = DateTime.now();
 
       if (_isNavigating) {
+        _hasInitialLiveGpsFix = true;
         _updateUserPosition(rawLoc, spdKmh, hdg);
       } else {
-        final bool isFirstFix = _currentLocation == null;
-        if (isFirstFix) {
+        final bool isFirstLiveFix = !_hasInitialLiveGpsFix || _currentLocation == null;
+        if (isFirstLiveFix) {
+          _hasInitialLiveGpsFix = true;
           _currentLocation = rawLoc;
         } else {
           // Lọc mượt vị trí khi chưa dẫn đường để chấm xanh không nhảy giật cục
@@ -328,7 +405,7 @@ class NavigationManager extends ChangeNotifier {
         }
         onLocationChanged?.call(_currentLocation!, effectiveHeading);
         final now = DateTime.now();
-        if (isFirstFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
+        if (isFirstLiveFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
           _lastUiNotifyTime = now;
           notifyListeners();
         }
@@ -694,6 +771,14 @@ class NavigationManager extends ChangeNotifier {
     if (route.steps.isNotEmpty) {
       final targetStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
       _distanceToNextManeuver = const Distance().as(LengthUnit.Meter, _currentLocation!, targetStep.coordinate);
+      _lastSpokenStepIndex = _currentStepIndex;
+      _lastSpokenStage = 0;
+      final distM = (_distanceToNextManeuver / 10).round() * 10;
+      if (distM > 50) {
+        speakVoicePrompt('Bắt đầu dẫn đường. Sau $distM mét, ${targetStep.instruction}');
+      } else {
+        speakVoicePrompt('Bắt đầu dẫn đường. ${targetStep.instruction}');
+      }
     }
 
     // Đảm bảo luồng GPS liên tục và bộ nội suy 30 FPS luôn chạy
@@ -741,6 +826,12 @@ class NavigationManager extends ChangeNotifier {
     _smoothedHeading = initialHeading;
     _closestSegmentBearing = initialHeading;
     _hasHeadingLock = true;
+    _lastSpokenStepIndex = _currentStepIndex;
+    _lastSpokenStage = 0;
+    if (route.steps.isNotEmpty) {
+      final firstStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
+      speakVoicePrompt('Bắt đầu mô phỏng lộ trình. ${firstStep.instruction}');
+    }
     _updateUserPosition(polyline.first, 42.0, initialHeading);
 
     // Chạy mô phỏng ở tốc độ 30 FPS (33ms/tick, mỗi nhịp tiến ~0.39m dọc theo polyline)
@@ -762,6 +853,7 @@ class NavigationManager extends ChangeNotifier {
         _remainingTotalDistance = 0.0;
         _remainingEtaMinutes = 0;
         _currentSpeedKmh = 0.0;
+        speakVoicePrompt('Bạn đã đến điểm đến.');
         onLocationChanged?.call(_currentLocation!, effectiveHeading);
         notifyListeners();
         _sendCurrentPayloadToEsp32();
@@ -827,11 +919,47 @@ class NavigationManager extends ChangeNotifier {
         effectiveLoc,
         targetStep.coordinate,
       );
+      _lastSpokenStepIndex = _currentStepIndex;
+      _lastSpokenStage = 0;
+      if (directDistToStep > 240.0) {
+        final roundedDist = (directDistToStep / 50).round() * 50;
+        speakVoicePrompt('Tiếp tục đi $roundedDist mét, sau đó ${targetStep.instruction}');
+      }
       notifyListeners();
     }
 
     _distanceToNextManeuver = directDistToStep;
+    _checkAndSpeakManeuver(targetStep, directDistToStep);
     _updateRemainingMetrics();
+  }
+
+  void _checkAndSpeakManeuver(NavStep targetStep, double distMeters) {
+    if (!_isNavigating || !_isVoiceEnabled) return;
+    if (_lastSpokenStepIndex != _currentStepIndex) {
+      _lastSpokenStepIndex = _currentStepIndex;
+      _lastSpokenStage = 0;
+    }
+
+    // Chặng cuối: thông báo khi sắp tới đích (<= 30m)
+    if (targetStep.maneuverType == ManeuverType.arrive) {
+      if (distMeters <= 30.0 && _lastSpokenStage < 2) {
+        _lastSpokenStage = 2;
+        speakVoicePrompt('Bạn đã đến điểm đến.');
+      }
+      return;
+    }
+
+    // 1. Báo trước khi cách điểm rẽ từ 130m - 200m
+    if (distMeters <= 200.0 && distMeters >= 110.0 && _lastSpokenStage < 1) {
+      _lastSpokenStage = 1;
+      final roundedDist = (distMeters / 10).round() * 10;
+      speakVoicePrompt('Còn $roundedDist mét, ${targetStep.instruction}');
+    }
+    // 2. Báo rẽ trực tiếp khi cách điểm rẽ <= 45m
+    else if (distMeters <= 45.0 && _lastSpokenStage < 2) {
+      _lastSpokenStage = 2;
+      speakVoicePrompt(targetStep.instruction);
+    }
   }
 
   void _updateUserPosition(LatLng rawLocation, double speedKmh, double heading) {
@@ -963,6 +1091,11 @@ class NavigationManager extends ChangeNotifier {
             }
             _syncStepIndexWithPolylineProgress();
             _updateRemainingMetrics();
+            _lastSpokenStepIndex = _currentStepIndex;
+            _lastSpokenStage = 0;
+            if (currentStep != null) {
+              speakVoicePrompt('Đã cập nhật lộ trình mới. ${currentStep!.instruction}');
+            }
             onRouteChanged?.call();
             onLocationChanged?.call(_currentLocation ?? latestPos, effectiveHeading);
             _sendCurrentPayloadToEsp32();
@@ -1172,9 +1305,16 @@ class NavigationManager extends ChangeNotifier {
   /// Stop active navigation or simulation
   void stopNavigation() {
     _disableBackgroundNavigation();
+    if (Platform.isIOS) {
+      try {
+        _locationChannel.invokeMethod('stopGuidance');
+      } catch (_) {}
+    }
     _isNavigating = false;
     _isSimulating = false;
     _isRerouting = false;
+    _lastSpokenStepIndex = -1;
+    _lastSpokenStage = 0;
     _activeRoute = null; // Clear active route so minimap returns to standby mode!
     _previewRoute = null; // Also clear preview route to completely remove old route
     _currentStepIndex = 0;

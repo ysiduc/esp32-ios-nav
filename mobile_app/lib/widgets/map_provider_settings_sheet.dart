@@ -3,7 +3,7 @@ import '../models/map_provider.dart';
 import '../services/apple_maps_service.dart';
 import '../services/map_settings_service.dart';
 
-/// Modal Sheet cho phép người dùng chọn giữa Goong API và Apple Maps (Native)
+/// Modal Sheet chuẩn phong cách iOS cho phép chọn chế độ kết hợp Goong Search + Apple Maps Routing
 void showMapProviderSettingsSheet(BuildContext context) {
   showModalBottomSheet(
     context: context,
@@ -33,11 +33,8 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
         return Container(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           decoration: const BoxDecoration(
-            color: Color(0xFF131B26),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(
-              top: BorderSide(color: Color(0xFF00F0FF), width: 1.2),
-            ),
+            color: Color(0xFFF2F2F7),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -46,12 +43,12 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
               // Drag Handle
               Center(
                 child: Container(
-                  width: 40,
-                  height: 4,
+                  width: 38,
+                  height: 5,
                   margin: const EdgeInsets.only(bottom: 16),
                   decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(2.5),
                   ),
                 ),
               ),
@@ -60,13 +57,13 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    width: 40,
+                    height: 40,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF00F0FF).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
+                      color: const Color(0xFF007AFF).withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.alt_route_rounded, color: Color(0xFF00F0FF), size: 22),
+                    child: const Icon(Icons.alt_route_rounded, color: Color(0xFF007AFF), size: 22),
                   ),
                   const SizedBox(width: 12),
                   const Expanded(
@@ -74,17 +71,17 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Nhà cung cấp Bản đồ & Dẫn đường',
+                          'Dịch vụ Bản đồ & Dẫn đường',
                           style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
+                            color: Color(0xFF1C1C1E),
+                            fontSize: 17,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         SizedBox(height: 2),
                         Text(
-                          'Chọn dịch vụ tìm kiếm địa điểm và tính lộ trình',
-                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                          'Tuỳ chỉnh bộ máy tìm kiếm và tính toán lộ trình',
+                          style: TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
                         ),
                       ],
                     ),
@@ -92,18 +89,18 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
                 ],
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
 
               // Option 1: Hybrid Goong Search + Apple Maps Routing (iOS)
               _buildProviderCard(
                 provider: MapProvider.appleMaps,
                 title: 'Goong Tìm kiếm + Apple Maps Lộ trình',
                 badge: 'Khuyên dùng • Siêu mượt',
-                badgeColor: const Color(0xFF05FFA1),
+                badgeColor: const Color(0xFF34C759),
                 description:
                     'Tìm địa chỉ, số nhà, ngõ hẻm bằng Goong Map chuẩn Việt Nam; Tính toán lộ trình, ETA và dẫn đường Realtime 30 FPS bằng Apple Maps (MKDirections) gốc trên iPhone.',
                 icon: Icons.map_rounded,
-                iconColor: const Color(0xFF00F0FF),
+                iconColor: const Color(0xFF007AFF),
                 isSelected: current == MapProvider.appleMaps,
                 isSupportedOnDevice: AppleMapsService.isSupported,
                 onTap: () {
@@ -119,41 +116,17 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
                 provider: MapProvider.goong,
                 title: 'Goong API Toàn bộ (Tìm kiếm + Lộ trình)',
                 badge: 'Dùng Quota Key riêng',
-                badgeColor: const Color(0xFFFF9F1C),
+                badgeColor: const Color(0xFFFF9500),
                 description:
                     'Sử dụng Goong API cho cả tìm kiếm và tính lộ trình xe máy. Tiêu tốn lượt gọi Direction API từ Goong Config.',
                 icon: Icons.navigation_rounded,
-                iconColor: const Color(0xFFFF9F1C),
+                iconColor: const Color(0xFFFF9500),
                 isSelected: current == MapProvider.goong,
                 isSupportedOnDevice: true,
                 onTap: () {
                   _settings.setProvider(MapProvider.goong);
                   _showToast(context, 'Đã chuyển sang Goong API toàn bộ');
                 },
-              ),
-
-              const SizedBox(height: 16),
-
-              // Reversible note for user peace-of-mind
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0B111A),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.swap_horiz_rounded, color: Color(0xFF00F0FF), size: 18),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Bạn có thể chuyển đổi qua lại giữa Apple Maps và Goong bất cứ lúc nào trong Menu.',
-                        style: TextStyle(color: Colors.white60, fontSize: 11),
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ],
           ),
@@ -175,32 +148,37 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
     required VoidCallback onTap,
   }) {
     return InkWell(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(18),
       onTap: isSupportedOnDevice ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(15),
         decoration: BoxDecoration(
-          color: isSelected
-              ? iconColor.withValues(alpha: 0.12)
-              : const Color(0xFF0B111A),
-          borderRadius: BorderRadius.circular(14),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isSelected ? iconColor : Colors.white12,
-            width: isSelected ? 1.8 : 1.0,
+            color: isSelected ? iconColor : Colors.black.withValues(alpha: 0.06),
+            width: isSelected ? 2.0 : 1.0,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
-                color: iconColor.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(10),
+                color: iconColor.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(11),
               ),
-              child: Icon(icon, color: iconColor, size: 20),
+              child: Icon(icon, color: iconColor, size: 21),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -209,49 +187,43 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
                 children: [
                   Row(
                     children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: badgeColor.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: badgeColor.withValues(alpha: 0.5), width: 0.8),
-                        ),
+                      Flexible(
                         child: Text(
-                          badge,
-                          style: TextStyle(color: badgeColor, fontSize: 9, fontWeight: FontWeight.bold),
+                          title,
+                          style: const TextStyle(
+                            color: Color(0xFF1C1C1E),
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: badgeColor.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      badge,
+                      style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
                   const SizedBox(height: 6),
                   Text(
                     description,
-                    style: const TextStyle(color: Colors.white54, fontSize: 11, height: 1.3),
+                    style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12, height: 1.35),
                   ),
-                  if (!isSupportedOnDevice) ...[
-                    const SizedBox(height: 4),
-                    const Text(
-                      '⚠️ Chỉ khả dụng trên hệ điều hành iOS (iPhone/iPad).',
-                      style: TextStyle(color: Colors.orangeAccent, fontSize: 10),
-                    ),
-                  ],
                 ],
               ),
             ),
             const SizedBox(width: 8),
             Icon(
               isSelected ? Icons.check_circle_rounded : Icons.radio_button_off_rounded,
-              color: isSelected ? iconColor : Colors.white24,
-              size: 20,
+              color: isSelected ? iconColor : const Color(0xFFC7C7CC),
+              size: 22,
             ),
           ],
         ),
@@ -262,12 +234,11 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
   void _showToast(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: const Color(0xFF00F0FF),
+        content: Text(message, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        backgroundColor: const Color(0xFF007AFF),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
       ),
     );
   }
 }
-

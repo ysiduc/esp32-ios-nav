@@ -231,6 +231,17 @@ import AVFoundation
             result(nil)
           }
         }
+      case "speakGuidance":
+        if let args = call.arguments as? [String: Any],
+           let text = args["text"] as? String {
+          NavigationSpeechSynthesizer.shared.speak(text)
+        } else if let text = call.arguments as? String {
+          NavigationSpeechSynthesizer.shared.speak(text)
+        }
+        result(true)
+      case "stopGuidance":
+        NavigationSpeechSynthesizer.shared.stop()
+        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -898,4 +909,58 @@ class MapStreamer {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - NavigationSpeechSynthesizer (Native iOS Vietnamese Voice Guidance)
+// ─────────────────────────────────────────────────────────────────────────────
+final class NavigationSpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
+  static let shared = NavigationSpeechSynthesizer()
+  private let synthesizer = AVSpeechSynthesizer()
+
+  private override init() {
+    super.init()
+    synthesizer.delegate = self
+  }
+
+  func speak(_ text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    DispatchQueue.main.async {
+      do {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .mixWithOthers])
+        try session.setActive(true)
+      } catch {}
+
+      if self.synthesizer.isSpeaking {
+        self.synthesizer.stopSpeaking(at: .immediate)
+      }
+
+      let utterance = AVSpeechUtterance(string: trimmed)
+      utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN") ?? AVSpeechSynthesisVoice(language: "en-US")
+      utterance.rate = 0.51
+      utterance.pitchMultiplier = 1.0
+      utterance.volume = 1.0
+      self.synthesizer.speak(utterance)
+    }
+  }
+
+  func stop() {
+    DispatchQueue.main.async {
+      if self.synthesizer.isSpeaking {
+        self.synthesizer.stopSpeaking(at: .immediate)
+      }
+      do {
+        try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      } catch {}
+    }
+  }
+
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    do {
+      try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    } catch {}
+  }
+}
+
 

@@ -219,13 +219,14 @@ class BleService extends ChangeNotifier {
 
       for (final d in allKnown.values) {
         final pName = d.platformName;
-        final isEsp = pName.toLowerCase().contains('esp32') ||
-            pName.toLowerCase().contains('nav') ||
+        final isEsp = pName.toLowerCase().contains('ysiducnaga') ||
             pName.toLowerCase().contains('ysiduc') ||
+            pName.toLowerCase().contains('esp32') ||
+            pName.toLowerCase().contains('nav') ||
             pName.isEmpty; // iOS sometimes hides name until connected
 
         if (isEsp) {
-          final name = pName.isNotEmpty ? pName : 'ESP32-S3 Navi (Đã kết nối iOS)';
+          final name = pName.isNotEmpty ? pName : 'ysiducnaga';
           _systemBondedDevice = d;
           matched.add(d);
 
@@ -334,12 +335,95 @@ class BleService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Kết nối nhanh 1 chạm tới thiết bị ysiducnaga (hoặc ESP32 đã ghép nối)
+  Future<bool> quickConnectToYsiducnaga() async {
+    if (_isConnected) return true;
+    if (_isConnecting) return false;
+
+    // 1. Ưu tiên kiểm tra thiết bị đã ghép nối sẵn trong hệ thống Bluetooth iOS
+    final sysList = await checkSystemDevices();
+    if (sysList.isNotEmpty) {
+      final preferred = sysList.firstWhere(
+        (d) => d.platformName.toLowerCase().contains('ysiducnaga') ||
+               d.platformName.toLowerCase().contains('ysiduc'),
+        orElse: () => sysList.first,
+      );
+      final name = preferred.platformName.isNotEmpty ? preferred.platformName : 'ysiducnaga';
+      final ok = await connectToDevice(preferred, displayName: name);
+      if (ok) return true;
+    }
+
+    // 2. Nếu chưa ghép nối sẵn, quét nhanh tối đa 5 giây và tự động kết nối ngay khi thấy ysiducnaga
+    try {
+      final isSupported = await FlutterBluePlus.isSupported;
+      if (!isSupported) return false;
+
+      _isScanning = true;
+      notifyListeners();
+
+      final completer = Completer<BluetoothDevice?>();
+      String? foundName;
+
+      _scanSubscription?.cancel();
+      _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        for (final r in results) {
+          final advName = r.advertisementData.advName;
+          final platName = r.device.platformName;
+          final name = advName.isNotEmpty ? advName : platName;
+          final lower = name.toLowerCase();
+          final hasNavUuid = r.advertisementData.serviceUuids.any(
+            (u) => u.str.toUpperCase().contains('FFE0'),
+          );
+
+          if (name.isNotEmpty) {
+            final index = _discoveredDevices.indexWhere((item) => item.device.remoteId == r.device.remoteId);
+            if (index >= 0) {
+              _discoveredDevices[index] = BleDeviceItem(device: r.device, name: name, rssi: r.rssi);
+            } else {
+              _discoveredDevices.add(BleDeviceItem(device: r.device, name: name, rssi: r.rssi));
+            }
+          }
+
+          if (lower.contains('ysiducnaga') ||
+              lower.contains('ysiduc') ||
+              lower.contains('esp32') ||
+              hasNavUuid) {
+            if (!completer.isCompleted) {
+              foundName = name.isNotEmpty ? name : 'ysiducnaga';
+              completer.complete(r.device);
+            }
+          }
+        }
+        notifyListeners();
+      });
+
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+      if (!completer.isCompleted) {
+        completer.complete(null);
+      }
+
+      final targetDevice = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+      await stopScan();
+
+      if (targetDevice != null) {
+        return await connectToDevice(targetDevice, displayName: foundName ?? 'ysiducnaga');
+      }
+    } catch (e) {
+      _isScanning = false;
+      notifyListeners();
+    }
+    return false;
+  }
+
   /// Connect to ESP32 BLE device
   Future<bool> connectToDevice(BluetoothDevice device, {String? displayName}) async {
     if (_isConnecting) return false;
 
     _isConnecting = true;
-    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'ESP32 Device');
+    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'ysiducnaga');
     notifyListeners();
     _addLog('Đang kết nối tới: $_connectedDeviceName...', isTx: false);
 

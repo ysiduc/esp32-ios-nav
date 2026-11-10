@@ -18,6 +18,7 @@ import '../services/goong_service.dart';
 import '../services/apple_maps_service.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
+import '../services/saved_places_service.dart';
 import '../services/search_service.dart';
 import '../services/map_settings_service.dart';
 import '../widgets/map_provider_settings_sheet.dart';
@@ -34,18 +35,20 @@ class MapScreen extends StatefulWidget {
   const MapScreen({super.key, this.onOpenMenu});
 
   @override
-  State<MapScreen> createState() => _MapScreenState();
+  State<MapScreen> createState() => MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class MapScreenState extends State<MapScreen> {
   ml.MapLibreMapController? _mapController;
   final SearchService _searchService = SearchService();
+  final SavedPlacesService _savedPlacesService = SavedPlacesService();
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
   final GoogleMapsParser _googleMapsParser = GoogleMapsParser();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
 
   bool _mapReady = false;
+  bool _hasCenteredOnInitialUserLocation = false;
 
   // Coordinates default (Hanoi)
   LatLng _userPosition = const LatLng(21.0285, 105.8542);
@@ -65,7 +68,6 @@ class _MapScreenState extends State<MapScreen> {
   // 1: Place Selected Inspector Sheet
   // 2: Route Comparison & Alternatives
   int _viewMode = 0;
-  bool _isMuted = false;
   bool _isDrivingZoomOverview = false;
   MapThemeMode _currentTheme = MapThemeMode.streets; // Apple / Goong Streets (clean light)
 
@@ -104,6 +106,7 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     MapSettingsService().addListener(_onMapProviderChanged);
+    _savedPlacesService.addListener(_refreshSearchModal);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       if (navManager.currentLocation != null) {
@@ -125,6 +128,27 @@ class _MapScreenState extends State<MapScreen> {
       navManager.onLocationChanged = (loc, heading) async {
         if (!mounted) return;
         _userPosition = loc;
+        if (!navManager.isNavigating) {
+          // Tự động đưa bản đồ về đúng vị trí hiện tại của người dùng ngay khi mở app
+          if (!_hasCenteredOnInitialUserLocation &&
+              _mapController != null &&
+              _mapReady &&
+              _viewMode == 0 &&
+              _selectedPlace == null) {
+            if (navManager.hasInitialLiveGpsFix) {
+              _hasCenteredOnInitialUserLocation = true;
+            }
+            _mapController?.animateCamera(
+              ml.CameraUpdate.newCameraPosition(
+                ml.CameraPosition(
+                  target: ml.LatLng(loc.latitude, loc.longitude),
+                  zoom: 16.5,
+                ),
+              ),
+            );
+          }
+          return;
+        }
         if (navManager.isNavigating) {
           final now = DateTime.now();
           if (now.difference(_lastFastLineUpdate).inMilliseconds >= 90 && !_isUpdatingRouteLine) {
@@ -201,14 +225,22 @@ class _MapScreenState extends State<MapScreen> {
     _mapController = controller;
     _mapReady = true;
 
-    // Move camera to user position
+    // Move camera to user position immediately on startup
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final pos = navManager.currentLocation ?? _userPosition;
+    if (navManager.hasInitialLiveGpsFix && navManager.currentLocation != null) {
+      _hasCenteredOnInitialUserLocation = true;
+    }
     controller.animateCamera(
       ml.CameraUpdate.newCameraPosition(
         ml.CameraPosition(target: ml.LatLng(pos.latitude, pos.longitude), zoom: 16.5),
       ),
     );
+  }
+
+  /// Được gọi từ Menu 3 gạch khi người dùng chọn một địa điểm đã lưu
+  void selectSavedPlace(MapPlace place, {bool autoRoute = false}) {
+    _onPlaceClicked(place, autoCalculateRoutes: autoRoute);
   }
 
   /// Update route polyline on the MapLibre map using Apple Maps styling
@@ -431,6 +463,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     MapSettingsService().removeListener(_onMapProviderChanged);
+    _savedPlacesService.removeListener(_refreshSearchModal);
     _debounceTimer?.cancel();
     _recenterTimer?.cancel();
     _vehiclePuckNotifier.dispose();
@@ -1050,12 +1083,7 @@ class _MapScreenState extends State<MapScreen> {
                     onTap: _showMapThemePicker,
                   ),
                   const SizedBox(height: 10),
-                  _buildCircularGlassButton(
-                    icon: Icons.explore_rounded,
-                    iconColor: const Color(0xFFFF3B30),
-                    tooltip: 'Hướng Bắc',
-                    onTap: () => _mapController?.animateCamera(ml.CameraUpdate.bearingTo(0.0)),
-                  ),
+                  _buildQuickBleConnectButton(bleService),
                   const SizedBox(height: 10),
                   _buildAppleVerticalControlPill(navManager, isDriving),
                 ],
@@ -1090,9 +1118,16 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   const SizedBox(height: 12),
                   _buildCircularGlassButton(
-                    icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                    tooltip: 'Âm thanh',
-                    onTap: () => setState(() => _isMuted = !_isMuted),
+                    icon: navManager.isVoiceEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                    iconColor: navManager.isVoiceEnabled ? const Color(0xFF007AFF) : Colors.black45,
+                    tooltip: 'Giọng nói chỉ đường',
+                    onTap: () {
+                      final nextState = !navManager.isVoiceEnabled;
+                      navManager.setVoiceEnabled(nextState);
+                      if (nextState) {
+                        navManager.testVoiceGuidance();
+                      }
+                    },
                   ),
                   const SizedBox(height: 12),
                   _buildCircularGlassButton(
@@ -1315,6 +1350,270 @@ class _MapScreenState extends State<MapScreen> {
         ),
         child: Icon(icon, color: iconColor ?? Colors.black87, size: 22),
       ),
+    );
+  }
+
+  /// Nút Kết nối nhanh Bluetooth ysiducnaga (thay thế nút hình la bàn cũ)
+  Widget _buildQuickBleConnectButton(BleService bleService) {
+    final isConnected = bleService.isConnected;
+    final isBusy = bleService.isConnecting || bleService.isScanning;
+
+    return GestureDetector(
+      onTap: () => _onQuickBleConnectTapped(bleService),
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white.withValues(alpha: 0.94),
+          border: Border.all(
+            color: isConnected
+                ? const Color(0xFF34C759)
+                : (isBusy ? const Color(0xFF007AFF) : Colors.black.withValues(alpha: 0.08)),
+            width: isConnected || isBusy ? 1.8 : 1.0,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: isConnected
+                  ? const Color(0xFF34C759).withValues(alpha: 0.25)
+                  : Colors.black.withValues(alpha: 0.12),
+              blurRadius: 12,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (isBusy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  color: Color(0xFF007AFF),
+                ),
+              )
+            else
+              Icon(
+                isConnected ? Icons.bluetooth_connected_rounded : Icons.bluetooth_rounded,
+                color: isConnected ? const Color(0xFF34C759) : const Color(0xFF007AFF),
+                size: 22,
+              ),
+            if (isConnected)
+              Positioned(
+                right: 7,
+                top: 7,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: bleService.isWifiConnected
+                        ? const Color(0xFF34C759)
+                        : const Color(0xFF007AFF),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onQuickBleConnectTapped(BleService bleService) async {
+    if (bleService.isConnected) {
+      _showQuickBleStatusSheet(bleService);
+      return;
+    }
+    if (bleService.isConnecting || bleService.isScanning) return;
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF007AFF),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        duration: const Duration(seconds: 2),
+        content: const Row(
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Đang kết nối nhanh tới ysiducnaga...',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final ok = await bleService.quickConnectToYsiducnaga();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFF34C759),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          duration: const Duration(seconds: 2),
+          content: Row(
+            children: [
+              const Icon(Icons.bluetooth_connected_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Đã kết nối ${bleService.connectedDeviceName ?? "ysiducnaga"} thành công!',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else {
+      _showQuickBleStatusSheet(bleService);
+    }
+  }
+
+  void _showQuickBleStatusSheet(BleService bleService) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return AnimatedBuilder(
+          animation: bleService,
+          builder: (context, _) {
+            final isConn = bleService.isConnected;
+            final isWifi = bleService.isWifiConnected;
+            return Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF2F2F7),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 38,
+                      height: 5,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(2.5),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: (isConn ? const Color(0xFF34C759) : const Color(0xFF007AFF))
+                                .withValues(alpha: 0.14),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            isConn ? Icons.bluetooth_connected_rounded : Icons.bluetooth_searching_rounded,
+                            color: isConn ? const Color(0xFF34C759) : const Color(0xFF007AFF),
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isConn
+                                    ? (bleService.connectedDeviceName ?? 'ysiducnaga')
+                                    : 'Chưa kết nối ysiducnaga',
+                                style: const TextStyle(
+                                  color: Color(0xFF1C1C1E),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                isConn
+                                    ? (isWifi
+                                        ? 'Đã kết nối BLE + Wi-Fi Stream (${bleService.wifiIp})'
+                                        : 'Đã kết nối Bluetooth BLE • Sẵn sàng dẫn đường')
+                                    : 'Bật nguồn màn hình ESP32 (ysiducnaga) để kết nối nhanh',
+                                style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12.5),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isConn ? const Color(0xFFFF3B30) : const Color(0xFF007AFF),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: Icon(
+                            isConn ? Icons.link_off_rounded : Icons.flash_on_rounded,
+                            size: 19,
+                          ),
+                          label: Text(
+                            isConn ? 'Ngắt kết nối' : 'Quét & Kết nối lại',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5),
+                          ),
+                          onPressed: () async {
+                            if (isConn) {
+                              await bleService.disconnect();
+                              if (ctx.mounted) Navigator.pop(ctx);
+                            } else {
+                              final ok = await bleService.quickConnectToYsiducnaga();
+                              if (ok && ctx.mounted) Navigator.pop(ctx);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1821,6 +2120,109 @@ class _MapScreenState extends State<MapScreen> {
                                     ),
                                   ),
 
+                                  // Section 0: "Địa điểm đã lưu" (Saved Places)
+                                  if (_savedPlacesService.savedPlaces.isNotEmpty) ...[
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        const Row(
+                                          children: [
+                                            Icon(Icons.bookmark_rounded, color: Color(0xFFFF9500), size: 20),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              'Địa điểm đã lưu',
+                                              style: TextStyle(
+                                                fontSize: 19,
+                                                fontWeight: FontWeight.bold,
+                                                color: Colors.black87,
+                                                letterSpacing: -0.3,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        GestureDetector(
+                                          onTap: () {
+                                            Navigator.pop(modalCtx);
+                                            showSavedPlacesSheet(
+                                              context,
+                                              onSelectPlace: (p, {bool autoRoute = false}) {
+                                                _onPlaceClicked(p, autoCalculateRoutes: autoRoute);
+                                              },
+                                            );
+                                          },
+                                          child: const Text(
+                                            'Xem tất cả',
+                                            style: TextStyle(color: Color(0xFF007AFF), fontSize: 14, fontWeight: FontWeight.w600),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      margin: const EdgeInsets.only(bottom: 22),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(16),
+                                        boxShadow: [
+                                          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        children: _savedPlacesService.savedPlaces.take(4).map((p) {
+                                          return Column(
+                                            children: [
+                                              ListTile(
+                                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                                                leading: const Icon(Icons.bookmark_rounded, color: Color(0xFFFF9500), size: 22),
+                                                title: Text(
+                                                  p.name,
+                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                subtitle: Text(
+                                                  p.displayName,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(color: Colors.black45, fontSize: 13),
+                                                ),
+                                                trailing: GestureDetector(
+                                                  onTap: () {
+                                                    Navigator.pop(modalCtx);
+                                                    _onPlaceClicked(p, autoCalculateRoutes: true);
+                                                  },
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                    decoration: BoxDecoration(
+                                                      color: const Color(0xFF007AFF),
+                                                      borderRadius: BorderRadius.circular(14),
+                                                    ),
+                                                    child: const Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        Icon(Icons.directions_rounded, color: Colors.white, size: 15),
+                                                        SizedBox(width: 4),
+                                                        Text(
+                                                          'Đi',
+                                                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                                onTap: () {
+                                                  Navigator.pop(modalCtx);
+                                                  _onPlaceClicked(p);
+                                                },
+                                              ),
+                                              const Divider(height: 1, indent: 48, color: Colors.black12),
+                                            ],
+                                          );
+                                        }).toList(),
+                                      ),
+                                    ),
+                                  ],
+
                                   // Section 1: "Gần đây >"
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2133,27 +2535,52 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // Secondary Button: Info / Coordinates
+                  // Secondary Button: Save / Bookmark Place ("Lưu địa điểm" / "Đã lưu")
                   Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFE5F0FF),
-                        foregroundColor: const Color(0xFF007AFF),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      icon: const Icon(Icons.explore_outlined, size: 20),
-                      label: const Text(
-                        'Trang web',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(
-                          text: '${place.coordinate.latitude.toStringAsFixed(6)}, ${place.coordinate.longitude.toStringAsFixed(6)}',
-                        ));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Đã sao chép tọa độ GPS vào bộ nhớ tạm')),
+                    child: Builder(
+                      builder: (context) {
+                        final isSaved = _savedPlacesService.isSaved(place);
+                        return ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isSaved
+                                ? const Color(0xFFFF9500).withValues(alpha: 0.16)
+                                : const Color(0xFFE5F0FF),
+                            foregroundColor: isSaved
+                                ? const Color(0xFFFF9500)
+                                : const Color(0xFF007AFF),
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          ),
+                          icon: Icon(
+                            isSaved ? Icons.bookmark_added_rounded : Icons.bookmark_add_outlined,
+                            size: 20,
+                          ),
+                          label: Text(
+                            isSaved ? 'Đã lưu' : 'Lưu địa điểm',
+                            style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: () async {
+                            final resolved = await _resolvePlaceCoordinateIfNeeded(place);
+                            final nowSaved = await _savedPlacesService.toggleSaved(resolved);
+                            if (!mounted) return;
+                            setState(() {});
+                            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                backgroundColor: nowSaved ? const Color(0xFFFF9500) : const Color(0xFF1C1C1E),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                duration: const Duration(seconds: 2),
+                                content: Text(
+                                  nowSaved
+                                      ? '⭐ Đã lưu "${resolved.name}" vào Địa điểm đã lưu'
+                                      : 'Đã bỏ lưu "${resolved.name}"',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            );
+                          },
                         );
                       },
                     ),
@@ -2173,7 +2600,7 @@ class _MapScreenState extends State<MapScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Xếp hạng & Chi tiết', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87)),
+                    const Text('Thông tin địa điểm', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87)),
                     const SizedBox(height: 6),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2189,8 +2616,8 @@ class _MapScreenState extends State<MapScreen> {
                     const Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Dịch vụ:', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                        Text('Hoạt động bình thường', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF34C759))),
+                        Text('Định tuyến:', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                        Text('Goong Search • Apple Maps Realtime', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF34C759))),
                       ],
                     ),
                   ],
@@ -2199,7 +2626,7 @@ class _MapScreenState extends State<MapScreen> {
 
               const SizedBox(height: 12),
 
-              // Bottom Action Bar: + (Lưu), ⭐ (Yêu thích), 👍 (Thích), ••• (Khác)
+              // Bottom Action Bar: Gắn nhãn nhanh Nhà riêng / Công ty / Yêu thích / Danh sách đã lưu
               Container(
                 height: 46,
                 decoration: BoxDecoration(
@@ -2209,13 +2636,59 @@ class _MapScreenState extends State<MapScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    IconButton(icon: const Icon(Icons.add_rounded, color: Colors.black87), onPressed: () {}),
+                    IconButton(
+                      tooltip: 'Lưu làm Nhà riêng',
+                      icon: const Icon(Icons.home_rounded, color: Color(0xFF007AFF)),
+                      onPressed: () async {
+                        final resolved = await _resolvePlaceCoordinateIfNeeded(place);
+                        await _savedPlacesService.savePlace(resolved, customName: 'Nhà riêng (${resolved.name})', tag: 'Nhà riêng');
+                        if (!mounted) return;
+                        setState(() {});
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('🏠 Đã lưu làm địa chỉ Nhà riêng')),
+                        );
+                      },
+                    ),
                     Container(width: 1, height: 20, color: Colors.black12),
-                    IconButton(icon: const Icon(Icons.star_border_rounded, color: Colors.black87), onPressed: () {}),
+                    IconButton(
+                      tooltip: 'Lưu làm Công ty',
+                      icon: const Icon(Icons.business_center_rounded, color: Color(0xFF5856D6)),
+                      onPressed: () async {
+                        final resolved = await _resolvePlaceCoordinateIfNeeded(place);
+                        await _savedPlacesService.savePlace(resolved, customName: 'Công ty (${resolved.name})', tag: 'Công ty');
+                        if (!mounted) return;
+                        setState(() {});
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('🏢 Đã lưu làm địa chỉ Công ty')),
+                        );
+                      },
+                    ),
                     Container(width: 1, height: 20, color: Colors.black12),
-                    IconButton(icon: const Icon(Icons.thumb_up_alt_outlined, color: Colors.black87), onPressed: () {}),
+                    IconButton(
+                      tooltip: 'Lưu Yêu thích',
+                      icon: Icon(
+                        _savedPlacesService.isSaved(place) ? Icons.star_rounded : Icons.star_border_rounded,
+                        color: const Color(0xFFFF9500),
+                      ),
+                      onPressed: () async {
+                        final resolved = await _resolvePlaceCoordinateIfNeeded(place);
+                        await _savedPlacesService.toggleSaved(resolved, tag: 'Yêu thích');
+                        if (mounted) setState(() {});
+                      },
+                    ),
                     Container(width: 1, height: 20, color: Colors.black12),
-                    IconButton(icon: const Icon(Icons.more_horiz_rounded, color: Colors.black87), onPressed: () {}),
+                    IconButton(
+                      tooltip: 'Mở danh sách đã lưu',
+                      icon: const Icon(Icons.bookmarks_rounded, color: Colors.black87),
+                      onPressed: () {
+                        showSavedPlacesSheet(
+                          context,
+                          onSelectPlace: (p, {bool autoRoute = false}) {
+                            _onPlaceClicked(p, autoCalculateRoutes: autoRoute);
+                          },
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
