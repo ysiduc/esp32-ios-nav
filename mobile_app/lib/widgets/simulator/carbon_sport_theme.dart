@@ -98,42 +98,39 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // Tên người gửi + Nội dung tin nhắn (thu nhỏ, thả trôi marquee nếu dài)
+          // Tên người gửi (cố định, không thả trôi)
           Positioned(
             left: 184,
             top: 48,
             width: 110,
-            height: 78,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                MarqueeText(
-                  text: mockData.sender,
-                  width: 110,
-                  style: GoogleFonts.plusJakartaSans(
-                    color: const Color(0xFFFACC15),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 11.0,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Expanded(
-                  child: ClipRect(
-                    child: MarqueeText(
-                      text: mockData.message,
-                      width: 110,
-                      style: GoogleFonts.plusJakartaSans(
-                        color: Colors.white,
-                        fontSize: 10.0,
-                        fontWeight: FontWeight.w500,
-                        height: 1.25,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            child: Text(
+              mockData.sender,
+              style: GoogleFonts.plusJakartaSans(
+                color: const Color(0xFFFACC15),
+                fontWeight: FontWeight.w700,
+                fontSize: 11.0,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          // Nội dung tin nhắn (xuống dòng đến hết ô, không cần trôi)
+          Positioned(
+            left: 184,
+            top: 66,
+            width: 110,
+            height: 64,
+            child: Text(
+              mockData.message,
+              style: GoogleFonts.plusJakartaSans(
+                color: Colors.white,
+                fontSize: 10.0,
+                fontWeight: FontWeight.w500,
+                height: 1.25,
+              ),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
 

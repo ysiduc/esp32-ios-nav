@@ -82,38 +82,39 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 2 - Tin nhắn (Vùng bên trong: x: 14..146, y: 142..218, thả trôi nếu dài) ---
-          // "From: Người gửi" (thả trôi nếu dài hơn 124px)
+          // --- Cửa sổ 2 - Tin nhắn (Vùng bên trong: x: 14..146, y: 142..218) ---
+          // "From: Người gửi" ngang hàng với hộp thư (hộp thư x: 14..36, y: 155..170), cố định không trôi
           Positioned(
-            left: 16,
-            top: 146,
-            child: MarqueeText(
-              text: 'From: ${mockData.sender}',
-              width: 124,
+            left: 42,
+            top: 155,
+            width: 98,
+            child: Text(
+              'From: ${mockData.sender}',
               style: GoogleFonts.vt323(
-                fontSize: 12,
+                fontSize: 12.5,
                 color: Colors.black,
                 fontWeight: FontWeight.bold,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // Nội dung tin nhắn (Nằm bên dưới phong bì, thả trôi nếu dài hơn 124px)
+          // Nội dung tin nhắn (xuống dòng đến hết ô dưới phong bì, không cần trôi)
           Positioned(
             left: 16,
-            top: 166,
+            top: 174,
             width: 124,
-            height: 48,
-            child: ClipRect(
-              child: MarqueeText(
-                text: mockData.message,
-                width: 124,
-                style: GoogleFonts.vt323(
-                  fontSize: 11.5,
-                  color: Colors.black,
-                  height: 1.15,
-                ),
+            height: 44,
+            child: Text(
+              mockData.message,
+              style: GoogleFonts.vt323(
+                fontSize: 11.5,
+                color: Colors.black,
+                height: 1.15,
               ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
 

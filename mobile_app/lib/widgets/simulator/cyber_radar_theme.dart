@@ -89,40 +89,39 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Tên người gửi & Nội dung tin nhắn (nằm lọt trong khung hồng w: 86, thả trôi)
+          // Tên người gửi (cố định, không thả trôi)
           Positioned(
             left: 218,
             top: 50,
             width: 86,
-            height: 105,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                MarqueeText(
-                  text: mockData.sender,
-                  width: 86,
-                  style: GoogleFonts.chakraPetch(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFFFF007F),
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Expanded(
-                  child: ClipRect(
-                    child: MarqueeText(
-                      text: mockData.message,
-                      width: 86,
-                      style: GoogleFonts.chakraPetch(
-                        fontSize: 10.0,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                        height: 1.2,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            child: Text(
+              mockData.sender,
+              style: GoogleFonts.chakraPetch(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFFF007F),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          // Nội dung tin nhắn (xuống dòng đến hết ô, không cần trôi)
+          Positioned(
+            left: 218,
+            top: 68,
+            width: 86,
+            height: 85,
+            child: Text(
+              mockData.message,
+              style: GoogleFonts.chakraPetch(
+                fontSize: 10.0,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+                height: 1.2,
+              ),
+              maxLines: 5,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
 

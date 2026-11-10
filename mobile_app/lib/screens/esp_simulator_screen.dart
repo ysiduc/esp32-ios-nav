@@ -206,9 +206,50 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
       final bytes = await file.readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded != null) {
-        // Resize chính xác 320x240 chuẩn màn hình ST7789
-        final resized = img.copyResize(decoded, width: 320, height: 240);
-        final jpgBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 80));
+        // Cắt ảnh theo tỉ lệ 4:3 từ tâm (tránh méo / mờ khi ảnh chụp từ iPhone là ảnh dọc)
+        final srcW = decoded.width;
+        final srcH = decoded.height;
+        int cropW = srcW;
+        int cropH = srcH;
+        int cropX = 0;
+        int cropY = 0;
+
+        if (srcW * 3 > srcH * 4) {
+          cropW = (srcH * 4) ~/ 3;
+          cropX = (srcW - cropW) ~/ 2;
+        } else {
+          cropH = (srcW * 3) ~/ 4;
+          cropY = (srcH - cropH) ~/ 2;
+        }
+
+        final cropped = img.copyCrop(
+          decoded,
+          x: cropX,
+          y: cropY,
+          width: cropW,
+          height: cropH,
+        );
+
+        // Resize chính xác 320x240 chuẩn màn hình ST7789 bằng bộ lọc cubic sắc nét
+        final resized = img.copyResize(
+          cropped,
+          width: 320,
+          height: 240,
+          interpolation: img.Interpolation.cubic,
+        );
+        final jpgBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
+
+        // Lưu bản 320x240 này vào file để Simulator hiển thị nét tuyệt đối
+        final processedPath = '${file.parent.path}/esp32_wallpaper_320x240.jpg';
+        await File(processedPath).writeAsBytes(jpgBytes);
+
+        if (mounted) {
+          setState(() {
+            _customBgPath = processedPath;
+          });
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_prefBgPathKey, processedPath);
 
         // 1. Gửi cấu hình theme sang ESP32
         _syncThemeToEsp32(ESP32Interface.customStatic, bgBytes: jpgBytes);
@@ -456,7 +497,12 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
 
             return InkWell(
               borderRadius: BorderRadius.circular(12),
-              onTap: () => _selectTheme(theme),
+              onTap: () {
+                _selectTheme(theme);
+                if (theme == ESP32Interface.customStatic) {
+                  _pickCustomBackground();
+                }
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),

@@ -829,10 +829,10 @@ private:
     tft.drawFastHLine(0, 216, 320, tft.color565(51, 65, 85));
   }
 
-  void _updateTheme0CustomStatic() {
+  void _updateTheme0CustomStatic(bool forceRedraw = false) {
     uint16_t cWb = tft.color565(15, 23, 42);
 
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+    if (forceRedraw || _clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
       _lastDrawnHour = _clockHour;
       _lastDrawnMin = _clockMin;
       char tBuf[16];
@@ -842,14 +842,14 @@ private:
       tft.drawString(tBuf, 10, 220, 2);
     }
 
-    if (_notifDirty) {
+    if (forceRedraw || _notifDirty) {
       _notifDirty = false;
       tft.fillRect(70, 219, 150, 18, cWb);
       const char* notifStr = (_notifShown && _notif.title[0] != '\0') ? _notif.title : "Chua co thong bao";
       _drawUtf8String(notifStr, 72, 220, tft.color565(226, 232, 240), cWb);
     }
 
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
+    if (forceRedraw || strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
       strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
       tft.fillRect(230, 219, 85, 18, cWb);
       const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nhac tat";
@@ -873,7 +873,7 @@ private:
       for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
       _drawUtf8StringTransparent(dateBuf, 22, 70, TFT_WHITE);
 
-      // 3. Music Duration (chỉ vẽ khi durationSec > 0, không thêm mặc định 01:24)
+      // 3. Music Duration (chỉ vẽ khi durationSec > 0)
       if (_navData.songDurationSec > 0) {
         char elBuf[16], durBuf[16];
         snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
@@ -883,19 +883,19 @@ private:
         tft.setTextColor(TFT_WHITE);
         tft.drawString(durBuf, 262, 211, 1);
       }
-    }
 
-    // 4. Notification (thu nhỏ, thả trôi nếu dài)
-    if (_notifShown && _notif.title[0] != '\0') {
-      _drawSongTitle(_notif.title, 184, 50, 110, 15, tft.color565(250, 204, 21), tft.color565(15, 14, 14), isRedraw);
-      if (_notif.message[0] != '\0') {
-        _drawSongTitle(_notif.message, 184, 68, 110, 15, TFT_WHITE, tft.color565(15, 14, 14), isRedraw);
+      // 4. Notification: Người gửi cố định (vàng), nội dung xuống dòng hết ô không trôi
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 184, 50, tft.color565(250, 204, 21));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 184, 68, 110, 4, TFT_WHITE, 15);
+        }
       }
     }
 
     // 5. Song Title (nhỏ lại 2px, dời xuống 3px: y=201, thả trôi nếu dài hơn 175px)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 60, 201, 175, 16, tft.color565(254, 240, 138), tft.color565(28, 25, 23), isRedraw);
+      _drawSongTitle(_navData.songTitle, 60, 201, 175, 16, tft.color565(254, 240, 138), tft.color565(37, 27, 18), isRedraw);
     }
   }
 
@@ -923,19 +923,19 @@ private:
         tft.setTextColor(tft.color565(251, 146, 60));
         tft.drawString(ratioBuf, 240, 188, 1);
       }
-    }
 
-    // 4. Notification (trong khung hồng x: 218..304, w: 86, thả trôi)
-    if (_notifShown && _notif.title[0] != '\0') {
-      _drawSongTitle(_notif.title, 218, 50, 86, 15, tft.color565(255, 0, 127), tft.color565(7, 6, 20), isRedraw);
-      if (_notif.message[0] != '\0') {
-        _drawSongTitle(_notif.message, 218, 68, 86, 15, TFT_WHITE, tft.color565(7, 6, 20), isRedraw);
+      // 4. Notification: Người gửi cố định (hồng neon), nội dung xuống dòng hết ô không trôi
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 218, 50, tft.color565(255, 0, 127));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 218, 68, 86, 4, TFT_WHITE, 15);
+        }
       }
     }
 
     // 5. Song Title (thanh nhạc đáy: x: 52, y: 188, w: 180, thả trôi)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 52, 188, 180, 16, tft.color565(103, 232, 249), tft.color565(7, 6, 20), isRedraw);
+      _drawSongTitle(_navData.songTitle, 52, 188, 180, 16, tft.color565(103, 232, 249), tft.color565(13, 13, 41), isRedraw);
     }
   }
 
@@ -953,42 +953,43 @@ private:
       snprintf(dBuf, sizeof(dBuf), "%02d/%02d/%04d", _clockDay, _clockMonth, _clockYear);
       _drawCentreUtf8StringTransparent(dBuf, 76, 82, TFT_BLACK);
 
-      // 3. Music Duration (chỉ hiện khi durationSec > 0, KHÔNG tự thêm 01:24)
+      // 3. Music Duration (chỉ hiện khi durationSec > 0)
       if (_navData.songDurationSec > 0) {
         char elBuf[16];
         snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
         tft.setTextColor(TFT_BLACK);
         tft.drawString(elBuf, 228, 151, 1);
       }
-    }
 
-    // 4. Notification (chỉ nằm trong ô Mail x: 16..140, w: 124, dài quá thì thả trôi)
-    if (_notifShown && _notif.title[0] != '\0') {
-      char fromBuf[48];
-      snprintf(fromBuf, sizeof(fromBuf), "From: %s", _notif.title);
-      _drawSongTitle(fromBuf, 16, 146, 124, 15, TFT_BLACK, TFT_WHITE, isRedraw);
-      if (_notif.message[0] != '\0') {
-        _drawSongTitle(_notif.message, 16, 166, 124, 15, TFT_BLACK, TFT_WHITE, isRedraw);
+      // 4. Notification: "From: Người gửi" ngang hàng với hộp thư (hộp thư x: 14..36, y: 155..170).
+      //    Tên người gửi cố định không trôi. Nội dung tin nhắn xuống dòng đến hết ô (x: 16, y: 174, w: 124, 3 lines) không trôi.
+      if (_notifShown && _notif.title[0] != '\0') {
+        char fromBuf[48];
+        snprintf(fromBuf, sizeof(fromBuf), "From: %s", _notif.title);
+        _drawUtf8StringTransparent(fromBuf, 42, 155, TFT_BLACK);
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 16, 174, 124, 3, TFT_BLACK, 15);
+        }
       }
     }
 
-    // 5. Song Title (thả trôi nếu dài hơn 110px, trong khung đen x: 178, y: 65, w: 110, h: 14)
+    // 5. Song Title (thả trôi nếu dài hơn 110px, trong khung đen x: 176, y: 63, w: 112, h: 14)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 178, 65, 110, 14, TFT_WHITE, TFT_BLACK, isRedraw);
+      _drawSongTitle(_navData.songTitle, 176, 63, 112, 14, TFT_WHITE, TFT_BLACK, isRedraw);
     }
   }
 
   // --- GIAO DIỆN 4: 80s SYNTHWAVE CASSETTE ---
   void _drawTheme4CassetteContent(bool isRedraw) {
     if (isRedraw) {
-      // 1. Clock (HH:mm - căn giữa trong khung tương phản cao)
+      // 1. Clock (HH:mm - không hiện giây)
       char timeBuf[16];
       snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.setTextColor(TFT_WHITE); // trắng trong suốt
-      tft.drawCentreString(timeBuf, 80, 32, 6);
+      tft.setTextColor(TFT_WHITE);
+      tft.drawCentreString(timeBuf, 80, 28, 6);
 
       // 2. Date
-      char dateBuf[32];
+      char dateBuf[48];
       snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d TH%02d %04d",
                _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
       _drawCentreUtf8StringTransparent(dateBuf, 80, 84, tft.color565(34, 211, 238));
@@ -1002,22 +1003,23 @@ private:
         tft.drawString(elBuf, 172, 196, 2);
         tft.drawRightString(durBuf, 308, 196, 2);
       }
-    }
 
-    // 4. Notification (hộp x: 22..142, w: 120, thả trôi)
-    if (_notifShown && _notif.title[0] != '\0') {
-      _drawSongTitle(_notif.title, 22, 144, 120, 15, tft.color565(244, 114, 182), tft.color565(18, 14, 30), isRedraw);
-      if (_notif.message[0] != '\0') {
-        _drawSongTitle(_notif.message, 22, 162, 120, 15, tft.color565(165, 243, 252), tft.color565(18, 14, 30), isRedraw);
+      // 4. Notification: Người gửi cố định, nội dung xuống dòng hết ô không cần trôi
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 22, 142, tft.color565(251, 146, 60));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 22, 158, 120, 3, tft.color565(165, 243, 252), 15);
+        }
       }
     }
 
-    // 5. Cuộn băng Cassette: Tên bài hát (nhãn trên) & Ca sĩ (nhãn dưới)
+    // 5. Cuộn băng Cassette: Tên bài hát in hoa trên dải nhãn trên (thả trôi nếu dài hơn 120px)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 176, 58, 124, 16, TFT_WHITE, tft.color565(91, 33, 182), isRedraw);
-    }
-    if (_navData.songArtist[0] != '\0') {
-      _drawSongTitle(_navData.songArtist, 176, 120, 124, 16, tft.color565(34, 211, 238), tft.color565(22, 12, 42), isRedraw);
+      char upperSong[64];
+      strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
+      upperSong[sizeof(upperSong) - 1] = '\0';
+      for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
+      _drawSongTitle(upperSong, 175, 58, 120, 16, TFT_WHITE, tft.color565(47, 10, 62), isRedraw);
     }
   }
 
@@ -1049,13 +1051,13 @@ private:
       // Vẽ khung badge bài hát màu vàng viền đen phong cách Comic
       tft.fillRoundRect(184, 16, 124, 24, 4, tft.color565(250, 204, 21));
       tft.drawRoundRect(184, 16, 124, 24, 4, TFT_BLACK);
-    }
 
-    // 4. Notification trong bóng thoại: Hiện ĐẦY ĐỦ người gửi + nội dung, thả trôi
-    if (_notifShown && _notif.title[0] != '\0') {
-      _drawSongTitle(_notif.title, 32, 146, 120, 15, tft.color565(234, 88, 12), TFT_WHITE, isRedraw);
-      if (_notif.message[0] != '\0') {
-        _drawSongTitle(_notif.message, 32, 166, 120, 15, TFT_BLACK, TFT_WHITE, isRedraw);
+      // 4. Notification trong bóng thoại: Người gửi cố định, nội dung xuống dòng hết ô không trôi
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 32, 142, tft.color565(234, 88, 12));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 32, 160, 120, 3, TFT_BLACK, 15);
+        }
       }
     }
 
@@ -1064,8 +1066,10 @@ private:
       _drawSongTitle(_navData.songTitle, 188, 20, 116, 16, TFT_BLACK, tft.color565(250, 204, 21), isRedraw);
     }
   }
+
   void _renderStandbyWatchface() {
     if (_watchfaceStyle == 0) {
+      bool needRedraw = _needFullRedraw;
       if (_needFullRedraw) {
         _lastState = _currentState;
         _lastWatchfaceStyle = _watchfaceStyle;
@@ -1085,7 +1089,7 @@ private:
         }
         _drawTheme0WaybarStatic();
       }
-      _updateTheme0CustomStatic();
+      _updateTheme0CustomStatic(needRedraw);
       return;
     }
 

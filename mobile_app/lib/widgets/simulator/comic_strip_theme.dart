@@ -110,31 +110,36 @@ class ComicStripTheme extends StatelessWidget {
             left: 28,
             top: 140,
             width: 130,
-            height: 70,
+            height: 72,
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Tên người gửi nổi bật
-                MarqueeText(
-                  text: '💬 ${mockData.sender.toUpperCase()}:',
-                  width: 120,
+                // Tên người gửi nổi bật (cố định, không trôi)
+                Text(
+                  '💬 ${mockData.sender.toUpperCase()}:',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.fredoka(
                     fontSize: 11.0,
                     fontWeight: FontWeight.w900,
                     color: const Color(0xFFEA580C),
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
-                // Nội dung tin nhắn thả trôi
-                MarqueeText(
-                  text: mockData.message,
-                  width: 120,
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.fredoka(
-                    fontSize: 10.0,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
+                // Nội dung tin nhắn xuống dòng đến hết ô, không cần trôi
+                Expanded(
+                  child: Text(
+                    mockData.message,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.fredoka(
+                      fontSize: 10.0,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black,
+                      height: 1.15,
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],

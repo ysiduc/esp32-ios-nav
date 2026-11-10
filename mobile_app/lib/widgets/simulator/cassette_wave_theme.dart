@@ -108,40 +108,39 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // Người gửi & Nội dung tin nhắn (thả trôi marquee nếu dài)
+          // Người gửi (cố định, không thả trôi)
           Positioned(
             left: 22,
-            top: 144,
+            top: 142,
             width: 120,
-            height: 48,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                MarqueeText(
-                  text: mockData.sender,
-                  width: 120,
-                  style: GoogleFonts.chakraPetch(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFFF472B6),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Expanded(
-                  child: ClipRect(
-                    child: MarqueeText(
-                      text: mockData.message,
-                      width: 120,
-                      style: GoogleFonts.chakraPetch(
-                        fontSize: 10.0,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFFA5F3FC),
-                        height: 1.15,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            child: Text(
+              mockData.sender,
+              style: GoogleFonts.chakraPetch(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFF472B6),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          // Nội dung tin nhắn (xuống dòng đến hết ô, không cần trôi)
+          Positioned(
+            left: 22,
+            top: 158,
+            width: 120,
+            height: 38,
+            child: Text(
+              mockData.message,
+              style: GoogleFonts.chakraPetch(
+                fontSize: 10.0,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFFA5F3FC),
+                height: 1.15,
+              ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
 
