@@ -14,8 +14,8 @@ import '../models/map_provider.dart';
 /// Navigation Directions Service
 /// Supports Goong Map / MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
 class MapboxDirectionsService {
-  // In-Memory Route Cache (instant retrieval for repeated queries)
-  static final Map<String, List<NavRoute>> _routeCache = {};
+  // In-Memory Route Cache (instant retrieval for repeated queries within ~100m & 25s)
+  static final Map<String, ({DateTime time, List<NavRoute> routes})> _routeCache = {};
   final OsrmService _osrmService = OsrmService();
   final GoongService _goongService = GoongService();
 
@@ -30,10 +30,13 @@ class MapboxDirectionsService {
   }) async {
     final providerKey = MapSettingsService().currentProvider.id;
     final cacheKey =
-        '$providerKey-${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
+        '$providerKey-${start.latitude.toStringAsFixed(3)},${start.longitude.toStringAsFixed(3)}'
         '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$mode';
-    if (!bypassCache && _routeCache.containsKey(cacheKey)) {
-      return _routeCache[cacheKey]!;
+    final cached = _routeCache[cacheKey];
+    if (!bypassCache &&
+        cached != null &&
+        DateTime.now().difference(cached.time).inSeconds < 25) {
+      return cached.routes;
     }
 
     List<NavRoute> routes = [];
@@ -91,7 +94,7 @@ class MapboxDirectionsService {
     // Classify routes
     routes = _classifyAndRankRoutes(routes, mode);
 
-    _routeCache[cacheKey] = routes;
+    _routeCache[cacheKey] = (time: DateTime.now(), routes: routes);
     if (_routeCache.length > 50) {
       _routeCache.remove(_routeCache.keys.first);
     }

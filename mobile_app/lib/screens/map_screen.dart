@@ -75,6 +75,11 @@ class _MapScreenState extends State<MapScreen> {
   StateSetter? _searchModalSetState;
   ml.Line? _activeCasingLine;
   ml.Line? _activeCoreLine;
+  bool _isUpdatingRouteLine = false;
+  DateTime _lastFastLineUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  double? _smoothedPuckScreenY;
+  final ValueNotifier<({Offset pos, double rotationRad})?> _vehiclePuckNotifier =
+      ValueNotifier<({Offset pos, double rotationRad})?>(null);
 
   void _refreshSearchModal() {
     if (mounted) {
@@ -110,24 +115,56 @@ class _MapScreenState extends State<MapScreen> {
         }
       } catch (_) {}
 
-      // Hook navigation position update callback to continuously center vehicle with 3D perspective
-      navManager.onLocationChanged = (loc, heading) {
+      navManager.onRouteChanged = () {
+        if (!mounted) return;
+        _updateRouteOnMap();
+      };
+
+      // Hook 30 FPS navigation position update callback for fluid 3D camera & road-snapped puck
+      navManager.onLocationChanged = (loc, heading) async {
         if (!mounted) return;
         _userPosition = loc;
         if (navManager.isNavigating) {
-          _updateRouteOnMap(isFastTrackingUpdate: true);
-          if (_isAutoCentering) {
-            final camTarget = _isDrivingZoomOverview ? loc : _offsetCameraTarget(loc, heading, 42.0);
-            _mapController?.animateCamera(
-              ml.CameraUpdate.newCameraPosition(
-                ml.CameraPosition(
-                  target: ml.LatLng(camTarget.latitude, camTarget.longitude),
-                  zoom: _isDrivingZoomOverview ? 14.5 : 17.6,
-                  tilt: _isDrivingZoomOverview ? 0.0 : 52.0,
-                  bearing: _isDrivingZoomOverview ? 0.0 : heading,
+          final now = DateTime.now();
+          if (now.difference(_lastFastLineUpdate).inMilliseconds >= 90 && !_isUpdatingRouteLine) {
+            _lastFastLineUpdate = now;
+            unawaited(_updateRouteOnMap(isFastTrackingUpdate: true));
+          }
+          final ctrl = _mapController;
+          if (ctrl != null && _mapReady) {
+            if (_isAutoCentering) {
+              final camTarget = _isDrivingZoomOverview ? loc : _offsetCameraTarget(loc, heading, 36.0);
+              await ctrl.moveCamera(
+                ml.CameraUpdate.newCameraPosition(
+                  ml.CameraPosition(
+                    target: ml.LatLng(camTarget.latitude, camTarget.longitude),
+                    zoom: _isDrivingZoomOverview ? 14.5 : 17.6,
+                    tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
+                    bearing: _isDrivingZoomOverview ? 0.0 : heading,
+                  ),
                 ),
-              ),
-            );
+              );
+            }
+            try {
+              final pt = await ctrl.toScreenLocation(ml.LatLng(loc.latitude, loc.longitude));
+              if (!mounted) return;
+              final screenW = MediaQuery.of(context).size.width;
+              if (_isAutoCentering && !_isDrivingZoomOverview) {
+                final rawY = pt.y.toDouble();
+                _smoothedPuckScreenY = _smoothedPuckScreenY == null
+                    ? rawY
+                    : (_smoothedPuckScreenY! * 0.85 + rawY * 0.15);
+                _vehiclePuckNotifier.value = (
+                  pos: Offset(screenW / 2.0, _smoothedPuckScreenY!),
+                  rotationRad: 0.0,
+                );
+              } else {
+                _vehiclePuckNotifier.value = (
+                  pos: Offset(pt.x.toDouble(), pt.y.toDouble()),
+                  rotationRad: heading * (math.pi / 180.0),
+                );
+              }
+            } catch (_) {}
           }
         }
       };
@@ -177,7 +214,8 @@ class _MapScreenState extends State<MapScreen> {
   /// Automatically trims traveled polyline segments behind the vehicle during active navigation!
   Future<void> _updateRouteOnMap({bool isFastTrackingUpdate = false}) async {
     final ctrl = _mapController;
-    if (ctrl == null || !_mapReady) return;
+    if (ctrl == null || !_mapReady || _isUpdatingRouteLine) return;
+    _isUpdatingRouteLine = true;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     List<LatLng> points = [];
@@ -256,6 +294,8 @@ class _MapScreenState extends State<MapScreen> {
       );
     } catch (e) {
       debugPrint('Error drawing route on MapLibre: $e');
+    } finally {
+      _isUpdatingRouteLine = false;
     }
   }
 
@@ -392,6 +432,7 @@ class _MapScreenState extends State<MapScreen> {
     MapSettingsService().removeListener(_onMapProviderChanged);
     _debounceTimer?.cancel();
     _recenterTimer?.cancel();
+    _vehiclePuckNotifier.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -530,15 +571,11 @@ class _MapScreenState extends State<MapScreen> {
     // Tính sẵn lộ trình ngầm trong bộ nhớ đệm để khi bấm "Chỉ đường" hiện ra ngay lập tức (0ms)!
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final startPos = navManager.currentLocation ?? _userPosition;
-    unawaited(_directionsService.calculateMultipleRoutes(
-      startPos,
-      resolvedPlace.coordinate,
-      mode: _transportMode,
-    ));
-
     setState(() {
       _selectedPlace = resolvedPlace;
       _searchResults = [];
+      _routes = [];
+      _isLoadingRoutes = true;
       _viewMode = 1; // Open Place Details Inspector
     });
     _mapController?.animateCamera(
@@ -548,6 +585,19 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
     _updateDestinationMarker();
+
+    final prewarmed = await _directionsService.calculateMultipleRoutes(
+      startPos,
+      resolvedPlace.coordinate,
+      mode: _transportMode,
+    );
+    if (mounted && _selectedPlace?.coordinate == resolvedPlace.coordinate && _viewMode == 1) {
+      setState(() {
+        _routes = prewarmed;
+        _isLoadingRoutes = false;
+        _selectedRouteIndex = 0;
+      });
+    }
   }
 
   void _onMapTapped(LatLng point) async {
@@ -588,7 +638,6 @@ class _MapScreenState extends State<MapScreen> {
       _selectedPlace = resolvedPlace;
       _viewMode = 2; // Open Route Comparison
       _selectedRouteIndex = 0;
-      _routes = [];
     });
     _updateDestinationMarker();
 
@@ -658,15 +707,18 @@ class _MapScreenState extends State<MapScreen> {
       _viewMode = 0;
     });
 
-    // Center vehicle with 3D perspective camera (50° tilt, aligned with heading)
+    // Center vehicle with 3D perspective camera (50° tilt, aligned with road look-ahead heading)
     final startPos = navManager.currentLocation ?? _userPosition;
-    _mapController?.animateCamera(
+    final startHeading = navManager.effectiveHeading;
+    final camTarget = _offsetCameraTarget(startPos, startHeading, 36.0);
+    _smoothedPuckScreenY = null;
+    _mapController?.moveCamera(
       ml.CameraUpdate.newCameraPosition(
         ml.CameraPosition(
-          target: ml.LatLng(startPos.latitude, startPos.longitude),
-          zoom: 17.5,
+          target: ml.LatLng(camTarget.latitude, camTarget.longitude),
+          zoom: 17.6,
           tilt: 50.0,
-          bearing: navManager.currentHeading,
+          bearing: startHeading,
         ),
       ),
     );
@@ -676,16 +728,18 @@ class _MapScreenState extends State<MapScreen> {
   void _recenterToVehicle() {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final current = navManager.currentLocation ?? _userPosition;
+    final heading = navManager.effectiveHeading;
+    final camTarget = _isDrivingZoomOverview ? current : _offsetCameraTarget(current, heading, 36.0);
     setState(() {
       _isAutoCentering = true;
     });
     _mapController?.animateCamera(
       ml.CameraUpdate.newCameraPosition(
         ml.CameraPosition(
-          target: ml.LatLng(current.latitude, current.longitude),
-          zoom: 17.5,
-          tilt: 50.0,
-          bearing: navManager.currentHeading,
+          target: ml.LatLng(camTarget.latitude, camTarget.longitude),
+          zoom: _isDrivingZoomOverview ? 14.5 : 17.6,
+          tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
+          bearing: _isDrivingZoomOverview ? 0.0 : heading,
         ),
       ),
     );
@@ -817,18 +871,83 @@ class _MapScreenState extends State<MapScreen> {
             },
             onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
             onMapLongClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
-            trackCameraPosition: true,
+            trackCameraPosition: false,
             compassEnabled: false,
-            myLocationEnabled: true,
+            myLocationEnabled: !isDriving,
             myLocationTrackingMode: ml.MyLocationTrackingMode.none,
-            myLocationRenderMode: isDriving
-                ? ml.MyLocationRenderMode.gps
-                : ml.MyLocationRenderMode.compass,
+            myLocationRenderMode: ml.MyLocationRenderMode.compass,
             rotateGesturesEnabled: true,
             scrollGesturesEnabled: true,
             zoomGesturesEnabled: true,
             tiltGesturesEnabled: true,
           ),
+
+          // -----------------------------------------------------------
+          // 1b. Road-Snapped 60 FPS Apple Maps 3D Navigation Chevron Puck
+          // -----------------------------------------------------------
+          if (isDriving)
+            ValueListenableBuilder<({Offset pos, double rotationRad})?>(
+              valueListenable: _vehiclePuckNotifier,
+              builder: (context, puck, _) {
+                final screenSize = MediaQuery.of(context).size;
+                final dx = puck?.pos.dx ?? (screenSize.width / 2.0);
+                final dy = puck?.pos.dy ?? (screenSize.height * 0.65);
+                final rot = puck?.rotationRad ?? 0.0;
+                if (dx < -40 || dx > screenSize.width + 40 || dy < -40 || dy > screenSize.height + 40) {
+                  return const SizedBox.shrink();
+                }
+                return Positioned(
+                  left: dx - 26,
+                  top: dy - 26,
+                  child: IgnorePointer(
+                    child: Transform.rotate(
+                      angle: rot,
+                      child: SizedBox(
+                        width: 52,
+                        height: 52,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Outer soft radar halo
+                            Container(
+                              width: 52,
+                              height: 52,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF007AFF).withAlpha(38),
+                              ),
+                            ),
+                            // Crisp white Apple Maps navigation shield with drop shadow
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withAlpha(65),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.navigation_rounded,
+                                  color: Color(0xFF007AFF),
+                                  size: 24,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
 
           // -----------------------------------------------------------
           // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
