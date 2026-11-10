@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 
-/// GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS (Lớp nền Image.asset 320x240 + Lớp trên Stack Positioned Text)
+/// GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_3_bg.png)
 class RetroMacTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -38,7 +38,7 @@ class RetroMacTheme extends StatelessWidget {
       height: 240,
       child: Stack(
         children: [
-          // Lớp dưới: Ảnh nền 320x240 phẳng 2D
+          // Lớp dưới: Ảnh nền 320x240 phẳng 2D (Đã có sẵn menu bar, CLOCK.EXE, MAIL.APP, PLAYER.EXE)
           Positioned.fill(
             child: Image.asset(
               'assets/themes/theme_3_bg.png',
@@ -48,40 +48,14 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Thanh Menu Trên Cùng ---
-          // Positioned(left: 26, top: 2): "Retro Macintosh/OS"
+          // --- Cửa sổ 1 - Đồng hồ (Vùng trắng bên trong: x: 9..144, y: 34..118) ---
+          // Giờ HH:mm + Giây ss (Căn giữa ngang hoàn hảo trong cửa sổ đồng hồ)
           Positioned(
-            left: 26,
-            top: 2,
-            child: Text(
-              'Retro Macintosh/OS',
-              style: GoogleFonts.vt323(
-                fontSize: 12,
-                color: Colors.black,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-
-          // --- Cửa sổ 1 - Đồng hồ (Trên trái) ---
-          // Positioned(left: 28, top: 22): Tiêu đề cửa sổ "CLOCK.EXE"
-          Positioned(
-            left: 28,
-            top: 22,
-            child: Text(
-              'CLOCK.EXE',
-              style: GoogleFonts.vt323(
-                fontSize: 10,
-                color: Colors.black,
-              ),
-            ),
-          ),
-
-          // Positioned(left: 22, top: 40): Giờ HH:mm + Giây ss
-          Positioned(
-            left: 22,
-            top: 40,
+            left: 10,
+            top: 42,
+            width: 134,
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
@@ -108,10 +82,11 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 34, top: 82): Ngày 09/11/2026\nMONDAY
+          // Ngày tháng tiếng Anh (Căn giữa ngang trong cửa sổ đồng hồ)
           Positioned(
-            left: 34,
+            left: 10,
             top: 82,
+            width: 134,
             child: Text(
               dateStr,
               textAlign: TextAlign.center,
@@ -124,24 +99,11 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 2 - Tin nhắn (Dưới trái) ---
-          // Positioned(left: 28, top: 132): Tiêu đề "MAIL.APP"
+          // --- Cửa sổ 2 - Tin nhắn (Vùng trắng bên trong: x: 8..152, y: 141..217) ---
+          // "From: Người gửi" (Nằm ngang hàng bên phải icon phong bì x: 14..36, y: 144..162)
           Positioned(
-            left: 28,
-            top: 132,
-            child: Text(
-              'MAIL.APP',
-              style: GoogleFonts.vt323(
-                fontSize: 10,
-                color: Colors.black,
-              ),
-            ),
-          ),
-
-          // Positioned(left: 44, top: 152): "From: Vợ"
-          Positioned(
-            left: 44,
-            top: 152,
+            left: 42,
+            top: 148,
             child: Text(
               'From: ${mockData.sender}',
               style: GoogleFonts.vt323(
@@ -152,12 +114,12 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 18, top: 174, width: 118, height: 48): Nội dung tin nhắn
+          // Nội dung tin nhắn (Nằm bên dưới phong bì và tiêu đề người gửi)
           Positioned(
-            left: 18,
-            top: 174,
-            width: 118,
-            height: 48,
+            left: 16,
+            top: 168,
+            width: 132,
+            height: 44,
             child: Text(
               mockData.message,
               style: GoogleFonts.vt323(
@@ -171,24 +133,11 @@ class RetroMacTheme extends StatelessWidget {
           ),
 
           // --- Cửa sổ 3 - Nhạc (Bên phải) ---
-          // Positioned(left: 182, top: 53): Tiêu đề "PLAYER.EXE"
+          // Tên bài hát (Nằm lọt lòng bên trong thanh ngang đen: x: 177..264, y: 65..78)
           Positioned(
-            left: 182,
-            top: 53,
-            child: Text(
-              'PLAYER.EXE',
-              style: GoogleFonts.vt323(
-                fontSize: 10,
-                color: Colors.black,
-              ),
-            ),
-          ),
-
-          // Positioned(left: 170, top: 70, width: 136): Tên bài hát chạy chữ
-          Positioned(
-            left: 170,
-            top: 70,
-            width: 136,
+            left: 178,
+            top: 65,
+            width: 86,
             child: Text(
               mockData.fullSongTitle,
               style: GoogleFonts.vt323(
@@ -200,14 +149,16 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 242, top: 156): Thời lượng 01:24 / 03:52
+          // Thời lượng 01:24 / 03:52 (Nằm bên trên thanh tiến trình tại x: 226..268, y: 151..163)
           Positioned(
-            left: 242,
-            top: 156,
+            left: 226,
+            top: 151,
+            width: 44,
             child: Text(
               mockData.timeRatioStr,
+              textAlign: TextAlign.right,
               style: GoogleFonts.vt323(
-                fontSize: 10,
+                fontSize: 9.5,
                 color: Colors.black,
               ),
             ),

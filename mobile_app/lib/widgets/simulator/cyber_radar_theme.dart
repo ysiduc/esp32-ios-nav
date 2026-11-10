@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 
-/// GIAO DIỆN 2: CYBERPUNK NEON HUD (Lớp nền Image.asset 320x240 + Lớp trên Stack Positioned Text)
+/// GIAO DIỆN 2: CYBERPUNK NEON HUD (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_2_bg.png)
 class CyberRadarTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -39,10 +39,9 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Đồng hồ (Bên trái) ---
-          // Positioned(left: 22, top: 44): Giờ HH:mm (GoogleFonts.orbitron) + Giây ss
+          // --- Khung Đồng hồ (Bên trái: x: 22..195, y: 24..160) ---
           Positioned(
-            left: 22,
+            left: 24,
             top: 44,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -77,9 +76,9 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 24, top: 116): Ngày T2, 09.11.2026
+          // Ngày tháng (bên dưới đồng hồ)
           Positioned(
-            left: 24,
+            left: 26,
             top: 116,
             child: Text(
               dateStr,
@@ -92,10 +91,10 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Tin nhắn (Bên phải) ---
-          // Positioned(left: 222, top: 31): "MSG_INCOMING"
+          // --- Khung Tin nhắn (Bên phải: viền hồng nét đứt x: 214..303, y: 22..160) ---
+          // Tiêu đề MSG_INCOMING (nằm sau icon 💬 ở x: 218)
           Positioned(
-            left: 222,
+            left: 232,
             top: 31,
             child: Text(
               'MSG_INCOMING',
@@ -108,16 +107,16 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 208, top: 54, width: 92, height: 100): Nội dung tin nhắn
+          // Nội dung tin nhắn (bắt đầu từ x: 220 để nằm hoàn toàn bên trong khung viền x: 214..303)
           Positioned(
-            left: 208,
-            top: 54,
-            width: 92,
-            height: 100,
+            left: 220,
+            top: 52,
+            width: 80,
+            height: 98,
             child: Text(
-              '${mockData.sender}: "${mockData.message}"',
+              '${mockData.sender}:\n"${mockData.message}"',
               style: GoogleFonts.chakraPetch(
-                fontSize: 11,
+                fontSize: 10.5,
                 fontWeight: FontWeight.w600,
                 color: Colors.white,
                 height: 1.25,
@@ -127,12 +126,12 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Thanh Nhạc (Dưới đáy) ---
-          // Positioned(left: 56, top: 196, width: 175): Tên bài hát - Ca sĩ
+          // --- Thanh Nhạc (Dưới đáy: khung y: 173..210) ---
+          // Tên bài hát - Ca sĩ (nằm ở top: 178, TRÊN các vạch sóng equalizer y: 194..206)
           Positioned(
-            left: 56,
-            top: 196,
-            width: 175,
+            left: 60,
+            top: 178,
+            width: 160,
             child: Text(
               mockData.fullSongTitle,
               style: GoogleFonts.chakraPetch(
@@ -145,10 +144,10 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(right: 16, top: 196): Thời lượng 01:24 / 03:52
+          // Thời lượng 01:24 / 03:52 (nằm ở top: 178, TRÊN thanh trượt tiến trình)
           Positioned(
-            right: 16,
-            top: 196,
+            right: 20,
+            top: 178,
             child: Text(
               mockData.timeRatioStr,
               style: GoogleFonts.orbitron(

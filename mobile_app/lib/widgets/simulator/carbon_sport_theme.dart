@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 
-/// GIAO DIỆN 1: SUNFLOWER BENTO (Lớp nền Image.asset 320x240 + Lớp trên Stack Positioned Text)
+/// GIAO DIỆN 1: SUNFLOWER BENTO (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_1_bg.png)
 class CarbonSportTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -51,11 +51,10 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Ô Đồng hồ (Góc trên trái) ---
-          // Positioned(left: 18, top: 18): Row gồm Giờ HH:mm + Giây ss
+          // --- Ô Đồng hồ (Góc trên trái: ô x: 12..160, y: 12..104) ---
           Positioned(
-            left: 18,
-            top: 18,
+            left: 20,
+            top: 22,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
@@ -84,10 +83,10 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 20, top: 68): Thứ & Ngày THỨ HAI, 09/11
+          // Thứ & Ngày (bên dưới giờ)
           Positioned(
-            left: 20,
-            top: 68,
+            left: 22,
+            top: 70,
             child: Text(
               dateStr,
               style: GoogleFonts.plusJakartaSans(
@@ -99,10 +98,10 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Ô Tin nhắn (Khung dọc bên phải) ---
-          // Positioned(left: 200, top: 23): Tiêu đề "TIN NHẮN MỚI"
+          // --- Ô Tin nhắn (Khung dọc bên phải: x: 176..304, y: 15..184) ---
+          // Tiêu đề "TIN NHẮN MỚI" (ngay sau icon bong bóng chat ở x: 185, y: 23)
           Positioned(
-            left: 200,
+            left: 204,
             top: 23,
             child: Text(
               'TIN NHẮN MỚI',
@@ -115,12 +114,12 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 184, top: 52, width: 115, height: 95): Tên người gửi + Nội dung tin nhắn
+          // Tên người gửi + Nội dung tin nhắn (nằm gọn phần trên, không đè bông hoa ở đáy)
           Positioned(
             left: 184,
-            top: 52,
-            width: 115,
-            height: 95,
+            top: 50,
+            width: 110,
+            height: 75,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -130,23 +129,23 @@ class CarbonSportTheme extends StatelessWidget {
                   style: GoogleFonts.plusJakartaSans(
                     color: const Color(0xFFFACC15),
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 12.5,
                     height: 1.2,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Expanded(
                   child: Text(
                     mockData.message,
                     style: GoogleFonts.plusJakartaSans(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 11.5,
                       fontWeight: FontWeight.w500,
                       height: 1.25,
                     ),
-                    maxLines: 4,
+                    maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -154,12 +153,12 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Thanh Nhạc (Dưới đáy) ---
-          // Positioned(left: 58, top: 204, width: 195): Tên bài hát - Ca sĩ
+          // --- Thanh Nhạc (Dưới đáy: pill y: 190..231) ---
+          // Tên bài hát - Ca sĩ (nằm trên hàng chấm tiến trình y: 223)
           Positioned(
-            left: 58,
-            top: 204,
-            width: 195,
+            left: 60,
+            top: 198,
+            width: 175,
             child: Text(
               mockData.fullSongTitle,
               style: GoogleFonts.plusJakartaSans(
@@ -172,10 +171,10 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(right: 16, top: 202): Cột phải hiển thị thời gian hiện tại 01:24 và tổng 03:52
+          // Cột thời gian hiện tại / tổng thời gian ở bên phải thanh nhạc
           Positioned(
-            right: 16,
-            top: 202,
+            right: 20,
+            top: 198,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,

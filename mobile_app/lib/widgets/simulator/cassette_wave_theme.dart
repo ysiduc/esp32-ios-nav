@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
 
-/// GIAO DIỆN 4: 80s SYNTHWAVE CASSETTE (Lớp nền Image.asset 320x240 + Lớp trên Stack Positioned Text)
+/// GIAO DIỆN 4: 80s SYNTHWAVE CASSETTE (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_4_bg.png)
 class CassetteWaveTheme extends StatelessWidget {
   final DateTime currentTime;
   final SimulatorMockData mockData;
@@ -39,55 +39,60 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khu vực Đồng hồ (Trên trái, đè lên mặt trời Synthwave) ---
-          // Positioned(left: 12, top: 20): Giờ HH:mm chữ trắng viền hồng neon phát sáng
+          // --- Khu vực Mặt Trời Synthwave (Mặt trời tâm x: 80, y: 51.5, bounds x: 45..115, y: 26..77) ---
+          // Giờ HH:mm chữ trắng phát sáng hồng neon + Giây ss vàng neon (Căn giữa ngang trên mặt trời)
           Positioned(
-            left: 12,
-            top: 20,
-            child: Text(
-              '$hStr:$mStr',
-              style: GoogleFonts.righteous(
-                fontSize: 42,
-                color: Colors.white,
-                letterSpacing: -1,
-                height: 1.0,
-                shadows: const [
-                  Shadow(color: Color(0xFFEC4899), blurRadius: 12),
-                  Shadow(color: Color(0xFFEC4899), blurRadius: 4),
-                ],
-              ),
-            ),
-          ),
-
-          // Giây ss (left: 122, top: 44, fontSize: 20)
-          Positioned(
-            left: 122,
-            top: 44,
-            child: Text(
-              sStr,
-              style: GoogleFonts.righteous(
-                fontSize: 20,
-                color: const Color(0xFFFACC15),
-                height: 1.0,
-                shadows: const [
-                  Shadow(color: Color(0xFFF59E0B), blurRadius: 8),
-                ],
-              ),
-            ),
-          ),
-
-          // Positioned(left: 14, top: 82): Thứ & Ngày T2, 09 TH11 + Năm 2026
-          Positioned(
-            left: 14,
-            top: 82,
+            left: 20,
+            top: 34,
+            width: 120,
             child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  '$hStr:$mStr',
+                  style: GoogleFonts.righteous(
+                    fontSize: 36,
+                    color: Colors.white,
+                    letterSpacing: -0.5,
+                    height: 1.0,
+                    shadows: const [
+                      Shadow(color: Color(0xFFEC4899), blurRadius: 10),
+                      Shadow(color: Color(0xFFEC4899), blurRadius: 3),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  sStr,
+                  style: GoogleFonts.righteous(
+                    fontSize: 18,
+                    color: const Color(0xFFFACC15),
+                    height: 1.0,
+                    shadows: const [
+                      Shadow(color: Color(0xFFF59E0B), blurRadius: 8),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Thứ & Ngày + Năm (Nằm ngay bên dưới mặt trời tại y: 84)
+          Positioned(
+            left: 16,
+            top: 84,
+            width: 128,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   datePart,
                   style: GoogleFonts.righteous(
                     color: const Color(0xFF22D3EE),
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.5,
                   ),
@@ -96,7 +101,7 @@ class CassetteWaveTheme extends StatelessWidget {
                   yearStr,
                   style: GoogleFonts.righteous(
                     color: const Color(0xFFFACC15),
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -104,15 +109,15 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Tin nhắn (Dưới trái) ---
-          // Positioned(left: 38, top: 132): "MESSAGES"
+          // --- Khung Tin nhắn (Dưới trái: x: 14..149, y: 124..192) ---
+          // Tiêu đề MESSAGES (ngay sau icon chat ở x: 20, y: 128)
           Positioned(
-            left: 38,
-            top: 132,
+            left: 36,
+            top: 128,
             child: Text(
               'MESSAGES',
               style: GoogleFonts.righteous(
-                fontSize: 11,
+                fontSize: 10.5,
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFFF472B6),
                 letterSpacing: 0.8,
@@ -120,31 +125,31 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 20, top: 154, width: 124, height: 55): Nội dung tin nhắn
+          // Nội dung tin nhắn (nằm lọt trong khung hồng)
           Positioned(
-            left: 20,
-            top: 154,
-            width: 124,
-            height: 55,
+            left: 22,
+            top: 146,
+            width: 120,
+            height: 42,
             child: Text(
               '${mockData.sender}: "${mockData.message}"',
               style: GoogleFonts.chakraPetch(
-                fontSize: 11.5,
+                fontSize: 10.5,
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFFA5F3FC),
-                height: 1.2,
+                height: 1.15,
               ),
-              maxLines: 3,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // --- Cuộn Băng Cassette (Bên phải) ---
-          // Positioned(left: 198, top: 40, width: 96): Tên bài hát in hoa trên nhãn trên
+          // --- Cuộn Băng Cassette (Bên phải: x: 168..307, y: 48..174) ---
+          // Tên bài hát in hoa trên dải nhãn trên (y: 58..72)
           Positioned(
-            left: 198,
-            top: 40,
-            width: 96,
+            left: 178,
+            top: 58,
+            width: 120,
             child: Text(
               mockData.songTitle.toUpperCase(),
               style: GoogleFonts.righteous(
@@ -159,11 +164,11 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 192, top: 103, width: 104): Tên ca sĩ in hoa trên nhãn dưới
+          // Tên ca sĩ in hoa trên dải nhãn dưới (y: 124..138)
           Positioned(
-            left: 192,
-            top: 103,
-            width: 104,
+            left: 178,
+            top: 124,
+            width: 120,
             child: Text(
               mockData.songArtist.toUpperCase(),
               style: GoogleFonts.righteous(
@@ -178,10 +183,10 @@ class CassetteWaveTheme extends StatelessWidget {
             ),
           ),
 
-          // Positioned(left: 172, top: 176, width: 136): Row spaceBetween 01:24 và 03:52
+          // Thời lượng 01:24 và 03:52 bên dưới thanh tiến trình cyan (y: 196)
           Positioned(
             left: 172,
-            top: 176,
+            top: 196,
             width: 136,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -189,7 +194,7 @@ class CassetteWaveTheme extends StatelessWidget {
                 Text(
                   mockData.elapsedStr,
                   style: GoogleFonts.righteous(
-                    fontSize: 11,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF22D3EE),
                   ),
@@ -197,7 +202,7 @@ class CassetteWaveTheme extends StatelessWidget {
                 Text(
                   mockData.durationStr,
                   style: GoogleFonts.righteous(
-                    fontSize: 11,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF22D3EE),
                   ),
