@@ -313,7 +313,7 @@ void processJsonPacket(const char* jsonStr) {
     Serial.printf("[JSON] Set Watchface/Theme style: %d and switched display\n", s);
     return;
 
-  } else if (typeStr == "EXIT_SIMULATOR" || typeStr == "RESTORE_IDLE_MAP") {
+  } else if (typeStr == "EXIT_SIMULATOR" || typeStr == "RESTORE_IDLE_MAP" || typeStr == "MAP_MODE") {
     display.restoreIdleMap();
     return;
 

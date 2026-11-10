@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -80,6 +81,12 @@ class _MapScreenState extends State<MapScreen> {
       if (navManager.currentLocation != null) {
         _userPosition = navManager.currentLocation!;
       }
+      try {
+        final ble = Provider.of<BleService>(context, listen: false);
+        if (ble.isConnected) {
+          ble.sendRawJson(jsonEncode({'type': 'RESTORE_IDLE_MAP'}));
+        }
+      } catch (_) {}
 
       // Hook navigation position update callback to continuously center vehicle with 3D perspective
       navManager.onLocationChanged = (loc, heading) {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../widgets/map_provider_settings_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +20,16 @@ class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _currentIndex = 0;
 
+  void _switchToMap() {
+    setState(() => _currentIndex = 0);
+    try {
+      final ble = context.read<BleService>();
+      if (ble.isConnected) {
+        ble.sendRawJson(jsonEncode({'type': 'RESTORE_IDLE_MAP'}));
+      }
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final bleService = context.watch<BleService>();
@@ -29,13 +40,13 @@ class _HomeScreenState extends State<HomeScreen> {
         onOpenMenu: () => _scaffoldKey.currentState?.openDrawer(),
       ),
       BleScreen(
-        onBackToMap: () => setState(() => _currentIndex = 0),
+        onBackToMap: _switchToMap,
       ),
       EspSimulatorScreen(
-        onBackToMap: () => setState(() => _currentIndex = 0),
+        onBackToMap: _switchToMap,
       ),
       EspPreviewScreen(
-        onBackToMap: () => setState(() => _currentIndex = 0),
+        onBackToMap: _switchToMap,
       ),
     ];
 
@@ -148,7 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
               isSelected: _currentIndex == 0,
               onTap: () {
                 Navigator.pop(context);
-                setState(() => _currentIndex = 0);
+                _switchToMap();
               },
             ),
             _buildDrawerTile(

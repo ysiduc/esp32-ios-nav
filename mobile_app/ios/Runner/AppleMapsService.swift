@@ -297,3 +297,4 @@ struct PolylineEncoder {
     }
   }
 }
+

@@ -193,11 +193,10 @@ public:
   }
 
   void restoreIdleMap() {
-    if (_isAppConnected) {
-      _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
-      _needFullRedraw = true;
-      Serial.println(F("[UI] Restored Idle Map state"));
-    }
+    _isAppConnected = true;
+    _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+    _needFullRedraw = true;
+    Serial.println(F("[UI] Restored Idle Map state (Map Khoi)"));
   }
 
   uint8_t getWatchfaceStyle() const {
@@ -306,9 +305,11 @@ public:
   }
 
   void setNavigating(bool isNav) {
-    if (_navData.isNavigating != isNav) {
-      _navData.isNavigating = isNav;
-      _currentState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    bool stateChanged = (_navData.isNavigating != isNav);
+    _navData.isNavigating = isNav;
+    DisplayState targetState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    if (_currentState != targetState || stateChanged) {
+      _currentState = targetState;
       _needFullRedraw = true;
     }
   }
@@ -337,9 +338,11 @@ public:
                   const char* street, const char* arrival = "12:00", const char* clock = "12:00",
                   uint8_t battery = 85, const RoutePoint* pts = nullptr, uint8_t ptCount = 0,
                   bool isNav = false, int16_t head = 0) {
-    if (_navData.isNavigating != isNav) {
-      _navData.isNavigating = isNav;
-      _currentState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    bool stateChanged = (_navData.isNavigating != isNav);
+    _navData.isNavigating = isNav;
+    DisplayState targetState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    if (_currentState != targetState || stateChanged) {
+      _currentState = targetState;
       _needFullRedraw = true;
     }
 
@@ -1315,6 +1318,50 @@ private:
     tft.fillCircle(142, 18, 3, TFT_GREEN);
   }
 
+  void _drawManeuverArrow(int x, int y, uint8_t turnCode) {
+    tft.fillRoundRect(x, y, 52, 52, 10, tft.color565(14, 20, 30));
+    tft.drawRoundRect(x, y, 52, 52, 10, TFT_CYAN);
+
+    int cx = x + 26;
+    int cy = y + 26;
+
+    if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
+      // TURN LEFT
+      tft.fillRect(cx + 6, cy - 6, 5, 20, TFT_CYAN);
+      tft.fillRect(cx - 12, cy - 6, 20, 5, TFT_CYAN);
+      tft.fillTriangle(cx - 16, cy - 4, cx - 8, cy - 12, cx - 8, cy + 4, TFT_CYAN);
+    }
+    else if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
+      // TURN RIGHT
+      tft.fillRect(cx - 11, cy - 6, 5, 20, TFT_CYAN);
+      tft.fillRect(cx - 8, cy - 6, 20, 5, TFT_CYAN);
+      tft.fillTriangle(cx + 16, cy - 4, cx + 8, cy - 12, cx + 8, cy + 4, TFT_CYAN);
+    }
+    else if (turnCode == 4) {
+      // U-TURN
+      tft.fillRect(cx + 6, cy - 4, 4, 18, TFT_CYAN);
+      tft.fillRect(cx - 10, cy - 8, 18, 4, TFT_CYAN);
+      tft.fillRect(cx - 10, cy - 4, 4, 18, TFT_CYAN);
+      tft.fillTriangle(cx - 8, cy + 16, cx - 14, cy + 8, cx - 2, cy + 8, TFT_CYAN);
+    }
+    else if (turnCode == 8) {
+      // ROUNDABOUT
+      tft.drawCircle(cx, cy, 12, TFT_CYAN);
+      tft.drawCircle(cx, cy, 11, TFT_CYAN);
+      tft.fillTriangle(cx + 8, cy - 12, cx + 15, cy - 7, cx + 8, cy - 2, TFT_CYAN);
+    }
+    else if (turnCode == 9) {
+      // ARRIVED / DESTINATION FLAG
+      tft.fillRect(cx - 8, cy - 12, 3, 24, TFT_WHITE);
+      tft.fillTriangle(cx - 5, cy - 12, cx + 12, cy - 6, cx - 5, cy, TFT_CYAN);
+    }
+    else {
+      // STRAIGHT
+      tft.fillRect(cx - 2, cy - 6, 5, 20, TFT_CYAN);
+      tft.fillTriangle(cx, cy - 14, cx - 10, cy - 5, cx + 10, cy - 5, TFT_CYAN);
+    }
+  }
+
   // =========================================================================
   // MÀN 3 FALLBACK HUD (When WebSocket stream is not yet transmitting)
   // =========================================================================
@@ -1328,6 +1375,24 @@ private:
       tft.drawRoundRect(158, 28, 158, 206, 12, tft.color565(32, 45, 61));
       _needFullRedraw = false;
       _lastState = _currentState;
+
+      // Draw vector radar/road grid in left map box
+      const int cx = 78;
+      const int cy = 152;
+      uint16_t cRadarRing = tft.color565(20, 32, 48);
+      tft.drawCircle(cx, cy, 38, cRadarRing);
+      tft.drawCircle(cx, cy, 68, cRadarRing);
+      _drawThickLine(cx, 226, cx, 36, tft.color565(28, 38, 54), 10);
+      _drawThickLine(10, cy, 146, cy, tft.color565(28, 38, 54), 10);
+
+      // Vehicle Puck
+      tft.drawCircle(cx, cy, 10, tft.color565(0, 50, 80));
+      tft.fillCircle(cx, cy, 6, TFT_CYAN);
+      tft.drawCircle(cx, cy, 6, TFT_WHITE);
+      tft.fillTriangle(cx, cy - 8, cx - 4, cy - 1, cx + 4, cy - 1, TFT_WHITE);
+
+      // Draw Maneuver Arrow
+      _drawManeuverArrow(52, 44, _navData.turnCode);
     }
 
     // Distance

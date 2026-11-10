@@ -331,7 +331,15 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
         leading: widget.onBackToMap != null
             ? IconButton(
                 icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-                onPressed: widget.onBackToMap,
+                onPressed: () {
+                  try {
+                    final ble = context.read<BleService>();
+                    if (ble.isConnected) {
+                      ble.sendRawJson(jsonEncode({'type': 'RESTORE_IDLE_MAP'}));
+                    }
+                  } catch (_) {}
+                  widget.onBackToMap!();
+                },
               )
             : null,
         title: const Column(
@@ -597,6 +605,54 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
               overflow: TextOverflow.ellipsis,
             ),
             onPressed: _pickCustomBackground,
+          ),
+        ),
+
+        const SizedBox(height: 10),
+
+        // Nút Khôi phục Màn hình Bản đồ Khối (Minimap + HUD Card)
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00F0FF).withValues(alpha: 0.12),
+              foregroundColor: const Color(0xFF00F0FF),
+              elevation: 0,
+              side: const BorderSide(color: Color(0xFF00F0FF), width: 1.2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.map_rounded, size: 20),
+            label: const Text(
+              'Khôi phục Màn hình Bản đồ Khối trên ESP32',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+            onPressed: () {
+              try {
+                final ble = context.read<BleService>();
+                if (ble.isConnected) {
+                  ble.sendRawJson(jsonEncode({'type': 'RESTORE_IDLE_MAP'}));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Đã gửi lệnh khôi phục Màn hình Bản đồ Khối sang ESP32!'),
+                      backgroundColor: Color(0xFF00F0FF),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Chưa kết nối Bluetooth với ESP32!'),
+                      backgroundColor: Colors.orange,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              } catch (_) {}
+              if (widget.onBackToMap != null) {
+                widget.onBackToMap!();
+              }
+            },
           ),
         ),
       ],
