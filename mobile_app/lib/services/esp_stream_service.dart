@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,8 +28,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 14; // Real-time 14 FPS match for ESP32 hardware (zero queue lag, 3 FPS in background)
-  double _actualFps = 10.0;
+  int _targetFps = 28; // High-speed 28-30 FPS target for double-buffered ESP32 Wi-Fi streaming
+  double _actualFps = 25.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
@@ -44,6 +45,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   // Real Map Tile Cache (In-Memory Image Cache for Instant Rendering)
   final Map<String, ui.Image> _tileCache = {};
   final Map<String, img.Image> _cpuTileCache = {};
+  final Map<String, Uint32List> _cpuTileRgba32 = {}; // Fast 32-bit pixel view for 30 FPS software rasterizer
   final Map<String, Uint8List> _tileMasks = {}; // 1 = building footprint (for pseudo-3D extrusion)
   final Set<String> _pendingTileFetches = {};
 
@@ -71,6 +73,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
       _cpuTileCache.clear();
+      _cpuTileRgba32.clear();
       _tileMasks.clear();
       _lastPrefetchPos = null;
       notifyListeners();
@@ -86,6 +89,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _tileCache.forEach((_, img) => img.dispose());
       _tileCache.clear();
       _cpuTileCache.clear();
+      _cpuTileRgba32.clear();
       _tileMasks.clear();
       _lastPrefetchPos = null;
       notifyListeners();
@@ -258,7 +262,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();
     _cpuTileCache.clear();
-      _tileMasks.clear();
+    _cpuTileRgba32.clear();
+    _tileMasks.clear();
     super.dispose();
   }
 
@@ -365,7 +370,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     // Strict 1-in-flight queue control: if ESP32 hasn't rendered previous frame, skip tick to prevent queue buildup
-    if (_wsClients.isNotEmpty && !_wsReadyForNextFrame && DateTime.now().difference(_lastWsSendTime).inMilliseconds < 250) {
+    if (_wsClients.isNotEmpty && !_wsReadyForNextFrame && DateTime.now().difference(_lastWsSendTime).inMilliseconds < 85) {
       return;
     }
     _isCapturing = true;
@@ -520,8 +525,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // Draw active route polyline (matching Image 2: Apple blue casing + core with round joint caps)
-      if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
-        final pts = activeRoute.polylinePoints;
+      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
+          ? navManager!.remainingPolylinePoints
+          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
+      if (pts.length >= 2) {
         final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 81, 179, 255);
         final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
 
@@ -651,7 +658,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final bool hasTiles3d = !isDark;
 
       final frame = img.Image(width: w, height: h, numChannels: 4);
-      final Uint8List buf = frame.buffer.asUint8List();
+      final Uint32List buf32 = frame.buffer.asUint32List();
       final int fh = h + extrude + 1; // footprint rows (buildings below frame still extrude into it)
       final Uint8List foot = Uint8List(w * fh);
 
@@ -659,64 +666,67 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final int baseG = isDark ? 17 : 245;
       final int baseB = isDark ? 26 : 232;
       final int wallR = isDark ? 40 : 156, wallG = isDark ? 52 : 174, wallB = isDark ? 66 : 164;
+      final int baseColor32 = 0xFF000000 | (baseB << 16) | (baseG << 8) | baseR;
+      final int wallColor32 = 0xFF000000 | (wallB << 16) | (wallG << 8) | wallR;
+      const int roofEdge32 = 0xFF000000 | (152 << 16) | (162 << 8) | 144;
+      const int roofFlat32 = 0xFF000000 | (198 << 16) | (209 << 8) | 192;
 
       int lastTx = -999999, lastTy = -999999;
-      img.Image? curTile;
+      Uint32List? curTile32;
       Uint8List? curMask;
 
-      // 1. Ground + footprint (inverse mapping screen -> world tile pixel, no patch/rotate allocation)
+      // 1. Ground + footprint (fast 32-bit inverse mapping screen -> world tile pixel, zero object allocation)
       for (int sy = 0; sy < fh; sy++) {
         final double dy = (sy - vy) / tilt;
+        double wx = worldX - vx * cosT - dy * sinT;
+        double wy = worldY - vx * sinT + dy * cosT;
+        final int rowOff = sy * w;
+        final bool inScreenY = sy < h;
+
         for (int sx = 0; sx < w; sx++) {
-          final double dx = (sx - vx).toDouble();
-          final double wx = worldX + dx * cosT - dy * sinT;
-          final double wy = worldY + dx * sinT + dy * cosT;
-          final int tx = (wx / 256.0).floor();
-          final int ty = (wy / 256.0).floor();
+          final int iwx = wx.floor();
+          final int iwy = wy.floor();
+          wx += cosT;
+          wy += sinT;
+
+          final int tx = iwx >> 8;
+          final int ty = iwy >> 8;
           if (tx != lastTx || ty != lastTy) {
             lastTx = tx;
             lastTy = ty;
             final String key = '$zoom/$tx/$ty';
-            curTile = _cpuTileCache[key];
+            curTile32 = _cpuTileRgba32[key];
             curMask = _tileMasks[key];
           }
-          final tile = curTile;
-          int r = baseR, g = baseG, b = baseB;
+
+          int color32 = baseColor32;
           bool isBuilding = false;
-          if (tile != null) {
-            final int px = (wx - tx * 256.0).floor().clamp(0, 255);
-            final int py = (wy - ty * 256.0).floor().clamp(0, 255);
-            final pix = tile.getPixel(px, py);
-            r = pix.r.toInt();
-            g = pix.g.toInt();
-            b = pix.b.toInt();
+          final tile32 = curTile32;
+          if (tile32 != null) {
+            final int pIdx = ((iwy & 255) << 8) | (iwx & 255);
+            color32 = tile32[pIdx] | 0xFF000000;
             if (hasTiles3d) {
               final mask = curMask;
-              if (mask != null && mask[py * 256 + px] == 1) {
+              if (mask != null && mask[pIdx] == 1) {
                 isBuilding = true;
               }
             }
           }
-          if (isBuilding) foot[sy * w + sx] = 1;
-          if (sy < h) {
-            final int o = (sy * w + sx) * 4;
-            if (isBuilding) {
-              buf[o] = wallR;
-              buf[o + 1] = wallG;
-              buf[o + 2] = wallB;
-            } else {
-              buf[o] = r;
-              buf[o + 1] = g;
-              buf[o + 2] = b;
-            }
-            buf[o + 3] = 255;
+          final int idx = rowOff + sx;
+          if (isBuilding) {
+            foot[idx] = 1;
+            if (inScreenY) buf32[idx] = wallColor32;
+          } else if (inScreenY) {
+            buf32[idx] = color32;
           }
         }
       }
 
-      // 2. Route polyline projected through the same transform (drawn on the ground)
-      if (activeRoute != null && activeRoute.polylinePoints.length >= 2) {
-        final pts = activeRoute.polylinePoints;
+      // 2. Route polyline projected through the same transform (drawn on the ground, trimmed behind vehicle)
+      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
+          ? navManager!.remainingPolylinePoints
+          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
+      if (pts.length >= 2) {
         final casingColor = img.ColorRgba8(0, 62, 179, 255);
         final coreColor = img.ColorRgba8(0, 102, 255, 255);
         final screenPts = <img.Point>[];
@@ -754,16 +764,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // 3. Extrude buildings upward (painter's algorithm: far rows first, near rows overlap)
       if (hasTiles3d) {
         for (int sy = 0; sy < fh; sy++) {
+          final int rowOff = sy * w;
           for (int sx = 0; sx < w; sx++) {
-            if (foot[sy * w + sx] != 1) continue;
+            if (foot[rowOff + sx] != 1) continue;
             // walls
             for (int dh = 1; dh < extrude; dh++) {
               final int ny = sy - dh;
-              if (ny < 0 || ny >= h) continue;
-              final int o = (ny * w + sx) * 4;
-              buf[o] = wallR;
-              buf[o + 1] = wallG;
-              buf[o + 2] = wallB;
+              if (ny >= 0 && ny < h) {
+                buf32[ny * w + sx] = wallColor32;
+              }
             }
             // roof
             final int ry = sy - extrude;
@@ -772,20 +781,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
                   sx == w - 1 ||
                   sy == 0 ||
                   sy >= fh - 1 ||
-                  foot[(sy - 1) * w + sx] == 0 ||
-                  foot[(sy + 1) * w + sx] == 0 ||
-                  foot[sy * w + sx - 1] == 0 ||
-                  foot[sy * w + sx + 1] == 0;
-              final int o = (ry * w + sx) * 4;
-              if (edge) {
-                buf[o] = 144;
-                buf[o + 1] = 162;
-                buf[o + 2] = 152;
-              } else {
-                buf[o] = 192;
-                buf[o + 1] = 209;
-                buf[o + 2] = 198;
-              }
+                  foot[rowOff - w + sx] == 0 ||
+                  foot[rowOff + w + sx] == 0 ||
+                  foot[rowOff + sx - 1] == 0 ||
+                  foot[rowOff + sx + 1] == 0;
+              buf32[ry * w + sx] = edge ? roofEdge32 : roofFlat32;
             }
           }
         }
@@ -825,16 +825,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (Platform.isIOS) {
         final rawRgba = frame.toUint8List();
-        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 60, hud: hudData);
+        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 52, hud: hudData);
         if (iosJpg != null && iosJpg.isNotEmpty) {
           return iosJpg;
         }
       }
 
       // Pure-Dart fallback if non-iOS
-      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 58));
+      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 52));
       if (jpg.length > 14500) {
-        jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 40));
+        jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 38));
       }
       return jpg;
     } catch (e) {
@@ -847,14 +847,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     if (_wsClients.isNotEmpty) {
       final now = DateTime.now();
       final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
-      // Strict 1-in-flight closed-loop flow control (Zero-Queue latency):
-      // Only send if ESP32 finished rendering previous frame, or after 250ms watchdog timeout
-      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 250) {
+      // Double-buffered closed-loop flow control (Zero-Queue latency):
+      // Only send if ESP32 acknowledged ('K') previous frame, or after 85ms watchdog timeout
+      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 85) {
         return; // Drop intermediate frame to prevent TCP buffer accumulation and latency!
       }
-      // Micro-gap flow control (at least 45ms between frames = max ~22 FPS):
-      // Leaves a clean RF breather between Wi-Fi packets, allowing 2.4GHz radio to service BLE without dropouts!
-      if (elapsedSinceLastWs < 45) {
+      // Micro-gap flow control (at least 16ms between frames = up to 30+ FPS)
+      if (elapsedSinceLastWs < 16) {
         return;
       }
 
@@ -1079,8 +1078,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
               }
             }
             _cpuTileCache[key] = cpuImg;
+            if (cpuImg.width == 256 && cpuImg.height == 256) {
+              _cpuTileRgba32[key] = Uint32List.fromList(cpuImg.buffer.asUint32List());
+            }
             if (_cpuTileCache.length > 100) {
-              _cpuTileCache.remove(_cpuTileCache.keys.first);
+              final firstK = _cpuTileCache.keys.first;
+              _cpuTileCache.remove(firstK);
+              _cpuTileRgba32.remove(firstK);
             }
 
             if (isDark && isGoong) {
@@ -1188,11 +1192,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Draw Route Polyline whenever an active route or preview route exists
+    // Draw Route Polyline whenever an active route or preview route exists (trimmed behind vehicle when navigating)
     final effectiveRoute = activeRoute ?? navManager?.previewRoute;
-    final points = (effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
-        ? effectiveRoute.polylinePoints
-        : <LatLng>[];
+    final points = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
+        ? navManager!.remainingPolylinePoints
+        : ((effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
+            ? effectiveRoute.polylinePoints
+            : <LatLng>[]);
 
     if (points.length >= 2) {
       final routePath = ui.Path();
@@ -1351,9 +1357,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
     // Active Route Polyline in Vibrant iPhone Navigation Blue (#003EB3 casing + #0066FF core)
     final effectiveRoute = activeRoute ?? navManager?.previewRoute;
-    final points = (effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
-        ? effectiveRoute.polylinePoints
-        : <LatLng>[];
+    final points = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
+        ? navManager!.remainingPolylinePoints
+        : ((effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
+            ? effectiveRoute.polylinePoints
+            : <LatLng>[]);
 
     if (points.length >= 2) {
       final routePath = ui.Path();

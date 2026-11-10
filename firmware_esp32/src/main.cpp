@@ -641,29 +641,37 @@ void loop() {
   webSocketServer.loop();
 
 
-  // 1. Decode & push new JPEG Map Frame safely on the Main thread
+  // 1. Decode & push new JPEG Map Frame safely on the Main thread (Double-Buffered Pipelined)
   if (newFrameAvailable) {
     newFrameAvailable = false;
     lastFrameTime = millis();
+    uint8_t* frameBuf = (uint8_t*)activeRenderBuf;
+    size_t frameLen = activeRenderBufLen;
+
+    // Immediately ACK ('K') so iPhone pipelines Frame N+1 into the inactive ping-pong buffer while ST7789 renders Frame N!
+    if (wsConnected && wsClientNum != 255) {
+      webSocketServer.sendTXT(wsClientNum, "K");
+    }
+
     #if defined(DISPLAY_TFT_ST7789)
     // Render live map/simulator when app has established handshake (isAppConnected) or WebSocket stream is active
-    if (activeRenderBufLen > 100 && (display.isAppConnected() || wsConnected)) {
+    if (frameLen > 100 && (display.isAppConnected() || wsConnected)) {
       uint16_t jpgW = 0, jpgH = 0;
-      TJpgDec.getJpgSize(&jpgW, &jpgH, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      TJpgDec.getJpgSize(&jpgW, &jpgH, frameBuf, frameLen);
       if (jpgW >= 300) {
         display.setFullScreenStream(true);
         g_clipMapOnly = false;
         tft.resetViewport();
         int mapY = (jpgH <= 216) ? 24 : 0;
         g_skipNavPopup = display.isPopupActive() && (display.getCurrentState() == STATE_NAVIGATION);
-        TJpgDec.drawJpg(0, mapY, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        TJpgDec.drawJpg(0, mapY, frameBuf, frameLen);
         display.onFrameRendered();
       } else if (jpgW > 0) {
         display.setFullScreenStream(false);
         g_clipMapOnly = true;
         g_skipNavPopup = false;
         tft.setViewport(6, 8, 144, 224, false);
-        TJpgDec.drawJpg(6, 8, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        TJpgDec.drawJpg(6, 8, frameBuf, frameLen);
         tft.resetViewport();
         g_clipMapOnly = false;
         tft.drawRoundRect(4, 6, 148, 228, 12, tft.color565(56, 189, 248));
@@ -671,11 +679,7 @@ void loop() {
       }
     }
     #endif
-
-    // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
-    if (wsConnected && wsClientNum != 255) {
-      webSocketServer.sendTXT(wsClientNum, "K");
-    }
+    webSocketServer.loop();
   }
 
   // Grace period before dropping to Standby if BLE disconnected
@@ -823,5 +827,7 @@ void loop() {
     prefs.end();
   }
 
-  delay(1);
+  if (!wsConnected) {
+    delay(1);
+  }
 }

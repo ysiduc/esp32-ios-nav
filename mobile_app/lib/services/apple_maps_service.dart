@@ -185,11 +185,12 @@ class AppleMapsService {
       final lng = (s['lng'] as num?)?.toDouble() ?? 0.0;
 
       final parsedManeuver = _parseManeuverFromInstruction(instruction, i, rawSteps.length);
+      final extractedStreet = _extractStreetName(instruction, fallbackSummary: name);
 
       steps.add(NavStep(
         stepIndex: i,
-        instruction: instruction.isNotEmpty ? instruction : 'Tiếp tục đi thẳng',
-        streetName: _extractStreetName(instruction),
+        instruction: instruction.isNotEmpty ? instruction : 'Tiếp tục đi thẳng trên $name',
+        streetName: extractedStreet,
         distanceMeters: stepDist,
         durationSeconds: (durSec > 0 && distM > 0) ? (stepDist / distM * durSec) : 0,
         coordinate: LatLng(lat, lng),
@@ -221,23 +222,14 @@ class AppleMapsService {
   ) {
     final lower = instruction.toLowerCase();
 
-    if (index == 0) {
-      return (typeStr: 'depart', modifier: null);
-    }
-    if (index == totalSteps - 1 ||
-        lower.contains('đến') ||
-        lower.contains('arrive') ||
-        lower.contains('bên phải của bạn') ||
-        lower.contains('bên trái của bạn')) {
-      return (typeStr: 'arrive', modifier: null);
-    }
+    // 1. Kiểm tra các thao tác rẽ/vòng xuyến/quay đầu trước tiên (kể cả ở bước đầu tiên)
     if (lower.contains('quay đầu') || lower.contains('u-turn') || lower.contains('uturn')) {
       return (typeStr: 'turn', modifier: 'u-turn');
     }
     if (lower.contains('bùng binh') || lower.contains('vòng xuyến') || lower.contains('roundabout') || lower.contains('rotary')) {
       return (typeStr: 'roundabout', modifier: null);
     }
-    if (lower.contains('chếch sang phải') || lower.contains('hơi rẽ phải') || lower.contains('slight right') || lower.contains('nhập làn sang phải')) {
+    if (lower.contains('chếch sang phải') || lower.contains('hơi rẽ phải') || lower.contains('slight right') || lower.contains('nhập làn sang phải') || lower.contains('đi về phía bên phải')) {
       return (typeStr: 'turn', modifier: 'slight right');
     }
     if (lower.contains('ngoặt sang phải') || lower.contains('sharp right')) {
@@ -246,7 +238,7 @@ class AppleMapsService {
     if (lower.contains('rẽ phải') || lower.contains('quẹo phải') || lower.contains('turn right')) {
       return (typeStr: 'turn', modifier: 'right');
     }
-    if (lower.contains('chếch sang trái') || lower.contains('hơi rẽ trái') || lower.contains('slight left') || lower.contains('nhập làn sang trái')) {
+    if (lower.contains('chếch sang trái') || lower.contains('hơi rẽ trái') || lower.contains('slight left') || lower.contains('nhập làn sang trái') || lower.contains('đi về phía bên trái')) {
       return (typeStr: 'turn', modifier: 'slight left');
     }
     if (lower.contains('ngoặt sang trái') || lower.contains('sharp left')) {
@@ -256,18 +248,49 @@ class AppleMapsService {
       return (typeStr: 'turn', modifier: 'left');
     }
 
+    // 2. Chỉ nhận diện đích đến khi thực sự là câu thông báo tới đích hoặc bước cuối cùng không phải lệnh rẽ
+    if (lower.contains('điểm đến') ||
+        lower.contains('điểm đích') ||
+        lower.contains('bên phải của bạn') ||
+        lower.contains('bên trái của bạn') ||
+        lower.contains('destination') ||
+        lower.contains('arrive') ||
+        (index == totalSteps - 1 && totalSteps > 1)) {
+      return (typeStr: 'arrive', modifier: null);
+    }
+
     return (typeStr: 'straight', modifier: 'straight');
   }
 
-  static String _extractStreetName(String instruction) {
-    final prefixes = ['vào đường ', 'vào phố ', 'vào ', 'onto ', 'on '];
+  static String _extractStreetName(String instruction, {String fallbackSummary = ''}) {
+    final clean = instruction.trim();
+    if (clean.isEmpty) {
+      return fallbackSummary.isNotEmpty ? fallbackSummary : 'Tiếp tục đi thẳng';
+    }
+    final lower = clean.toLowerCase();
+    if (lower.contains('điểm đích') || lower.contains('điểm đến') || lower.contains('destination')) {
+      return fallbackSummary.isNotEmpty ? 'Đích: $fallbackSummary' : 'Điểm đến phía trước';
+    }
+    final prefixes = [
+      'vào đường ',
+      'vào phố ',
+      'trên đường ',
+      'trên phố ',
+      'theo hướng ',
+      'đến ',
+      'vào ',
+      'onto ',
+      'on ',
+      'toward ',
+    ];
     for (final p in prefixes) {
-      final idx = instruction.toLowerCase().indexOf(p);
+      final idx = lower.indexOf(p);
       if (idx != -1) {
-        return instruction.substring(idx + p.length).trim();
+        final sub = clean.substring(idx + p.length).trim();
+        if (sub.isNotEmpty) return sub;
       }
     }
-    return instruction;
+    return clean;
   }
 }
 

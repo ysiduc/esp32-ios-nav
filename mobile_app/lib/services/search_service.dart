@@ -803,35 +803,7 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 0: Check Provider (Apple Maps Native iOS vs Goong API)
-    // -------------------------------------------------------------
-    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
-    if (isAppleMapsMode) {
-      try {
-        final applePlaces = await AppleMapsService().searchPlaces(cleanQuery, nearLocation: nearLocation);
-        if (applePlaces.isNotEmpty) {
-          for (final p in applePlaces) {
-            addPlace(p);
-          }
-          return mergedResults;
-        }
-      } catch (e) {
-        // Fallback
-      }
-    } else if (GoongConfig.hasRestApiKey) {
-      try {
-        final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation);
-        if (goongPlaces.isNotEmpty) {
-          for (final p in goongPlaces) {
-            addPlace(p);
-          }
-          return mergedResults;
-        }
-      } catch (_) {}
-    }
-
-    // -------------------------------------------------------------
-    // Step 1: Check Built-in Vietnamese Landmark / POI Database first
+    // Step 0: Check Built-in Vietnamese Landmark / POI Database first
     // -------------------------------------------------------------
     if (cleanQuery.length >= 2) {
       for (final landmark in _vietnameseLandmarks) {
@@ -844,6 +816,39 @@ class SearchService {
           addPlace(landmark);
         }
       }
+    }
+
+    // -------------------------------------------------------------
+    // Step 1: Check Provider (Apple Maps Native iOS vs Goong API)
+    // -------------------------------------------------------------
+    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
+    if (isAppleMapsMode) {
+      try {
+        final applePlaces = await AppleMapsService().searchPlaces(cleanQuery, nearLocation: nearLocation, limit: 15);
+        if (applePlaces.isNotEmpty) {
+          for (final p in applePlaces) {
+            addPlace(p);
+          }
+          mergedResults.sort((a, b) {
+            final scoreA = _calculateRelevanceScore(cleanQuery, a.name, a.displayName, a.distanceMeters);
+            final scoreB = _calculateRelevanceScore(cleanQuery, b.name, b.displayName, b.distanceMeters);
+            return scoreB.compareTo(scoreA);
+          });
+          return mergedResults.take(15).toList();
+        }
+      } catch (e) {
+        // Fallback to multi-engine search below
+      }
+    } else if (GoongConfig.hasRestApiKey) {
+      try {
+        final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation);
+        if (goongPlaces.isNotEmpty) {
+          for (final p in goongPlaces) {
+            addPlace(p);
+          }
+          return mergedResults.take(15).toList();
+        }
+      } catch (_) {}
     }
 
     // -------------------------------------------------------------

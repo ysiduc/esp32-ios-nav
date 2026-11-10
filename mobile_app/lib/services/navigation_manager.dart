@@ -31,6 +31,10 @@ class NavigationManager extends ChangeNotifier {
   int _currentBattery = 85;
   int _remainingEtaMinutes = 0;
   int _consecutiveOffRouteCount = 0;
+  int _closestPointIndex = 0;
+  double _minSegmentDistance = 0.0;
+  double _closestSegmentBearing = 0.0;
+  DateTime? _lastRerouteTime;
 
   StreamSubscription<Position>? _positionStream;
   Timer? _blePushTimer;
@@ -47,6 +51,20 @@ class NavigationManager extends ChangeNotifier {
   bool get isRerouting => _isRerouting;
   NavRoute? get activeRoute => _activeRoute;
   NavRoute? get previewRoute => _previewRoute;
+  int get closestPointIndex => _closestPointIndex;
+
+  /// Danh sách các điểm polyline còn lại phía trước đầu xe (đã cắt bỏ phần đường đã đi qua)
+  List<LatLng> get remainingPolylinePoints {
+    final route = _activeRoute;
+    if (route == null || route.polylinePoints.isEmpty) return [];
+    final pts = route.polylinePoints;
+    if (!_isNavigating || _currentLocation == null || pts.length < 2) {
+      return pts;
+    }
+    final segIdx = _closestPointIndex.clamp(0, pts.length - 2);
+    return [_currentLocation!, ...pts.sublist(segIdx + 1)];
+  }
+
   void setPreviewRoute(NavRoute? route) {
     _previewRoute = route;
     notifyListeners();
@@ -57,6 +75,16 @@ class NavigationManager extends ChangeNotifier {
   double get currentSpeedKmh => _currentSpeedKmh;
   double get currentHeading => _currentHeading;
   double get effectiveHeading {
+    if (_isNavigating && _minSegmentDistance <= 25.0 && _closestSegmentBearing > 0.0) {
+      if (_currentSpeedKmh < 4.0 || _currentHeading <= 0.0) {
+        return _closestSegmentBearing;
+      }
+      double diff = (_currentHeading - _closestSegmentBearing).abs() % 360.0;
+      if (diff > 180.0) diff = 360.0 - diff;
+      if (diff <= 50.0) {
+        return _closestSegmentBearing;
+      }
+    }
     if (_currentHeading > 0.0 && _currentSpeedKmh >= 3.0) {
       return _currentHeading;
     }
@@ -64,13 +92,15 @@ class NavigationManager extends ChangeNotifier {
     if (targetRoute != null && targetRoute.polylinePoints.length >= 2 && _currentLocation != null) {
       const distanceCalc = Distance();
       final points = targetRoute.polylinePoints;
-      int closestIdx = 0;
-      double minD = double.infinity;
-      for (int i = 0; i < points.length; i++) {
-        final d = distanceCalc.as(LengthUnit.Meter, _currentLocation!, points[i]);
-        if (d < minD) {
-          minD = d;
-          closestIdx = i;
+      int closestIdx = _isNavigating ? _closestPointIndex.clamp(0, points.length - 1) : 0;
+      if (!_isNavigating) {
+        double minD = double.infinity;
+        for (int i = 0; i < points.length; i++) {
+          final d = distanceCalc.as(LengthUnit.Meter, _currentLocation!, points[i]);
+          if (d < minD) {
+            minD = d;
+            closestIdx = i;
+          }
         }
       }
       final targetIdx = (closestIdx + 1 < points.length) ? closestIdx + 1 : closestIdx;
@@ -86,10 +116,28 @@ class NavigationManager extends ChangeNotifier {
   int get remainingEtaMinutes => _remainingEtaMinutes;
 
   NavStep? get currentStep {
-    if (_activeRoute == null || _currentStepIndex >= _activeRoute!.steps.length) {
+    if (_activeRoute == null || _activeRoute!.steps.isEmpty) {
       return null;
     }
-    return _activeRoute!.steps[_currentStepIndex];
+    final idx = _currentStepIndex.clamp(0, _activeRoute!.steps.length - 1);
+    final rawStep = _activeRoute!.steps[idx];
+
+    // Nếu đang ở chặng cuối hướng tới đích nhưng còn cách xa (> 50m),
+    // hiển thị "Đi thẳng trên <tên đường>" thay vì báo sớm "Bạn đã đến điểm đích"
+    if (rawStep.maneuverType == ManeuverType.arrive && _distanceToNextManeuver > 50.0) {
+      final road = currentStreetName;
+      return NavStep(
+        stepIndex: rawStep.stepIndex,
+        instruction: 'Đi thẳng trên $road',
+        streetName: road,
+        distanceMeters: rawStep.distanceMeters,
+        durationSeconds: rawStep.durationSeconds,
+        coordinate: rawStep.coordinate,
+        maneuverTypeStr: 'straight',
+        maneuverModifier: 'straight',
+      );
+    }
+    return rawStep;
   }
 
   /// Strips verbose Vietnamese navigation instruction prefixes to leave only the clean street name
@@ -99,6 +147,7 @@ class NavigationManager extends ChangeNotifier {
       'Bắt đầu di chuyển trên ',
       'Bắt đầu đi từ ',
       'Tiếp tục đi thẳng trên ',
+      'Tiếp tục đi theo ',
       'Đi thẳng trên ',
       'Đi thẳng vào ',
       'Rẽ trái vào ',
@@ -124,37 +173,52 @@ class NavigationManager extends ChangeNotifier {
     return s;
   }
 
-  /// Returns the clean name of the road currently being traveled on (for the bottom-right purple pill)
+  static bool _isArrivalOrGenericLabel(String s) {
+    final lower = s.trim().toLowerCase();
+    return lower.isEmpty ||
+        lower == 'đường không tên' ||
+        lower == 'đường chính' ||
+        lower == 'điểm đến' ||
+        lower == 'điểm đến phía trước' ||
+        lower.contains('đến điểm đích') ||
+        lower.contains('đến điểm đến') ||
+        lower.contains('bên phải của bạn') ||
+        lower.contains('bên trái của bạn') ||
+        lower.startsWith('đích:');
+  }
+
+  /// Returns the clean name of the road currently being traveled on (for the bottom blue pill)
   String get currentStreetName {
     final route = _activeRoute ?? _previewRoute;
     if (route != null && route.steps.isNotEmpty) {
-      final int roadIdx = (_currentStepIndex > 0 && _currentStepIndex < route.steps.length)
-          ? _currentStepIndex - 1
-          : 0;
-      final s = cleanStreetName(route.steps[roadIdx].streetName);
-      if (s.isNotEmpty && s != 'Đường không tên' && s != 'Đường chính') {
-        return s;
+      if (_currentStepIndex > 0 && _currentStepIndex <= route.steps.length) {
+        final prev = cleanStreetName(route.steps[_currentStepIndex - 1].streetName);
+        if (!_isArrivalOrGenericLabel(prev)) {
+          return prev;
+        }
+      }
+      if (route.summary.isNotEmpty) {
+        final sum = cleanStreetName(route.summary);
+        if (!_isArrivalOrGenericLabel(sum) && !sum.toLowerCase().contains('apple maps')) {
+          return sum;
+        }
       }
       final cur = cleanStreetName(route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)].streetName);
-      if (cur.isNotEmpty && cur != 'Đường không tên') {
+      if (!_isArrivalOrGenericLabel(cur)) {
         return cur;
       }
     }
     if (route != null && route.summary.isNotEmpty) {
-      return cleanStreetName(route.summary);
+      final sum = cleanStreetName(route.summary);
+      if (!_isArrivalOrGenericLabel(sum)) {
+        return sum;
+      }
     }
     return 'Đường hiện tại';
   }
 
   /// Returns the upcoming turn maneuver step (for the top-left black maneuver card)
-  NavStep? get upcomingStep {
-    final route = _activeRoute ?? _previewRoute;
-    if (route == null || route.steps.isEmpty) return null;
-    if (_currentStepIndex == 0 && route.steps.length > 1) {
-      return route.steps[1];
-    }
-    return route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
-  }
+  NavStep? get upcomingStep => currentStep;
 
   NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
     _initGps();
@@ -188,11 +252,12 @@ class NavigationManager extends ChangeNotifier {
 
   LocationSettings _buildLocationSettings({
     LocationAccuracy accuracy = LocationAccuracy.bestForNavigation,
-    int distanceFilter = 2,
+    int distanceFilter = 0,
   }) {
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       return AppleSettings(
         accuracy: accuracy,
+        activityType: ActivityType.automotiveNavigation,
         distanceFilter: distanceFilter,
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true,
@@ -219,28 +284,39 @@ class NavigationManager extends ChangeNotifier {
           notifyListeners();
         }
 
-        // Immediately start continuous high-accuracy location updates for map & search
-        _positionStream?.cancel();
-        final settings = _buildLocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 2,
-        );
-        _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
-          _currentLocation = LatLng(pos.latitude, pos.longitude);
-          _currentSpeedKmh = pos.speed * 3.6;
-          _currentHeading = pos.heading;
-          if (_isNavigating) {
-            _updateUserPosition(_currentLocation!, _currentSpeedKmh, _currentHeading);
-          } else {
-            notifyListeners();
-          }
-        });
+        _startContinuousGpsStream();
       }
     } catch (_) {
       // Default fallback (Hanoi)
       _currentLocation ??= const LatLng(21.0285, 105.8542);
       notifyListeners();
     }
+  }
+
+  void _startContinuousGpsStream() {
+    _positionStream?.cancel();
+    final settings = _buildLocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 0,
+    );
+    _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
+      if (_isSimulating) return;
+      final rawLoc = LatLng(pos.latitude, pos.longitude);
+      final spdKmh = (pos.speed >= 0 ? pos.speed * 3.6 : 0.0).clamp(0.0, 160.0);
+      final hdg = pos.heading >= 0 ? pos.heading : _currentHeading;
+
+      if (_isNavigating) {
+        _updateUserPosition(rawLoc, spdKmh, hdg);
+      } else {
+        _currentLocation = rawLoc;
+        _currentSpeedKmh = spdKmh;
+        if (pos.heading >= 0 && spdKmh >= 2.0) {
+          _currentHeading = pos.heading;
+        }
+        onLocationChanged?.call(_currentLocation!, effectiveHeading);
+        notifyListeners();
+      }
+    });
   }
 
   static const _locationChannel = MethodChannel('com.ysiduc.esp32_nav/location');
@@ -261,6 +337,104 @@ class NavigationManager extends ChangeNotifier {
     }
   }
 
+  /// Chọn bước điều hướng đầu tiên thực sự phía trước xe (bỏ qua bước depart 0m ở ngay vị trí xuất phát)
+  int _resolveInitialStepIndex(NavRoute route) {
+    if (route.steps.length <= 1) return 0;
+    final firstStep = route.steps[0];
+    if (firstStep.maneuverType == ManeuverType.depart || firstStep.distanceMeters < 12.0) {
+      if (route.polylinePoints.isNotEmpty) {
+        final d = const Distance().as(LengthUnit.Meter, route.polylinePoints.first, firstStep.coordinate);
+        if (d < 20.0) return 1;
+      }
+      if (firstStep.distanceMeters < 10.0) return 1;
+    }
+    return 0;
+  }
+
+  /// Phép chiếu vuông góc từ vị trí GPS xuống đoạn thẳng [a, b]
+  static ({LatLng point, double distanceMeters, double t, double bearingDeg}) _projectPointOnSegment(
+    LatLng p,
+    LatLng a,
+    LatLng b,
+  ) {
+    final cosLat = math.cos(p.latitude * (math.pi / 180.0));
+    final dx = (b.longitude - a.longitude) * cosLat * 111320.0;
+    final dy = (b.latitude - a.latitude) * 110540.0;
+    final px = (p.longitude - a.longitude) * cosLat * 111320.0;
+    final py = (p.latitude - a.latitude) * 110540.0;
+
+    final lenSq = dx * dx + dy * dy;
+    final t = lenSq > 0.01 ? ((px * dx + py * dy) / lenSq).clamp(0.0, 1.0) : 0.0;
+
+    final projLat = a.latitude + t * (b.latitude - a.latitude);
+    final projLng = a.longitude + t * (b.longitude - a.longitude);
+    final distX = px - t * dx;
+    final distY = py - t * dy;
+    final distMeters = math.sqrt(distX * distX + distY * distY);
+    final bearingDeg = lenSq > 0.001 ? ((math.atan2(dx, dy) * (180.0 / math.pi)) + 360.0) % 360.0 : 0.0;
+
+    return (
+      point: LatLng(projLat, projLng),
+      distanceMeters: distMeters,
+      t: t,
+      bearingDeg: bearingDeg,
+    );
+  }
+
+  /// Tìm đoạn polyline gần nhất và khớp (Map-Match) vị trí xe lên lộ trình
+  ({LatLng snappedPoint, int segmentIndex, double distanceMeters, double bearingDeg}) _snapToRoute(
+    LatLng rawLocation,
+    List<LatLng> pts,
+  ) {
+    if (pts.length < 2) {
+      return (
+        snappedPoint: rawLocation,
+        segmentIndex: 0,
+        distanceMeters: 0.0,
+        bearingDeg: _currentHeading,
+      );
+    }
+
+    int bestIdx = _closestPointIndex.clamp(0, pts.length - 2);
+    double minDist = double.infinity;
+    LatLng bestPoint = rawLocation;
+    double bestBearing = _currentHeading;
+
+    // Ưu tiên tìm từ đoạn hiện tại về phía trước để không bị nhảy lùi ở các ngã tư
+    final int startSearch = math.max(0, _closestPointIndex - 2);
+    for (int i = startSearch; i < pts.length - 1; i++) {
+      final proj = _projectPointOnSegment(rawLocation, pts[i], pts[i + 1]);
+      // Cộng một lượng phạt nhỏ cho các đoạn quá xa phía trước để giữ tính liên tục
+      final penalty = (i > _closestPointIndex + 8) ? (i - _closestPointIndex) * 0.4 : 0.0;
+      if (proj.distanceMeters + penalty < minDist) {
+        minDist = proj.distanceMeters;
+        bestIdx = i;
+        bestPoint = proj.point;
+        bestBearing = proj.bearingDeg;
+      }
+    }
+
+    // Nếu khoảng cách ở đoạn phía trước vẫn lớn (> 30m), quét lại toàn bộ tuyến đường
+    if (minDist > 30.0 && startSearch > 0) {
+      for (int i = 0; i < startSearch; i++) {
+        final proj = _projectPointOnSegment(rawLocation, pts[i], pts[i + 1]);
+        if (proj.distanceMeters < minDist) {
+          minDist = proj.distanceMeters;
+          bestIdx = i;
+          bestPoint = proj.point;
+          bestBearing = proj.bearingDeg;
+        }
+      }
+    }
+
+    return (
+      snappedPoint: bestPoint,
+      segmentIndex: bestIdx,
+      distanceMeters: minDist,
+      bearingDeg: bestBearing,
+    );
+  }
+
   /// Start Real-World Turn-by-Turn Navigation with GPS
   void startNavigation(NavRoute route) {
     stopNavigation();
@@ -269,7 +443,9 @@ class NavigationManager extends ChangeNotifier {
     _isNavigating = true;
     _isSimulating = false;
     _isRerouting = false;
-    _currentStepIndex = 0;
+    _closestPointIndex = 0;
+    _minSegmentDistance = 0.0;
+    _currentStepIndex = _resolveInitialStepIndex(route);
     _consecutiveOffRouteCount = 0;
     _remainingTotalDistance = route.totalDistanceMeters;
     _remainingEtaMinutes = (route.totalDurationSeconds / 60).round();
@@ -277,22 +453,18 @@ class NavigationManager extends ChangeNotifier {
     if (route.steps.isNotEmpty) {
       final startLoc = _currentLocation ?? (route.polylinePoints.isNotEmpty ? route.polylinePoints.first : route.steps.first.coordinate);
       _currentLocation ??= startLoc;
-      final targetStep = route.steps.length > 1 ? route.steps[1] : route.steps.first;
+      final targetStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
       _distanceToNextManeuver = const Distance().as(LengthUnit.Meter, startLoc, targetStep.coordinate);
     }
 
-    // Start location tracking with iOS background execution enabled
-    final locationSettings = _buildLocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 2, // 2 meters
-    );
+    // Đảm bảo luồng GPS liên tục độ chính xác cao nhất luôn chạy
+    _startContinuousGpsStream();
+    if (_currentLocation != null) {
+      _updateUserPosition(_currentLocation!, _currentSpeedKmh, _currentHeading);
+    }
 
-    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings).listen((pos) {
-      _updateUserPosition(LatLng(pos.latitude, pos.longitude), pos.speed * 3.6, pos.heading);
-    });
-
-    // Start periodic BLE push timer (every 1.2 seconds)
-    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
+    // Start periodic BLE push timer (every 1.0 second)
+    _blePushTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       _sendCurrentPayloadToEsp32();
     });
 
@@ -308,7 +480,9 @@ class NavigationManager extends ChangeNotifier {
     _isNavigating = true;
     _isSimulating = true;
     _isRerouting = false;
-    _currentStepIndex = 0;
+    _closestPointIndex = 0;
+    _minSegmentDistance = 0.0;
+    _currentStepIndex = _resolveInitialStepIndex(route);
     _simulatedPolylineIndex = 0;
     _currentSpeedKmh = 38.0; // 38 km/h mock speed
     _consecutiveOffRouteCount = 0;
@@ -326,6 +500,7 @@ class NavigationManager extends ChangeNotifier {
     _simulationTimer = Timer.periodic(const Duration(milliseconds: 150), (timer) {
       if (_simulatedPolylineIndex < polyline.length - 1) {
         _simulatedPolylineIndex++;
+        _closestPointIndex = _simulatedPolylineIndex.clamp(0, math.max(0, polyline.length - 2));
         final nextCoord = polyline[_simulatedPolylineIndex];
 
         // Calculate heading
@@ -359,76 +534,142 @@ class NavigationManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _updateUserPosition(LatLng newLocation, double speedKmh, double heading) {
-    _currentLocation = newLocation;
+  void _updateUserPosition(LatLng rawLocation, double speedKmh, double heading) {
     _currentSpeedKmh = speedKmh.clamp(0.0, 160.0);
-    _currentHeading = heading;
+    if (heading >= 0.0) {
+      _currentHeading = heading;
+    }
 
-    onLocationChanged?.call(newLocation, heading);
+    if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty) {
+      _currentLocation = rawLocation;
+      onLocationChanged?.call(_currentLocation!, effectiveHeading);
+      notifyListeners();
+      return;
+    }
 
-    if (_activeRoute == null || _activeRoute!.steps.isEmpty) return;
+    final pts = _activeRoute!.polylinePoints;
 
-    // Measure distance to current step maneuver point
+    // 1. Map-Matching (Snap vị trí xe vào vạch dẫn đường nếu sai số GPS <= 24m)
+    if (!_isSimulating && pts.length >= 2) {
+      final snap = _snapToRoute(rawLocation, pts);
+      _minSegmentDistance = snap.distanceMeters;
+      _closestSegmentBearing = snap.bearingDeg;
+
+      if (snap.distanceMeters <= 24.0) {
+        _currentLocation = snap.snappedPoint;
+        _closestPointIndex = snap.segmentIndex;
+      } else {
+        _currentLocation = rawLocation;
+      }
+    } else {
+      _currentLocation = rawLocation;
+      _minSegmentDistance = 0.0;
+    }
+
+    final effectiveLoc = _currentLocation!;
+    onLocationChanged?.call(effectiveLoc, effectiveHeading);
+
+    if (_activeRoute!.steps.isEmpty) return;
+
+    // 2. Tính khoảng cách dọc theo lộ trình tới điểm rẽ tiếp theo và tự động chuyển bước khi đi qua
     const distanceCalculator = Distance();
-    final targetStep = _activeRoute!.steps[_currentStepIndex];
-    _distanceToNextManeuver = distanceCalculator.as(
+    _currentStepIndex = _currentStepIndex.clamp(0, _activeRoute!.steps.length - 1);
+    var targetStep = _activeRoute!.steps[_currentStepIndex];
+
+    double directDistToStep = distanceCalculator.as(
       LengthUnit.Meter,
-      newLocation,
+      effectiveLoc,
       targetStep.coordinate,
     );
 
-    // If within 25m of current step, advance to next step
-    if (_distanceToNextManeuver <= 25.0 && _currentStepIndex < _activeRoute!.steps.length - 1) {
+    // Tìm đỉnh polyline tương ứng với bước rẽ hiện tại
+    int stepPolyIdx = pts.length - 1;
+    double minStepVertexDist = double.infinity;
+    for (int i = _closestPointIndex; i < pts.length; i++) {
+      final d = distanceCalculator.as(LengthUnit.Meter, pts[i], targetStep.coordinate);
+      if (d < minStepVertexDist) {
+        minStepVertexDist = d;
+        stepPolyIdx = i;
+      }
+    }
+
+    // Chuyển sang bước tiếp theo khi đã tiến sát <= 22m hoặc đã đi vượt qua đỉnh rẽ trên polyline
+    if (_currentStepIndex < _activeRoute!.steps.length - 1 &&
+        (directDistToStep <= 22.0 || (_closestPointIndex > stepPolyIdx && minStepVertexDist < 30.0))) {
       _currentStepIndex++;
-      final nextStep = _activeRoute!.steps[_currentStepIndex];
-      _distanceToNextManeuver = distanceCalculator.as(
+      targetStep = _activeRoute!.steps[_currentStepIndex];
+      directDistToStep = distanceCalculator.as(
         LengthUnit.Meter,
-        newLocation,
-        nextStep.coordinate,
+        effectiveLoc,
+        targetStep.coordinate,
       );
     }
 
-    // Check for off-route condition (Auto-Rerouting)
+    _distanceToNextManeuver = directDistToStep;
+
+    // 3. Kiểm tra đi chệch lộ trình và tính lại đường tức thì (Auto-Rerouting)
     if (!_isSimulating && !_isRerouting) {
-      _checkOffRouteAndReroute(newLocation);
+      _checkOffRouteAndReroute(rawLocation);
     }
 
     _updateRemainingMetrics();
     notifyListeners();
   }
 
-  /// Automatically recalculate route if user deviates more than 45m from polyline
-  void _checkOffRouteAndReroute(LatLng location) async {
+  /// Tự động tính lại lộ trình nhanh khi người dùng đi sai hướng hoặc lệch khỏi vạch dẫn đường
+  void _checkOffRouteAndReroute(LatLng rawLocation) async {
     if (_activeRoute == null || _activeRoute!.polylinePoints.isEmpty) return;
 
-    const distanceCalculator = Distance();
-    double minDistanceToPolyline = double.infinity;
-
-    for (final point in _activeRoute!.polylinePoints) {
-      final d = distanceCalculator.as(LengthUnit.Meter, location, point);
-      if (d < minDistanceToPolyline) {
-        minDistanceToPolyline = d;
-      }
+    // Cooldown 3 giây giữa các lần reroute để tránh gọi chồng chéo
+    if (_lastRerouteTime != null &&
+        DateTime.now().difference(_lastRerouteTime!).inMilliseconds < 3000) {
+      return;
     }
 
-    if (minDistanceToPolyline > 45.0) {
+    double headingDiff = 0.0;
+    if (_currentSpeedKmh >= 8.0 && _currentHeading > 0.0 && _closestSegmentBearing > 0.0) {
+      headingDiff = (_currentHeading - _closestSegmentBearing).abs() % 360.0;
+      if (headingDiff > 180.0) headingDiff = 360.0 - headingDiff;
+    }
+
+    final bool isSeverelyOffRoute = _minSegmentDistance > 35.0;
+    final bool isModeratelyOffRoute = _minSegmentDistance > 24.0;
+    final bool isWrongDirectionOffRoute =
+        _minSegmentDistance > 16.0 && _currentSpeedKmh >= 10.0 && headingDiff > 75.0;
+
+    if (isSeverelyOffRoute || isModeratelyOffRoute || isWrongDirectionOffRoute) {
       _consecutiveOffRouteCount++;
-      if (_consecutiveOffRouteCount >= 2) {
+      final int requiredCount = isSeverelyOffRoute ? 1 : 2;
+
+      if (_consecutiveOffRouteCount >= requiredCount) {
         _isRerouting = true;
+        _consecutiveOffRouteCount = 0;
+        _lastRerouteTime = DateTime.now();
         notifyListeners();
 
-        final destination = _activeRoute!.polylinePoints.last;
-        final newRoute = await _directionsService.calculateRoute(location, destination, profile: 'bike');
+        try {
+          final destination = _activeRoute!.polylinePoints.last;
+          final newRoute = await _directionsService.calculateRoute(
+            rawLocation,
+            destination,
+            profile: 'bike',
+            bypassCache: true,
+          );
 
-        if (newRoute != null && _isNavigating) {
-          _activeRoute = newRoute;
-          _currentStepIndex = 0;
-          _consecutiveOffRouteCount = 0;
-          _updateRemainingMetrics();
-          _sendCurrentPayloadToEsp32();
+          if (newRoute != null && _isNavigating) {
+            _activeRoute = newRoute;
+            _closestPointIndex = 0;
+            _minSegmentDistance = 0.0;
+            _currentStepIndex = _resolveInitialStepIndex(newRoute);
+            _updateRemainingMetrics();
+            onLocationChanged?.call(_currentLocation ?? rawLocation, effectiveHeading);
+            _sendCurrentPayloadToEsp32();
+          }
+        } catch (_) {
+        } finally {
+          _isRerouting = false;
+          notifyListeners();
         }
-        _isRerouting = false;
-        notifyListeners();
       }
     } else {
       _consecutiveOffRouteCount = 0;
@@ -443,28 +684,19 @@ class NavigationManager extends ChangeNotifier {
 
     const distanceCalculator = Distance();
 
-    // In simulation mode, polyline progress index is already tracked
-    int closestIdx = _isSimulating ? _simulatedPolylineIndex : 0;
+    final int segIdx = (_isSimulating ? _simulatedPolylineIndex : _closestPointIndex)
+        .clamp(0, math.max(0, points.length - 2));
 
-    if (!_isSimulating) {
-      // Find the closest polyline point to user location
-      double minDist = double.infinity;
-      for (int i = 0; i < points.length; i++) {
-        final d = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[i]);
-        if (d < minDist) {
-          minDist = d;
-          closestIdx = i;
-        }
-      }
-    }
-
-    // Accumulate actual road polyline distance from closest point to end
-    double polylineDist = 0.0;
-    for (int i = closestIdx; i < points.length - 1; i++) {
+    // Tính tổng quãng đường còn lại dọc theo các đoạn polyline phía trước xe
+    double polylineDist = distanceCalculator.as(
+      LengthUnit.Meter,
+      _currentLocation!,
+      points[math.min(segIdx + 1, points.length - 1)],
+    );
+    for (int i = segIdx + 1; i < points.length - 1; i++) {
       polylineDist += distanceCalculator.as(LengthUnit.Meter, points[i], points[i + 1]);
     }
-    final distToClosest = distanceCalculator.as(LengthUnit.Meter, _currentLocation!, points[closestIdx]);
-    _remainingTotalDistance = distToClosest + polylineDist;
+    _remainingTotalDistance = polylineDist;
 
     // Calculate accurate ETA based on initial route duration proportion
     final totalMeters = _activeRoute!.totalDistanceMeters;
@@ -644,13 +876,19 @@ class NavigationManager extends ChangeNotifier {
     _activeRoute = null; // Clear active route so minimap returns to standby mode!
     _previewRoute = null; // Also clear preview route to completely remove old route
     _currentStepIndex = 0;
+    _closestPointIndex = 0;
+    _minSegmentDistance = 0.0;
     _simulatedPolylineIndex = 0;
     _distanceToNextManeuver = 0.0;
     _remainingTotalDistance = 0.0;
     _remainingEtaMinutes = 0;
-    _positionStream?.cancel();
     _simulationTimer?.cancel();
     _blePushTimer?.cancel();
+
+    // Giữ luồng GPS chạy liên tục để vị trí hiện tại trên bản đồ luôn chuẩn xác khi tìm đường mới
+    if (_positionStream == null) {
+      _startContinuousGpsStream();
+    }
 
     // Send standby idle dashboard packet to ESP32
     sendPreviewPayloadToEsp32();
@@ -661,6 +899,8 @@ class NavigationManager extends ChangeNotifier {
   @override
   void dispose() {
     _idleHeartbeatTimer?.cancel();
+    _positionStream?.cancel();
+    _positionStream = null;
     stopNavigation();
     super.dispose();
   }

@@ -84,13 +84,16 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
   ) {
     let request = MKLocalSearch.Request()
     request.naturalLanguageQuery = query
+    if #available(iOS 13.0, *) {
+      request.resultTypes = [.address, .pointOfInterest]
+    }
 
     if let lat = lat, let lng = lng, lat != 0, lng != 0 {
       let center = CLLocationCoordinate2D(latitude: lat, longitude: lng)
       request.region = MKCoordinateRegion(
         center: center,
-        latitudinalMeters: 60000,
-        longitudinalMeters: 60000
+        latitudinalMeters: 25000,
+        longitudinalMeters: 25000
       )
     }
 
@@ -227,12 +230,29 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
         let encodedPolyline = PolylineEncoder.encode(polylinePoints)
 
         // Các bước điều hướng (Steps)
+        // Lưu ý: Trong MapKit, mỗi MKRoute.Step dẫn tới điểm rẽ ở CUỐI polyline của step đó.
+        // Step 0 thường là bước khởi hành 0m không có chỉ dẫn -> bỏ qua để tránh nhảy bước sớm.
         var stepsData: [[String: Any]] = []
-        for (stepIdx, step) in route.steps.enumerated() {
-          let stepCoord = step.polyline.coordinate
+        for step in route.steps {
+          let cleanInstr = step.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+          if cleanInstr.isEmpty && step.distance < 5.0 {
+            continue
+          }
+
+          let stepPtCount = step.polyline.pointCount
+          var stepCoord = step.polyline.coordinate
+          if stepPtCount > 0 {
+            var stepPts = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: stepPtCount)
+            step.polyline.getCoordinates(&stepPts, range: NSRange(location: 0, length: stepPtCount))
+            // Điểm thực hiện thao tác rẽ nằm ở CUỐI đoạn đường của step
+            if let lastPt = stepPts.last {
+              stepCoord = lastPt
+            }
+          }
+
           let stepDict: [String: Any] = [
-            "stepIndex": stepIdx,
-            "instruction": step.instructions,
+            "stepIndex": stepsData.count,
+            "instruction": cleanInstr.isEmpty ? "Tiếp tục đi theo \(route.name)" : cleanInstr,
             "distance": step.distance,
             "notice": step.notice ?? "",
             "lat": stepCoord.latitude,

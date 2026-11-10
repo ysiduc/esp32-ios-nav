@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -71,6 +72,27 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _debounceTimer;
   String? _clipboardGoogleMapsText;
   String? _lastDismissedClipboardText;
+  StateSetter? _searchModalSetState;
+  ml.Line? _activeCasingLine;
+  ml.Line? _activeCoreLine;
+
+  void _refreshSearchModal() {
+    if (mounted) {
+      setState(() {});
+    }
+    try {
+      _searchModalSetState?.call(() {});
+    } catch (_) {}
+  }
+
+  /// Dịch tâm camera về phía trước xe ~42m theo hướng di chuyển để xe nằm ở 1/3 dưới màn hình chuẩn Apple Maps
+  LatLng _offsetCameraTarget(LatLng loc, double headingDeg, double offsetMeters) {
+    final rad = headingDeg * (math.pi / 180.0);
+    final cosLat = math.cos(loc.latitude * (math.pi / 180.0));
+    final dLat = (offsetMeters * math.cos(rad)) / 110540.0;
+    final dLng = cosLat > 0.01 ? (offsetMeters * math.sin(rad)) / (111320.0 * cosLat) : 0.0;
+    return LatLng(loc.latitude + dLat, loc.longitude + dLng);
+  }
 
   @override
   void initState() {
@@ -90,18 +112,23 @@ class _MapScreenState extends State<MapScreen> {
 
       // Hook navigation position update callback to continuously center vehicle with 3D perspective
       navManager.onLocationChanged = (loc, heading) {
-        if (mounted && navManager.isNavigating && _isAutoCentering) {
-          _mapController?.animateCamera(
-            ml.CameraUpdate.newCameraPosition(
-              ml.CameraPosition(
-                target: ml.LatLng(loc.latitude, loc.longitude),
-                zoom: _isDrivingZoomOverview ? 14.5 : 17.5,
-                tilt: _isDrivingZoomOverview ? 0.0 : 50.0,
-                bearing: _isDrivingZoomOverview ? 0.0 : heading,
+        if (!mounted) return;
+        _userPosition = loc;
+        if (navManager.isNavigating) {
+          _updateRouteOnMap(isFastTrackingUpdate: true);
+          if (_isAutoCentering) {
+            final camTarget = _isDrivingZoomOverview ? loc : _offsetCameraTarget(loc, heading, 42.0);
+            _mapController?.animateCamera(
+              ml.CameraUpdate.newCameraPosition(
+                ml.CameraPosition(
+                  target: ml.LatLng(camTarget.latitude, camTarget.longitude),
+                  zoom: _isDrivingZoomOverview ? 14.5 : 17.6,
+                  tilt: _isDrivingZoomOverview ? 0.0 : 52.0,
+                  bearing: _isDrivingZoomOverview ? 0.0 : heading,
+                ),
               ),
-            ),
-          );
-          _updateRouteOnMap();
+            );
+          }
         }
       };
 
@@ -147,21 +174,44 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// Update route polyline on the MapLibre map using Apple Maps styling
-  Future<void> _updateRouteOnMap() async {
+  /// Automatically trims traveled polyline segments behind the vehicle during active navigation!
+  Future<void> _updateRouteOnMap({bool isFastTrackingUpdate = false}) async {
     final ctrl = _mapController;
     if (ctrl == null || !_mapReady) return;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     List<LatLng> points = [];
     if (navManager.isNavigating && navManager.activeRoute != null) {
-      points = navManager.activeRoute!.polylinePoints;
+      points = navManager.remainingPolylinePoints;
     } else if (_routes.isNotEmpty && _selectedRouteIndex < _routes.length) {
       points = _routes[_selectedRouteIndex].polylinePoints;
     }
 
     try {
+      if (points.length < 2) {
+        await ctrl.clearLines();
+        _activeCasingLine = null;
+        _activeCoreLine = null;
+        return;
+      }
+
+      final mlGeometry = points
+          .map((p) => ml.LatLng(p.latitude, p.longitude))
+          .toList();
+
+      // Cắt vạch dẫn đường mượt mà theo thời gian thực mà không cần xóa/vẽ lại toàn bộ layer
+      if (isFastTrackingUpdate &&
+          navManager.isNavigating &&
+          _activeCasingLine != null &&
+          _activeCoreLine != null) {
+        await ctrl.updateLine(_activeCasingLine!, ml.LineOptions(geometry: mlGeometry));
+        await ctrl.updateLine(_activeCoreLine!, ml.LineOptions(geometry: mlGeometry));
+        return;
+      }
+
       await ctrl.clearLines();
-      if (points.length < 2) return;
+      _activeCasingLine = null;
+      _activeCoreLine = null;
 
       // Draw alternative routes first in muted Apple slate (Screenshot 4)
       if (!navManager.isNavigating && _routes.length > 1) {
@@ -183,12 +233,8 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
 
-      final mlGeometry = points
-          .map((p) => ml.LatLng(p.latitude, p.longitude))
-          .toList();
-
       // 1. Casing / Glow outline (Apple Maps Deep Blue Casing #0051B3)
-      await ctrl.addLine(
+      _activeCasingLine = await ctrl.addLine(
         ml.LineOptions(
           geometry: mlGeometry,
           lineColor: '#0051B3',
@@ -199,7 +245,7 @@ class _MapScreenState extends State<MapScreen> {
       );
 
       // 2. Core Apple Maps Vibrant Route Line (#007AFF)
-      await ctrl.addLine(
+      _activeCoreLine = await ctrl.addLine(
         ml.LineOptions(
           geometry: mlGeometry,
           lineColor: '#007AFF',
@@ -358,73 +404,78 @@ class _MapScreenState extends State<MapScreen> {
     _debounceTimer?.cancel();
     final clean = query.trim();
     if (clean.isEmpty) {
-      setState(() {
-        _searchResults = [];
-        _isSearching = false;
-      });
+      _searchResults = [];
+      _isSearching = false;
+      _refreshSearchModal();
       return;
     }
 
     if (GoogleMapsParser.isGoogleMapsOrCoordInput(clean)) {
-      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _debounceTimer = Timer(const Duration(milliseconds: 250), () {
         _handleGoogleMapsOrSharedInput(clean);
       });
       return;
     }
 
     // Không gửi request mạng với từ khóa quá ngắn (dưới 2 ký tự)
-    if (clean.length < 2) return;
+    if (clean.length < 2) {
+      _refreshSearchModal();
+      return;
+    }
 
     try {
-      Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 600));
+      Provider.of<EspStreamService>(context, listen: false).pauseStreamingFor(const Duration(milliseconds: 300));
     } catch (_) {}
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
 
-    // 1. Instant 0ms Local Offline Results
+    // 1. Instant 0ms Local Offline Results (hiển thị ngay lập tức trong modal)
     final instantMatches = _searchService.searchInstantLocal(clean, nearLocation: currentPos);
     if (instantMatches.isNotEmpty) {
-      setState(() {
-        _searchResults = instantMatches;
-      });
+      _searchResults = instantMatches;
     }
 
-    // 2. Debounce 450ms: Giảm đến 90% số lượng request lãng phí khi người dùng gõ phím
-    setState(() => _isSearching = true);
-    _debounceTimer = Timer(const Duration(milliseconds: 450), () async {
+    // 2. Debounce 200ms: Gọi Apple Maps / Goong và cập nhật trực tiếp vào Modal đang mở!
+    _isSearching = true;
+    _refreshSearchModal();
+    _debounceTimer = Timer(const Duration(milliseconds: 200), () async {
       final results = await _searchService.searchPlaces(clean, nearLocation: currentPos);
-      if (mounted) {
-        setState(() {
-          _searchResults = results;
-          _isSearching = false;
-        });
+      if (mounted && _searchController.text.trim() == clean) {
+        _searchResults = results;
+        _isSearching = false;
+        _refreshSearchModal();
       }
     });
   }
 
-  void _onSearchSubmitted(String query) async {
+  void _onSearchSubmitted(String query, {BuildContext? modalCtx}) async {
     final clean = query.trim();
     if (clean.isEmpty) return;
 
     if (GoogleMapsParser.isGoogleMapsOrCoordInput(clean)) {
+      if (modalCtx != null && Navigator.canPop(modalCtx)) {
+        Navigator.pop(modalCtx);
+      }
       _handleGoogleMapsOrSharedInput(clean);
       return;
     }
 
     _debounceTimer?.cancel();
-    setState(() => _isSearching = true);
+    _isSearching = true;
+    _refreshSearchModal();
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final currentPos = navManager.currentLocation ?? _userPosition;
     final results = await _searchService.searchPlaces(clean, nearLocation: currentPos);
 
     if (mounted) {
-      setState(() {
-        _searchResults = results;
-        _isSearching = false;
-      });
-      if (results.isNotEmpty) {
+      _searchResults = results;
+      _isSearching = false;
+      _refreshSearchModal();
+      // Nếu người dùng bấm Tìm từ ngoài modal thì chọn luôn kết quả đầu tiên;
+      // Nếu đang ở trong modal tìm kiếm thì giữ nguyên danh sách kết quả để người dùng nhìn thấy và chọn!
+      if (_searchModalSetState == null && results.isNotEmpty) {
         _onPlaceClicked(results.first);
       }
     }
@@ -448,40 +499,55 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _onPlaceClicked(MapPlace place) async {
-    MapPlace resolvedPlace = place;
-
-    // Nếu địa điểm chưa có tọa độ GPS (do tải lười từ Goong AutoComplete),
-    // gọi Place Detail 1 lần duy nhất cho địa điểm được chọn.
-    if (resolvedPlace.placeId != null &&
-        resolvedPlace.coordinate.latitude == 0 &&
-        resolvedPlace.coordinate.longitude == 0) {
+  Future<MapPlace> _resolvePlaceCoordinateIfNeeded(MapPlace place) async {
+    if (place.placeId != null &&
+        place.coordinate.latitude == 0 &&
+        place.coordinate.longitude == 0) {
       final detail = await GoongService().getPlaceDetail(
-        resolvedPlace.placeId!,
-        fallbackName: resolvedPlace.name,
-        fallbackDisplay: resolvedPlace.displayName,
+        place.placeId!,
+        fallbackName: place.name,
+        fallbackDisplay: place.displayName,
       );
       if (detail != null) {
-        resolvedPlace = detail;
+        return detail;
       }
     }
+    return place;
+  }
+
+  void _onPlaceClicked(MapPlace place, {bool autoCalculateRoutes = false}) async {
+    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
 
     _searchFocusNode.unfocus();
     _searchService.addRecentSearch(resolvedPlace);
-    if (mounted) {
-      setState(() {
-        _selectedPlace = resolvedPlace;
-        _searchResults = [];
-        _viewMode = 1; // Open Place Details Inspector
-      });
-      _mapController?.animateCamera(
-        ml.CameraUpdate.newLatLngZoom(
-          ml.LatLng(resolvedPlace.coordinate.latitude, resolvedPlace.coordinate.longitude),
-          16.5,
-        ),
-      );
-      _updateDestinationMarker();
+    if (!mounted) return;
+
+    if (autoCalculateRoutes) {
+      _calculateRoutesForPlace(resolvedPlace);
+      return;
     }
+
+    // Tính sẵn lộ trình ngầm trong bộ nhớ đệm để khi bấm "Chỉ đường" hiện ra ngay lập tức (0ms)!
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final startPos = navManager.currentLocation ?? _userPosition;
+    unawaited(_directionsService.calculateMultipleRoutes(
+      startPos,
+      resolvedPlace.coordinate,
+      mode: _transportMode,
+    ));
+
+    setState(() {
+      _selectedPlace = resolvedPlace;
+      _searchResults = [];
+      _viewMode = 1; // Open Place Details Inspector
+    });
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(
+        ml.LatLng(resolvedPlace.coordinate.latitude, resolvedPlace.coordinate.longitude),
+        16.5,
+      ),
+    );
+    _updateDestinationMarker();
   }
 
   void _onMapTapped(LatLng point) async {
@@ -508,16 +574,18 @@ class _MapScreenState extends State<MapScreen> {
   // Route Calculation & Comparison Logic
   // -------------------------------------------------------------
   Future<void> _calculateRoutesForPlace(MapPlace place) async {
+    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
+    if (!mounted) return;
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final startPos = navManager.currentLocation ?? _userPosition;
 
     try {
-      Provider.of<EspStreamService>(context, listen: false).pauseForDuration(const Duration(milliseconds: 1500));
+      Provider.of<EspStreamService>(context, listen: false).pauseStreamingFor(const Duration(milliseconds: 400));
     } catch (_) {}
 
     setState(() {
       _isLoadingRoutes = true;
-      _selectedPlace = place;
+      _selectedPlace = resolvedPlace;
       _viewMode = 2; // Open Route Comparison
       _selectedRouteIndex = 0;
       _routes = [];
@@ -526,7 +594,7 @@ class _MapScreenState extends State<MapScreen> {
 
     final routes = await _directionsService.calculateMultipleRoutes(
       startPos,
-      place.coordinate,
+      resolvedPlace.coordinate,
       mode: _transportMode,
     );
 
@@ -752,10 +820,10 @@ class _MapScreenState extends State<MapScreen> {
             trackCameraPosition: true,
             compassEnabled: false,
             myLocationEnabled: true,
-            myLocationTrackingMode: _isAutoCentering && isDriving
-                ? ml.MyLocationTrackingMode.tracking
-                : ml.MyLocationTrackingMode.none,
-            myLocationRenderMode: ml.MyLocationRenderMode.compass,
+            myLocationTrackingMode: ml.MyLocationTrackingMode.none,
+            myLocationRenderMode: isDriving
+                ? ml.MyLocationRenderMode.gps
+                : ml.MyLocationRenderMode.compass,
             rotateGesturesEnabled: true,
             scrollGesturesEnabled: true,
             zoomGesturesEnabled: true,
@@ -1261,6 +1329,7 @@ class _MapScreenState extends State<MapScreen> {
       builder: (modalCtx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            _searchModalSetState = setModalState;
             final query = _searchController.text.trim();
             final isQueryMode = query.isNotEmpty;
             final results = isQueryMode ? _searchResults : _searchService.recentSearches;
@@ -1319,6 +1388,7 @@ class _MapScreenState extends State<MapScreen> {
                                       child: TextField(
                                         controller: _searchController,
                                         autofocus: true,
+                                        textInputAction: TextInputAction.search,
                                         style: const TextStyle(
                                           color: Colors.black87,
                                           fontSize: 16,
@@ -1334,11 +1404,9 @@ class _MapScreenState extends State<MapScreen> {
                                         ),
                                         onChanged: (val) {
                                           _onSearchChanged(val);
-                                          setModalState(() {});
                                         },
                                         onSubmitted: (val) {
-                                          _onSearchSubmitted(val);
-                                          setModalState(() {});
+                                          _onSearchSubmitted(val, modalCtx: modalCtx);
                                         },
                                       ),
                                     ),
@@ -1353,7 +1421,6 @@ class _MapScreenState extends State<MapScreen> {
                                         onTap: () {
                                           _searchController.clear();
                                           _onSearchChanged('');
-                                          setModalState(() {});
                                         },
                                         child: const Icon(Icons.cancel, color: Colors.black38, size: 20),
                                       ),
@@ -1453,30 +1520,98 @@ class _MapScreenState extends State<MapScreen> {
                       // Body: Query Results or Recent Searches & Nearby Categories
                       Expanded(
                         child: isQueryMode
-                            ? ListView.separated(
-                                controller: scrollController,
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: results.length,
-                                separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.black12),
-                                itemBuilder: (context, idx) {
-                                  final p = results[idx];
-                                  return ListTile(
-                                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    leading: const CircleAvatar(
-                                      radius: 18,
-                                      backgroundColor: Colors.white,
-                                      child: Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
+                            ? (results.isEmpty
+                                ? Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(24.0),
+                                      child: Text(
+                                        _isSearching
+                                            ? 'Đang tìm kiếm địa điểm...'
+                                            : (query.length < 2
+                                                ? 'Nhập ít nhất 2 ký tự để tìm kiếm'
+                                                : 'Không tìm thấy địa điểm phù hợp'),
+                                        style: const TextStyle(color: Colors.black45, fontSize: 14, fontWeight: FontWeight.w500),
+                                      ),
                                     ),
-                                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
-                                    subtitle: Text(p.displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.black54, fontSize: 13)),
-                                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.black38),
-                                    onTap: () {
-                                      Navigator.pop(modalCtx);
-                                      _onPlaceClicked(p);
+                                  )
+                                : ListView.separated(
+                                    controller: scrollController,
+                                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                                    itemCount: results.length,
+                                    separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.black12),
+                                    itemBuilder: (context, idx) {
+                                      final p = results[idx];
+                                      final distText = p.formattedDistance;
+                                      return ListTile(
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        leading: const CircleAvatar(
+                                          radius: 18,
+                                          backgroundColor: Colors.white,
+                                          child: Icon(Icons.location_on_rounded, color: Color(0xFF007AFF), size: 20),
+                                        ),
+                                        title: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                p.name,
+                                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (distText.isNotEmpty) ...[
+                                              const SizedBox(width: 6),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFE5F0FF),
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                child: Text(
+                                                  distText,
+                                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF007AFF)),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                        subtitle: Text(
+                                          p.displayName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(color: Colors.black54, fontSize: 13),
+                                        ),
+                                        trailing: GestureDetector(
+                                          onTap: () {
+                                            Navigator.pop(modalCtx);
+                                            _onPlaceClicked(p, autoCalculateRoutes: true);
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF007AFF),
+                                              borderRadius: BorderRadius.circular(14),
+                                            ),
+                                            child: const Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.directions_rounded, color: Colors.white, size: 15),
+                                                SizedBox(width: 4),
+                                                Text(
+                                                  'Đi',
+                                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        onTap: () {
+                                          Navigator.pop(modalCtx);
+                                          _onPlaceClicked(p);
+                                        },
+                                      );
                                     },
-                                  );
-                                },
-                              )
+                                  ))
                             : ListView(
                                 controller: scrollController,
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1670,7 +1805,9 @@ class _MapScreenState extends State<MapScreen> {
           },
         );
       },
-    );
+    ).whenComplete(() {
+      _searchModalSetState = null;
+    });
   }
 
   Widget _buildAppleCategoryRow(String emoji, String title, VoidCallback onTap) {
@@ -1797,12 +1934,33 @@ class _MapScreenState extends State<MapScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      icon: const Icon(Icons.directions_car_rounded, size: 20),
-                      label: const Text(
-                        'Chỉ đường',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      icon: _isLoadingRoutes
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.directions_car_rounded, size: 20),
+                      label: Text(
+                        _isLoadingRoutes
+                            ? 'Đang tính đường...'
+                            : (_routes.isNotEmpty
+                                ? 'Chỉ đường • ${_routes.first.formattedDuration}'
+                                : 'Chỉ đường'),
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
-                      onPressed: () => _calculateRoutesForPlace(place),
+                      onPressed: () {
+                        if (_routes.isNotEmpty && !_isLoadingRoutes) {
+                          setState(() {
+                            _viewMode = 2;
+                          });
+                          context.read<NavigationManager>().setPreviewRoute(_routes[_selectedRouteIndex]);
+                          _updateRouteOnMap();
+                          _fitRouteBounds(_routes[_selectedRouteIndex].polylinePoints);
+                        } else {
+                          _calculateRoutesForPlace(place);
+                        }
+                      },
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -2184,7 +2342,9 @@ class _MapScreenState extends State<MapScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                idx == 0 ? 'Nhanh nhất (Goong)' : 'Tuyến ${idx + 1}',
+                                idx == 0
+                                    ? (MapSettingsService().isAppleMaps ? 'Nhanh nhất (Apple)' : 'Nhanh nhất (Goong)')
+                                    : 'Tuyến ${idx + 1}',
                                 style: TextStyle(
                                   color: isSelected ? Colors.white.withOpacity(0.9) : const Color(0xFF34C759),
                                   fontSize: 11,
@@ -2231,7 +2391,7 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           Text(
                             _selectedRouteIndex == 0
-                                ? 'Nhanh nhất (Goong Map)'
+                                ? (MapSettingsService().isAppleMaps ? 'Nhanh nhất (Apple Maps)' : 'Nhanh nhất (Goong Map)')
                                 : 'Lộ trình thay thế ${_selectedRouteIndex + 1}',
                             style: TextStyle(
                               fontSize: 12,
@@ -2352,11 +2512,14 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Active Driving Turn Banner (Screenshot 5)
   // -------------------------------------------------------------
   Widget _buildAppleActiveDrivingTurnBanner(NavigationManager navManager) {
-    final step = navManager.currentStep;
+    final isRerouting = navManager.isRerouting;
+    final step = navManager.upcomingStep ?? navManager.currentStep;
     final dist = navManager.distanceToNextManeuver.round();
     final distStr = dist >= 1000 ? '${(dist / 1000).toStringAsFixed(1)} km' : '$dist m';
-    final street = step?.streetName ?? 'Tiếp tục đi thẳng';
-    final icon = step?.icon ?? Icons.straight_rounded;
+    final street = isRerouting
+        ? 'Đang tính lại lộ trình...'
+        : (step?.streetName.isNotEmpty == true ? step!.streetName : navManager.currentStreetName);
+    final icon = isRerouting ? Icons.sync_rounded : (step?.icon ?? Icons.straight_rounded);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -2391,7 +2554,7 @@ class _MapScreenState extends State<MapScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Trong $distStr',
+                  isRerouting ? 'Cập nhật đường đi mới' : 'Trong $distStr',
                   style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 14,
@@ -2419,7 +2582,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildAppleFloatingStreetPill(NavigationManager navManager) {
-    final street = navManager.currentStep?.streetName ?? 'Lộ trình hiện tại';
+    final street = navManager.currentStreetName;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(

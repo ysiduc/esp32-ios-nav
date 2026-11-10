@@ -26,12 +26,13 @@ class MapboxDirectionsService {
     String mode = 'bike', // 'bike' (motorcycle), 'driving', 'foot'
     bool avoidTolls = false,
     bool avoidHighways = false,
+    bool bypassCache = false,
   }) async {
     final providerKey = MapSettingsService().currentProvider.id;
     final cacheKey =
         '$providerKey-${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
         '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$mode';
-    if (_routeCache.containsKey(cacheKey)) {
+    if (!bypassCache && _routeCache.containsKey(cacheKey)) {
       return _routeCache[cacheKey]!;
     }
 
@@ -60,31 +61,22 @@ class MapboxDirectionsService {
       }
     }
 
-    // Bổ sung 1-2 lộ trình thay thế (Alternatives) từ OSRM để người dùng có nhiều lựa chọn
-    try {
-      final altRoutes = await _osrmService.calculateMultipleRoutes(
-        start,
-        destination,
-        mode: mode,
-        avoidTolls: avoidTolls,
-        avoidHighways: avoidHighways,
-      );
-      if (routes.isEmpty) {
-        routes.addAll(altRoutes);
-      } else {
-        for (int i = 0; i < altRoutes.length && routes.length < 3; i++) {
-          final alt = altRoutes[i];
-          final diffSec = (alt.totalDurationSeconds - routes.first.totalDurationSeconds).abs();
-          final diffDist = (alt.totalDistanceMeters - routes.first.totalDistanceMeters).abs();
-          if (diffSec > 60 || diffDist > 200) {
-            routes.add(alt.copyWith(
-              title: i == 0 ? 'Lộ trình qua đường lớn' : 'Lộ trình tránh đông',
-              subtitle: 'Lựa chọn thay thế ${routes.length}',
-            ));
-          }
+    // Chỉ gọi OSRM làm phương án dự phòng khi cả Apple Maps và Goong đều chưa trả về lộ trình
+    // (Tránh chờ đợi server OSRM công cộng phản hồi chậm 3-8 giây)
+    if (routes.isEmpty) {
+      try {
+        final altRoutes = await _osrmService.calculateMultipleRoutes(
+          start,
+          destination,
+          mode: mode,
+          avoidTolls: avoidTolls,
+          avoidHighways: avoidHighways,
+        );
+        if (altRoutes.isNotEmpty) {
+          routes.addAll(altRoutes);
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     // Fallback to Mapbox if available
     if (routes.isEmpty && MapboxConfig.accessToken.isNotEmpty) {
@@ -350,9 +342,14 @@ class MapboxDirectionsService {
     LatLng start,
     LatLng destination, {
     String profile = 'bike',
+    bool bypassCache = false,
   }) async {
-    final list =
-        await calculateMultipleRoutes(start, destination, mode: profile);
+    final list = await calculateMultipleRoutes(
+      start,
+      destination,
+      mode: profile,
+      bypassCache: bypassCache,
+    );
     return list.isNotEmpty ? list.first : null;
   }
 
