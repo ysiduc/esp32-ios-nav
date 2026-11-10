@@ -22,7 +22,7 @@ class GoongService {
   Future<List<MapPlace>> searchPlaces(
     String query, {
     LatLng? nearLocation,
-    int limit = 10,
+    int limit = 12,
   }) async {
     if (!GoongConfig.hasRestApiKey) return [];
     final clean = query.trim();
@@ -41,10 +41,10 @@ class GoongService {
         urlStr += '&location=${nearLocation.latitude},${nearLocation.longitude}';
       }
 
-      final res = await http.get(Uri.parse(urlStr)).timeout(const Duration(seconds: 8));
+      final res = await http.get(Uri.parse(urlStr)).timeout(const Duration(milliseconds: 4500));
       if (res.statusCode != 200) return [];
 
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final predictions = data['predictions'] as List? ?? [];
       if (predictions.isEmpty) return [];
 
@@ -90,10 +90,10 @@ class GoongService {
 
     try {
       final url = Uri.parse('${GoongConfig.placeDetailUrl}?place_id=$placeId&api_key=${GoongConfig.restApiKey}');
-      final res = await http.get(url).timeout(const Duration(seconds: 6));
+      final res = await http.get(url).timeout(const Duration(seconds: 5));
       if (res.statusCode != 200) return null;
 
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final result = data['result'] as Map<String, dynamic>?;
       if (result == null) return null;
 

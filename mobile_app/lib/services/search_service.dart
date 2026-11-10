@@ -6,7 +6,6 @@ import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'goong_service.dart';
 import 'apple_maps_service.dart';
-import 'map_settings_service.dart';
 
 class SearchService {
   static const String _photonBaseUrl = 'https://photon.komoot.io';
@@ -803,7 +802,34 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 0: Check Built-in Vietnamese Landmark / POI Database first
+    // Step 1: Ưu tiên số 1 - Tìm kiếm địa điểm bằng Goong Map API (chính xác số nhà, ngõ ngách, địa danh VN)
+    // -------------------------------------------------------------
+    if (GoongConfig.hasRestApiKey) {
+      try {
+        final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation, limit: 12);
+        if (goongPlaces.isNotEmpty) {
+          for (final p in goongPlaces) {
+            addPlace(p);
+          }
+          // Bổ sung các địa danh nổi tiếng nội bộ khớp từ khóa xuống dưới kết quả Goong
+          if (cleanQuery.length >= 2) {
+            for (final landmark in _vietnameseLandmarks) {
+              final lName = landmark.name.toLowerCase();
+              final lNameUnaccented = removeDiacritics(landmark.name).toLowerCase();
+              if (lName.contains(cleanQuery.toLowerCase()) ||
+                  lNameUnaccented.contains(unaccented) ||
+                  lNameUnaccented.contains(strippedCityUnaccented)) {
+                addPlace(landmark);
+              }
+            }
+          }
+          return mergedResults.take(15).toList();
+        }
+      } catch (_) {}
+    }
+
+    // -------------------------------------------------------------
+    // Step 1B: Bổ sung địa danh nội bộ & Fallback sang Apple Maps Search nếu Goong hết quota hoặc lỗi mạng
     // -------------------------------------------------------------
     if (cleanQuery.length >= 2) {
       for (final landmark in _vietnameseLandmarks) {
@@ -818,11 +844,7 @@ class SearchService {
       }
     }
 
-    // -------------------------------------------------------------
-    // Step 1: Check Provider (Apple Maps Native iOS vs Goong API)
-    // -------------------------------------------------------------
-    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
-    if (isAppleMapsMode) {
+    if (AppleMapsService.isSupported) {
       try {
         final applePlaces = await AppleMapsService().searchPlaces(cleanQuery, nearLocation: nearLocation, limit: 15);
         if (applePlaces.isNotEmpty) {
@@ -834,18 +856,6 @@ class SearchService {
             final scoreB = _calculateRelevanceScore(cleanQuery, b.name, b.displayName, b.distanceMeters);
             return scoreB.compareTo(scoreA);
           });
-          return mergedResults.take(15).toList();
-        }
-      } catch (e) {
-        // Fallback to multi-engine search below
-      }
-    } else if (GoongConfig.hasRestApiKey) {
-      try {
-        final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation);
-        if (goongPlaces.isNotEmpty) {
-          for (final p in goongPlaces) {
-            addPlace(p);
-          }
           return mergedResults.take(15).toList();
         }
       } catch (_) {}

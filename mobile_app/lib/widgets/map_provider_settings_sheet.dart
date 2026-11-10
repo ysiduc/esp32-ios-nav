@@ -94,41 +94,41 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
 
               const SizedBox(height: 20),
 
-              // Option 1: Apple Maps Native (iOS)
+              // Option 1: Hybrid Goong Search + Apple Maps Routing (iOS)
               _buildProviderCard(
                 provider: MapProvider.appleMaps,
-                title: 'Apple Maps (Native iOS)',
-                badge: 'Khuyên dùng • Miễn phí 100%',
+                title: 'Goong Tìm kiếm + Apple Maps Lộ trình',
+                badge: 'Khuyên dùng • Siêu mượt',
                 badgeColor: const Color(0xFF05FFA1),
                 description:
-                    'Sử dụng Apple MapKit gốc (MKLocalSearch & MKDirections) trực tiếp trên iPhone. Miễn phí 100%, không giới hạn lượt dùng, mượt mà và tiết kiệm pin.',
+                    'Tìm địa chỉ, số nhà, ngõ hẻm bằng Goong Map chuẩn Việt Nam; Tính toán lộ trình, ETA và dẫn đường Realtime 30 FPS bằng Apple Maps (MKDirections) gốc trên iPhone.',
                 icon: Icons.map_rounded,
                 iconColor: const Color(0xFF00F0FF),
                 isSelected: current == MapProvider.appleMaps,
                 isSupportedOnDevice: AppleMapsService.isSupported,
                 onTap: () {
                   _settings.setProvider(MapProvider.appleMaps);
-                  _showToast(context, 'Đã kích hoạt Apple Maps (Native iOS)');
+                  _showToast(context, 'Đã kích hoạt: Tìm kiếm Goong + Lộ trình Apple Maps');
                 },
               ),
 
               const SizedBox(height: 12),
 
-              // Option 2: Goong API
+              // Option 2: Goong API Full
               _buildProviderCard(
                 provider: MapProvider.goong,
-                title: 'Goong API (Key riêng)',
-                badge: 'Tối ưu ngõ hẻm VN',
+                title: 'Goong API Toàn bộ (Tìm kiếm + Lộ trình)',
+                badge: 'Dùng Quota Key riêng',
                 badgeColor: const Color(0xFFFF9F1C),
                 description:
-                    'Tối ưu tuyến đường xe máy, đường tắt và ngõ ngách đặc thù tại Việt Nam. Sử dụng lượt gọi API từ cấu hình Goong Config.',
+                    'Sử dụng Goong API cho cả tìm kiếm và tính lộ trình xe máy. Tiêu tốn lượt gọi Direction API từ Goong Config.',
                 icon: Icons.navigation_rounded,
                 iconColor: const Color(0xFFFF9F1C),
                 isSelected: current == MapProvider.goong,
                 isSupportedOnDevice: true,
                 onTap: () {
                   _settings.setProvider(MapProvider.goong);
-                  _showToast(context, 'Đã chuyển sang Goong API');
+                  _showToast(context, 'Đã chuyển sang Goong API toàn bộ');
                 },
               ),
 

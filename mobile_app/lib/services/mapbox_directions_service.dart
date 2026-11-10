@@ -41,9 +41,10 @@ class MapboxDirectionsService {
 
     List<NavRoute> routes = [];
 
-    // Priority 1: Check Provider (Apple Maps Native iOS vs Goong Direction API)
-    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
-    if (isAppleMapsMode) {
+    // Priority 1: Tính lộ trình & Realtime Rerouting bằng Apple Maps (MKDirections gốc trên iOS)
+    // Nếu người dùng chọn chế độ chỉ dùng Goong trong Settings thì ưu tiên Goong trước, ngược lại mặc định luôn dùng Apple Maps
+    final preferAppleRouting = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
+    if (preferAppleRouting) {
       try {
         final appleRoutes = await AppleMapsService().calculateMultipleRoutes(start, destination, mode: mode);
         if (appleRoutes.isNotEmpty) {
@@ -52,7 +53,10 @@ class MapboxDirectionsService {
       } catch (e) {
         debugPrint('[DirectionsService] Lỗi tính lộ trình Apple Maps: $e');
       }
-    } else if (GoongConfig.hasRestApiKey) {
+    }
+
+    // Fallback sang Goong Direction API nếu Apple Maps không trả về kết quả (hoặc khi chọn chế độ Goong thuần)
+    if (routes.isEmpty && GoongConfig.hasRestApiKey) {
       final vehicle = (mode == 'driving') ? 'car' : 'bike';
       final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
       if (goongRoute != null) {
@@ -62,6 +66,16 @@ class MapboxDirectionsService {
           isFastest: true,
         ));
       }
+    }
+
+    // Nếu chọn chế độ Goong thuần mà Goong lỗi/hết quota thì tự động fallback sang Apple Maps
+    if (routes.isEmpty && !preferAppleRouting && AppleMapsService.isSupported) {
+      try {
+        final appleRoutes = await AppleMapsService().calculateMultipleRoutes(start, destination, mode: mode);
+        if (appleRoutes.isNotEmpty) {
+          routes.addAll(appleRoutes);
+        }
+      } catch (_) {}
     }
 
     // Chỉ gọi OSRM làm phương án dự phòng khi cả Apple Maps và Goong đều chưa trả về lộ trình

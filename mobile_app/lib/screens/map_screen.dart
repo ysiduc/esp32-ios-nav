@@ -15,6 +15,7 @@ import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/google_maps_parser.dart';
 import '../services/goong_service.dart';
+import '../services/apple_maps_service.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/search_service.dart';
@@ -541,62 +542,105 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<MapPlace> _resolvePlaceCoordinateIfNeeded(MapPlace place) async {
-    if (place.placeId != null &&
-        place.coordinate.latitude == 0 &&
-        place.coordinate.longitude == 0) {
+    if (place.coordinate.latitude != 0 || place.coordinate.longitude != 0) {
+      return place;
+    }
+
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final currentPos = navManager.currentLocation ?? _userPosition;
+
+    // 1. Lấy tọa độ chính xác từ Goong Place Detail nếu có placeId
+    if (place.placeId != null && place.placeId!.isNotEmpty) {
       final detail = await GoongService().getPlaceDetail(
         place.placeId!,
         fallbackName: place.name,
         fallbackDisplay: place.displayName,
+        userLocation: currentPos,
       );
-      if (detail != null) {
+      if (detail != null &&
+          (detail.coordinate.latitude != 0 || detail.coordinate.longitude != 0)) {
         return detail;
       }
     }
+
+    // 2. Dự phòng: Nếu Goong Place Detail lỗi mạng, phân giải tọa độ qua Apple Maps Native
+    if (AppleMapsService.isSupported) {
+      final queryText = place.displayName.isNotEmpty ? place.displayName : place.name;
+      final appleMatches = await AppleMapsService().searchPlaces(
+        queryText,
+        nearLocation: currentPos,
+        limit: 1,
+      );
+      if (appleMatches.isNotEmpty) {
+        final matched = appleMatches.first;
+        return MapPlace(
+          name: place.name,
+          displayName: place.displayName,
+          coordinate: matched.coordinate,
+          type: place.type,
+          category: place.category,
+          distanceMeters: matched.distanceMeters,
+          placeId: place.placeId,
+        );
+      }
+    }
+
     return place;
   }
 
   void _onPlaceClicked(MapPlace place, {bool autoCalculateRoutes = false}) async {
-    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
-
     _searchFocusNode.unfocus();
-    _searchService.addRecentSearch(resolvedPlace);
     if (!mounted) return;
 
     if (autoCalculateRoutes) {
-      _calculateRoutesForPlace(resolvedPlace);
+      _calculateRoutesForPlace(place);
       return;
     }
 
-    // Tính sẵn lộ trình ngầm trong bộ nhớ đệm để khi bấm "Chỉ đường" hiện ra ngay lập tức (0ms)!
-    final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final startPos = navManager.currentLocation ?? _userPosition;
+    // Hiển thị ngay lập tức bảng thông tin địa điểm (0ms) trong lúc lấy tọa độ chi tiết & tính lộ trình Apple Maps
     setState(() {
-      _selectedPlace = resolvedPlace;
+      _selectedPlace = place;
       _searchResults = [];
       _routes = [];
       _isLoadingRoutes = true;
       _viewMode = 1; // Open Place Details Inspector
     });
-    _mapController?.animateCamera(
-      ml.CameraUpdate.newLatLngZoom(
-        ml.LatLng(resolvedPlace.coordinate.latitude, resolvedPlace.coordinate.longitude),
-        16.5,
-      ),
-    );
-    _updateDestinationMarker();
 
-    final prewarmed = await _directionsService.calculateMultipleRoutes(
-      startPos,
-      resolvedPlace.coordinate,
-      mode: _transportMode,
-    );
-    if (mounted && _selectedPlace?.coordinate == resolvedPlace.coordinate && _viewMode == 1) {
-      setState(() {
-        _routes = prewarmed;
-        _isLoadingRoutes = false;
-        _selectedRouteIndex = 0;
-      });
+    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
+    if (!mounted) return;
+
+    _searchService.addRecentSearch(resolvedPlace);
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final startPos = navManager.currentLocation ?? _userPosition;
+
+    setState(() {
+      _selectedPlace = resolvedPlace;
+    });
+
+    if (resolvedPlace.coordinate.latitude != 0 || resolvedPlace.coordinate.longitude != 0) {
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngZoom(
+          ml.LatLng(resolvedPlace.coordinate.latitude, resolvedPlace.coordinate.longitude),
+          16.5,
+        ),
+      );
+      _updateDestinationMarker();
+
+      // Tính sẵn lộ trình bằng Apple Maps (MKDirections) để bấm "Chỉ đường" hiện ra ngay lập tức (0ms)!
+      final prewarmed = await _directionsService.calculateMultipleRoutes(
+        startPos,
+        resolvedPlace.coordinate,
+        mode: _transportMode,
+      );
+      if (mounted && _selectedPlace?.coordinate == resolvedPlace.coordinate && _viewMode == 1) {
+        setState(() {
+          _routes = prewarmed;
+          _isLoadingRoutes = false;
+          _selectedRouteIndex = 0;
+        });
+      }
+    } else if (mounted) {
+      setState(() => _isLoadingRoutes = false);
     }
   }
 
@@ -624,20 +668,26 @@ class _MapScreenState extends State<MapScreen> {
   // Route Calculation & Comparison Logic
   // -------------------------------------------------------------
   Future<void> _calculateRoutesForPlace(MapPlace place) async {
-    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
-    if (!mounted) return;
-    final navManager = Provider.of<NavigationManager>(context, listen: false);
-    final startPos = navManager.currentLocation ?? _userPosition;
-
     try {
       Provider.of<EspStreamService>(context, listen: false).pauseStreamingFor(const Duration(milliseconds: 400));
     } catch (_) {}
 
     setState(() {
       _isLoadingRoutes = true;
-      _selectedPlace = resolvedPlace;
-      _viewMode = 2; // Open Route Comparison
+      _selectedPlace = place;
+      _viewMode = 2; // Open Route Comparison immediately (0ms)
       _selectedRouteIndex = 0;
+    });
+
+    final resolvedPlace = await _resolvePlaceCoordinateIfNeeded(place);
+    if (!mounted) return;
+    _searchService.addRecentSearch(resolvedPlace);
+
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final startPos = navManager.currentLocation ?? _userPosition;
+
+    setState(() {
+      _selectedPlace = resolvedPlace;
     });
     _updateDestinationMarker();
 

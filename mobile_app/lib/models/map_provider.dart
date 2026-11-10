@@ -17,16 +17,16 @@ extension MapProviderExtension on MapProvider {
   String get displayName {
     switch (this) {
       case MapProvider.appleMaps:
-        return 'Apple Maps (Native iOS)';
+        return 'Goong Search + Apple Maps Routing';
       case MapProvider.goong:
-        return 'Goong API (Key riêng)';
+        return 'Goong API Toàn diện (Key riêng)';
     }
   }
 
   String get shortName {
     switch (this) {
       case MapProvider.appleMaps:
-        return 'Apple Maps';
+        return 'Goong + Apple Maps';
       case MapProvider.goong:
         return 'Goong Map';
     }
@@ -35,9 +35,9 @@ extension MapProviderExtension on MapProvider {
   String get description {
     switch (this) {
       case MapProvider.appleMaps:
-        return 'Apple MapKit gốc trên iOS: Tìm kiếm & Chỉ đường miễn phí 100%, không giới hạn lượt dùng.';
+        return 'Tìm địa điểm bằng Goong Map chuẩn VN + Tính lộ trình & Dẫn đường Realtime bằng Apple Maps (iOS).';
       case MapProvider.goong:
-        return 'Tối ưu tuyến đường xe máy, ngõ hẻm Việt Nam (Dùng quota API key riêng của bạn).';
+        return 'Dùng Goong API cho cả Tìm kiếm và Tính lộ trình (tiêu tốn quota Direction API).';
     }
   }
 
