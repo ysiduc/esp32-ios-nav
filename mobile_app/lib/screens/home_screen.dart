@@ -1,3 +1,4 @@
+import '../widgets/map_provider_settings_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
@@ -179,6 +180,23 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 Navigator.pop(context);
                 setState(() => _currentIndex = 3);
+              },
+            ),
+
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Divider(color: Colors.white10, height: 16),
+            ),
+
+            _buildDrawerTile(
+              icon: Icons.alt_route_rounded,
+              title: 'Cài đặt Dẫn đường & Bản đồ',
+              subtitle: 'Chuyển đổi Apple Maps (Native) vs Goong API',
+              isSelected: false,
+              badgeColor: const Color(0xFF00F0FF),
+              onTap: () {
+                Navigator.pop(context);
+                showMapProviderSettingsSheet(context);
               },
             ),
 

@@ -7,6 +7,9 @@ import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'goong_service.dart';
 import 'osrm_service.dart';
+import 'apple_maps_service.dart';
+import 'map_settings_service.dart';
+import '../models/map_provider.dart';
 
 /// Navigation Directions Service
 /// Supports Goong Map / MapTiler / OSRM with automatic multi-route alternatives and turn-by-turn maneuvers.
@@ -24,8 +27,9 @@ class MapboxDirectionsService {
     bool avoidTolls = false,
     bool avoidHighways = false,
   }) async {
+    final providerKey = MapSettingsService().currentProvider.id;
     final cacheKey =
-        '${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
+        '$providerKey-${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
         '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$mode';
     if (_routeCache.containsKey(cacheKey)) {
       return _routeCache[cacheKey]!;
@@ -33,8 +37,18 @@ class MapboxDirectionsService {
 
     List<NavRoute> routes = [];
 
-    // Priority 1: Goong Direction API (Tối ưu giao thông Việt Nam: xe máy/ô tô)
-    if (GoongConfig.hasRestApiKey) {
+    // Priority 1: Check Provider (Apple Maps Native iOS vs Goong Direction API)
+    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
+    if (isAppleMapsMode) {
+      try {
+        final appleRoutes = await AppleMapsService().calculateMultipleRoutes(start, destination, mode: mode);
+        if (appleRoutes.isNotEmpty) {
+          routes.addAll(appleRoutes);
+        }
+      } catch (e) {
+        debugPrint('[DirectionsService] Lỗi tính lộ trình Apple Maps: $e');
+      }
+    } else if (GoongConfig.hasRestApiKey) {
       final vehicle = (mode == 'driving') ? 'car' : 'bike';
       final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
       if (goongRoute != null) {

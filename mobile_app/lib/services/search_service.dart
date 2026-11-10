@@ -5,6 +5,8 @@ import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'goong_service.dart';
+import 'apple_maps_service.dart';
+import 'map_settings_service.dart';
 
 class SearchService {
   static const String _photonBaseUrl = 'https://photon.komoot.io';
@@ -801,9 +803,22 @@ class SearchService {
     }
 
     // -------------------------------------------------------------
-    // Step 0: Goong Map Places API (Chuẩn xác 100% Việt Nam, số nhà, ngõ ngách)
+    // Step 0: Check Provider (Apple Maps Native iOS vs Goong API)
     // -------------------------------------------------------------
-    if (GoongConfig.hasRestApiKey) {
+    final isAppleMapsMode = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
+    if (isAppleMapsMode) {
+      try {
+        final applePlaces = await AppleMapsService().searchPlaces(cleanQuery, nearLocation: nearLocation);
+        if (applePlaces.isNotEmpty) {
+          for (final p in applePlaces) {
+            addPlace(p);
+          }
+          return mergedResults;
+        }
+      } catch (e) {
+        // Fallback
+      }
+    } else if (GoongConfig.hasRestApiKey) {
       try {
         final goongPlaces = await GoongService().searchPlaces(cleanQuery, nearLocation: nearLocation);
         if (goongPlaces.isNotEmpty) {

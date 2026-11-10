@@ -16,6 +16,8 @@ import '../services/goong_service.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/search_service.dart';
+import '../services/map_settings_service.dart';
+import '../widgets/map_provider_settings_sheet.dart';
 
 enum MapThemeMode {
   streets,         // Apple / Goong Streets (clean light aesthetic)
@@ -72,6 +74,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    MapSettingsService().addListener(_onMapProviderChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navManager = Provider.of<NavigationManager>(context, listen: false);
       if (navManager.currentLocation != null) {
@@ -323,8 +326,17 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  void _onMapProviderChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_selectedPlace != null && _viewMode == 2) {
+      _calculateRoutesForPlace(_selectedPlace!);
+    }
+  }
+
   @override
   void dispose() {
+    MapSettingsService().removeListener(_onMapProviderChanged);
     _debounceTimer?.cancel();
     _recenterTimer?.cancel();
     _searchController.dispose();
@@ -1128,18 +1140,20 @@ class _MapScreenState extends State<MapScreen> {
   // Apple Maps Bottom Search Capsule (Screenshot 1)
   // -------------------------------------------------------------
   Widget _buildAppleBottomSearchCapsule() {
+    final isApple = MapSettingsService().isAppleMaps;
+
     return GestureDetector(
       onTap: _openAppleSearchModal,
       child: Container(
         height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.92),
+          color: Colors.white.withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(30),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.14),
+              color: Colors.black.withValues(alpha: 0.12),
               blurRadius: 20,
               offset: const Offset(0, 4),
             ),
@@ -1148,15 +1162,53 @@ class _MapScreenState extends State<MapScreen> {
         child: Row(
           children: [
             const Icon(Icons.search_rounded, color: Colors.black54, size: 24),
-            const SizedBox(width: 12),
-            const Expanded(
+            const SizedBox(width: 10),
+            Expanded(
               child: Text(
-                'Bản Đồ Apple',
-                style: TextStyle(
-                  color: Colors.black54,
-                  fontSize: 16,
+                isApple ? 'Tìm kiếm Apple Maps' : 'Tìm kiếm Goong Map',
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontSize: 15,
                   fontWeight: FontWeight.w500,
                   letterSpacing: -0.2,
+                ),
+              ),
+            ),
+            // Quick Provider Switch Pill
+            GestureDetector(
+              onTap: () => showMapProviderSettingsSheet(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: isApple
+                      ? const Color(0xFF007AFF).withValues(alpha: 0.12)
+                      : const Color(0xFFFF9F1C).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isApple
+                        ? const Color(0xFF007AFF).withValues(alpha: 0.3)
+                        : const Color(0xFFFF9F1C).withValues(alpha: 0.4),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isApple ? Icons.apple_rounded : Icons.map_rounded,
+                      size: 14,
+                      color: isApple ? const Color(0xFF007AFF) : const Color(0xFFD97706),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      isApple ? 'Apple' : 'Goong',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: isApple ? const Color(0xFF007AFF) : const Color(0xFFD97706),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1265,9 +1317,11 @@ class _MapScreenState extends State<MapScreen> {
                                           fontSize: 16,
                                           fontWeight: FontWeight.w500,
                                         ),
-                                        decoration: const InputDecoration(
-                                          hintText: 'Bản Đồ Apple',
-                                          hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
+                                        decoration: InputDecoration(
+                                          hintText: MapSettingsService().isAppleMaps
+                                              ? 'Tìm kiếm Apple Maps...'
+                                              : 'Tìm kiếm Goong Map...',
+                                          hintStyle: const TextStyle(color: Colors.black38, fontSize: 16),
                                           border: InputBorder.none,
                                           isDense: true,
                                         ),
@@ -1319,7 +1373,75 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
 
-                      const SizedBox(height: 16),
+                      // Provider Quick Switch Banner
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                        child: Row(
+                          children: [
+                            Text(
+                              'Nguồn tìm kiếm: ',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black.withValues(alpha: 0.5),
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () {
+                                showMapProviderSettingsSheet(context);
+                                setModalState(() {});
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: MapSettingsService().isAppleMaps
+                                      ? const Color(0xFF007AFF).withValues(alpha: 0.12)
+                                      : const Color(0xFFFF9F1C).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: MapSettingsService().isAppleMaps
+                                        ? const Color(0xFF007AFF).withValues(alpha: 0.3)
+                                        : const Color(0xFFFF9F1C).withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      MapSettingsService().isAppleMaps ? Icons.apple_rounded : Icons.map_rounded,
+                                      size: 13,
+                                      color: MapSettingsService().isAppleMaps
+                                          ? const Color(0xFF007AFF)
+                                          : const Color(0xFFD97706),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      MapSettingsService().isAppleMaps
+                                          ? 'Apple Maps (Native iOS)'
+                                          : 'Goong API (Key riêng)',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: MapSettingsService().isAppleMaps
+                                            ? const Color(0xFF007AFF)
+                                            : const Color(0xFFD97706),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.swap_horiz_rounded,
+                                      size: 14,
+                                      color: Colors.black.withValues(alpha: 0.5),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
 
                       // Body: Query Results or Recent Searches & Nearby Categories
                       Expanded(
@@ -1834,15 +1956,39 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE5F0FF),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text(
-                          'Tùy chọn',
-                          style: TextStyle(color: Color(0xFF007AFF), fontSize: 11, fontWeight: FontWeight.bold),
+                      GestureDetector(
+                        onTap: () => showMapProviderSettingsSheet(context),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: MapSettingsService().isAppleMaps
+                                ? const Color(0xFFE5F0FF)
+                                : const Color(0xFFFEF3C7),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                MapSettingsService().isAppleMaps ? '🍎 Apple Maps' : '🟢 Goong Map',
+                                style: TextStyle(
+                                  color: MapSettingsService().isAppleMaps
+                                      ? const Color(0xFF007AFF)
+                                      : const Color(0xFFD97706),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.swap_horiz_rounded,
+                                color: MapSettingsService().isAppleMaps
+                                    ? const Color(0xFF007AFF)
+                                    : const Color(0xFFD97706),
+                                size: 14,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],

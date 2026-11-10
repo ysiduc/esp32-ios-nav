@@ -236,6 +236,9 @@ import AVFoundation
       }
     }
 
+    // ─── 4. Apple Maps Native Channel (MKLocalSearch & MKDirections) ──────
+    AppleMapsService.shared.setup(binaryMessenger: binaryMessenger)
+
     // Khởi động CallKit observer
     setupCallObserver()
   }
