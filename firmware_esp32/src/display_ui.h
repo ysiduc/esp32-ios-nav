@@ -438,7 +438,7 @@ public:
       _notifShown = false;
       _notifDirty = true;
     }
-    if (wasActive && (_currentState == STATE_NAVIGATION || _currentState == STATE_STANDBY_WATCHFACE)) {
+    if (wasActive && (_currentState == STATE_NAVIGATION || (_currentState == STATE_STANDBY_WATCHFACE && _watchfaceStyle == 0))) {
       _needFullRedraw = true;
     }
   }
@@ -465,7 +465,9 @@ public:
           _navPopupDirty = false;
         }
       } else if (_currentState == STATE_STANDBY_WATCHFACE) {
-        _drawPopupBanner();
+        if (_watchfaceStyle == 0) {
+          _drawPopupBanner();
+        }
       }
     }
   }
@@ -548,10 +550,14 @@ public:
           _navPopupDirty = false;
         }
       } else if (_currentState == STATE_STANDBY_WATCHFACE) {
-        static unsigned long lastBanner = 0;
-        if (millis() - lastBanner > 400) {
-          lastBanner = millis();
-          _drawPopupBanner();
+        // Chỉ hiện popup banner khi ở Theme 0 (Màn chờ mặc định).
+        // Các theme 1..5 đã có khung riêng trên màn hình để hiện thông báo, không vẽ popup đè lên!
+        if (_watchfaceStyle == 0) {
+          static unsigned long lastBanner = 0;
+          if (millis() - lastBanner > 400) {
+            lastBanner = millis();
+            _drawPopupBanner();
+          }
         }
       }
     }
@@ -692,355 +698,123 @@ private:
   // =========================================================================
   // MÀN 1: STANDBY WATCHFACE / 6 GIAO DIỆN MÔ PHỎNG (Styles 0..5)
   // =========================================================================
-  void _renderStandbyWatchface() {
-    if (_needFullRedraw) {
-      _lastState = _currentState;
-      _lastWatchfaceStyle = _watchfaceStyle;
-      _lastDrawnHour = 255;
-      _lastDrawnMin = 255;
-      _lastDrawnSec = 255;
-      _lastDrawnDay = 255;
-      _lastDrawnBat = 255;
-      _lastDrawnBleState = !_navData.isConnected;
-      _lastDrawnSong[0] = '\0';
-      _needFullRedraw = false;
+  void _drawUtf8StringTransparent(const char* str, int x, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(font);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fgColor);
+    u8f.setCursor(x, y + 13);
+    u8f.print(str);
+    u8f.setFontMode(0);
+  }
 
-      switch (_watchfaceStyle) {
-        case 0: { // Giao diện 6: Custom Static + Waybar đáy
-          tft.fillScreen(TFT_BLACK);
-          if (SPIFFS.exists("/bg_wait.jpg")) {
-            File f = SPIFFS.open("/bg_wait.jpg", "r");
-            if (f) {
-              size_t fSize = f.size();
-              f.close();
-              if (fSize > 500) {
-                TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
-              }
-            }
-          } else {
-            _drawDefaultWallpaper();
+  void _drawCentreUtf8StringTransparent(const char* str, int cx, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(font);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fgColor);
+    int w = u8f.getUTF8Width(str);
+    u8f.setCursor(cx - (w / 2), y + 13);
+    u8f.print(str);
+    u8f.setFontMode(0);
+  }
+
+  void _drawWrappedUtf8StringTransparent(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, int lineHeight = 16) {
+    if (!text || text[0] == '\0') return;
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fgColor);
+
+    int lineCount = 0;
+    const char* ptr = text;
+    char lineBuf[96];
+
+    while (*ptr != '\0' && lineCount < maxLines) {
+      int lineLen = 0;
+      lineBuf[0] = '\0';
+
+      while (*ptr != '\0' && *ptr != '\n') {
+        const char* nextWord = ptr;
+        while (*nextWord != '\0' && *nextWord != ' ' && *nextWord != '\n') {
+          nextWord++;
+        }
+        int wordLen = nextWord - ptr;
+
+        char testBuf[96];
+        if (lineLen > 0) {
+          snprintf(testBuf, sizeof(testBuf), "%s %.*s", lineBuf, wordLen, ptr);
+        } else {
+          snprintf(testBuf, sizeof(testBuf), "%.*s", wordLen, ptr);
+        }
+
+        if (u8f.getUTF8Width(testBuf) > maxWidth) {
+          if (lineLen == 0) {
+            strncpy(lineBuf, testBuf, sizeof(lineBuf) - 1);
+            ptr = nextWord;
+            if (*ptr == ' ') ptr++;
           }
-          _drawTheme0WaybarStatic();
           break;
         }
-        case 1: { // Giao diện 1: Sunflower Bento Grid
-          TJpgDec.drawJpg(0, 0, THEME_1_BG_JPG, THEME_1_BG_LEN);
-          break;
-        }
-        case 2: { // Giao diện 2: Cyberpunk Neon HUD
-          TJpgDec.drawJpg(0, 0, THEME_2_BG_JPG, THEME_2_BG_LEN);
-          break;
-        }
-        case 3: { // Giao diện 3: Retro Macintosh Pixel OS
-          TJpgDec.drawJpg(0, 0, THEME_3_BG_JPG, THEME_3_BG_LEN);
-          break;
-        }
-        case 4: { // Giao diện 4: 80s Synthwave Cassette
-          TJpgDec.drawJpg(0, 0, THEME_4_BG_JPG, THEME_4_BG_LEN);
-          break;
-        }
-        case 5: { // Giao diện 5: Pop-Art Comic Strip Manga
-          TJpgDec.drawJpg(0, 0, THEME_5_BG_JPG, THEME_5_BG_LEN);
-          break;
-        }
-        default:
-          TJpgDec.drawJpg(0, 0, THEME_1_BG_JPG, THEME_1_BG_LEN);
-          break;
+
+        strncpy(lineBuf, testBuf, sizeof(lineBuf) - 1);
+        lineLen = strlen(lineBuf);
+        ptr = nextWord;
+        if (*ptr == ' ') ptr++;
+      }
+
+      if (*ptr == '\n') ptr++;
+
+      if (lineLen > 0) {
+        u8f.setCursor(startX, startY + (lineCount * lineHeight) + 13);
+        u8f.print(lineBuf);
+        lineCount++;
+      } else if (*ptr == '\0') {
+        break;
       }
     }
-
-    switch (_watchfaceStyle) {
-      case 0:
-        _updateTheme0CustomStatic();
-        break;
-      case 1:
-        _updateTheme1Sunflower();
-        break;
-      case 2:
-        _updateTheme2Cyberpunk();
-        break;
-      case 3:
-        _updateTheme3RetroMac();
-        break;
-      case 4:
-        _updateTheme4Cassette();
-        break;
-      case 5:
-        _updateTheme5Comic();
-        break;
-      default:
-        _updateTheme1Sunflower();
-        break;
-    }
+    u8f.setFontMode(0);
   }
 
-  // --- GIAO DIỆN 1: SUNFLOWER BENTO ---
-  void _updateTheme1Sunflower() {
-    uint16_t cClockBg = tft.color565(41, 35, 28);   // #29231C
-    uint16_t cMsgBg = tft.color565(15, 14, 14);     // #0F0E0E
-    uint16_t cMusicBg = tft.color565(28, 25, 23);   // #1C1917
+  void _drawSongTitle(const char* title, int x, int y, int w, int h, uint16_t fgColor, uint16_t bgColor, bool isRedraw) {
+    if (!title || title[0] == '\0') return;
 
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(20, 22, 98, 38, cClockBg);
-      tft.setTextColor(tft.color565(250, 204, 21), cClockBg);
-      tft.drawString(timeBuf, 20, 22, 6);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    int textW = u8f.getUTF8Width(title);
 
-      char dateBuf[48];
-      snprintf(dateBuf, sizeof(dateBuf), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
-      for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
-      tft.fillRect(22, 68, 120, 18, cClockBg);
-      _drawUtf8String(dateBuf, 22, 68, TFT_WHITE, cClockBg);
-    }
-
-    if (_clockSec != _lastDrawnSec) {
-      _lastDrawnSec = _clockSec;
-      char secBuf[8];
-      snprintf(secBuf, sizeof(secBuf), "%02d", _clockSec);
-      tft.fillRect(120, 26, 32, 24, cClockBg);
-      tft.setTextColor(tft.color565(249, 115, 22), cClockBg);
-      tft.drawString(secBuf, 120, 26, 4);
-    }
-
-    if (_notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(184, 50, 110, 75, cMsgBg);
-      if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8String(_notif.title, 184, 50, tft.color565(250, 204, 21), cMsgBg);
-        if (_notif.message[0] != '\0') {
-          _drawWrappedUtf8String(_notif.message, 184, 70, 110, 3, TFT_WHITE, cMsgBg, 16);
-        }
-      } else {
-        _drawUtf8String("Vợ", 184, 50, tft.color565(250, 204, 21), cMsgBg);
-        _drawWrappedUtf8String("Mua đồ ăn tối chưa anh ơi?", 184, 70, 110, 3, TFT_WHITE, cMsgBg, 16);
+    if (textW <= w) {
+      // Song title fits inside container! Only draw on full redraw (transparent, zero box)
+      if (isRedraw) {
+        _drawUtf8StringTransparent(title, x, y, fgColor);
       }
+      return;
     }
 
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(60, 198, 175, 18, cMusicBg);
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nơi Này Có Anh";
-      _drawUtf8String(sTitle, 60, 198, tft.color565(254, 240, 138), cMusicBg);
+    // Text is longer than container: Marquee scroll ("thả trôi") strictly inside viewport
+    static unsigned long lastMarquee = 0;
+    if (millis() - lastMarquee < 70 && !isRedraw) return;
+    lastMarquee = millis();
 
-      tft.fillRect(260, 198, 40, 26, cMusicBg);
-      tft.setTextColor(tft.color565(251, 146, 60), cMusicBg);
-      tft.drawString("01:24", 262, 198, 1);
-      tft.setTextColor(TFT_WHITE, cMusicBg);
-      tft.drawString("03:52", 262, 208, 1);
-    }
-  }
+    int gap = 28;
+    int cycle = textW + gap;
+    int offset = ((millis() / 60) % cycle);
 
-  // --- GIAO DIỆN 2: CYBERPUNK NEON HUD ---
-  void _updateTheme2Cyberpunk() {
-    uint16_t cBg = tft.color565(7, 6, 20); // #070614
+    tft.setViewport(x, y, w, h);
+    tft.fillRect(0, 0, w, h, bgColor);
 
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(24, 44, 118, 42, cBg);
-      tft.setTextColor(tft.color565(0, 240, 255), cBg);
-      tft.drawString(timeBuf, 24, 44, 7);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fgColor);
 
-      char dateBuf[32];
-      snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d.%02d.%04d",
-               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
-      tft.fillRect(26, 116, 120, 16, cBg);
-      _drawUtf8String(dateBuf, 26, 116, tft.color565(103, 232, 249), cBg);
+    u8f.setCursor(-offset, 13);
+    u8f.print(title);
+
+    if (w - (-offset + textW) > 0) {
+      u8f.setCursor(-offset + cycle, 13);
+      u8f.print(title);
     }
 
-    if (_clockSec != _lastDrawnSec) {
-      _lastDrawnSec = _clockSec;
-      char secBuf[8];
-      snprintf(secBuf, sizeof(secBuf), "%02d", _clockSec);
-      tft.fillRect(146, 48, 36, 26, cBg);
-      tft.setTextColor(tft.color565(255, 0, 127), cBg);
-      tft.drawString(secBuf, 146, 48, 4);
-    }
-
-    if (_notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(220, 52, 80, 95, cBg);
-      if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8String(_notif.title, 220, 52, tft.color565(255, 0, 127), cBg);
-        if (_notif.message[0] != '\0') {
-          _drawWrappedUtf8String(_notif.message, 220, 72, 80, 4, TFT_WHITE, cBg, 16);
-        }
-      } else {
-        _drawUtf8String("Vợ:", 220, 52, tft.color565(255, 0, 127), cBg);
-        _drawWrappedUtf8String("Mua đồ ăn tối chưa anh ơi?", 220, 70, 80, 4, TFT_WHITE, cBg, 16);
-      }
-    }
-
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(60, 178, 160, 16, cBg);
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nơi Này Có Anh";
-      _drawUtf8String(sTitle, 60, 178, tft.color565(103, 232, 249), cBg);
-
-      tft.fillRect(235, 178, 65, 16, cBg);
-      tft.setTextColor(tft.color565(251, 146, 60), cBg);
-      tft.drawString("01:24 / 03:52", 235, 178, 2);
-    }
-  }
-
-  // --- GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS ---
-  void _updateTheme3RetroMac() {
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(24, 42, 90, 36, TFT_WHITE);
-      tft.setTextColor(TFT_BLACK, TFT_WHITE);
-      tft.drawString(timeBuf, 24, 42, 6);
-
-      char dBuf[32];
-      snprintf(dBuf, sizeof(dBuf), "%02d/%02d/%04d", _clockDay, _clockMonth, _clockYear);
-      tft.fillRect(24, 82, 100, 16, TFT_WHITE);
-      _drawUtf8String(dBuf, 28, 82, TFT_BLACK, TFT_WHITE);
-    }
-
-    if (_clockSec != _lastDrawnSec) {
-      _lastDrawnSec = _clockSec;
-      char secBuf[8];
-      snprintf(secBuf, sizeof(secBuf), "%02d", _clockSec);
-      tft.fillRect(116, 46, 26, 24, TFT_WHITE);
-      tft.setTextColor(tft.color565(75, 85, 99), TFT_WHITE);
-      tft.drawString(secBuf, 116, 46, 4);
-    }
-
-    if (_notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(16, 168, 132, 46, TFT_WHITE);
-      const char* msg = (_notifShown && _notif.message[0] != '\0') ? _notif.message : "Mua đồ ăn tối chưa anh ơi?";
-      _drawWrappedUtf8String(msg, 16, 168, 132, 3, TFT_BLACK, TFT_WHITE, 16);
-    }
-
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(178, 65, 86, 14, TFT_BLACK);
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Noi Nay Co Anh";
-      tft.setTextColor(TFT_WHITE, TFT_BLACK);
-      tft.drawString(sTitle, 179, 65, 2);
-
-      tft.fillRect(226, 151, 46, 14, tft.color565(180, 185, 190));
-      tft.setTextColor(TFT_BLACK, tft.color565(180, 185, 190));
-      tft.drawString("01:24", 228, 151, 1);
-    }
-  }
-
-  // --- GIAO DIỆN 4: 80s SYNTHWAVE CASSETTE ---
-  void _updateTheme4Cassette() {
-    uint16_t cMsgBg = tft.color565(18, 14, 30);
-    uint16_t cSunBg = tft.color565(250, 180, 50);
-
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(26, 34, 78, 30, cSunBg);
-      tft.setTextColor(TFT_WHITE, cSunBg);
-      tft.drawString(timeBuf, 28, 34, 4);
-
-      char dateBuf[32];
-      snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d TH%02d %04d",
-               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
-      tft.fillRect(16, 84, 128, 18, tft.color565(9, 5, 20));
-      _drawUtf8String(dateBuf, 16, 84, tft.color565(34, 211, 238), tft.color565(9, 5, 20));
-    }
-
-    if (_clockSec != _lastDrawnSec) {
-      _lastDrawnSec = _clockSec;
-      char secBuf[8];
-      snprintf(secBuf, sizeof(secBuf), "%02d", _clockSec);
-      tft.fillRect(106, 38, 22, 20, cSunBg);
-      tft.setTextColor(tft.color565(250, 204, 21), cSunBg);
-      tft.drawString(secBuf, 106, 38, 2);
-    }
-
-    if (_notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(22, 146, 120, 42, cMsgBg);
-      const char* msg = (_notifShown && _notif.message[0] != '\0') ? _notif.message : "Vợ: Mua đồ ăn tối chưa anh ơi?";
-      _drawWrappedUtf8String(msg, 22, 146, 120, 2, tft.color565(165, 243, 252), cMsgBg, 16);
-    }
-
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(178, 58, 120, 16, tft.color565(91, 33, 182));
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "NOI NAY CO ANH";
-      tft.setTextColor(TFT_WHITE, tft.color565(91, 33, 182));
-      tft.drawCentreString(sTitle, 238, 58, 2);
-
-      tft.fillRect(178, 124, 120, 16, tft.color565(91, 33, 182));
-      const char* sArtist = (_navData.songArtist[0] != '\0') ? _navData.songArtist : "SON TUNG M-TP";
-      tft.setTextColor(TFT_WHITE, tft.color565(91, 33, 182));
-      tft.drawCentreString(sArtist, 238, 124, 2);
-
-      tft.fillRect(172, 196, 136, 16, tft.color565(9, 5, 20));
-      tft.setTextColor(tft.color565(34, 211, 238), tft.color565(9, 5, 20));
-      tft.drawString("01:24", 172, 196, 2);
-      tft.drawRightString("03:52", 308, 196, 2);
-    }
-  }
-
-  // --- GIAO DIỆN 5: POP-ART COMIC STRIP ---
-  void _updateTheme5Comic() {
-    uint16_t cClockPanel = tft.color565(255, 240, 130);
-    uint16_t cRibbon = tft.color565(249, 115, 22);
-    uint16_t cBlueSky = tft.color565(128, 216, 255);
-
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
-      _lastDrawnHour = _clockHour;
-      _lastDrawnMin = _clockMin;
-      char timeBuf[16];
-      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(24, 20, 96, 38, cClockPanel);
-      tft.setTextColor(TFT_BLACK, cClockPanel);
-      tft.drawString(timeBuf, 24, 20, 6);
-
-      char dateRib[32];
-      snprintf(dateRib, sizeof(dateRib), "T%d, %02d THANG %02d",
-               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth);
-      tft.fillRect(30, 83, 118, 18, cRibbon);
-      _drawCentreUtf8String(dateRib, 89, 83, TFT_BLACK, cRibbon);
-    }
-
-    if (_clockSec != _lastDrawnSec) {
-      _lastDrawnSec = _clockSec;
-      char secBuf[8];
-      snprintf(secBuf, sizeof(secBuf), "%02d", _clockSec);
-      tft.fillRect(122, 24, 30, 24, cClockPanel);
-      tft.setTextColor(tft.color565(249, 115, 22), cClockPanel);
-      tft.drawString(secBuf, 122, 24, 4);
-    }
-
-    if (_notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(28, 142, 130, 68, TFT_WHITE);
-      _drawCentreUtf8String("TIN MOI!", 93, 144, TFT_BLACK, TFT_WHITE);
-      const char* msg = (_notifShown && _notif.message[0] != '\0') ? _notif.message : "Vo: Mua do an toi chua?";
-      _drawWrappedUtf8String(msg, 32, 162, 122, 2, TFT_BLACK, TFT_WHITE, 16);
-    }
-
-    if (strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(184, 18, 124, 36, cBlueSky);
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "NOI NAY CO ANH";
-      tft.setTextColor(tft.color565(250, 204, 21), cBlueSky);
-      tft.drawCentreString(sTitle, 246, 18, 2);
-
-      tft.fillRect(184, 212, 122, 16, cBlueSky);
-      tft.setTextColor(TFT_BLACK, cBlueSky);
-      tft.drawString("01:24", 184, 212, 2);
-      tft.drawRightString("03:52", 306, 212, 2);
-    }
+    u8f.setFontMode(0);
+    tft.resetViewport();
   }
 
   // --- GIAO DIỆN 0: CUSTOM STATIC + WAYBAR ĐÁY ---
@@ -1081,6 +855,273 @@ private:
       const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nhac tat";
       tft.setTextColor(tft.color565(254, 240, 138), cWb);
       tft.drawString(sTitle, 232, 220, 2);
+    }
+  }
+
+  // --- GIAO DIỆN 1: SUNFLOWER BENTO ---
+  void _drawTheme1SunflowerContent(bool isRedraw) {
+    if (isRedraw) {
+      // 1. Clock (HH:mm - không hiện giây)
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(tft.color565(250, 204, 21)); // vàng tươi trong suốt
+      tft.drawString(timeBuf, 20, 24, 6);
+
+      // 2. Date
+      char dateBuf[48];
+      snprintf(dateBuf, sizeof(dateBuf), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
+      for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
+      _drawUtf8StringTransparent(dateBuf, 22, 70, TFT_WHITE);
+
+      // 3. Notification
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 184, 50, tft.color565(250, 204, 21));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 184, 70, 110, 3, TFT_WHITE, 16);
+        }
+      }
+
+      // 4. Music Duration (chỉ vẽ khi durationSec > 0, không thêm mặc định 01:24)
+      if (_navData.songDurationSec > 0) {
+        char elBuf[16], durBuf[16];
+        snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        snprintf(durBuf, sizeof(durBuf), "%02d:%02d", _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+        tft.setTextColor(tft.color565(251, 146, 60));
+        tft.drawString(elBuf, 262, 198, 1);
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString(durBuf, 262, 208, 1);
+      }
+    }
+
+    // 5. Song Title (thả trôi nếu dài hơn 175px)
+    if (_navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, 60, 198, 175, 18, tft.color565(254, 240, 138), tft.color565(28, 25, 23), isRedraw);
+    }
+  }
+
+  // --- GIAO DIỆN 2: CYBERPUNK NEON HUD ---
+  void _drawTheme2CyberpunkContent(bool isRedraw) {
+    if (isRedraw) {
+      // 1. Clock (HH:mm - không hiện giây)
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(tft.color565(0, 240, 255)); // cyan neon trong suốt
+      tft.drawString(timeBuf, 26, 46, 7);
+
+      // 2. Date
+      char dateBuf[32];
+      snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d.%02d.%04d",
+               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
+      _drawUtf8StringTransparent(dateBuf, 26, 116, tft.color565(103, 232, 249));
+
+      // 3. Notification
+      if (_notifShown && _notif.title[0] != '\0') {
+        _drawUtf8StringTransparent(_notif.title, 220, 52, tft.color565(255, 0, 127));
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 220, 72, 80, 4, TFT_WHITE, 16);
+        }
+      }
+
+      // 4. Music Duration (chỉ hiện khi durationSec > 0)
+      if (_navData.songDurationSec > 0) {
+        char ratioBuf[32];
+        snprintf(ratioBuf, sizeof(ratioBuf), "%02d:%02d / %02d:%02d",
+                 _navData.songElapsedSec / 60, _navData.songElapsedSec % 60,
+                 _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+        tft.setTextColor(tft.color565(251, 146, 60));
+        tft.drawString(ratioBuf, 225, 178, 1);
+      }
+    }
+
+    // 5. Song Title (thả trôi nếu dài hơn 160px)
+    if (_navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, 60, 178, 160, 16, tft.color565(103, 232, 249), tft.color565(7, 6, 20), isRedraw);
+    }
+  }
+
+  // --- GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS ---
+  void _drawTheme3RetroMacContent(bool isRedraw) {
+    if (isRedraw) {
+      // 1. Clock (HH:mm - không hiện giây, chữ đen trong suốt)
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(TFT_BLACK); // đen trong suốt, không đè hộp trắng
+      tft.drawString(timeBuf, 26, 42, 6);
+
+      // 2. Date
+      char dBuf[32];
+      snprintf(dBuf, sizeof(dBuf), "%02d/%02d/%04d", _clockDay, _clockMonth, _clockYear);
+      _drawCentreUtf8StringTransparent(dBuf, 77, 82, TFT_BLACK);
+
+      // 3. Notification (chỉ hiện khi có thông báo thực tế, chữ đen trong suốt)
+      if (_notifShown && _notif.title[0] != '\0') {
+        char fromBuf[48];
+        snprintf(fromBuf, sizeof(fromBuf), "From: %s", _notif.title);
+        _drawUtf8StringTransparent(fromBuf, 42, 148, TFT_BLACK);
+        if (_notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, 16, 168, 132, 3, TFT_BLACK, 16);
+        }
+      }
+
+      // 4. Music Duration (chỉ hiện khi durationSec > 0, KHÔNG tự thêm 01:24)
+      if (_navData.songDurationSec > 0) {
+        char elBuf[16];
+        snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        tft.setTextColor(TFT_BLACK);
+        tft.drawString(elBuf, 228, 151, 1);
+      }
+    }
+
+    // 5. Song Title (thả trôi nếu dài hơn 110px, trong khung đen x: 178, y: 65, w: 110, h: 14)
+    if (_navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, 178, 65, 110, 14, TFT_WHITE, TFT_BLACK, isRedraw);
+    }
+  }
+
+  // --- GIAO DIỆN 4: 80s SYNTHWAVE CASSETTE ---
+  void _drawTheme4CassetteContent(bool isRedraw) {
+    if (isRedraw) {
+      // 1. Clock (HH:mm - không hiện giây)
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(TFT_WHITE); // trắng trong suốt
+      tft.drawString(timeBuf, 26, 36, 4);
+
+      // 2. Date
+      char dateBuf[32];
+      snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d TH%02d %04d",
+               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
+      _drawUtf8StringTransparent(dateBuf, 16, 84, tft.color565(34, 211, 238));
+
+      // 3. Notification
+      if (_notifShown && _notif.message[0] != '\0') {
+        _drawWrappedUtf8StringTransparent(_notif.message, 22, 146, 120, 2, tft.color565(165, 243, 252), 16);
+      }
+
+      // Ca sĩ
+      if (_navData.songArtist[0] != '\0') {
+        _drawUtf8StringTransparent(_navData.songArtist, 178, 124, TFT_WHITE);
+      }
+
+      // 4. Music Duration (chỉ hiện khi durationSec > 0)
+      if (_navData.songDurationSec > 0) {
+        char elBuf[16], durBuf[16];
+        snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        snprintf(durBuf, sizeof(durBuf), "%02d:%02d", _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+        tft.setTextColor(tft.color565(34, 211, 238));
+        tft.drawString(elBuf, 172, 196, 2);
+        tft.drawRightString(durBuf, 308, 196, 2);
+      }
+    }
+
+    // 5. Song Title (thả trôi nếu dài hơn 120px)
+    if (_navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, 178, 58, 120, 16, TFT_WHITE, tft.color565(91, 33, 182), isRedraw);
+    }
+  }
+
+  // --- GIAO DIỆN 5: POP-ART COMIC STRIP ---
+  void _drawTheme5ComicContent(bool isRedraw) {
+    if (isRedraw) {
+      // 1. Clock (HH:mm - không hiện giây)
+      char timeBuf[16];
+      snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+      tft.setTextColor(TFT_BLACK); // đen trong suốt
+      tft.drawString(timeBuf, 24, 20, 6);
+
+      // 2. Date
+      char dateRib[32];
+      snprintf(dateRib, sizeof(dateRib), "T%d, %02d THANG %02d",
+               _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth);
+      _drawCentreUtf8StringTransparent(dateRib, 89, 83, TFT_BLACK);
+
+      // 3. Notification
+      if (_notifShown && _notif.message[0] != '\0') {
+        _drawWrappedUtf8StringTransparent(_notif.message, 32, 162, 122, 2, TFT_BLACK, 16);
+      }
+
+      // 4. Music Duration (chỉ hiện khi durationSec > 0)
+      if (_navData.songDurationSec > 0) {
+        char elBuf[16], durBuf[16];
+        snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        snprintf(durBuf, sizeof(durBuf), "%02d:%02d", _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+        tft.setTextColor(TFT_BLACK);
+        tft.drawString(elBuf, 184, 212, 2);
+        tft.drawRightString(durBuf, 306, 212, 2);
+      }
+    }
+
+    // 5. Song Title (thả trôi nếu dài hơn 122px)
+    if (_navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, 184, 18, 122, 16, tft.color565(250, 204, 21), tft.color565(128, 216, 255), isRedraw);
+    }
+  }
+
+  void _renderStandbyWatchface() {
+    if (_watchfaceStyle == 0) {
+      if (_needFullRedraw) {
+        _lastState = _currentState;
+        _lastWatchfaceStyle = _watchfaceStyle;
+        _needFullRedraw = false;
+        tft.fillScreen(TFT_BLACK);
+        if (SPIFFS.exists("/bg_wait.jpg")) {
+          File f = SPIFFS.open("/bg_wait.jpg", "r");
+          if (f) {
+            size_t fSize = f.size();
+            f.close();
+            if (fSize > 500) {
+              TJpgDec.drawFsJpg(0, 0, "/bg_wait.jpg");
+            }
+          }
+        } else {
+          _drawDefaultWallpaper();
+        }
+        _drawTheme0WaybarStatic();
+      }
+      _updateTheme0CustomStatic();
+      return;
+    }
+
+    // Themes 1..5: Vẽ nền ảnh sạch 2D, tách hoàn toàn màu nền (trong suốt 100%)
+    bool minuteChanged = (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin);
+    bool songChanged = (strcmp(_navData.songTitle, _lastDrawnSong) != 0);
+    bool needsFullThemeRedraw = _needFullRedraw || minuteChanged || _notifDirty || songChanged;
+
+    if (needsFullThemeRedraw) {
+      _lastState = _currentState;
+      _lastWatchfaceStyle = _watchfaceStyle;
+      _lastDrawnHour = _clockHour;
+      _lastDrawnMin = _clockMin;
+      _lastDrawnDay = _clockDay;
+      _needFullRedraw = false;
+      _notifDirty = false;
+      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+
+      switch (_watchfaceStyle) {
+        case 1: TJpgDec.drawJpg(0, 0, THEME_1_BG_JPG, THEME_1_BG_LEN); break;
+        case 2: TJpgDec.drawJpg(0, 0, THEME_2_BG_JPG, THEME_2_BG_LEN); break;
+        case 3: TJpgDec.drawJpg(0, 0, THEME_3_BG_JPG, THEME_3_BG_LEN); break;
+        case 4: TJpgDec.drawJpg(0, 0, THEME_4_BG_JPG, THEME_4_BG_LEN); break;
+        case 5: TJpgDec.drawJpg(0, 0, THEME_5_BG_JPG, THEME_5_BG_LEN); break;
+        default: TJpgDec.drawJpg(0, 0, THEME_1_BG_JPG, THEME_1_BG_LEN); break;
+      }
+
+      switch (_watchfaceStyle) {
+        case 1: _drawTheme1SunflowerContent(true); break;
+        case 2: _drawTheme2CyberpunkContent(true); break;
+        case 3: _drawTheme3RetroMacContent(true); break;
+        case 4: _drawTheme4CassetteContent(true); break;
+        case 5: _drawTheme5ComicContent(true); break;
+        default: _drawTheme1SunflowerContent(true); break;
+      }
+    } else {
+      switch (_watchfaceStyle) {
+        case 1: _drawTheme1SunflowerContent(false); break;
+        case 2: _drawTheme2CyberpunkContent(false); break;
+        case 3: _drawTheme3RetroMacContent(false); break;
+        case 4: _drawTheme4CassetteContent(false); break;
+        case 5: _drawTheme5ComicContent(false); break;
+      }
     }
   }
 

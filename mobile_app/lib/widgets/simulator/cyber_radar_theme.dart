@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
+import 'marquee_text.dart';
 
 /// GIAO DIỆN 2: CYBERPUNK NEON HUD (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_2_bg.png)
 class CyberRadarTheme extends StatelessWidget {
@@ -17,7 +18,6 @@ class CyberRadarTheme extends StatelessWidget {
   Widget build(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
     final dayOfWeek = currentTime.weekday == 7 ? 'CN' : 'T${currentTime.weekday + 1}';
     final d = currentTime.day.toString().padLeft(2, '0');
     final m = currentTime.month.toString().padLeft(2, '0');
@@ -39,40 +39,22 @@ class CyberRadarTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung Đồng hồ (Bên trái: x: 22..195, y: 24..160) ---
+          // --- Khung Đồng hồ (Bên trái: x: 22..195, y: 24..160, chỉ hiện HH:mm) ---
           Positioned(
             left: 24,
             top: 44,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  '$hStr:$mStr',
-                  style: GoogleFonts.orbitron(
-                    fontSize: 42,
-                    fontWeight: FontWeight.w900,
-                    color: const Color(0xFF00F0FF),
-                    letterSpacing: -1,
-                    shadows: const [
-                      Shadow(color: Color(0xFF00F0FF), blurRadius: 14),
-                      Shadow(color: Color(0xFF00F0FF), blurRadius: 4),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  sStr,
-                  style: GoogleFonts.orbitron(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                    color: const Color(0xFFFF007F),
-                    shadows: const [
-                      Shadow(color: Color(0xFFFF007F), blurRadius: 10),
-                    ],
-                  ),
-                ),
-              ],
+            child: Text(
+              '$hStr:$mStr',
+              style: GoogleFonts.orbitron(
+                fontSize: 42,
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFF00F0FF),
+                letterSpacing: -1,
+                shadows: const [
+                  Shadow(color: Color(0xFF00F0FF), blurRadius: 14),
+                  Shadow(color: Color(0xFF00F0FF), blurRadius: 4),
+                ],
+              ),
             ),
           ),
 
@@ -127,36 +109,35 @@ class CyberRadarTheme extends StatelessWidget {
           ),
 
           // --- Thanh Nhạc (Dưới đáy: khung y: 173..210) ---
-          // Tên bài hát - Ca sĩ (nằm ở top: 178, TRÊN các vạch sóng equalizer y: 194..206)
+          // Tên bài hát - Ca sĩ (thả trôi marquee nếu dài hơn 160px)
           Positioned(
             left: 60,
             top: 178,
-            width: 160,
-            child: Text(
-              mockData.fullSongTitle,
+            child: MarqueeText(
+              text: mockData.fullSongTitle,
+              width: 160,
               style: GoogleFonts.chakraPetch(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFF67E8F9),
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // Thời lượng 01:24 / 03:52 (nằm ở top: 178, TRÊN thanh trượt tiến trình)
-          Positioned(
-            right: 20,
-            top: 178,
-            child: Text(
-              mockData.timeRatioStr,
-              style: GoogleFonts.orbitron(
-                fontSize: 9.5,
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFFFB923C),
+          // Thời lượng 01:24 / 03:52 (chỉ hiện khi có tiến trình thực tế)
+          if (mockData.durationSec > 0)
+            Positioned(
+              right: 20,
+              top: 178,
+              child: Text(
+                mockData.timeRatioStr,
+                style: GoogleFonts.orbitron(
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFFFB923C),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

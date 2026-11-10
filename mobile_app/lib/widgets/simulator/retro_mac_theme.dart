@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
+import 'marquee_text.dart';
 
 /// GIAO DIỆN 3: RETRO MACINTOSH PIXEL OS (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_3_bg.png)
 class RetroMacTheme extends StatelessWidget {
@@ -17,7 +18,6 @@ class RetroMacTheme extends StatelessWidget {
   Widget build(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
     const days = [
       'MONDAY',
       'TUESDAY',
@@ -48,37 +48,20 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 1 - Đồng hồ (Vùng trắng bên trong: x: 9..144, y: 34..118) ---
-          // Giờ HH:mm + Giây ss (Căn giữa ngang hoàn hảo trong cửa sổ đồng hồ)
+          // --- Cửa sổ 1 - Đồng hồ (Vùng bên trong: x: 9..144, y: 34..118, chỉ hiện HH:mm) ---
           Positioned(
             left: 10,
             top: 42,
             width: 134,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  '$hStr:$mStr',
-                  style: GoogleFonts.vt323(
-                    fontSize: 38,
-                    color: Colors.black,
-                    fontWeight: FontWeight.w900,
-                    height: 1.0,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  sStr,
-                  style: GoogleFonts.vt323(
-                    fontSize: 20,
-                    color: const Color(0xFF4B5563),
-                    fontWeight: FontWeight.w700,
-                    height: 1.0,
-                  ),
-                ),
-              ],
+            child: Text(
+              '$hStr:$mStr',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.vt323(
+                fontSize: 38,
+                color: Colors.black,
+                fontWeight: FontWeight.w900,
+                height: 1.0,
+              ),
             ),
           ),
 
@@ -99,7 +82,7 @@ class RetroMacTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Cửa sổ 2 - Tin nhắn (Vùng trắng bên trong: x: 8..152, y: 141..217) ---
+          // --- Cửa sổ 2 - Tin nhắn (Vùng bên trong: x: 8..152, y: 141..217) ---
           // "From: Người gửi" (Nằm ngang hàng bên phải icon phong bì x: 14..36, y: 144..162)
           Positioned(
             left: 42,
@@ -133,36 +116,35 @@ class RetroMacTheme extends StatelessWidget {
           ),
 
           // --- Cửa sổ 3 - Nhạc (Bên phải) ---
-          // Tên bài hát (Nằm lọt lòng bên trong thanh ngang đen: x: 177..264, y: 65..78)
+          // Tên bài hát (thả trôi marquee nếu dài hơn 110px)
           Positioned(
             left: 178,
             top: 65,
-            width: 86,
-            child: Text(
-              mockData.fullSongTitle,
+            child: MarqueeText(
+              text: mockData.fullSongTitle,
+              width: 110,
               style: GoogleFonts.vt323(
                 fontSize: 11,
                 color: Colors.white,
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // Thời lượng 01:24 / 03:52 (Nằm bên trên thanh tiến trình tại x: 226..268, y: 151..163)
-          Positioned(
-            left: 226,
-            top: 151,
-            width: 44,
-            child: Text(
-              mockData.timeRatioStr,
-              textAlign: TextAlign.right,
-              style: GoogleFonts.vt323(
-                fontSize: 9.5,
-                color: Colors.black,
+          // Thời lượng 01:24 / 03:52 (chỉ hiện khi có tiến trình bài hát)
+          if (mockData.durationSec > 0)
+            Positioned(
+              left: 226,
+              top: 151,
+              width: 44,
+              child: Text(
+                mockData.timeRatioStr,
+                textAlign: TextAlign.right,
+                style: GoogleFonts.vt323(
+                  fontSize: 9.5,
+                  color: Colors.black,
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

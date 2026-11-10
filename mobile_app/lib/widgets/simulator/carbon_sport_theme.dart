@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
+import 'marquee_text.dart';
 
 /// GIAO DIỆN 1: SUNFLOWER BENTO (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_1_bg.png)
 class CarbonSportTheme extends StatelessWidget {
@@ -33,7 +34,6 @@ class CarbonSportTheme extends StatelessWidget {
   Widget build(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
     final dateStr = _formatDateVietnamese(currentTime);
 
     return SizedBox(
@@ -51,35 +51,19 @@ class CarbonSportTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Ô Đồng hồ (Góc trên trái: ô x: 12..160, y: 12..104) ---
+          // --- Ô Đồng hồ (Góc trên trái: ô x: 12..160, y: 12..104, chỉ hiện HH:mm) ---
           Positioned(
             left: 20,
             top: 22,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  '$hStr:$mStr',
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 38,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFFFACC15),
-                    letterSpacing: -1,
-                    height: 1.0,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  sStr,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFFF97316),
-                    height: 1.0,
-                  ),
-                ),
-              ],
+            child: Text(
+              '$hStr:$mStr',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 38,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFFFACC15),
+                letterSpacing: -1,
+                height: 1.0,
+              ),
             ),
           ),
 
@@ -154,52 +138,51 @@ class CarbonSportTheme extends StatelessWidget {
           ),
 
           // --- Thanh Nhạc (Dưới đáy: pill y: 190..231) ---
-          // Tên bài hát - Ca sĩ (nằm trên hàng chấm tiến trình y: 223)
+          // Tên bài hát - Ca sĩ (thả trôi marquee nếu dài hơn 175px)
           Positioned(
             left: 60,
             top: 198,
-            width: 175,
-            child: Text(
-              mockData.fullSongTitle,
+            child: MarqueeText(
+              text: mockData.fullSongTitle,
+              width: 175,
               style: GoogleFonts.plusJakartaSans(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 color: const Color(0xFFFEF08A),
               ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
 
-          // Cột thời gian hiện tại / tổng thời gian ở bên phải thanh nhạc
-          Positioned(
-            right: 20,
-            top: 198,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  mockData.elapsedStr,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFFFB923C),
-                    height: 1.1,
+          // Cột thời gian hiện tại / tổng thời gian (chỉ hiện khi có tiến trình bài hát)
+          if (mockData.durationSec > 0)
+            Positioned(
+              right: 20,
+              top: 198,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    mockData.elapsedStr,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFFFB923C),
+                      height: 1.1,
+                    ),
                   ),
-                ),
-                Text(
-                  mockData.durationStr,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                    height: 1.1,
+                  Text(
+                    mockData.durationStr,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      height: 1.1,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../config/simulator_presets.dart';
+import 'marquee_text.dart';
 
 /// GIAO DIỆN 5: POP-ART COMIC STRIP (Căn chỉnh tọa độ pixel-perfect theo ảnh nền theme_5_bg.png)
 class ComicStripTheme extends StatelessWidget {
@@ -17,7 +18,6 @@ class ComicStripTheme extends StatelessWidget {
   Widget build(BuildContext context) {
     final hStr = currentTime.hour.toString().padLeft(2, '0');
     final mStr = currentTime.minute.toString().padLeft(2, '0');
-    final sStr = currentTime.second.toString().padLeft(2, '0');
     final dayOfWeek = currentTime.weekday == 7 ? 'CN' : 'T${currentTime.weekday + 1}';
     final d = currentTime.day.toString().padLeft(2, '0');
     final m = currentTime.month.toString().padLeft(2, '0');
@@ -38,82 +38,50 @@ class ComicStripTheme extends StatelessWidget {
             ),
           ),
 
-          // --- Khung 1 - Đồng hồ Comic (Góc trên trái: panel x: 8..170, y: 8..115) ---
-          // Giờ HH:mm (ruột đen, viền trắng, viền ngoài đen) + Giây ss (ruột cam, viền đen)
+          // --- Khung 1 - Đồng hồ Comic (Góc trên trái: panel x: 8..170, y: 8..115, chỉ hiện HH:mm) ---
           Positioned(
             left: 16,
             top: 20,
             width: 148,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                // Giờ: Stack 3 lớp tạo viền kép đậm chất Comic
-                Stack(
-                  children: [
-                    Text(
-                      '$hStr:$mStr',
-                      style: GoogleFonts.bangers(
-                        fontSize: 38,
-                        letterSpacing: 1.0,
-                        foreground: Paint()
-                          ..style = PaintingStyle.stroke
-                          ..strokeWidth = 6.0
-                          ..strokeCap = StrokeCap.round
-                          ..strokeJoin = StrokeJoin.round
-                          ..color = Colors.black,
-                      ),
+            child: Center(
+              child: Stack(
+                children: [
+                  Text(
+                    '$hStr:$mStr',
+                    style: GoogleFonts.bangers(
+                      fontSize: 40,
+                      letterSpacing: 1.0,
+                      foreground: Paint()
+                        ..style = PaintingStyle.stroke
+                        ..strokeWidth = 6.0
+                        ..strokeCap = StrokeCap.round
+                        ..strokeJoin = StrokeJoin.round
+                        ..color = Colors.black,
                     ),
-                    Text(
-                      '$hStr:$mStr',
-                      style: GoogleFonts.bangers(
-                        fontSize: 38,
-                        letterSpacing: 1.0,
-                        foreground: Paint()
-                          ..style = PaintingStyle.stroke
-                          ..strokeWidth = 3.0
-                          ..strokeCap = StrokeCap.round
-                          ..strokeJoin = StrokeJoin.round
-                          ..color = Colors.white,
-                      ),
+                  ),
+                  Text(
+                    '$hStr:$mStr',
+                    style: GoogleFonts.bangers(
+                      fontSize: 40,
+                      letterSpacing: 1.0,
+                      foreground: Paint()
+                        ..style = PaintingStyle.stroke
+                        ..strokeWidth = 3.0
+                        ..strokeCap = StrokeCap.round
+                        ..strokeJoin = StrokeJoin.round
+                        ..color = Colors.white,
                     ),
-                    Text(
-                      '$hStr:$mStr',
-                      style: GoogleFonts.bangers(
-                        fontSize: 38,
-                        letterSpacing: 1.0,
-                        color: Colors.black,
-                      ),
+                  ),
+                  Text(
+                    '$hStr:$mStr',
+                    style: GoogleFonts.bangers(
+                      fontSize: 40,
+                      letterSpacing: 1.0,
+                      color: Colors.black,
                     ),
-                  ],
-                ),
-                const SizedBox(width: 4),
-                // Giây ss
-                Stack(
-                  children: [
-                    Text(
-                      sStr,
-                      style: GoogleFonts.bangers(
-                        fontSize: 20,
-                        foreground: Paint()
-                          ..style = PaintingStyle.stroke
-                          ..strokeWidth = 3.5
-                          ..strokeCap = StrokeCap.round
-                          ..strokeJoin = StrokeJoin.round
-                          ..color = Colors.black,
-                      ),
-                    ),
-                    Text(
-                      sStr,
-                      style: GoogleFonts.bangers(
-                        fontSize: 20,
-                        color: const Color(0xFFF97316),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -173,103 +141,56 @@ class ComicStripTheme extends StatelessWidget {
           ),
 
           // --- Khung 3 - Nhạc (Cột xanh bên phải: bầu trời x: 180..311, y: 12..74) ---
-          // Tên bài hát & Ca sĩ in hoa, chữ vàng viền đen đậm
+          // Tên bài hát & Ca sĩ in hoa, chữ vàng viền đen (thả trôi marquee nếu dài)
           Positioned(
             left: 184,
-            top: 18,
-            width: 124,
-            child: ComicStrokeText(
-              text: '${mockData.songTitle}\n${mockData.songArtist}'.toUpperCase(),
-              fontSize: 12,
-              fillColor: const Color(0xFFFACC15),
-              strokeColor: Colors.black,
-              strokeWidth: 3.2,
+            top: 20,
+            child: MarqueeText(
+              text: '${mockData.songTitle} - ${mockData.songArtist}'.toUpperCase(),
+              width: 124,
               textAlign: TextAlign.center,
-              fontStyle: GoogleFonts.bangers(height: 1.1),
+              style: GoogleFonts.bangers(
+                fontSize: 13,
+                letterSpacing: 0.8,
+                color: const Color(0xFFFACC15),
+                shadows: const [
+                  Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 2),
+                  Shadow(color: Colors.black, offset: Offset(-1, -1), blurRadius: 2),
+                ],
+              ),
             ),
           ),
 
-          // Thời lượng 01:24 và 03:52 (bên dưới thanh tiến trình đáy)
-          Positioned(
-            left: 184,
-            top: 212,
-            width: 122,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  mockData.elapsedStr,
-                  style: GoogleFonts.fredoka(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.black,
+          // Thời lượng 01:24 và 03:52 (chỉ hiện khi có tiến trình bài hát)
+          if (mockData.durationSec > 0)
+            Positioned(
+              left: 184,
+              top: 212,
+              width: 122,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    mockData.elapsedStr,
+                    style: GoogleFonts.fredoka(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                    ),
                   ),
-                ),
-                Text(
-                  mockData.durationStr,
-                  style: GoogleFonts.fredoka(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.black,
+                  Text(
+                    mockData.durationStr,
+                    style: GoogleFonts.fredoka(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
-    );
-  }
-}
-
-class ComicStrokeText extends StatelessWidget {
-  final String text;
-  final double fontSize;
-  final Color fillColor;
-  final Color strokeColor;
-  final double strokeWidth;
-  final TextAlign textAlign;
-  final TextStyle? fontStyle;
-
-  const ComicStrokeText({
-    super.key,
-    required this.text,
-    required this.fontSize,
-    this.fillColor = Colors.white,
-    this.strokeColor = Colors.black,
-    this.strokeWidth = 3.0,
-    this.textAlign = TextAlign.left,
-    this.fontStyle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final baseStyle = (fontStyle ?? GoogleFonts.bangers()).copyWith(
-      fontSize: fontSize,
-    );
-
-    return Stack(
-      children: [
-        Text(
-          text,
-          textAlign: textAlign,
-          style: baseStyle.copyWith(
-            foreground: Paint()
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = strokeWidth
-              ..strokeCap = StrokeCap.round
-              ..strokeJoin = StrokeJoin.round
-              ..color = strokeColor,
-          ),
-        ),
-        Text(
-          text,
-          textAlign: textAlign,
-          style: baseStyle.copyWith(
-            color: fillColor,
-          ),
-        ),
-      ],
     );
   }
 }
