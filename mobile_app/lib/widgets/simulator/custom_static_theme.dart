@@ -1,3 +1,4 @@
+import 'marquee_text.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../config/simulator_presets.dart';
@@ -170,10 +171,10 @@ class CustomStaticTheme extends StatelessWidget {
                     ),
                   ),
 
-                  // Module Pill 2: [💬 Tin nhắn]
+                  // Module Pill 2: [🎵 Nhạc] (Kéo dài toàn bộ phần còn lại của Waybar, bỏ tin nhắn)
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1.5),
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E293B),
                         borderRadius: BorderRadius.circular(8),
@@ -181,61 +182,21 @@ class CustomStaticTheme extends StatelessWidget {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.chat_bubble_rounded, color: Color(0xFFFB923C), size: 9.5),
-                          const SizedBox(width: 3),
+                          const Icon(Icons.music_note_rounded, color: Color(0xFFFACC15), size: 11),
+                          const SizedBox(width: 4),
                           Expanded(
-                            child: Text(
-                              '${mockData.sender}: ${mockData.message}',
+                            child: MarqueeText(
+                              text: mockData.fullSongTitle,
+                              width: 220,
                               style: const TextStyle(
-                                color: Color(0xFFE2E8F0),
-                                fontSize: 9,
-                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFFEF08A),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-
-                  // Divider '|'
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      '|',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 10),
-                    ),
-                  ),
-
-                  // Module Pill 3: [🎵 Nhạc]
-                  Container(
-                    constraints: const BoxConstraints(maxWidth: 96),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF334155), width: 0.8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.music_note_rounded, color: Color(0xFFFACC15), size: 10),
-                        const SizedBox(width: 2),
-                        Flexible(
-                          child: Text(
-                            mockData.songTitle,
-                            style: const TextStyle(
-                              color: Color(0xFFFEF08A),
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
                     ),
                   ),
                 ],

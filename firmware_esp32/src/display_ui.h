@@ -719,6 +719,46 @@ private:
     u8f.setFontMode(0);
   }
 
+  void _drawTruncatedUtf8StringTransparent(const char* str, int x, int y, int maxW, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+    if (str == nullptr || str[0] == '\0') return;
+    u8f.setFont(font);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fgColor);
+
+    if (u8f.getUTF8Width(str) <= maxW) {
+      u8f.setCursor(x, y + 13);
+      u8f.print(str);
+      u8f.setFontMode(0);
+      return;
+    }
+
+    // Tên quá dài so với maxW -> Cắt ngắn và thêm '...'
+    char buf[128];
+    strncpy(buf, str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    int dotW = u8f.getUTF8Width("...");
+    int availW = maxW - dotW;
+    if (availW < 10) availW = maxW;
+
+    int len = strlen(buf);
+    while (len > 0) {
+      while (len > 0 && ((unsigned char)buf[len - 1] & 0xC0) == 0x80) {
+        len--;
+      }
+      if (len > 0) len--;
+      buf[len] = '\0';
+      if (u8f.getUTF8Width(buf) <= availW) {
+        break;
+      }
+    }
+
+    strncat(buf, "...", sizeof(buf) - strlen(buf) - 1);
+    u8f.setCursor(x, y + 13);
+    u8f.print(buf);
+    u8f.setFontMode(0);
+  }
+
   void _drawWrappedUtf8StringTransparent(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, int lineHeight = 16) {
     if (!text || text[0] == '\0') return;
     u8f.setFont(u8g2_font_unifont_t_vietnamese1);
@@ -827,6 +867,7 @@ private:
   void _drawTheme0WaybarStatic() {
     tft.fillRect(0, 216, 320, 24, tft.color565(15, 23, 42));
     tft.drawFastHLine(0, 216, 320, tft.color565(51, 65, 85));
+    tft.drawFastVLine(64, 218, 20, tft.color565(51, 65, 85));
   }
 
   void _updateTheme0CustomStatic(bool forceRedraw = false) {
@@ -837,25 +878,14 @@ private:
       _lastDrawnMin = _clockMin;
       char tBuf[16];
       snprintf(tBuf, sizeof(tBuf), "%02d:%02d", _clockHour, _clockMin);
-      tft.fillRect(8, 219, 50, 18, cWb);
+      tft.fillRect(8, 219, 52, 18, cWb);
       tft.setTextColor(TFT_WHITE, cWb);
       tft.drawString(tBuf, 10, 220, 2);
     }
 
-    if (forceRedraw || _notifDirty) {
-      _notifDirty = false;
-      tft.fillRect(70, 219, 150, 18, cWb);
-      const char* notifStr = (_notifShown && _notif.title[0] != '\0') ? _notif.title : "Chua co thong bao";
-      _drawUtf8String(notifStr, 72, 220, tft.color565(226, 232, 240), cWb);
-    }
-
-    if (forceRedraw || strcmp(_navData.songTitle, _lastDrawnSong) != 0) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      tft.fillRect(230, 219, 85, 18, cWb);
-      const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nhac tat";
-      tft.setTextColor(tft.color565(254, 240, 138), cWb);
-      tft.drawString(sTitle, 232, 220, 2);
-    }
+    // Phần nhạc kéo dài từ x: 70 đến 314 (rộng 244px), xóa bỏ hoàn toàn phần thông báo trên waybar
+    const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nhac tat";
+    _drawSongTitle(sTitle, 70, 220, 244, 16, tft.color565(254, 240, 138), cWb, forceRedraw);
   }
 
   // --- GIAO DIỆN 1: SUNFLOWER BENTO ---
@@ -886,7 +916,7 @@ private:
 
       // 4. Notification: Người gửi cố định (vàng), nội dung xuống dòng hết ô không trôi
       if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8StringTransparent(_notif.title, 184, 50, tft.color565(250, 204, 21));
+        _drawTruncatedUtf8StringTransparent(_notif.title, 184, 50, 110, tft.color565(250, 204, 21));
         if (_notif.message[0] != '\0') {
           _drawWrappedUtf8StringTransparent(_notif.message, 184, 68, 110, 4, TFT_WHITE, 15);
         }
@@ -926,7 +956,7 @@ private:
 
       // 4. Notification: Người gửi cố định (hồng neon), nội dung xuống dòng hết ô không trôi
       if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8StringTransparent(_notif.title, 218, 50, tft.color565(255, 0, 127));
+        _drawTruncatedUtf8StringTransparent(_notif.title, 218, 50, 86, tft.color565(255, 0, 127));
         if (_notif.message[0] != '\0') {
           _drawWrappedUtf8StringTransparent(_notif.message, 218, 68, 86, 4, TFT_WHITE, 15);
         }
@@ -966,7 +996,7 @@ private:
       if (_notifShown && _notif.title[0] != '\0') {
         char fromBuf[48];
         snprintf(fromBuf, sizeof(fromBuf), "From: %s", _notif.title);
-        _drawUtf8StringTransparent(fromBuf, 42, 155, TFT_BLACK);
+        _drawTruncatedUtf8StringTransparent(fromBuf, 42, 155, 98, TFT_BLACK);
         if (_notif.message[0] != '\0') {
           _drawWrappedUtf8StringTransparent(_notif.message, 16, 174, 124, 3, TFT_BLACK, 15);
         }
@@ -1006,7 +1036,7 @@ private:
 
       // 4. Notification: Người gửi cố định, nội dung xuống dòng hết ô không cần trôi
       if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8StringTransparent(_notif.title, 22, 142, tft.color565(251, 146, 60));
+        _drawTruncatedUtf8StringTransparent(_notif.title, 22, 142, 120, tft.color565(251, 146, 60));
         if (_notif.message[0] != '\0') {
           _drawWrappedUtf8StringTransparent(_notif.message, 22, 158, 120, 3, tft.color565(165, 243, 252), 15);
         }
@@ -1054,7 +1084,7 @@ private:
 
       // 4. Notification trong bóng thoại: Người gửi cố định, nội dung xuống dòng hết ô không trôi
       if (_notifShown && _notif.title[0] != '\0') {
-        _drawUtf8StringTransparent(_notif.title, 32, 142, tft.color565(234, 88, 12));
+        _drawTruncatedUtf8StringTransparent(_notif.title, 32, 142, 120, tft.color565(234, 88, 12));
         if (_notif.message[0] != '\0') {
           _drawWrappedUtf8StringTransparent(_notif.message, 32, 160, 120, 3, TFT_BLACK, 15);
         }

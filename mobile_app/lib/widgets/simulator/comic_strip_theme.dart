@@ -114,17 +114,20 @@ class ComicStripTheme extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Tên người gửi nổi bật (cố định, không trôi)
-                Text(
-                  '💬 ${mockData.sender.toUpperCase()}:',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.fredoka(
-                    fontSize: 11.0,
-                    fontWeight: FontWeight.w900,
-                    color: const Color(0xFFEA580C),
+                // Tên người gửi nổi bật (cố định, cắt ... nếu quá dài)
+                SizedBox(
+                  width: 120,
+                  child: Text(
+                    '💬 ${mockData.sender.toUpperCase()}:',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.fredoka(
+                      fontSize: 11.0,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFFEA580C),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 // Nội dung tin nhắn xuống dòng đến hết ô, không cần trôi
