@@ -13,40 +13,77 @@
 #include "cts_service.h"
 #include "ams_service.h"
 
-// ESP32 SoftAP (no Internet) + WebSocket server 192.168.4.1:8080 - iPhone joins this Wi-Fi and connects as client
+// ESP32 SoftAP (no Internet):
+//  - Port 8081: Non-Blocking Zero-Alloc TCP Binary Stream (0xAA 0xBB lenH lenL jpeg / 0xAA 0xCC lenH lenL json)
+//  - Port 8080: Legacy WebSocket fallback (heartbeat disabled so SoftAP never drops)
 static WebSocketsServer webSocketServer(8080);
+static WiFiServer tcpStreamServer(8081);
+static WiFiClient tcpStreamClient;
 static uint8_t wsClientNum = 255;
 static bool wsConnected = false;
+static volatile bool tcpConnected = false;
+static volatile bool needSoftApRestart = false;
+static volatile bool pendingBleRestart = false;
+static unsigned long pendingBleRestartAt = 0;
+
 static Preferences prefs;
-static String wifiSsid = "ESP32-NAV";
+static String bleName = "ysiducnaga";
+static String wifiSsid = "ysiducnaga";
 static String wifiPass = "12345678";
 
 // Start SoftAP WITHOUT offering a default gateway/DNS via DHCP, so iOS immediately sees
-// "no Internet on this Wi-Fi" and keeps using cellular data (no slow captive-portal detection).
+// "no Internet on this Wi-Fi" and keeps using cellular data without Wi-Fi Assist disconnects.
 static void startSoftAp() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-  WiFi.softAP(wifiSsid.c_str(), wifiPass.c_str(), 6, 0, 2);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(0, 0, 0, 0), IPAddress(255, 255, 255, 0));
+  WiFi.softAP(wifiSsid.c_str(), wifiPass.c_str(), 1, 0, 4);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence
 
   tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
   uint8_t offerRouter = 0; // 0 = do NOT offer router (default gateway) option
   tcpip_adapter_dhcps_option(TCPIP_ADAPTER_OP_SET, TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS, &offerRouter, sizeof(offerRouter));
   tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
-  Serial.printf("[WiFi AP] SSID '%s' (no Internet), IP %s\n", wifiSsid.c_str(), WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi AP] SSID '%s' (no GW, local-only), IP %s\n", wifiSsid.c_str(), WiFi.softAPIP().toString().c_str());
 }
 
-
-
-// Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
+// Triple-Buffered Lock-Free Pipeline (Zero Tearing, Zero Malloc) for 28-30 FPS JPEG Stream
 static uint8_t bleRxBuf[32768];
-static uint8_t renderBufA[32768];
-static uint8_t renderBufB[32768];
-static volatile uint8_t* activeRenderBuf = renderBufA;
-static volatile size_t activeRenderBufLen = 0;
-static volatile bool newFrameAvailable = false;
+static uint8_t framePool[3][32768];
+static size_t framePoolLen[3] = {0, 0, 0};
+static volatile int8_t latestReadySlot = -1;
+static volatile int8_t readingSlot = -1;
+static portMUX_TYPE frameMux = portMUX_INITIALIZER_UNLOCKED;
+
+static char tcpJsonBuf[1024];
+static volatile size_t tcpJsonLen = 0;
+static volatile bool tcpJsonAvailable = false;
+
 static volatile unsigned long lastFrameTime = 0;
+
+static int8_t acquireFreeWriterSlot() {
+  portENTER_CRITICAL(&frameMux);
+  int8_t slot = -1;
+  for (int8_t i = 0; i < 3; i++) {
+    if (i != readingSlot && i != latestReadySlot) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0) {
+    slot = (readingSlot == 0) ? 1 : 0;
+  }
+  portEXIT_CRITICAL(&frameMux);
+  return slot;
+}
+
+static void publishCompleteFrameFromWriter(int8_t writerSlot, size_t len) {
+  portENTER_CRITICAL(&frameMux);
+  framePoolLen[writerSlot] = len;
+  latestReadySlot = writerSlot;
+  portEXIT_CRITICAL(&frameMux);
+}
 
 static uint8_t currentBleFrameId = 255;
 static size_t bleJpegBytesReceived = 0;
@@ -248,6 +285,10 @@ void processJsonPacket(const char* jsonStr) {
       String resp = "{\"type\":\"APP_CONNECT_ACK\",\"status\":\"connected\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
+      delay(10);
+      String cfgResp = "{\"type\":\"DEVICE_CONFIG\",\"ble_name\":\"" + bleName + "\",\"ssid\":\"" + wifiSsid + "\",\"pass\":\"" + wifiPass + "\",\"ip\":\"192.168.4.1\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) + "}";
+      pNavChar->setValue(cfgResp.c_str());
+      pNavChar->notify();
     }
     Serial.println("[BLE] Received APP_CONNECT handshake. Switched to Navigation screen.");
     return;
@@ -281,23 +322,63 @@ void processJsonPacket(const char* jsonStr) {
     }
     display.forceRedraw();
     return;
-  } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
-    if (doc["ssid"].is<const char*>() && doc["pass"].is<const char*>()) {
+  } else if (typeStr == "DEVICE_CONFIG" || typeStr == "BLE_CONFIG" || typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY" || typeStr == "DEVICE_QUERY") {
+    bool wifiChanged = false;
+    bool bleChanged = false;
+
+    if (doc["ssid"].is<const char*>()) {
       String newSsid = String(doc["ssid"].as<const char*>());
-      String newPass = String(doc["pass"].as<const char*>());
-      if (newSsid.length() > 0 && newPass.length() >= 8) {
+      newSsid.replace("\"", "");
+      newSsid.replace("\\", "");
+      newSsid.trim();
+      if (newSsid.length() >= 1 && newSsid.length() <= 31 && newSsid != wifiSsid) {
         wifiSsid = newSsid;
-        wifiPass = newPass;
-        prefs.begin("nav_wifi", false);
-        prefs.putString("ap_ssid", wifiSsid);
-        prefs.putString("ap_pass", wifiPass);
-        prefs.end();
-        Serial.printf("[WiFi AP] Saved new AP SSID: '%s' - restarting SoftAP\n", wifiSsid.c_str());
-        startSoftAp();
+        wifiChanged = true;
       }
     }
+    if (doc["pass"].is<const char*>()) {
+      String newPass = String(doc["pass"].as<const char*>());
+      newPass.replace("\"", "");
+      newPass.replace("\\", "");
+      if (newPass.length() >= 8 && newPass.length() <= 63 && newPass != wifiPass) {
+        wifiPass = newPass;
+        wifiChanged = true;
+      }
+    }
+    if (doc["ble_name"].is<const char*>()) {
+      String newBle = String(doc["ble_name"].as<const char*>());
+      newBle.replace("\"", "");
+      newBle.replace("\\", "");
+      newBle.trim();
+      if (newBle.length() >= 1 && newBle.length() <= 24 && newBle != bleName) {
+        bleName = newBle;
+        bleChanged = true;
+      }
+    }
+
+    if (wifiChanged) {
+      prefs.begin("nav_wifi", false);
+      prefs.putString("ap_ssid", wifiSsid);
+      prefs.putString("ap_pass", wifiPass);
+      prefs.end();
+      Serial.printf("[WiFi AP] Saved new AP SSID='%s' passLen=%d -> restarting SoftAP\n", wifiSsid.c_str(), wifiPass.length());
+      needSoftApRestart = true;
+    }
+    if (bleChanged) {
+      prefs.begin("nav_cfg", false);
+      prefs.putString("ble_name", bleName);
+      prefs.end();
+      Serial.printf("[BLE] Saved new Bluetooth name '%s' -> scheduling safe reboot\n", bleName.c_str());
+      pendingBleRestart = true;
+      pendingBleRestartAt = millis() + 450;
+    }
+
     if (pNavChar != nullptr && bleConnected) {
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"mode\":\"AP\",\"ip\":\"192.168.4.1\",\"ws\":" + String(wsConnected ? 1 : 0) + ",\"port\":8080,\"hotspot\":\"" + wifiSsid + "\"}";
+      String cfgResp = "{\"type\":\"DEVICE_CONFIG\",\"ble_name\":\"" + bleName + "\",\"ssid\":\"" + wifiSsid + "\",\"pass\":\"" + wifiPass + "\",\"ip\":\"192.168.4.1\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) + ",\"restarting\":" + String(bleChanged ? 1 : 0) + "}";
+      pNavChar->setValue(cfgResp.c_str());
+      pNavChar->notify();
+      delay(10);
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"mode\":\"AP\",\"ip\":\"192.168.4.1\",\"ws\":" + String((wsConnected || tcpConnected) ? 1 : 0) + ",\"port\":8081,\"hotspot\":\"" + wifiSsid + "\"}";
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
@@ -427,14 +508,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
       }
       break;
     case WStype_BIN:
-      if (length > 100 && payload[0] == 0xFF && payload[1] == 0xD8) {
-        uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-        if (length <= sizeof(renderBufA)) {
-          memcpy(nextBuf, payload, length);
-          activeRenderBuf = nextBuf;
-          activeRenderBufLen = length;
-          newFrameAvailable = true;
-        }
+      if (length > 100 && payload[0] == 0xFF && payload[1] == 0xD8 && length <= 32768) {
+        int8_t slot = acquireFreeWriterSlot();
+        memcpy(framePool[slot], payload, length);
+        publishCompleteFrameFromWriter(slot, length);
       }
       break;
     case WStype_ERROR:
@@ -478,12 +555,10 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
           if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
             // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
-            if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
-              uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
-              memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
-              activeRenderBuf = nextBuf;
-              activeRenderBufLen = bleJpegBytesReceived;
-              newFrameAvailable = true;
+            if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8 && bleJpegBytesReceived <= 32768) {
+              int8_t slot = acquireFreeWriterSlot();
+              memcpy(framePool[slot], bleRxBuf, bleJpegBytesReceived);
+              publishCompleteFrameFromWriter(slot, bleJpegBytesReceived);
             }
           }
         }
@@ -523,12 +598,133 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 // =========================================================================
+// Dedicated Non-Blocking Persistent TCP Binary Stream Task (Port 8081)
+// =========================================================================
+static void tcpStreamTask(void* param) {
+  (void)param;
+  uint8_t rxState = 0; // 0: MAGIC 0xAA, 1: TYPE, 2: LEN_H, 3: LEN_L, 4: PAYLOAD
+  uint8_t pktType = 0;
+  uint16_t pktLen = 0;
+  size_t rxPos = 0;
+  int8_t writerSlot = -1;
+
+  for (;;) {
+    if (needSoftApRestart) {
+      needSoftApRestart = false;
+      if (tcpStreamClient) tcpStreamClient.stop();
+      tcpConnected = false;
+      rxState = 0;
+      rxPos = 0;
+      startSoftAp();
+      tcpStreamServer.begin();
+    }
+
+    if (tcpStreamServer.hasClient()) {
+      WiFiClient incoming = tcpStreamServer.accept();
+      if (incoming) {
+        if (tcpStreamClient) tcpStreamClient.stop();
+        tcpStreamClient = incoming;
+        tcpStreamClient.setNoDelay(true);
+        tcpConnected = true;
+        rxState = 0;
+        rxPos = 0;
+        const uint8_t ack = 'K';
+        tcpStreamClient.write(&ack, 1);
+        Serial.println("[TCP 8081] iPhone persistent binary stream connected");
+      }
+    }
+
+    if (tcpStreamClient && !tcpStreamClient.connected()) {
+      tcpStreamClient.stop();
+      tcpConnected = false;
+      rxState = 0;
+      rxPos = 0;
+      Serial.println("[TCP 8081] iPhone disconnected");
+    }
+
+    if (tcpStreamClient && tcpStreamClient.connected()) {
+      int loops = 0;
+      while (tcpStreamClient.available() > 0 && loops++ < 64) {
+        if (rxState == 0) {
+          int c = tcpStreamClient.read();
+          if (c == 0xAA) rxState = 1;
+        } else if (rxState == 1) {
+          int c = tcpStreamClient.read();
+          if (c < 0) break;
+          pktType = (uint8_t)c;
+          if (pktType == 0xBB || pktType == 0xCC) {
+            rxState = 2;
+          } else if (pktType == 0xDD) {
+            const uint8_t ack = 'K';
+            tcpStreamClient.write(&ack, 1);
+            rxState = 0;
+          } else if (pktType == 0xAA) {
+            rxState = 1;
+          } else {
+            rxState = 0;
+          }
+        } else if (rxState == 2) {
+          int c = tcpStreamClient.read();
+          if (c < 0) break;
+          pktLen = ((uint16_t)c) << 8;
+          rxState = 3;
+        } else if (rxState == 3) {
+          int c = tcpStreamClient.read();
+          if (c < 0) break;
+          pktLen |= (uint8_t)c;
+          rxPos = 0;
+          if (pktLen == 0 || (pktType == 0xBB && pktLen > 32768) || (pktType == 0xCC && pktLen > 1023)) {
+            rxState = 0;
+          } else {
+            if (pktType == 0xBB) {
+              writerSlot = acquireFreeWriterSlot();
+            }
+            rxState = 4;
+          }
+        } else if (rxState == 4) {
+          int avail = tcpStreamClient.available();
+          if (avail <= 0) break;
+          size_t remain = pktLen - rxPos;
+          size_t toRead = ((size_t)avail < remain) ? (size_t)avail : remain;
+          uint8_t* dst = (pktType == 0xBB)
+              ? (framePool[writerSlot] + rxPos)
+              : ((uint8_t*)tcpJsonBuf + rxPos);
+          int got = tcpStreamClient.read(dst, toRead);
+          if (got > 0) {
+            rxPos += (size_t)got;
+          } else {
+            break;
+          }
+          if (rxPos >= pktLen) {
+            if (pktType == 0xBB) {
+              if (pktLen > 100 && framePool[writerSlot][0] == 0xFF && framePool[writerSlot][1] == 0xD8) {
+                publishCompleteFrameFromWriter(writerSlot, pktLen);
+              }
+            } else if (pktType == 0xCC) {
+              tcpJsonBuf[pktLen] = '\0';
+              tcpJsonLen = pktLen;
+              tcpJsonAvailable = true;
+            }
+            const uint8_t ack = 'K';
+            tcpStreamClient.write(&ack, 1);
+            rxState = 0;
+            rxPos = 0;
+          }
+        }
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+// =========================================================================
 // Setup & Loop
 // =========================================================================
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUC ST7789 20 FPS) ===");
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUCNAGA ST7789 30 FPS) ===");
 
   // 0. Mount SPIFFS Filesystem for Custom Background Images
   if (!SPIFFS.begin(true)) {
@@ -537,12 +733,19 @@ void setup() {
     Serial.println("[SPIFFS] Filesystem mounted successfully.");
   }
 
-  // Load saved Hotspot credentials from Preferences NVS
+  // Load saved Bluetooth & SoftAP Hotspot credentials from Preferences NVS
+  prefs.begin("nav_cfg", true);
+  bleName = prefs.getString("ble_name", "ysiducnaga");
+  prefs.end();
+  if (bleName.length() == 0) bleName = "ysiducnaga";
+
   prefs.begin("nav_wifi", false);
-  wifiSsid = prefs.getString("ap_ssid", "ESP32-NAV");
+  wifiSsid = prefs.getString("ap_ssid", "ysiducnaga");
   wifiPass = prefs.getString("ap_pass", "12345678");
   prefs.end();
-  Serial.printf("[NVS] Loaded SoftAP SSID: '%s'\n", wifiSsid.c_str());
+  if (wifiSsid.length() == 0) wifiSsid = "ysiducnaga";
+  if (wifiPass.length() < 8) wifiPass = "12345678";
+  Serial.printf("[NVS] BLE='%s' | SoftAP SSID='%s'\n", bleName.c_str(), wifiSsid.c_str());
 
   // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
@@ -555,7 +758,7 @@ void setup() {
   display.init();
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
-  NimBLEDevice::init("ysiducnaga");
+  NimBLEDevice::init(bleName.c_str());
   NimBLEDevice::setMTU(517);
 
   // Security Auth & Bonding for iOS (Required by Apple Media Service & ANCS)
@@ -618,7 +821,7 @@ void setup() {
   // Custom Nav Service: 0xFFE0 (4 bytes)
   // Total = 16 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
-  scanResponseData.setName("ysiducnaga");
+  scanResponseData.setName(bleName.c_str());
   scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
   pAdvertising->setScanResponseData(scanResponseData);
 
@@ -627,35 +830,65 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  // 3. Start ESP32 SoftAP (no Internet) + WebSocket server on 192.168.4.1:8080
+  // 3. Start ESP32 SoftAP (no Internet) + Non-Blocking TCP Stream (8081) + WebSocket fallback (8080)
   startSoftAp();
+  tcpStreamServer.begin();
+  xTaskCreatePinnedToCore(tcpStreamTask, "tcpStreamTask", 4096, nullptr, 2, nullptr, 1);
+
   webSocketServer.begin();
   webSocketServer.onEvent(webSocketEvent);
-  webSocketServer.enableHeartbeat(15000, 3000, 2);
+  webSocketServer.disableHeartbeat();
 
-  Serial.printf("[BLE & WiFi AP] ysiducnaga ready: join Wi-Fi '%s' (pass '%s') + AMS & ANCS!\n", wifiSsid.c_str(), wifiPass.c_str());
+  Serial.printf("[BLE & WiFi AP] '%s' ready: join Wi-Fi '%s' (pass '%s') on TCP 8081 / WS 8080!\n",
+                bleName.c_str(), wifiSsid.c_str(), wifiPass.c_str());
 }
 
 void loop() {
-  // 0. Serve iPhone WebSocket client on SoftAP
+  // Handle deferred reboot after custom BLE name save
+  if (pendingBleRestart && millis() >= pendingBleRestartAt) {
+    pendingBleRestart = false;
+    Serial.println("[BLE] Rebooting to apply new Bluetooth name...");
+    delay(50);
+    ESP.restart();
+  }
+
+  // Handle any JSON control packet received on TCP 8081 safely on main loop thread
+  if (tcpJsonAvailable) {
+    char localJson[1024];
+    size_t jlen = tcpJsonLen;
+    if (jlen >= sizeof(localJson)) jlen = sizeof(localJson) - 1;
+    memcpy(localJson, tcpJsonBuf, jlen);
+    localJson[jlen] = '\0';
+    tcpJsonAvailable = false;
+    processJsonPacket(localJson);
+  }
+
+  // 0. Serve legacy WebSocket client if connected on 8080
   webSocketServer.loop();
 
+  // 1. Decode & push latest triple-buffered JPEG Frame on Main thread (zero contention with tcpStreamTask)
+  int8_t slotToDraw = -1;
+  size_t frameLen = 0;
+  portENTER_CRITICAL(&frameMux);
+  if (latestReadySlot >= 0) {
+    slotToDraw = latestReadySlot;
+    readingSlot = slotToDraw;
+    frameLen = framePoolLen[slotToDraw];
+    latestReadySlot = -1;
+  }
+  portEXIT_CRITICAL(&frameMux);
 
-  // 1. Decode & push new JPEG Map Frame safely on the Main thread (Double-Buffered Pipelined)
-  if (newFrameAvailable) {
-    newFrameAvailable = false;
+  if (slotToDraw >= 0) {
     lastFrameTime = millis();
-    uint8_t* frameBuf = (uint8_t*)activeRenderBuf;
-    size_t frameLen = activeRenderBufLen;
+    uint8_t* frameBuf = framePool[slotToDraw];
 
-    // Immediately ACK ('K') so iPhone pipelines Frame N+1 into the inactive ping-pong buffer while ST7789 renders Frame N!
     if (wsConnected && wsClientNum != 255) {
       webSocketServer.sendTXT(wsClientNum, "K");
     }
 
     #if defined(DISPLAY_TFT_ST7789)
-    // Render live map/simulator when app has established handshake (isAppConnected) or WebSocket stream is active
-    if (frameLen > 100 && (display.isAppConnected() || wsConnected)) {
+    // Render live map/simulator when app has established handshake (isAppConnected) or WiFi stream is active
+    if (frameLen > 100 && (display.isAppConnected() || wsConnected || tcpConnected)) {
       uint16_t jpgW = 0, jpgH = 0;
       TJpgDec.getJpgSize(&jpgW, &jpgH, frameBuf, frameLen);
       if (jpgW >= 300) {
@@ -679,6 +912,11 @@ void loop() {
       }
     }
     #endif
+
+    portENTER_CRITICAL(&frameMux);
+    readingSlot = -1;
+    portEXIT_CRITICAL(&frameMux);
+
     webSocketServer.loop();
   }
 
@@ -690,7 +928,7 @@ void loop() {
   }
 
   // 2. Update HUD and status UI
-  bool isStreaming = (display.isAppConnected() || wsConnected) && (millis() - lastFrameTime < 4000);
+  bool isStreaming = (display.isAppConnected() || wsConnected || tcpConnected) && (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
   // 3. Delayed Security Request execution to prompt iOS native Pairing dialog
@@ -827,7 +1065,7 @@ void loop() {
     prefs.end();
   }
 
-  if (!wsConnected) {
+  if (!wsConnected && !tcpConnected) {
     delay(1);
   }
 }

@@ -315,12 +315,15 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
 
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0B0F17),
+      backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF131B26),
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF1C1C1E),
+        surfaceTintColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0.5,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF00F0FF)),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF007AFF), size: 20),
           tooltip: 'Quay lại Bản đồ',
           onPressed: () {
             if (widget.onBackToMap != null) {
@@ -332,9 +335,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         ),
         title: const Row(
           children: [
-            Icon(Icons.tv_rounded, color: Color(0xFF00F0FF)),
+            Icon(Icons.tv_rounded, color: Color(0xFF007AFF)),
             SizedBox(width: 10),
-            Text('Mô phỏng Màn hình ESP32', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            Text(
+              'Mô phỏng Màn hình ESP32',
+              style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.w700, fontSize: 17),
+            ),
           ],
         ),
       ),
@@ -347,42 +353,63 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: streamService.isStreaming ? const Color(0xFF00F0FF) : Colors.white12),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: streamService.isStreaming
+                      ? const Color(0xFF34C759).withAlpha(150)
+                      : const Color(0xFFE5E5EA),
+                  width: 1.2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(10),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
               child: Column(
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: streamService.isStreaming ? const Color(0xFF05FFA1) : Colors.grey,
-                              boxShadow: streamService.isStreaming
-                                  ? [BoxShadow(color: const Color(0xFF05FFA1).withAlpha(180), blurRadius: 6)]
-                                  : [],
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: streamService.isStreaming
+                                    ? const Color(0xFF34C759)
+                                    : const Color(0xFFC7C7CC),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            streamService.isStreaming ? 'Đang Stream JPEG Zoom x16 sang ESP32' : 'Dừng Stream',
-                            style: TextStyle(
-                              color: streamService.isStreaming ? const Color(0xFF05FFA1) : Colors.white54,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                streamService.isStreaming
+                                    ? 'Đang Stream JPEG Zoom x${streamService.minimapZoom} sang ESP32'
+                                    : 'Dừng Stream',
+                                style: TextStyle(
+                                  color: streamService.isStreaming
+                                      ? const Color(0xFF1E8E3E)
+                                      : const Color(0xFF8E8E93),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                       Switch.adaptive(
                         value: streamService.isStreaming,
-                        activeTrackColor: const Color(0xFF00F0FF),
+                        activeTrackColor: const Color(0xFF34C759),
                         onChanged: (val) {
                           if (val) {
                             streamService.startStreaming(boundaryKey: _streamBoundaryKey);
@@ -393,39 +420,39 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       ),
                     ],
                   ),
-                  const Divider(color: Colors.white12, height: 16),
+                  const Divider(color: Color(0xFFE5E5EA), height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       Column(
                         children: [
-                          const Text('FPS THỰC TẾ', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('FPS THỰC TẾ', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.w700)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.actualFps.toStringAsFixed(1)} FPS',
-                            style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            style: const TextStyle(color: Color(0xFF1E8E3E), fontSize: 14, fontWeight: FontWeight.w700, fontFamily: 'monospace'),
                           ),
                         ],
                       ),
-                      Container(width: 1, height: 24, color: Colors.white12),
+                      Container(width: 1, height: 24, color: const Color(0xFFE5E5EA)),
                       Column(
                         children: [
-                          const Text('KÍCH THƯỚC FRAME', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('KÍCH THƯỚC FRAME', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.w700)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.frameSizeKb} KB',
-                            style: const TextStyle(color: Color(0xFF00F0FF), fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            style: const TextStyle(color: Color(0xFF007AFF), fontSize: 14, fontWeight: FontWeight.w700, fontFamily: 'monospace'),
                           ),
                         ],
                       ),
-                      Container(width: 1, height: 24, color: Colors.white12),
+                      Container(width: 1, height: 24, color: const Color(0xFFE5E5EA)),
                       Column(
                         children: [
-                          const Text('MỤC TIÊU', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const Text('MỤC TIÊU', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.w700)),
                           const SizedBox(height: 2),
                           Text(
                             '${streamService.targetFps} FPS',
-                            style: const TextStyle(color: Color(0xFFFFB800), fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            style: const TextStyle(color: Color(0xFFFF9500), fontSize: 14, fontWeight: FontWeight.w700, fontFamily: 'monospace'),
                           ),
                         ],
                       ),
@@ -443,9 +470,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(100)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE5E5EA)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(8),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -455,15 +489,15 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.zoom_in_rounded, color: Color(0xFF00F0FF), size: 20),
+                          Icon(Icons.zoom_in_rounded, color: Color(0xFF007AFF), size: 20),
                           SizedBox(width: 8),
                           Text(
                             'TỶ LỆ PHÓNG TO MINIMAP',
                             style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1C1C1E),
+                              fontWeight: FontWeight.w700,
                               fontSize: 12,
-                              letterSpacing: 0.5,
+                              letterSpacing: 0.3,
                             ),
                           ),
                         ],
@@ -471,16 +505,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00F0FF).withAlpha(30),
+                          color: const Color(0xFF007AFF).withAlpha(20),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFF00F0FF)),
+                          border: Border.all(color: const Color(0xFF007AFF).withAlpha(110)),
                         ),
                         child: Text(
                           'Zoom x${streamService.minimapZoom}',
                           style: const TextStyle(
-                            color: Color(0xFF00F0FF),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
+                            color: Color(0xFF007AFF),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
                             fontFamily: 'monospace',
                           ),
                         ),
@@ -490,21 +524,23 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                   const SizedBox(height: 6),
                   Text(
                     streamService.minimapZoom >= 17
-                        ? 'Độ chi tiết cao: Hiển thị toà nhà, khu dân cư, số nhà & POI (khớp ảnh chụp)'
+                        ? 'Độ chi tiết cao: Hiển thị toà nhà, khu dân cư, số nhà & POI'
                         : 'Toàn cảnh: Hiển thị trục đường chính và các góc rẽ',
                     style: TextStyle(
-                      color: streamService.minimapZoom >= 17 ? const Color(0xFF05FFA1) : Colors.white60,
-                      fontSize: 11,
+                      color: streamService.minimapZoom >= 17
+                          ? const Color(0xFF1E8E3E)
+                          : const Color(0xFF8E8E93),
+                      fontSize: 11.5,
                     ),
                   ),
                   const SizedBox(height: 8),
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
-                      activeTrackColor: const Color(0xFF00F0FF),
-                      inactiveTrackColor: Colors.white12,
-                      thumbColor: const Color(0xFF00F0FF),
-                      overlayColor: const Color(0xFF00F0FF).withAlpha(40),
-                      trackHeight: 6,
+                      activeTrackColor: const Color(0xFF007AFF),
+                      inactiveTrackColor: const Color(0xFFE5E5EA),
+                      thumbColor: const Color(0xFF007AFF),
+                      overlayColor: const Color(0xFF007AFF).withAlpha(35),
+                      trackHeight: 5,
                       thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
                     ),
                     child: Slider(
@@ -674,13 +710,16 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(60)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE5E5EA)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.layers_rounded, color: Color(0xFF00F0FF), size: 18),
+                  const Icon(Icons.layers_rounded, color: Color(0xFF007AFF), size: 19),
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Column(
@@ -688,22 +727,22 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       children: [
                         Text(
                           'BẢN ĐỒ MINIMAP ESP32',
-                          style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                          style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 11.5, fontWeight: FontWeight.w700),
                         ),
                         SizedBox(height: 2),
                         Text(
                           'Nguồn map & style gửi sang ESP32',
-                          style: TextStyle(color: Colors.white54, fontSize: 10),
+                          style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10.5),
                         ),
                       ],
                     ),
                   ),
                   DropdownButton<String>(
                     value: streamService.streamMapStyle,
-                    dropdownColor: const Color(0xFF1E293B),
+                    dropdownColor: Colors.white,
                     underline: const SizedBox(),
-                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF00F0FF)),
-                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF007AFF)),
+                    style: const TextStyle(color: Color(0xFF007AFF), fontSize: 12.5, fontWeight: FontWeight.w700),
                     items: const [
                       DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN (Mặc định)')),
                       DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
@@ -729,9 +768,12 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(60)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE5E5EA)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -741,27 +783,26 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.music_note_rounded, color: Color(0xFF00F0FF), size: 16),
+                          Icon(Icons.music_note_rounded, color: Color(0xFF007AFF), size: 17),
                           SizedBox(width: 6),
                           Text(
                             'ĐIỀU KHIỂN NHẠC & CHẾ ĐỘ MÀN HÌNH',
-                            style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12, fontWeight: FontWeight.bold),
+                            style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 12, fontWeight: FontWeight.w700),
                           ),
                         ],
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: navManager.isNavigating ? const Color(0xFF00F0FF).withAlpha(30) : const Color(0xFF05FFA1).withAlpha(30),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: navManager.isNavigating ? const Color(0xFF00F0FF) : const Color(0xFF05FFA1)),
+                          color: (navManager.isNavigating ? const Color(0xFF007AFF) : const Color(0xFF34C759)).withAlpha(24),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           navManager.isNavigating ? 'DẪN ĐƯỜNG' : 'CHẾ ĐỘ CHỜ',
                           style: TextStyle(
-                            color: navManager.isNavigating ? const Color(0xFF00F0FF) : const Color(0xFF05FFA1),
+                            color: navManager.isNavigating ? const Color(0xFF007AFF) : const Color(0xFF1E8E3E),
                             fontSize: 10,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
@@ -773,17 +814,17 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0B111A),
-                      borderRadius: BorderRadius.circular(8),
+                      color: const Color(0xFFF2F2F7),
+                      borderRadius: BorderRadius.circular(10),
                       border: Border.all(
-                        color: mediaService.hasMedia ? const Color(0xFF05FFA1).withAlpha(140) : Colors.white12,
+                        color: mediaService.hasMedia ? const Color(0xFF34C759).withAlpha(120) : const Color(0xFFE5E5EA),
                       ),
                     ),
                     child: Row(
                       children: [
                         Icon(
                           mediaService.hasMedia ? Icons.graphic_eq_rounded : Icons.music_off_rounded,
-                          color: mediaService.hasMedia ? const Color(0xFF05FFA1) : Colors.white38,
+                          color: mediaService.hasMedia ? const Color(0xFF34C759) : const Color(0xFF8E8E93),
                           size: 20,
                         ),
                         const SizedBox(width: 9),
@@ -794,10 +835,10 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                               Text(
                                 mediaService.hasMedia ? 'PHÁT HIỆN TỪ IPHONE (REAL-TIME)' : 'CHƯA PHÁT NHẠC TRÊN IPHONE',
                                 style: TextStyle(
-                                  color: mediaService.hasMedia ? const Color(0xFF05FFA1) : Colors.white38,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
+                                  color: mediaService.hasMedia ? const Color(0xFF1E8E3E) : const Color(0xFF8E8E93),
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.3,
                                 ),
                               ),
                               const SizedBox(height: 2),
@@ -808,9 +849,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: mediaService.hasMedia ? Colors.white : Colors.white54,
+                                  color: mediaService.hasMedia ? const Color(0xFF1C1C1E) : const Color(0xFF8E8E93),
                                   fontSize: 12,
-                                  fontWeight: mediaService.hasMedia ? FontWeight.bold : FontWeight.normal,
+                                  fontWeight: mediaService.hasMedia ? FontWeight.w700 : FontWeight.normal,
                                 ),
                               ),
                             ],
@@ -825,29 +866,29 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     runSpacing: 6,
                     children: [
                       ActionChip(
-                        avatar: const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF00F0FF)),
-                        backgroundColor: const Color(0xFF00F0FF).withAlpha(25),
-                        side: const BorderSide(color: Color(0xFF00F0FF)),
-                        label: const Text('Lấy lại nhạc iPhone', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11, fontWeight: FontWeight.bold)),
+                        avatar: const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF007AFF)),
+                        backgroundColor: const Color(0xFF007AFF).withAlpha(20),
+                        side: BorderSide(color: const Color(0xFF007AFF).withAlpha(100)),
+                        label: const Text('Lấy lại nhạc iPhone', style: TextStyle(color: Color(0xFF007AFF), fontSize: 11, fontWeight: FontWeight.w700)),
                         onPressed: () => mediaService.pollNowPlaying(),
                       ),
                       ActionChip(
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Simulate: Waiting For You', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        backgroundColor: const Color(0xFFF2F2F7),
+                        side: const BorderSide(color: Color(0xFFE5E5EA)),
+                        label: const Text('Simulate: Waiting For You', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 11)),
                         onPressed: () => mediaService.setMockSong('Waiting For You', 'MONO'),
                       ),
                       ActionChip(
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Simulate: Nơi Này Có Anh', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        backgroundColor: const Color(0xFFF2F2F7),
+                        side: const BorderSide(color: Color(0xFFE5E5EA)),
+                        label: const Text('Simulate: Nơi Này Có Anh', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 11)),
                         onPressed: () => mediaService.setMockSong('Noi Nay Co Anh', 'Son Tung M-TP'),
                       ),
                       ActionChip(
-                        avatar: const Icon(Icons.edit, size: 14, color: Color(0xFF00F0FF)),
-                        backgroundColor: const Color(0xFF0E1520),
-                        side: const BorderSide(color: Color(0xFF1E293B)),
-                        label: const Text('Nhập tùy ý...', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        avatar: const Icon(Icons.edit, size: 14, color: Color(0xFF007AFF)),
+                        backgroundColor: const Color(0xFFF2F2F7),
+                        side: const BorderSide(color: Color(0xFFE5E5EA)),
+                        label: const Text('Nhập tùy ý...', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 11)),
                         onPressed: () => _showEditSongDialog(context, navManager),
                       ),
                     ],
@@ -858,13 +899,13 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       width: double.infinity,
                       child: OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.redAccent,
-                          side: const BorderSide(color: Colors.redAccent),
+                          foregroundColor: const Color(0xFFFF3B30),
+                          side: const BorderSide(color: Color(0xFFFF3B30)),
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
                         icon: const Icon(Icons.stop_rounded, size: 16),
-                        label: const Text('Dừng dẫn đường (Về chế độ chờ)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                        label: const Text('Dừng dẫn đường (Về chế độ chờ)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                         onPressed: () => navManager.stopNavigation(),
                       ),
                     ),
@@ -880,27 +921,30 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE5E5EA)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.photo_library_rounded, color: Color(0xFF00F0FF), size: 20),
+                      Icon(Icons.photo_library_rounded, color: Color(0xFF007AFF), size: 20),
                       SizedBox(width: 8),
                       Text(
                         'CÀI ĐẶT HÌNH NỀN TÙY CHỌN (FLASH ESP32)',
-                        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 13, fontWeight: FontWeight.bold),
+                        style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5, fontWeight: FontWeight.w700),
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   const Text(
                     'Ảnh được nạp và lưu vĩnh viễn vào bộ nhớ Flash SPIFFS của ESP32 đến khi bạn thay mới.',
-                    style: TextStyle(color: Colors.white60, fontSize: 11),
+                    style: TextStyle(color: Color(0xFF8E8E93), fontSize: 11.5),
                   ),
                   const SizedBox(height: 12),
 
@@ -909,9 +953,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       padding: const EdgeInsets.all(10),
                       margin: const EdgeInsets.only(bottom: 12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
+                        color: const Color(0xFFF2F2F7),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFF00F0FF)),
+                        border: Border.all(color: const Color(0xFF007AFF)),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -919,15 +963,15 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(_uploadStatusText, style: const TextStyle(color: Color(0xFF05FFA1), fontSize: 12, fontWeight: FontWeight.bold)),
-                              Text('${(_uploadProgress * 100).toInt()}%', style: const TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold)),
+                              Text(_uploadStatusText, style: const TextStyle(color: Color(0xFF1E8E3E), fontSize: 12, fontWeight: FontWeight.w700)),
+                              Text('${(_uploadProgress * 100).toInt()}%', style: const TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.w700)),
                             ],
                           ),
                           const SizedBox(height: 8),
                           LinearProgressIndicator(
                             value: _uploadProgress,
-                            backgroundColor: Colors.white12,
-                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F0FF)),
+                            backgroundColor: const Color(0xFFE5E5EA),
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF007AFF)),
                           ),
                         ],
                       ),
@@ -942,24 +986,24 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B111A),
+                            color: const Color(0xFFF2F2F7),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white12),
+                            border: Border.all(color: const Color(0xFFE5E5EA)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Text('Ảnh Ngang (Màn Chờ)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const Text('Ảnh Ngang (Màn Chờ)', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 12, fontWeight: FontWeight.w700)),
                               const SizedBox(height: 2),
-                              const Text('320 x 240 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                              const Text('320 x 240 px', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10)),
                               const SizedBox(height: 8),
                               AspectRatio(
                                 aspectRatio: 320 / 240,
                                 child: Container(
                                   decoration: BoxDecoration(
-                                    color: Colors.black26,
+                                    color: Colors.white,
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.white24),
+                                    border: Border.all(color: const Color(0xFFD1D1D6)),
                                   ),
                                   child: _waitImagePreview != null
                                       ? ClipRRect(
@@ -969,9 +1013,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                       : const Column(
                                           mainAxisAlignment: MainAxisAlignment.center,
                                           children: [
-                                            Icon(Icons.wallpaper_rounded, color: Colors.white38, size: 28),
+                                            Icon(Icons.wallpaper_rounded, color: Color(0xFFAEAEB2), size: 28),
                                             SizedBox(height: 4),
-                                            Text('Màn chờ kết nối', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                            Text('Màn chờ kết nối', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 9.5)),
                                           ],
                                         ),
                                 ),
@@ -981,13 +1025,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 width: double.infinity,
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF00F0FF),
-                                    foregroundColor: Colors.black,
+                                    backgroundColor: const Color(0xFF007AFF),
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
                                     padding: const EdgeInsets.symmetric(vertical: 8),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                   ),
                                   icon: const Icon(Icons.file_upload_outlined, size: 16),
-                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
                                   onPressed: _isUploadingBg ? null : () => _pickAndUploadImage(isWaitScreen: true),
                                 ),
                               ),
@@ -997,7 +1042,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                   visualDensity: VisualDensity.compact,
                                 ),
                                 onPressed: _isUploadingBg ? null : () => _deleteBgImage(isWaitScreen: true),
-                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Colors.redAccent, fontSize: 10)),
+                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 10.5)),
                               ),
                             ],
                           ),
@@ -1010,24 +1055,24 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0B111A),
+                            color: const Color(0xFFF2F2F7),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white12),
+                            border: Border.all(color: const Color(0xFFE5E5EA)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              const Text('Ảnh Dọc (Màn Map)', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                              const Text('Ảnh Dọc (Màn Map)', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 12, fontWeight: FontWeight.w700)),
                               const SizedBox(height: 2),
-                              const Text('144 x 208 px', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                              const Text('144 x 208 px', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10)),
                               const SizedBox(height: 8),
                               AspectRatio(
                                 aspectRatio: 144 / 208,
                                 child: Container(
                                   decoration: BoxDecoration(
-                                    color: Colors.black26,
+                                    color: Colors.white,
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.white24),
+                                    border: Border.all(color: const Color(0xFFD1D1D6)),
                                   ),
                                   child: _mapImagePreview != null
                                       ? ClipRRect(
@@ -1037,9 +1082,9 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                       : const Column(
                                           mainAxisAlignment: MainAxisAlignment.center,
                                           children: [
-                                            Icon(Icons.map_outlined, color: Colors.white38, size: 28),
+                                            Icon(Icons.map_outlined, color: Color(0xFFAEAEB2), size: 28),
                                             SizedBox(height: 4),
-                                            Text('Chờ xuất phát', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                                            Text('Chờ xuất phát', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 9.5)),
                                           ],
                                         ),
                                 ),
@@ -1049,13 +1094,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                 width: double.infinity,
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF05FFA1),
-                                    foregroundColor: Colors.black,
+                                    backgroundColor: const Color(0xFF34C759),
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
                                     padding: const EdgeInsets.symmetric(vertical: 8),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                   ),
                                   icon: const Icon(Icons.file_upload_outlined, size: 16),
-                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                  label: const Text('Chọn ảnh', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
                                   onPressed: _isUploadingBg ? null : () => _pickAndUploadImage(isWaitScreen: false),
                                 ),
                               ),
@@ -1065,7 +1111,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                                   visualDensity: VisualDensity.compact,
                                 ),
                                 onPressed: _isUploadingBg ? null : () => _deleteBgImage(isWaitScreen: false),
-                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Colors.redAccent, fontSize: 10)),
+                                child: const Text('Xóa / Mặc định', style: TextStyle(color: Color(0xFFFF3B30), fontSize: 10.5)),
                               ),
                             ],
                           ),
@@ -1084,20 +1130,23 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF131B26),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE5E5EA)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.notifications_active_rounded, color: Color(0xFFFFB800), size: 20),
+                      Icon(Icons.notifications_active_rounded, color: Color(0xFFFF9500), size: 20),
                       SizedBox(width: 8),
                       Text(
                         'THÔNG BÁO CUỘC GỌI & TIN NHẮN (ANCS)',
-                        style: TextStyle(color: Color(0xFFFFB800), fontSize: 13, fontWeight: FontWeight.bold),
+                        style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5, fontWeight: FontWeight.w700),
                       ),
                     ],
                   ),
@@ -1107,22 +1156,22 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F1B2A),
+                      color: const Color(0xFF007AFF).withAlpha(14),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
+                      border: Border.all(color: const Color(0xFF007AFF).withAlpha(45)),
                     ),
                     child: const Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.info_outline_rounded, color: Color(0xFF00F0FF), size: 18),
+                        Icon(Icons.info_outline_rounded, color: Color(0xFF007AFF), size: 18),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Để iPhone tự động gửi tên người gọi & tin nhắn thật đến ESP32:\n'
                             '1. Mở Cài đặt iPhone ➔ Bluetooth\n'
-                            '2. Bấm chữ (i) bên cạnh "ESP32-S3 Navi"\n'
+                            '2. Bấm chữ (i) bên cạnh "ysiducnaga"\n'
                             '3. BẬT mục "Chia sẻ thông báo hệ thống" (Share System Notifications).',
-                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, height: 1.4),
+                            style: TextStyle(color: Color(0xFF3A3A3C), fontSize: 11.5, height: 1.4),
                           ),
                         ),
                       ],
@@ -1137,11 +1186,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         flex: 5,
                         child: TextField(
                           controller: _callerNameCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          style: const TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5),
                           decoration: const InputDecoration(
                             isDense: true,
                             labelText: 'Tên người gọi',
-                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
+                            labelStyle: TextStyle(color: Color(0xFF1E8E3E), fontSize: 11),
                             border: OutlineInputBorder(),
                             contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           ),
@@ -1152,11 +1201,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         flex: 4,
                         child: TextField(
                           controller: _callerNumCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          style: const TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5),
                           decoration: const InputDecoration(
                             isDense: true,
                             labelText: 'Số điện thoại',
-                            labelStyle: TextStyle(color: Color(0xFF05FFA1), fontSize: 11),
+                            labelStyle: TextStyle(color: Color(0xFF1E8E3E), fontSize: 11),
                             border: OutlineInputBorder(),
                             contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           ),
@@ -1170,33 +1219,34 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                       Expanded(
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF05FFA1).withAlpha(40),
-                            foregroundColor: const Color(0xFF05FFA1),
+                            backgroundColor: const Color(0xFF34C759).withAlpha(26),
+                            foregroundColor: const Color(0xFF1E8E3E),
+                            elevation: 0,
                             padding: const EdgeInsets.symmetric(vertical: 8),
-                            side: const BorderSide(color: Color(0xFF05FFA1)),
+                            side: BorderSide(color: const Color(0xFF34C759).withAlpha(110)),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                           ),
                           icon: const Icon(Icons.phone_in_talk_rounded, size: 16),
-                          label: const Text('Thử gọi đến', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          label: const Text('Thử gọi đến', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                           onPressed: () => _triggerCall(),
                         ),
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.redAccent,
-                          side: const BorderSide(color: Colors.redAccent),
+                          foregroundColor: const Color(0xFFFF3B30),
+                          side: const BorderSide(color: Color(0xFFFF3B30)),
                           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
                         icon: const Icon(Icons.call_end_rounded, size: 16),
-                        label: const Text('Tắt máy', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        label: const Text('Tắt máy', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                         onPressed: _dismissCall,
                       ),
                     ],
                   ),
 
-                  const Divider(color: Colors.white12, height: 20),
+                  const Divider(color: Color(0xFFE5E5EA), height: 20),
 
                   // SMS Controls
                   Row(
@@ -1205,11 +1255,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         flex: 4,
                         child: TextField(
                           controller: _smsSenderCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          style: const TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5),
                           decoration: const InputDecoration(
                             isDense: true,
                             labelText: 'Người gửi SMS/Zalo',
-                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
+                            labelStyle: TextStyle(color: Color(0xFFC67100), fontSize: 11),
                             border: OutlineInputBorder(),
                             contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           ),
@@ -1220,11 +1270,11 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                         flex: 5,
                         child: TextField(
                           controller: _smsMsgCtrl,
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          style: const TextStyle(color: Color(0xFF1C1C1E), fontSize: 12.5),
                           decoration: const InputDecoration(
                             isDense: true,
                             labelText: 'Nội dung tin nhắn',
-                            labelStyle: TextStyle(color: Color(0xFFFFB800), fontSize: 11),
+                            labelStyle: TextStyle(color: Color(0xFFC67100), fontSize: 11),
                             border: OutlineInputBorder(),
                             contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           ),
@@ -1237,14 +1287,15 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFFB800).withAlpha(40),
-                        foregroundColor: const Color(0xFFFFB800),
+                        backgroundColor: const Color(0xFFFF9500).withAlpha(28),
+                        foregroundColor: const Color(0xFFC67100),
+                        elevation: 0,
                         padding: const EdgeInsets.symmetric(vertical: 8),
-                        side: const BorderSide(color: Color(0xFFFFB800)),
+                        side: BorderSide(color: const Color(0xFFFF9500).withAlpha(110)),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       icon: const Icon(Icons.mark_chat_unread_rounded, size: 16),
-                      label: const Text('Thử gửi tin nhắn SMS sang ESP32', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      label: const Text('Thử gửi tin nhắn SMS sang ESP32', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                       onPressed: () => _triggerSms(),
                     ),
                   ),
@@ -1264,30 +1315,31 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF131B26),
-        title: const Text('Đổi bài hát đang phát', style: TextStyle(color: Colors.white, fontSize: 16)),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Đổi bài hát đang phát', style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 16, fontWeight: FontWeight.w700)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: titleCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Color(0xFF1C1C1E)),
               decoration: const InputDecoration(
                 labelText: 'Tên bài hát',
-                labelStyle: TextStyle(color: Color(0xFF00F0FF)),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00F0FF))),
+                labelStyle: TextStyle(color: Color(0xFF007AFF)),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFD1D1D6))),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF007AFF))),
               ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: artistCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Color(0xFF1C1C1E)),
               decoration: const InputDecoration(
                 labelText: 'Tên ca sĩ / nghệ sĩ',
-                labelStyle: TextStyle(color: Color(0xFF00F0FF)),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00F0FF))),
+                labelStyle: TextStyle(color: Color(0xFF007AFF)),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFD1D1D6))),
+                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF007AFF))),
               ),
             ),
           ],
@@ -1295,12 +1347,14 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Hủy', style: TextStyle(color: Colors.white54)),
+            child: const Text('Hủy', style: TextStyle(color: Color(0xFF8E8E93))),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00F0FF),
-              foregroundColor: Colors.black,
+              backgroundColor: const Color(0xFF007AFF),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () {
               if (titleCtrl.text.trim().isNotEmpty) {
@@ -1308,7 +1362,7 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
               }
               Navigator.pop(ctx);
             },
-            child: const Text('Cập nhật', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: const Text('Cập nhật', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -1729,18 +1783,20 @@ class _EspPreviewScreenState extends State<EspPreviewScreen> {
       },
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF00F0FF) : const Color(0xFF1E293B),
+          color: isSelected ? const Color(0xFF007AFF) : const Color(0xFFF2F2F7),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isSelected ? const Color(0xFF00F0FF) : Colors.white10),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
+          ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.black : Colors.white70,
+            color: isSelected ? Colors.white : const Color(0xFF3A3A3C),
             fontSize: 10,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
           ),
         ),
       ),

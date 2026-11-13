@@ -28,8 +28,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
-  int _targetFps = 28; // High-speed 28-30 FPS target for double-buffered ESP32 Wi-Fi streaming
-  double _actualFps = 25.0;
+  int _targetFps = 30; // High-speed 30 FPS target for Raw TCP / double-buffered ESP32 Wi-Fi streaming
+  double _actualFps = 28.0;
   int _frameSizeKb = 0;
   int _frameCount = 0;
   DateTime? _lastFpsUpdate;
@@ -130,13 +130,24 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
 
   // ───────────────────────────────────────────────────────────────────────
-  // ESP32 SoftAP mode: ESP32 phát Wi-Fi "ESP32-NAV" (không Internet) + WebSocket server 192.168.4.1:8080.
-  // iPhone vào Wi-Fi đó (vẫn dùng 4G/5G để ra mạng) và app chủ động kết nối tới ESP32.
+  // ESP32 SoftAP mode: ESP32 phát Wi-Fi "ysiducnaga" (192.168.4.1).
+  // Primary: High-speed Lock-Free Raw TCP Stream Server port 8081 (30 FPS, <=32KB JPEG).
+  // Fallback: Legacy WebSocket ws://192.168.4.1:8080 if firmware < v2.
   // ───────────────────────────────────────────────────────────────────────
+  static const String espApIp = '192.168.4.1';
+  static const int espApTcpPort = 8081;
   static const String espApWsUrl = 'ws://192.168.4.1:8080';
   Timer? _apConnectTimer;
+  Timer? _apKeepaliveTimer;
+  Timer? _apConnectTimeoutTimer;
+  ConnectionTask<Socket>? _apConnectTask;
+  Socket? _tcpApSocket;
+  StreamSubscription<Uint8List>? _tcpApSub;
+  bool _tcpApReadyForNextFrame = true;
+  DateTime _lastTcpSendTime = DateTime.fromMillisecondsSinceEpoch(0);
   WebSocket? _apSocket;
   bool _apConnecting = false;
+  bool _isDisposed = false;
 
   void _startEspApConnector() {
     _apConnectTimer?.cancel();
@@ -144,18 +155,105 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tryConnectEspAp();
   }
 
+  void _closeTcpApSocket(Socket target, {bool notifyIfEmpty = true}) {
+    if (!identical(_tcpApSocket, target)) return;
+    _apKeepaliveTimer?.cancel();
+    _apKeepaliveTimer = null;
+    _tcpApSub?.cancel();
+    _tcpApSub = null;
+    _tcpApSocket = null;
+    try {
+      target.destroy();
+    } catch (_) {}
+    if (!_isDisposed && notifyIfEmpty && _wsClients.isEmpty) {
+      bleService.setHotspotDisconnected();
+    }
+    if (!_isDisposed) notifyListeners();
+  }
+
   Future<void> _tryConnectEspAp() async {
-    if (_apSocket != null || _apConnecting) return;
+    if (_isDisposed || _tcpApSocket != null || _apSocket != null || _apConnecting) return;
     _apConnecting = true;
     try {
-      final ws = await WebSocket.connect(espApWsUrl).timeout(const Duration(milliseconds: 1500));
-      ws.pingInterval = const Duration(seconds: 5);
-      _apSocket = ws;
-      _registerWsClient(ws);
-      bleService.logInfo('Đã kết nối Wi-Fi ESP32-NAV (192.168.4.1:8080)');
+      final task = await Socket.startConnect(espApIp, espApTcpPort);
+      if (_isDisposed) {
+        task.cancel();
+        return;
+      }
+      _apConnectTask = task;
+      _apConnectTimeoutTimer?.cancel();
+      _apConnectTimeoutTimer = Timer(const Duration(milliseconds: 900), () {
+        try {
+          task.cancel();
+        } catch (_) {}
+      });
+      final sock = await task.socket;
+      _apConnectTimeoutTimer?.cancel();
+      _apConnectTimeoutTimer = null;
+      _apConnectTask = null;
+      if (_isDisposed) {
+        sock.destroy();
+        return;
+      }
+      sock.setOption(SocketOption.tcpNoDelay, true);
+      _tcpApSocket = sock;
+      _tcpApReadyForNextFrame = true;
+      _lastTcpSendTime = DateTime.now();
+      _consecutiveWifiErrors = 0;
+      bleService.setHotspotConnected(espApIp, espApTcpPort);
+      bleService.logInfo('Đã kết nối Wi-Fi TCP tốc độ cao ($espApIp:$espApTcpPort)');
+
+      _tcpApSub?.cancel();
+      _tcpApSub = sock.listen(
+        (chunk) {
+          for (final b in chunk) {
+            if (b == 0x4B) {
+              _tcpApReadyForNextFrame = true;
+              break;
+            }
+          }
+        },
+        onDone: () => _closeTcpApSocket(sock, notifyIfEmpty: true),
+        onError: (_) => _closeTcpApSocket(sock, notifyIfEmpty: true),
+        cancelOnError: true,
+      );
+
+      _apKeepaliveTimer?.cancel();
+      _apKeepaliveTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+        final s = _tcpApSocket;
+        if (s == null) return;
+        if (DateTime.now().difference(_lastTcpSendTime).inMilliseconds >= 3500) {
+          try {
+            s.add(const [0xAA, 0xDD]);
+            _lastTcpSendTime = DateTime.now();
+          } catch (_) {
+            _closeTcpApSocket(s, notifyIfEmpty: true);
+          }
+        }
+      });
+
+      if (_latestJpegBytes != null) {
+        _sendPacketOverTcpAp(sock, _latestJpegBytes!);
+      }
+      notifyListeners();
+    } on SocketException catch (e) {
+      final msg = e.message.toLowerCase();
+      final osCode = e.osError?.errorCode ?? 0;
+      final bool isRefused = osCode == 61 || osCode == 111 || msg.contains('refused');
+      if (isRefused) {
+        try {
+          final ws = await WebSocket.connect(espApWsUrl).timeout(const Duration(milliseconds: 1200));
+          _apSocket = ws;
+          _registerWsClient(ws);
+          bleService.logInfo('Đã kết nối Wi-Fi WS dự phòng ($espApWsUrl)');
+        } catch (_) {}
+      }
     } catch (_) {
-      // Không ở trong Wi-Fi của ESP32 -> thử lại sau 2s
+      // Chưa kết nối vào Wi-Fi SoftAP của ESP32 -> thử lại mỗi 2s
     } finally {
+      _apConnectTimeoutTimer?.cancel();
+      _apConnectTimeoutTimer = null;
+      _apConnectTask = null;
       _apConnecting = false;
     }
   }
@@ -254,7 +352,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       } catch (_) {}
     }
     _wsClients.clear();
+    _isDisposed = true;
     _apConnectTimer?.cancel();
+    _apConnectTimeoutTimer?.cancel();
+    _apConnectTimeoutTimer = null;
+    try {
+      _apConnectTask?.cancel();
+    } catch (_) {}
+    _apConnectTask = null;
+    _apKeepaliveTimer?.cancel();
+    _tcpApSub?.cancel();
+    _tcpApSocket?.destroy();
+    _tcpApSocket = null;
     _apSocket = null;
     _wsServer?.close(force: true);
     _wsServer = null;
@@ -309,23 +418,32 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: smooth target FPS (14-20). In background (screen locked): steady 5 FPS (200ms) to ensure ESP32 watchdog never expires
-    final effectiveFps = _isForeground ? _targetFps : 5;
+    // In foreground: full 25-30 FPS. In background (screen locked): responsive 10 FPS
+    final effectiveFps = _isForeground ? _targetFps : 10;
     final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
     });
   }
 
+  /// Max JPEG payload bytes allowed for active transport
+  int get _maxJpegFrameBytes {
+    // Raw TCP 8081 (32KB framePool on ESP32) allows up to 30.5 KB for crisp text & lines.
+    // Legacy WebSocket 8080 (WebSockets.h 15KB cap) falls back safely to 14.5 KB.
+    if (_tcpApSocket != null) return 30500;
+    if (_wsClients.isEmpty) return 30500;
+    return 14500;
+  }
+
   /// Hardware-accelerated RGBA-to-JPEG encoding on iOS (with pure-Dart fallback)
-  /// Ensures output is always <= 14500 bytes to fit within ESP32 WebSockets 15KB max frame limit
   Future<Uint8List?> _compressRgbaToJpeg(
     Uint8List rawBytes,
     int w,
     int h, {
-    int quality = 65,
+    int quality = 82,
     Map<String, dynamic>? hud,
   }) async {
+    final maxBytes = _maxJpegFrameBytes;
     if (Platform.isIOS) {
       try {
         final args = <String, dynamic>{
@@ -336,8 +454,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           if (hud != null) 'hud': hud,
         };
         var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
-        if (res != null && res.length > 14500) {
-          args['quality'] = 0.38;
+        if (res != null && res.length > maxBytes) {
+          args['quality'] = maxBytes > 20000 ? 0.62 : 0.42;
           res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         }
         if (res != null && res.isNotEmpty) {
@@ -352,25 +470,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       order: img.ChannelOrder.rgba,
     );
     var jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: quality));
-    if (jpg.length > 14500) {
-      jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: 42));
+    if (jpg.length > maxBytes) {
+      jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: maxBytes > 20000 ? 60 : 42));
     }
     return jpg;
   }
 
-  /// Render 144x208 (Standby) or 320x240 (Active Navigation) Real Street Map & Stream at 20 FPS
+  /// Render 144x224 (Standby) or 320x216 (Active Navigation) Real Street Map & Stream at up to 30 FPS
   Future<void> _renderAndStreamHeadlessFrame() async {
-    // If previous frame is still transmitting over TCP or BLE, drop this tick to avoid queue buildup and heating
     if (!_isStreaming || _isCapturing || _isSendingWifi) return;
 
-    // Do NOT stream map frames if user has not connected BLE in-app and is not navigating!
-    // This keeps ESP32 quietly in Màn 1 (Watchface) without screen flickering or premature loading.
-    if (!bleService.isConnected && !(navManager?.isNavigating ?? false)) {
+    if (!bleService.isConnected && _tcpApSocket == null && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) {
       return;
     }
 
-    // Strict 1-in-flight queue control: if ESP32 hasn't rendered previous frame, skip tick to prevent queue buildup
-    if (_wsClients.isNotEmpty && !_wsReadyForNextFrame && DateTime.now().difference(_lastWsSendTime).inMilliseconds < 85) {
+    // Strict 1-in-flight closed-loop flow control so we don't decode/encode wasted frames
+    if (_tcpApSocket != null &&
+        !_tcpApReadyForNextFrame &&
+        DateTime.now().difference(_lastTcpSendTime).inMilliseconds < 50) {
+      return;
+    }
+    if (_tcpApSocket == null &&
+        _wsClients.isNotEmpty &&
+        !_wsReadyForNextFrame &&
+        DateTime.now().difference(_lastWsSendTime).inMilliseconds < 65) {
       return;
     }
     _isCapturing = true;
@@ -429,7 +552,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
           if (byteData != null) {
             final rawBytes = byteData.buffer.asUint8List();
-            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 60 : 65);
+            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 82 : 85);
           }
         } catch (_) {}
       }
@@ -621,7 +744,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         img.Point(vx - 4, vy + 4),
       ], color: img.ColorRgba8(255, 255, 255, 255));
 
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 65));
+      return Uint8List.fromList(img.encodeJpg(frame, quality: 84));
     } catch (e, stack) {
       debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
@@ -825,16 +948,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (Platform.isIOS) {
         final rawRgba = frame.toUint8List();
-        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 52, hud: hudData);
+        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 82, hud: hudData);
         if (iosJpg != null && iosJpg.isNotEmpty) {
           return iosJpg;
         }
       }
 
       // Pure-Dart fallback if non-iOS
-      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 52));
-      if (jpg.length > 14500) {
-        jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 38));
+      final maxBytes = _maxJpegFrameBytes;
+      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 82));
+      if (jpg.length > maxBytes) {
+        jpg = Uint8List.fromList(img.encodeJpg(frame, quality: maxBytes > 20000 ? 60 : 42));
       }
       return jpg;
     } catch (e) {
@@ -842,17 +966,51 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  void _dispatchTransmission(Uint8List jpegBytes) {
-    // 1. WebSocket Broadcast to iPhone Hotspot client (ESP32)
-    if (_wsClients.isNotEmpty) {
-      final now = DateTime.now();
-      final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
-      // Double-buffered closed-loop flow control (Zero-Queue latency):
-      // Only send if ESP32 acknowledged ('K') previous frame, or after 85ms watchdog timeout
-      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 85) {
-        return; // Drop intermediate frame to prevent TCP buffer accumulation and latency!
+  void _sendPacketOverTcpAp(Socket sock, Uint8List jpegBytes) {
+    final len = jpegBytes.length;
+    if (len == 0 || len > 32700) return;
+    final packet = Uint8List(4 + len);
+    packet[0] = 0xAA;
+    packet[1] = 0xBB;
+    packet[2] = (len >> 8) & 0xFF;
+    packet[3] = len & 0xFF;
+    packet.setRange(4, 4 + len, jpegBytes);
+    try {
+      _tcpApReadyForNextFrame = false;
+      _lastTcpSendTime = DateTime.now();
+      sock.add(packet);
+      _consecutiveWifiErrors = 0;
+      if (_frameCount % 50 == 0) {
+        bleService.logInfo('TX [SoftAP TCP] Frame #$_frameCount ($_frameSizeKb KB, ${_actualFps.toStringAsFixed(1)} FPS)');
       }
-      // Micro-gap flow control (at least 16ms between frames = up to 30+ FPS)
+    } catch (_) {
+      _closeTcpApSocket(sock, notifyIfEmpty: true);
+    }
+  }
+
+  void _dispatchTransmission(Uint8List jpegBytes) {
+    final now = DateTime.now();
+
+    // 1. Primary SoftAP Raw TCP Stream (192.168.4.1:8081) -> Zero-alloc lock-free 30 FPS
+    final tcpSock = _tcpApSocket;
+    if (tcpSock != null) {
+      final elapsed = now.difference(_lastTcpSendTime).inMilliseconds;
+      if (!_tcpApReadyForNextFrame && elapsed < 50) {
+        return;
+      }
+      if (elapsed < 16) {
+        return;
+      }
+      _sendPacketOverTcpAp(tcpSock, jpegBytes);
+      return;
+    }
+
+    // 2. WebSocket Broadcast (iPhone Hotspot 172.20.10.1:8080 or Legacy SoftAP WS 8080)
+    if (_wsClients.isNotEmpty) {
+      final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
+      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 65) {
+        return;
+      }
       if (elapsedSinceLastWs < 16) {
         return;
       }
@@ -867,33 +1025,48 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           _wsClients.remove(client);
         }
       }
-      if (_frameCount % 25 == 0) {
-        bleService.logInfo('TX [Hotspot WS] Stream Frame #$_frameCount ($_frameSizeKb KB, ${_actualFps.toStringAsFixed(1)} FPS)');
+      if (_frameCount % 50 == 0) {
+        bleService.logInfo('TX [WS] Frame #$_frameCount ($_frameSizeKb KB, ${_actualFps.toStringAsFixed(1)} FPS)');
       }
-      return; // Primary Hotspot WebSocket stream successful - return immediately
+      return;
     }
 
-    // 2. Persistent TCP Socket to ESP32 (SoftAP mode 192.168.4.1 only)
+    // 3. Fallback TCP if BLE reported WiFi IP other than Hotspot
     if (bleService.isWifiConnected && bleService.wifiIp != null && bleService.wifiIp != '172.20.10.1') {
       if (!_isSendingWifi) {
         _sendJpegOverWifi(jpegBytes);
       }
-      return; // Secondary SoftAP stream successful - return immediately
+      return;
     }
-
-    // Never stream video/JPEG frames over BLE!
-    // Streaming 60+ chunks over BLE saturates iOS CoreBluetooth buffers, causing connection drops
-    // especially during phone calls or screen lock.
   }
 
-  /// Transmit a single 320x240 simulator frame to ESP32 (via WebSocket or WiFi TCP)
+  /// Transmit a single 320x240 simulator frame to ESP32 (via TCP 8081 or WebSocket 8080)
   void transmitSimulatorFrame(Uint8List jpegBytes) {
     _latestJpegBytes = jpegBytes;
     _dispatchTransmission(jpegBytes);
   }
 
-  /// Broadcast JSON telemetry to connected WebSocket clients (ESP32)
+  /// Broadcast JSON telemetry to connected ESP32 peers (Raw TCP 8081 or WebSocket 8080)
   void broadcastTelemetry(String jsonStr) {
+    final tcpSock = _tcpApSocket;
+    if (tcpSock != null) {
+      try {
+        final payload = utf8.encode(jsonStr);
+        final len = payload.length;
+        if (len > 0 && len <= 8192) {
+          final pkt = Uint8List(4 + len);
+          pkt[0] = 0xAA;
+          pkt[1] = 0xCC;
+          pkt[2] = (len >> 8) & 0xFF;
+          pkt[3] = len & 0xFF;
+          pkt.setRange(4, 4 + len, payload);
+          tcpSock.add(pkt);
+          _lastTcpSendTime = DateTime.now();
+        }
+      } catch (_) {
+        _closeTcpApSocket(tcpSock, notifyIfEmpty: true);
+      }
+    }
     if (_wsClients.isEmpty) return;
     for (final client in _wsClients.toList()) {
       try {
@@ -1172,7 +1345,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             tileImg,
             Rect.fromLTWH(0, 0, tileImg.width.toDouble(), tileImg.height.toDouble()),
             Rect.fromLTWH(drawX, drawY, 256.0, 256.0),
-            Paint()..filterQuality = FilterQuality.medium,
+            Paint()..filterQuality = FilterQuality.high,
           );
           tilesDrawn = true;
         }
@@ -1336,7 +1509,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             tileImg,
             Rect.fromLTWH(0, 0, tileImg.width.toDouble(), tileImg.height.toDouble()),
             Rect.fromLTWH(drawX, drawY, 256.0, 256.0),
-            Paint()..filterQuality = FilterQuality.medium,
+            Paint()..filterQuality = FilterQuality.high,
           );
           tilesDrawn = true;
         }

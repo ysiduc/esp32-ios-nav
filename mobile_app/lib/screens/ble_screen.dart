@@ -14,10 +14,17 @@ class BleScreen extends StatefulWidget {
 }
 
 class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+  static const Color _bgColor = Color(0xFFF2F2F7);
+  static const Color _cardColor = Color(0xFFFFFFFF);
+  static const Color _primaryBlue = Color(0xFF007AFF);
+  static const Color _successGreen = Color(0xFF34C759);
+  static const Color _dangerRed = Color(0xFFFF3B30);
+  static const Color _warningAmber = Color(0xFFFF9500);
+  static const Color _textPrimary = Color(0xFF1C1C1E);
+  static const Color _textSecondary = Color(0xFF8E8E93);
+  static const Color _borderColor = Color(0xFFE5E5EA);
 
-  final TextEditingController _wifiSsidController = TextEditingController(text: 'iPhone');
-  final TextEditingController _wifiPassController = TextEditingController();
+  late TabController _tabController;
 
   @override
   void initState() {
@@ -35,8 +42,6 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
   @override
   void dispose() {
     _tabController.dispose();
-    _wifiSsidController.dispose();
-    _wifiPassController.dispose();
     super.dispose();
   }
 
@@ -45,12 +50,15 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
     final bleService = context.watch<BleService>();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0D1117),
+      backgroundColor: _bgColor,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF161B22),
+        backgroundColor: _cardColor,
+        foregroundColor: _textPrimary,
         elevation: 0,
+        scrolledUnderElevation: 0.5,
+        surfaceTintColor: _cardColor,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF00F0FF)),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _primaryBlue, size: 20),
           tooltip: 'Quay lại Bản đồ',
           onPressed: () {
             if (widget.onBackToMap != null) {
@@ -62,16 +70,32 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
         ),
         title: const Row(
           children: [
-            Icon(Icons.bluetooth_searching_rounded, color: Color(0xFF00F0FF)),
-            SizedBox(width: 10),
-            Text('Kết nối ysiducnaga BLE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            Icon(Icons.bluetooth_searching_rounded, color: _primaryBlue, size: 22),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Kết nối ysiducnaga',
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 17,
+                  letterSpacing: -0.3,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.tune_rounded, color: _primaryBlue),
+            tooltip: 'Đổi tên Bluetooth & Wi-Fi ESP32',
+            onPressed: () => _showDeviceConfigSheet(context, bleService),
+          ),
+          IconButton(
             icon: Icon(
               bleService.isScanning ? Icons.stop_circle_outlined : Icons.refresh_rounded,
-              color: const Color(0xFF00F0FF),
+              color: _primaryBlue,
             ),
             tooltip: bleService.isScanning ? 'Dừng quét' : 'Quét thiết bị',
             onPressed: () {
@@ -83,24 +107,40 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             },
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: const Color(0xFF00F0FF),
-          labelColor: const Color(0xFF00F0FF),
-          unselectedLabelColor: Colors.white60,
-          tabs: const [
-            Tab(icon: Icon(Icons.devices_rounded, size: 20), text: 'Thiết bị quét được'),
-            Tab(icon: Icon(Icons.terminal_rounded, size: 20), text: 'Nhật ký gói tin TX/RX'),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: _cardColor,
+              border: Border(bottom: BorderSide(color: _borderColor, width: 0.8)),
+            ),
+            child: TabBar(
+              controller: _tabController,
+              indicatorColor: _primaryBlue,
+              indicatorWeight: 2.5,
+              labelColor: _primaryBlue,
+              unselectedLabelColor: _textSecondary,
+              labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              tabs: const [
+                Tab(
+                  icon: Icon(Icons.devices_rounded, size: 18),
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                  text: 'Thiết bị & Cài đặt',
+                ),
+                Tab(
+                  icon: Icon(Icons.terminal_rounded, size: 18),
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                  text: 'Nhật ký TX/RX',
+                ),
+              ],
+            ),
+          ),
         ),
       ),
       body: TabBarView(
         controller: _tabController,
         children: [
-          // Tab 1: Device List & Status
           _buildDeviceListTab(bleService),
-
-          // Tab 2: Live Log & Test Packet Sender
           _buildLogsAndTestingTab(bleService),
         ],
       ),
@@ -108,304 +148,739 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
   }
 
   Widget _buildDeviceListTab(BleService bleService) {
-    return Column(
-      children: [
-        // Connection Status Banner
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFF161B22),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: bleService.isConnected ? const Color(0xFF05FFA1) : Colors.white12,
-              width: 1.5,
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          sliver: SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 1. BLE Connection Status Card
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _cardColor,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: bleService.isConnected
+                          ? _successGreen.withAlpha(140)
+                          : _borderColor,
+                      width: 1.2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(10),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: (bleService.isConnected ? _successGreen : _dangerRed).withAlpha(24),
+                        ),
+                        child: Icon(
+                          bleService.isConnected
+                              ? Icons.bluetooth_connected_rounded
+                              : Icons.bluetooth_disabled_rounded,
+                          color: bleService.isConnected ? _successGreen : _dangerRed,
+                          size: 23,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              bleService.isConnected
+                                  ? 'Đã kết nối: ${bleService.connectedDeviceName}'
+                                  : (bleService.isConnecting
+                                      ? 'Đang kết nối...'
+                                      : 'Chưa kết nối ESP32'),
+                              style: TextStyle(
+                                color: bleService.isConnected ? const Color(0xFF1E8E3E) : _textPrimary,
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              bleService.isConnected
+                                  ? 'Sẵn sàng truyền dữ liệu lộ trình & bản đồ'
+                                  : 'Bấm quét hoặc chạm vào thiết bị ESP32 bên dưới',
+                              style: const TextStyle(color: _textSecondary, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (bleService.isConnected) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            backgroundColor: _dangerRed.withAlpha(20),
+                            foregroundColor: _dangerRed,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                          onPressed: () => bleService.disconnect(),
+                          child: const Text('Ngắt', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // 2. ESP32 Bluetooth Name & Wi-Fi SoftAP Settings Card
+                _buildDeviceConfigCard(bleService),
+
+                const SizedBox(height: 12),
+
+                // 3. Apple ANCS Pairing Guide Banner
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _primaryBlue.withAlpha(14),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _primaryBlue.withAlpha(45)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.notifications_active_rounded, color: _primaryBlue, size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Khi ghép đôi lần đầu: Bấm "Ghép đôi" (Pair) & "Cho phép" trên iPhone. Sau đó vào Cài đặt > Bluetooth > chữ (i) bên cạnh "${bleService.customBleName}" > Bật "Chia sẻ thông báo hệ thống" để hiện cuộc gọi, tin nhắn & nhạc.',
+                          style: const TextStyle(color: Color(0xFF3A3A3C), fontSize: 11.5, height: 1.38),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 4. System Connected (Bonded) ESP32 Fast-Connect Card
+                if (bleService.systemBondedDevice != null && !bleService.isConnected) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _cardColor,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _primaryBlue, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: _primaryBlue.withAlpha(24),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _primaryBlue.withAlpha(22),
+                          ),
+                          child: const Icon(Icons.bluetooth_connected_rounded, color: _primaryBlue, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                bleService.systemBondedDevice!.platformName.isNotEmpty
+                                    ? bleService.systemBondedDevice!.platformName
+                                    : bleService.customBleName,
+                                style: const TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Đã ghép nối sẵn trong Bluetooth iPhone',
+                                style: TextStyle(color: _primaryBlue, fontSize: 11.5, fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _primaryBlue,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          ),
+                          onPressed: () => bleService.connectToDevice(
+                            bleService.systemBondedDevice!,
+                            displayName: bleService.systemBondedDevice!.platformName.isNotEmpty
+                                ? bleService.systemBondedDevice!.platformName
+                                : bleService.customBleName,
+                          ),
+                          child: const Text('Kết nối', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 16),
+
+                // 5. Device List Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'DANH SÁCH THIẾT BỊ (${bleService.discoveredDevices.length})',
+                      style: const TextStyle(
+                        color: _textSecondary,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    if (bleService.isScanning)
+                      const Row(
+                        children: [
+                          SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: _primaryBlue),
+                          ),
+                          SizedBox(width: 6),
+                          Text('Đang quét...', style: TextStyle(color: _primaryBlue, fontSize: 12, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
             ),
           ),
-          child: Row(
+        ),
+
+        // 6. Discovered Devices List
+        if (bleService.discoveredDevices.isEmpty)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.bluetooth_searching_rounded, size: 52, color: _textSecondary.withAlpha(110)),
+                  const SizedBox(height: 10),
+                  Text(
+                    bleService.isScanning
+                        ? 'Đang tìm kiếm ${bleService.customBleName}...'
+                        : 'Chưa tìm thấy thiết bị nào\nBấm nút làm mới ở góc trên để quét',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _textSecondary, fontSize: 13.5, height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+            sliver: SliverList.separated(
+              itemCount: bleService.discoveredDevices.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (context, index) {
+                final item = bleService.discoveredDevices[index];
+                final isThisConnected = bleService.connectedDevice?.remoteId == item.device.remoteId;
+                final lowerName = item.name.toLowerCase();
+                final customLower = bleService.customBleName.trim().toLowerCase();
+                final isEsp32 = lowerName.contains('ysiduc') ||
+                    lowerName.contains('esp32') ||
+                    lowerName.contains('nav') ||
+                    (customLower.isNotEmpty && lowerName.contains(customLower));
+
+                return Container(
+                  decoration: BoxDecoration(
+                    color: _cardColor,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isThisConnected
+                          ? _successGreen
+                          : (isEsp32 ? _primaryBlue.withAlpha(110) : _borderColor),
+                      width: isThisConnected ? 1.5 : 1.0,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(6),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: isEsp32 ? _primaryBlue.withAlpha(20) : const Color(0xFFF2F2F7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        isEsp32 ? Icons.developer_board_rounded : Icons.bluetooth_rounded,
+                        color: isEsp32 ? _primaryBlue : _textSecondary,
+                        size: 21,
+                      ),
+                    ),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.name,
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontWeight: isEsp32 ? FontWeight.w700 : FontWeight.w500,
+                              fontSize: 14.5,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isEsp32)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            margin: const EdgeInsets.only(left: 6),
+                            decoration: BoxDecoration(
+                              color: _primaryBlue.withAlpha(22),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'ESP32',
+                              style: TextStyle(color: _primaryBlue, fontSize: 10, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                      ],
+                    ),
+                    subtitle: Text(
+                      'RSSI: ${item.rssi} dBm • ${item.device.remoteId.str}',
+                      style: const TextStyle(color: _textSecondary, fontSize: 11),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isThisConnected ? _dangerRed.withAlpha(22) : _primaryBlue,
+                        foregroundColor: isThisConnected ? _dangerRed : Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      onPressed: () {
+                        if (isThisConnected) {
+                          bleService.disconnect();
+                        } else {
+                          bleService.connectToDevice(item.device, displayName: item.name);
+                        }
+                      },
+                      child: Text(
+                        isThisConnected ? 'Ngắt' : 'Kết nối',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildDeviceConfigCard(BleService bleService) {
+    final isWifi = bleService.isWifiConnected;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _cardColor,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isWifi ? _successGreen.withAlpha(150) : _borderColor,
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(8),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
               Container(
-                width: 44,
-                height: 44,
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: (bleService.isConnected ? const Color(0xFF05FFA1) : Colors.redAccent).withAlpha(40),
+                  color: (isWifi ? _successGreen : _primaryBlue).withAlpha(22),
                 ),
                 child: Icon(
-                  bleService.isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-                  color: bleService.isConnected ? const Color(0xFF05FFA1) : Colors.redAccent,
-                  size: 24,
+                  isWifi ? Icons.wifi_tethering_rounded : Icons.wifi_rounded,
+                  color: isWifi ? _successGreen : _primaryBlue,
+                  size: 21,
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      bleService.isConnected
-                          ? 'ĐÃ KẾT NỐI: ${bleService.connectedDeviceName}'
-                          : (bleService.isConnecting ? 'ĐANG KẾT NỐI...' : 'CHƯA KẾT NỐI ESP32'),
+                      isWifi ? 'Wi-Fi Stream ESP32: Đã kết nối' : 'Tên Bluetooth & Wi-Fi ESP32',
                       style: TextStyle(
-                        color: bleService.isConnected ? const Color(0xFF05FFA1) : Colors.white,
+                        color: isWifi ? const Color(0xFF1E8E3E) : _textPrimary,
                         fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
-                      bleService.isConnected
-                          ? 'Sẵn sàng truyền dữ liệu lộ trình & bản đồ'
-                          : 'Bấm quét và chọn ESP32 trong danh sách bên dưới',
-                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      isWifi
+                          ? '${bleService.wifiIp}:${bleService.wifiPort} • Stream 30 FPS sắc nét'
+                          : 'Bluetooth: ${bleService.customBleName} • Wi-Fi: ${bleService.wifiSsid}',
+                      style: const TextStyle(color: _textSecondary, fontSize: 11.5),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
-              if (bleService.isConnected)
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent.withAlpha(50),
-                    foregroundColor: Colors.redAccent,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  onPressed: () => bleService.disconnect(),
-                  child: const Text('Ngắt', style: TextStyle(fontWeight: FontWeight.bold)),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primaryBlue.withAlpha(20),
+                  foregroundColor: _primaryBlue,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-            ],
-          ),
-        ),
-
-        // WiFi Hotspot Configuration Card for iPhone Hotspot connection
-        if (bleService.isConnected) _buildWifiConfigCard(bleService),
-
-        // Apple ANCS Notification Guide Banner
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF38BDF8).withAlpha(80)),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 2),
-                child: Icon(Icons.notifications_active_rounded, color: Color(0xFF38BDF8), size: 22),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  '💡 KHI KẾT NỐI LẦN ĐẦU: Bấm "Ghép đôi" (Pair) & "Cho phép" trên màn hình iPhone. Sau đó vào Cài đặt iPhone > Bluetooth > chạm chữ (i) bên cạnh "ysiducnaga" > Bật "Chia sẻ thông báo hệ thống" để hiện Tên/SĐT cuộc gọi, tin nhắn SMS/Zalo và bài hát đang phát.',
-                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5, height: 1.35),
-                ),
+                icon: const Icon(Icons.edit_rounded, size: 15),
+                label: const Text('Đổi tên', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                onPressed: () => _showDeviceConfigSheet(context, bleService),
               ),
             ],
           ),
-        ),
-
-        // System Connected (Bonded) ESP32 Fast-Connect Card
-        if (bleService.systemBondedDevice != null && !bleService.isConnected)
+          const SizedBox(height: 10),
           Container(
-            width: double.infinity,
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFF0C243B),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF00F0FF), width: 1.5),
-              boxShadow: [
-                BoxShadow(color: const Color(0xFF00F0FF).withAlpha(40), blurRadius: 10),
-              ],
+              color: isWifi ? _successGreen.withAlpha(18) : const Color(0xFFF2F2F7),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF00F0FF).withAlpha(30),
-                  ),
-                  child: const Icon(Icons.bluetooth_connected_rounded, color: Color(0xFF00F0FF), size: 24),
+                Icon(
+                  isWifi ? Icons.check_circle_rounded : Icons.wifi_lock_rounded,
+                  color: isWifi ? const Color(0xFF1E8E3E) : _textSecondary,
+                  size: 15,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        bleService.systemBondedDevice!.platformName.isNotEmpty
-                            ? bleService.systemBondedDevice!.platformName
-                            : 'ysiducnaga',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                      const SizedBox(height: 3),
-                      const Text(
-                        'Đã kết nối Bluetooth iPhone (Hệ thống iOS)',
-                        style: TextStyle(color: Color(0xFF00F0FF), fontSize: 11.5),
-                      ),
-                    ],
+                  child: Text(
+                    isWifi
+                        ? 'Đang truyền bản đồ HD qua Wi-Fi ổn định (${bleService.wifiIp}:${bleService.wifiPort}).'
+                        : 'Vào Wi-Fi "${bleService.wifiSsid}" (Mật khẩu: ${bleService.wifiPass}) trên iPhone để truyền bản đồ 30 FPS.',
+                    style: TextStyle(
+                      color: isWifi ? const Color(0xFF1E8E3E) : const Color(0xFF3A3A3C),
+                      fontSize: 11.5,
+                      height: 1.35,
+                    ),
                   ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00F0FF),
-                    foregroundColor: Colors.black,
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  ),
-                  onPressed: () => bleService.connectToDevice(
-                    bleService.systemBondedDevice!,
-                    displayName: bleService.systemBondedDevice!.platformName.isNotEmpty
-                        ? bleService.systemBondedDevice!.platformName
-                        : 'ysiducnaga',
-                  ),
-                  child: const Text('KẾT NỐI VÀO APP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                 ),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-        // Scanning Indicator or Device Count
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'DANH SÁCH THIẾT BỊ (${bleService.discoveredDevices.length})',
-                style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+  void _showDeviceConfigSheet(BuildContext context, BleService bleService) {
+    final bleNameController = TextEditingController(text: bleService.customBleName);
+    final ssidController = TextEditingController(text: bleService.wifiSsid);
+    final passController = TextEditingController(text: bleService.wifiPass);
+    bool obscurePass = false;
+    bool isSaving = false;
+    String? validationError;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (modalCtx, setModalState) {
+            return SingleChildScrollView(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 16,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 28,
               ),
-              if (bleService.isScanning)
-                const Row(
-                  children: [
-                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F0FF))),
-                    SizedBox(width: 8),
-                    Text('Đang quét...', style: TextStyle(color: Color(0xFF00F0FF), fontSize: 12)),
-                  ],
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        // Devices ListView
-        Expanded(
-          child: bleService.discoveredDevices.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 38,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD1D1D6),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  Row(
                     children: [
-                      Icon(Icons.bluetooth_searching, size: 56, color: Colors.white.withAlpha(50)),
-                      const SizedBox(height: 12),
-                      Text(
-                        bleService.isScanning ? 'Đang tìm kiếm ysiducnaga...' : 'Chưa tìm thấy thiết bị nào\nBấm nút quét ở góc trên để bắt đầu',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white54, fontSize: 14),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: _primaryBlue.withAlpha(20),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.tune_rounded, color: _primaryBlue, size: 22),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Cài đặt Bluetooth & Wi-Fi ESP32',
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, color: _textSecondary),
+                        onPressed: () => Navigator.pop(ctx),
                       ),
                     ],
                   ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: bleService.discoveredDevices.length,
-                  separatorBuilder: (ctx, idx) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final item = bleService.discoveredDevices[index];
-                    final isThisConnected = bleService.connectedDevice?.remoteId == item.device.remoteId;
-                    final lowerName = item.name.toLowerCase();
-                    final isEsp32 = lowerName.contains('ysiduc') ||
-                        lowerName.contains('esp32') ||
-                        lowerName.contains('nav');
-
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF161B22),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: isThisConnected
-                              ? const Color(0xFF05FFA1)
-                              : (isEsp32 ? const Color(0xFF00F0FF).withAlpha(120) : Colors.white10),
+                  const SizedBox(height: 14),
+                  _buildConfigInput(
+                    controller: bleNameController,
+                    label: 'Tên Bluetooth ESP32',
+                    hint: 'Ví dụ: ysiducnaga',
+                    icon: Icons.bluetooth_rounded,
+                    maxLength: 20,
+                  ),
+                  const SizedBox(height: 12),
+                  _buildConfigInput(
+                    controller: ssidController,
+                    label: 'Tên Wi-Fi phát từ ESP32 (SSID)',
+                    hint: 'Ví dụ: ysiducnaga',
+                    icon: Icons.wifi_rounded,
+                    maxLength: 28,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: passController,
+                    obscureText: obscurePass,
+                    maxLength: 32,
+                    style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                    decoration: InputDecoration(
+                      labelText: 'Mật khẩu Wi-Fi ESP32 (tối thiểu 8 ký tự)',
+                      labelStyle: const TextStyle(color: _textSecondary, fontSize: 13),
+                      prefixIcon: const Icon(Icons.lock_outline_rounded, color: _primaryBlue, size: 20),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          obscurePass ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                          color: _textSecondary,
+                          size: 20,
                         ),
+                        onPressed: () => setModalState(() => obscurePass = !obscurePass),
                       ),
-                      child: ListTile(
-                        leading: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: isEsp32 ? const Color(0xFF00F0FF).withAlpha(40) : Colors.white10,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            isEsp32 ? Icons.developer_board : Icons.bluetooth,
-                            color: isEsp32 ? const Color(0xFF00F0FF) : Colors.white70,
-                          ),
+                      counterText: '',
+                      filled: true,
+                      fillColor: _bgColor,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: _primaryBlue, width: 1.5),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    ),
+                  ),
+                  if (validationError != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      validationError!,
+                      style: const TextStyle(color: _dangerRed, fontSize: 12.5, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _bgColor,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          bleService.isConnected ? Icons.info_outline_rounded : Icons.warning_amber_rounded,
+                          color: bleService.isConnected ? _primaryBlue : _warningAmber,
+                          size: 18,
                         ),
-                        title: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                item.name,
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: isEsp32 ? FontWeight.bold : FontWeight.normal,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (isEsp32)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                margin: const EdgeInsets.only(left: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF00F0FF).withAlpha(50),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: const Text(
-                                  'ESP32',
-                                  style: TextStyle(color: Color(0xFF00F0FF), fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                          ],
-                        ),
-                        subtitle: Text(
-                          'RSSI: ${item.rssi} dBm • ID: ${item.device.remoteId.str}',
-                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                        ),
-                        trailing: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isThisConnected
-                                ? Colors.redAccent.withAlpha(50)
-                                : const Color(0xFF00F0FF),
-                            foregroundColor: isThisConnected ? Colors.redAccent : Colors.black,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          onPressed: () {
-                            if (isThisConnected) {
-                              bleService.disconnect();
-                            } else {
-                              bleService.connectToDevice(item.device, displayName: item.name);
-                            }
-                          },
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: Text(
-                            isThisConnected ? 'Ngắt' : 'Kết nối',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            bleService.isConnected
+                                ? 'Wi-Fi mới áp dụng ngay lập tức. Nếu đổi tên Bluetooth, ESP32 sẽ tự khởi động lại sau 1 giây để phát tên mới.'
+                                : 'Chưa kết nối BLE với ESP32. Nhớ kết nối ESP32 trước khi áp dụng cài đặt xuống phần cứng.',
+                            style: const TextStyle(color: Color(0xFF3A3A3C), fontSize: 12, height: 1.38),
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryBlue,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
-                    );
-                  },
-                ),
+                      icon: isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.save_rounded, size: 19),
+                      label: Text(
+                        isSaving ? 'Đang gửi sang ESP32...' : 'Lưu & Áp dụng cho ESP32',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5),
+                      ),
+                      onPressed: isSaving
+                          ? null
+                          : () async {
+                              final newBle = bleNameController.text.trim();
+                              final newSsid = ssidController.text.trim();
+                              final newPass = passController.text;
+                              if (newBle.isEmpty || newSsid.isEmpty) {
+                                setModalState(() => validationError = 'Tên Bluetooth và tên Wi-Fi không được để trống.');
+                                return;
+                              }
+                              if (newPass.length < 8) {
+                                setModalState(() => validationError = 'Mật khẩu Wi-Fi cần ít nhất 8 ký tự theo chuẩn WPA2.');
+                                return;
+                              }
+                              setModalState(() {
+                                validationError = null;
+                                isSaving = true;
+                              });
+                              final sent = await bleService.sendDeviceConfig(
+                                bleName: newBle,
+                                ssid: newSsid,
+                                pass: newPass,
+                              );
+                              if (ctx.mounted) {
+                                Navigator.pop(ctx);
+                              }
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      sent
+                                          ? 'Đã cập nhật BT "$newBle" & Wi-Fi "$newSsid" sang ESP32!'
+                                          : 'Đã lưu cấu hình trên app. Hãy kết nối BLE để đồng bộ xuống ESP32.',
+                                    ),
+                                    backgroundColor: sent ? _successGreen : _warningAmber,
+                                  ),
+                                );
+                              }
+                            },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildConfigInput({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required IconData icon,
+    int maxLength = 28,
+  }) {
+    return TextField(
+      controller: controller,
+      maxLength: maxLength,
+      style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: const TextStyle(color: _textSecondary, fontSize: 13),
+        hintStyle: const TextStyle(color: Color(0xFFC7C7CC), fontSize: 13),
+        prefixIcon: Icon(icon, color: _primaryBlue, size: 20),
+        counterText: '',
+        filled: true,
+        fillColor: _bgColor,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
         ),
-      ],
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: _primaryBlue, width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      ),
     );
   }
 
@@ -414,75 +889,86 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
       children: [
         // Quick Test Buttons Bar
         Container(
-          padding: const EdgeInsets.all(12),
-          color: const Color(0xFF161B22),
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: const BoxDecoration(
+            color: _cardColor,
+            border: Border(bottom: BorderSide(color: _borderColor, width: 0.8)),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('GỬI GÓI TIN THỬ NGHIỆM SANG ESP32', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+              const Text(
+                'GỬI GÓI TIN THỬ NGHIỆM SANG ESP32',
+                style: TextStyle(color: _textSecondary, fontSize: 11, fontWeight: FontWeight.w700),
+              ),
               const SizedBox(height: 8),
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
                     _buildTestButton('➡️ Rẽ phải 150m', () {
-                      final p = EspNavPayload(
-                        isNavigating: true,
-                        turnCode: 2,
-                        distanceToTurn: 150,
-                        totalDistance: 3200,
-                        etaMinutes: 8,
-                        streetName: 'Nguyen Hue',
-                        currentSpeed: 35,
-                        stepIndex: 1,
-                        totalSteps: 5,
+                      bleService.sendNavPayload(
+                        EspNavPayload(
+                          isNavigating: true,
+                          turnCode: 2,
+                          distanceToTurn: 150,
+                          totalDistance: 3200,
+                          etaMinutes: 8,
+                          streetName: 'Nguyen Hue',
+                          currentSpeed: 35,
+                          stepIndex: 1,
+                          totalSteps: 5,
+                        ),
                       );
-                      bleService.sendNavPayload(p);
                     }, bleService.isConnected),
                     const SizedBox(width: 8),
                     _buildTestButton('⬅️ Rẽ trái 80m', () {
-                      final p = EspNavPayload(
-                        isNavigating: true,
-                        turnCode: 6,
-                        distanceToTurn: 80,
-                        totalDistance: 2100,
-                        etaMinutes: 5,
-                        streetName: 'Le Loi',
-                        currentSpeed: 40,
-                        stepIndex: 2,
-                        totalSteps: 5,
+                      bleService.sendNavPayload(
+                        EspNavPayload(
+                          isNavigating: true,
+                          turnCode: 6,
+                          distanceToTurn: 80,
+                          totalDistance: 2100,
+                          etaMinutes: 5,
+                          streetName: 'Le Loi',
+                          currentSpeed: 40,
+                          stepIndex: 2,
+                          totalSteps: 5,
+                        ),
                       );
-                      bleService.sendNavPayload(p);
                     }, bleService.isConnected),
                     const SizedBox(width: 8),
                     _buildTestButton('🔄 Vòng xuyến 300m', () {
-                      final p = EspNavPayload(
-                        isNavigating: true,
-                        turnCode: 8,
-                        distanceToTurn: 300,
-                        totalDistance: 1500,
-                        etaMinutes: 3,
-                        streetName: 'Vong Xuyen Dan Chu',
-                        currentSpeed: 25,
-                        stepIndex: 3,
-                        totalSteps: 5,
+                      bleService.sendNavPayload(
+                        EspNavPayload(
+                          isNavigating: true,
+                          turnCode: 8,
+                          distanceToTurn: 300,
+                          totalDistance: 1500,
+                          etaMinutes: 3,
+                          streetName: 'Vong Xuyen Dan Chu',
+                          currentSpeed: 25,
+                          stepIndex: 3,
+                          totalSteps: 5,
+                        ),
                       );
-                      bleService.sendNavPayload(p);
                     }, bleService.isConnected),
                     const SizedBox(width: 8),
                     _buildTestButton('🏁 Đã đến nơi', () {
-                      final p = EspNavPayload(
-                        isNavigating: true,
-                        turnCode: 9,
-                        distanceToTurn: 0,
-                        totalDistance: 0,
-                        etaMinutes: 0,
-                        streetName: 'Diem Den',
-                        currentSpeed: 0,
-                        stepIndex: 5,
-                        totalSteps: 5,
+                      bleService.sendNavPayload(
+                        EspNavPayload(
+                          isNavigating: true,
+                          turnCode: 9,
+                          distanceToTurn: 0,
+                          totalDistance: 0,
+                          etaMinutes: 0,
+                          streetName: 'Diem Den',
+                          currentSpeed: 0,
+                          stepIndex: 5,
+                          totalSteps: 5,
+                        ),
                       );
-                      bleService.sendNavPayload(p);
                     }, bleService.isConnected),
                     const SizedBox(width: 8),
                     _buildTestButton('📞 Test Cuộc gọi', () {
@@ -492,7 +978,10 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     const SizedBox(width: 8),
                     _buildTestButton('💬 Test Tin nhắn', () {
                       final callService = Provider.of<PhoneCallService>(context, listen: false);
-                      callService.triggerMockSms(sender: 'Zalo: Anh Nam', message: 'Bạn đang ở đâu đấy? Về ăn cơm nhé!');
+                      callService.triggerMockSms(
+                        sender: 'Zalo: Anh Nam',
+                        message: 'Bạn đang ở đâu đấy? Về ăn cơm nhé!',
+                      );
                     }, bleService.isConnected),
                   ],
                 ),
@@ -503,31 +992,34 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
 
         // Logs Header & Action Bar
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Row(
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('NHẬT KÝ GÓI TIN (TX / RX)',
-                        style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                    Text('${bleService.logs.length} bản ghi • MTU: ${bleService.currentMtu}',
-                        style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                    const Text(
+                      'NHẬT KÝ GÓI TIN (TX / RX)',
+                      style: TextStyle(color: _textPrimary, fontSize: 11.5, fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      '${bleService.logs.length} bản ghi • MTU: ${bleService.currentMtu}',
+                      style: const TextStyle(color: _textSecondary, fontSize: 11),
+                    ),
                   ],
                 ),
               ),
-              // Nút Xuất file nhật ký (iOS Share Sheet / Lưu tệp)
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF00F0FF).withAlpha(40),
-                  foregroundColor: const Color(0xFF00F0FF),
+                  backgroundColor: _primaryBlue.withAlpha(20),
+                  foregroundColor: _primaryBlue,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.share_rounded, size: 15),
-                label: const Text('Xuất file', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                label: const Text('Xuất file', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
                 onPressed: bleService.logs.isEmpty
                     ? null
                     : () async {
@@ -546,16 +1038,15 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Đã mở bảng xuất file và sao chép toàn bộ nhật ký!'),
-                              backgroundColor: Color(0xFF05FFA1),
+                              backgroundColor: _successGreen,
                             ),
                           );
                         }
                       },
               ),
-              const SizedBox(width: 6),
-              // Nút Sao chép nhanh
+              const SizedBox(width: 4),
               IconButton(
-                icon: const Icon(Icons.copy_rounded, color: Colors.white60, size: 18),
+                icon: const Icon(Icons.copy_rounded, color: _textSecondary, size: 18),
                 tooltip: 'Sao chép nhật ký',
                 onPressed: bleService.logs.isEmpty
                     ? null
@@ -565,16 +1056,15 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Đã sao chép toàn bộ nhật ký vào bộ nhớ tạm!'),
-                              backgroundColor: Color(0xFF00F0FF),
+                              content: Text('Đã sao chép toàn bộ nhật ký!'),
+                              backgroundColor: _primaryBlue,
                             ),
                           );
                         }
                       },
               ),
-              // Nút Xóa
               IconButton(
-                icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
+                icon: const Icon(Icons.delete_outline_rounded, color: _textSecondary, size: 19),
                 tooltip: 'Xóa nhật ký',
                 onPressed: () => bleService.clearLogs(),
               ),
@@ -585,35 +1075,48 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
         // Live Log Console
         Expanded(
           child: Container(
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFF070A0F),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white10),
+              color: _cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _borderColor),
             ),
             child: bleService.logs.isEmpty
-                ? const Center(child: Text('Chưa có dữ liệu truyền nhận...', style: TextStyle(color: Colors.white38, fontSize: 13)))
+                ? const Center(
+                    child: Text(
+                      'Chưa có dữ liệu truyền nhận...',
+                      style: TextStyle(color: _textSecondary, fontSize: 13),
+                    ),
+                  )
                 : ListView.builder(
                     itemCount: bleService.logs.length,
                     itemBuilder: (context, index) {
                       final log = bleService.logs[index];
-                      final timeStr = '${log.timestamp.hour.toString().padLeft(2, '0')}:${log.timestamp.minute.toString().padLeft(2, '0')}:${log.timestamp.second.toString().padLeft(2, '0')}';
+                      final timeStr =
+                          '${log.timestamp.hour.toString().padLeft(2, '0')}:${log.timestamp.minute.toString().padLeft(2, '0')}:${log.timestamp.second.toString().padLeft(2, '0')}';
 
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3.0),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('[$timeStr] ', style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace')),
+                            Text(
+                              '[$timeStr] ',
+                              style: const TextStyle(
+                                color: _textSecondary,
+                                fontSize: 11,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
                             Expanded(
                               child: Text(
                                 log.message,
                                 style: TextStyle(
                                   color: log.isError
-                                      ? Colors.redAccent
-                                      : (log.isTx ? const Color(0xFF05FFA1) : const Color(0xFF00F0FF)),
-                                  fontSize: 12,
+                                      ? _dangerRed
+                                      : (log.isTx ? const Color(0xFF1E8E3E) : _primaryBlue),
+                                  fontSize: 11.5,
                                   fontFamily: 'monospace',
                                 ),
                               ),
@@ -632,312 +1135,17 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
   Widget _buildTestButton(String label, VoidCallback onPressed, bool isEnabled) {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFF21262D),
-        foregroundColor: isEnabled ? const Color(0xFF00F0FF) : Colors.white38,
+        backgroundColor: _bgColor,
+        foregroundColor: isEnabled ? _primaryBlue : _textSecondary,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-      onPressed: isEnabled ? onPressed : null,
-      child: Text(label, style: const TextStyle(fontSize: 12)),
-    );
-  }
-
-  Widget _buildWifiConfigCard(BleService bleService) {
-    final isWifi = bleService.isWifiConnected;
-
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF161B22),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isWifi
-              ? const Color(0xFF05FFA1)
-              : const Color(0xFF00F0FF).withAlpha(100),
-          width: 1.5,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: isEnabled ? _primaryBlue.withAlpha(60) : _borderColor),
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: (isWifi
-                          ? const Color(0xFF05FFA1)
-                          : const Color(0xFF00F0FF))
-                      .withAlpha(40),
-                ),
-                child: Icon(
-                  isWifi ? Icons.wifi_tethering_rounded : Icons.wifi_tethering_off_rounded,
-                  color: isWifi ? const Color(0xFF05FFA1) : const Color(0xFF00F0FF),
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isWifi
-                          ? 'HOTSPOT IPHONE: ĐÃ KẾT NỐI'
-                          : 'ĐIỂM TRUY CẬP CÁ NHÂN (HOTSPOT)',
-                      style: TextStyle(
-                        color: isWifi ? const Color(0xFF05FFA1) : Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isWifi
-                          ? 'IP: ${bleService.wifiIp}:${bleService.wifiPort} • Stream JPEG 20 FPS (Không ngắt ngầm)'
-                          : 'Tên: #ysiduc • Mật khẩu: 00000000',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isWifi
-                      ? const Color(0xFF05FFA1).withAlpha(30)
-                      : const Color(0xFF00F0FF).withAlpha(40),
-                  foregroundColor: isWifi ? const Color(0xFF05FFA1) : const Color(0xFF00F0FF),
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: () => _showWifiConfigSheet(context, bleService),
-                child: Text(
-                  isWifi ? 'Đang bật' : 'Hướng dẫn',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: isWifi ? const Color(0xFF05FFA1).withAlpha(15) : Colors.white.withAlpha(8),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isWifi ? Icons.check_circle_rounded : Icons.info_outline_rounded,
-                  color: isWifi ? const Color(0xFF05FFA1) : const Color(0xFF00F0FF),
-                  size: 15,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    isWifi
-                        ? 'ESP32 đang kết nối vào Hotspot của iPhone. Khi khóa màn hình hoặc chuyển app, iOS không ngắt Wi-Fi và vẫn stream bình thường!'
-                        : 'Bật Điểm truy cập cá nhân trên iPhone: Tên Hotspot "#ysiduc" (Pass: 00000000) để ESP32 tự động bắt Wi-Fi.',
-                    style: TextStyle(
-                      color: isWifi ? const Color(0xFF05FFA1) : Colors.white70,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showWifiConfigSheet(BuildContext context, BleService bleService) {
-    final ssidController = TextEditingController(text: '#ysiduc');
-    final passController = TextEditingController(text: '00000000');
-    bool isSending = false;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF161B22),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (modalCtx, setModalState) {
-            return SingleChildScrollView(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.wifi_tethering_rounded, color: Color(0xFF00F0FF), size: 24),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'Điểm Truy Cập Cá Nhân (Hotspot)',
-                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white54),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A0E14),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFF00F0FF).withAlpha(80)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.wifi_password_rounded, color: Color(0xFF00F0FF), size: 20),
-                            SizedBox(width: 8),
-                            Text('CẤU HÌNH HOTSPOT CHO ESP32', style: TextStyle(color: Color(0xFF00F0FF), fontWeight: FontWeight.bold, fontSize: 12)),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: ssidController,
-                          style: const TextStyle(color: Colors.white, fontSize: 13),
-                          decoration: InputDecoration(
-                            labelText: 'Tên Hotspot (Tên iPhone trong Cài đặt)',
-                            labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
-                            filled: true,
-                            fillColor: Colors.white.withAlpha(8),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: passController,
-                          style: const TextStyle(color: Colors.white, fontSize: 13),
-                          decoration: InputDecoration(
-                            labelText: 'Mật khẩu Hotspot iPhone',
-                            labelStyle: const TextStyle(color: Colors.white60, fontSize: 12),
-                            filled: true,
-                            fillColor: Colors.white.withAlpha(8),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF05FFA1),
-                              foregroundColor: Colors.black,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                            ),
-                            icon: isSending
-                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                                : const Icon(Icons.send_rounded, size: 18),
-                            label: Text(
-                              isSending ? 'Đang gửi...' : 'Gửi cấu hình sang ESP32',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            onPressed: isSending || !bleService.isConnected
-                                ? null
-                                : () async {
-                                    setModalState(() => isSending = true);
-                                    final success = await bleService.sendWifiCredentials(
-                                      ssidController.text.trim(),
-                                      passController.text.trim(),
-                                    );
-                                    setModalState(() => isSending = false);
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text(success
-                                              ? 'Đã gửi Hotspot "${ssidController.text.trim()}" sang ESP32! ESP32 đang kết nối...'
-                                              : 'Gửi thất bại! Hãy chắc chắn ESP32 đã kết nối BLE.'),
-                                          backgroundColor: success ? const Color(0xFF05FFA1) : Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  },
-                          ),
-                        ),
-                        if (!bleService.isConnected) ...[
-                          const SizedBox(height: 6),
-                          const Text(
-                            '⚠️ Cần kết nối Bluetooth với ESP32 trước để gửi cấu hình.',
-                            style: TextStyle(color: Colors.amber, fontSize: 11),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('💡 LƯU Ý KHI THOÁT APP & TẮT MÀN HÌNH:', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-                        SizedBox(height: 8),
-                        Text('1. Cả luồng Wi-Fi Hotspot (20 FPS) và luồng BLE dự phòng (3 FPS) đều chạy liên tục ngầm khi khóa màn hình hoặc chuyển app.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                        SizedBox(height: 6),
-                        Text('2. Khi bắt đầu điều hướng hoặc xem trước, iPhone tự động bật dịch vụ chạy ngầm GPS để iOS không bao giờ ngắt CPU hay Wi-Fi/Bluetooth.', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 12)),
-                        SizedBox(height: 6),
-                        Text('3. Nếu không dùng Hotspot Wi-Fi, app vẫn tự động stream bản đồ qua Bluetooth (BLE) mà không bị mất hình.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 46,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00F0FF),
-                        foregroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Đã hiểu & Đóng', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      onPressed: isEnabled ? onPressed : null,
+      child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
     );
   }
 }
-
-
-

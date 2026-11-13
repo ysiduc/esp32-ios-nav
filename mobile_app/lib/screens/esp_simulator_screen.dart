@@ -324,13 +324,16 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
     final effectiveMock = _buildEffectiveMockData(mediaService);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1017),
+      backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF131B26),
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF1C1C1E),
+        surfaceTintColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0.5,
         leading: widget.onBackToMap != null
             ? IconButton(
-                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF007AFF), size: 20),
                 onPressed: () {
                   try {
                     final ble = context.read<BleService>();
@@ -347,18 +350,18 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
           children: [
             Text(
               'Mô phỏng Màn hình ESP32',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 16.5, fontWeight: FontWeight.w700),
             ),
             Text(
               'ST7789 2.4" 320x240 • 6 Giao diện thời gian thực',
-              style: TextStyle(color: Color(0xFF00F0FF), fontSize: 10, fontWeight: FontWeight.w600),
+              style: TextStyle(color: Color(0xFF007AFF), fontSize: 10.5, fontWeight: FontWeight.w600),
             ),
           ],
         ),
         actions: [
           IconButton(
             tooltip: 'Chọn ảnh nền cho Màn Chờ',
-            icon: const Icon(Icons.add_photo_alternate_rounded, color: Color(0xFF00F0FF)),
+            icon: const Icon(Icons.add_photo_alternate_rounded, color: Color(0xFF007AFF)),
             onPressed: _pickCustomBackground,
           ),
         ],
@@ -387,22 +390,29 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFF161F2E),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF00F0FF).withValues(alpha: 0.3)),
+                border: Border.all(color: const Color(0xFF007AFF).withValues(alpha: 0.35)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.visibility_rounded, color: Color(0xFF00F0FF), size: 14),
+                  const Icon(Icons.visibility_rounded, color: Color(0xFF007AFF), size: 14),
                   const SizedBox(width: 6),
                   Text(
                     'ĐANG XEM: ${_selectedTheme.displayName.toUpperCase()}',
                     style: const TextStyle(
-                      color: Color(0xFF00F0FF),
+                      color: Color(0xFF007AFF),
                       fontSize: 10.5,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
                     ),
                   ),
                 ],
@@ -472,17 +482,17 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             const Text(
               'LỰA CHỌN GIAO DIỆN (6 THEMES)',
               style: TextStyle(
-                color: Colors.white,
+                color: Color(0xFF1C1C1E),
                 fontSize: 12.5,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0.8,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
               ),
             ),
             if (_isCompressingBg)
               const SizedBox(
                 width: 14,
                 height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F0FF)),
+                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF007AFF)),
               ),
           ],
         ),
@@ -504,7 +514,7 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             final isSelected = _selectedTheme == theme;
 
             return InkWell(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(14),
               onTap: () {
                 _selectTheme(theme);
                 if (theme == ESP32Interface.customStatic) {
@@ -516,21 +526,22 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? const Color(0xFF00F0FF).withValues(alpha: 0.16)
-                      : const Color(0xFF131B26),
-                  borderRadius: BorderRadius.circular(12),
+                      ? const Color(0xFF007AFF).withValues(alpha: 0.08)
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: isSelected ? const Color(0xFF00F0FF) : Colors.white12,
+                    color: isSelected ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
                     width: isSelected ? 1.8 : 1.0,
                   ),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF00F0FF).withValues(alpha: 0.25),
-                            blurRadius: 10,
-                          ),
-                        ]
-                      : null,
+                  boxShadow: [
+                    BoxShadow(
+                      color: isSelected
+                          ? const Color(0xFF007AFF).withValues(alpha: 0.14)
+                          : Colors.black.withValues(alpha: 0.04),
+                      blurRadius: isSelected ? 10 : 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: Row(
                   children: [
@@ -538,8 +549,8 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: _getThemeAccentColor(theme).withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(8),
+                        color: _getThemeAccentColor(theme).withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(9),
                       ),
                       child: Icon(_getThemeIcon(theme), color: _getThemeAccentColor(theme), size: 18),
                     ),
@@ -552,9 +563,9 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                           Text(
                             theme.displayName,
                             style: TextStyle(
-                              color: isSelected ? const Color(0xFF00F0FF) : Colors.white,
+                              color: isSelected ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
                               fontSize: 10.5,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -563,7 +574,7 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                           Text(
                             theme.subtitle,
                             style: const TextStyle(
-                              color: Colors.white54,
+                              color: Color(0xFF8E8E93),
                               fontSize: 8.5,
                             ),
                             maxLines: 1,
@@ -573,7 +584,7 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                       ),
                     ),
                     if (isSelected)
-                      const Icon(Icons.check_circle_rounded, color: Color(0xFF00F0FF), size: 16),
+                      const Icon(Icons.check_circle_rounded, color: Color(0xFF007AFF), size: 16),
                   ],
                 ),
               ),
@@ -589,18 +600,18 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
           height: 44,
           child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF162130),
-              foregroundColor: const Color(0xFF00F0FF),
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF007AFF),
               elevation: 0,
-              side: const BorderSide(color: Color(0xFF00F0FF), width: 1.2),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              side: const BorderSide(color: Color(0xFF007AFF), width: 1.2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             icon: const Icon(Icons.photo_library_rounded, size: 18),
             label: Text(
               _customBgPath != null
                   ? 'Đổi ảnh nền Màn Chờ (Hiện: ${_customBgPath!.split('/').last})'
                   : 'Chọn ảnh từ Album làm Màn Chờ',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -616,16 +627,15 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
           height: 44,
           child: ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00F0FF).withValues(alpha: 0.12),
-              foregroundColor: const Color(0xFF00F0FF),
+              backgroundColor: const Color(0xFF007AFF),
+              foregroundColor: Colors.white,
               elevation: 0,
-              side: const BorderSide(color: Color(0xFF00F0FF), width: 1.2),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             icon: const Icon(Icons.map_rounded, size: 20),
             label: const Text(
               'Khôi phục Màn hình Bản đồ Khối trên ESP32',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
             ),
             onPressed: () {
               try {
@@ -635,7 +645,7 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Đã gửi lệnh khôi phục Màn hình Bản đồ Khối sang ESP32!'),
-                      backgroundColor: Color(0xFF00F0FF),
+                      backgroundColor: Color(0xFF34C759),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -643,7 +653,7 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Chưa kết nối Bluetooth với ESP32!'),
-                      backgroundColor: Colors.orange,
+                      backgroundColor: Color(0xFFFF9500),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -663,9 +673,16 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF131B26),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E5EA)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -675,15 +692,15 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             children: [
               const Row(
                 children: [
-                  Icon(Icons.tune_rounded, color: Color(0xFF05FFA1), size: 18),
+                  Icon(Icons.tune_rounded, color: Color(0xFF34C759), size: 18),
                   SizedBox(width: 8),
                   Text(
                     'CÔNG CỤ TEST DỮ LIỆU GIẢ LẬP',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Color(0xFF1C1C1E),
                       fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.6,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
                     ),
                   ),
                 ],
@@ -691,12 +708,11 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
               // Switch: Use real iPhone media vs preset mock
               Row(
                 children: [
-                  const Text('Nhạc thật:', style: TextStyle(color: Colors.white60, fontSize: 10.5)),
+                  const Text('Nhạc thật:', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 11)),
                   const SizedBox(width: 4),
-                  Switch(
+                  Switch.adaptive(
                     value: _useRealMedia,
-                    activeTrackColor: const Color(0xFF05FFA1),
-                    activeThumbColor: const Color(0xFF0B1017),
+                    activeTrackColor: const Color(0xFF34C759),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     onChanged: (val) => setState(() => _useRealMedia = val),
                   ),
@@ -712,10 +728,10 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
             runSpacing: 8,
             children: [
               ActionChip(
-                avatar: const Icon(Icons.call_rounded, size: 14, color: Color(0xFF05FFA1)),
-                backgroundColor: const Color(0xFF05FFA1).withValues(alpha: 0.12),
-                side: const BorderSide(color: Color(0xFF05FFA1)),
-                label: const Text('Test Cuộc gọi đến', style: TextStyle(color: Color(0xFF05FFA1), fontSize: 11, fontWeight: FontWeight.bold)),
+                avatar: const Icon(Icons.call_rounded, size: 14, color: Color(0xFF1E8E3E)),
+                backgroundColor: const Color(0xFF34C759).withValues(alpha: 0.14),
+                side: BorderSide(color: const Color(0xFF34C759).withValues(alpha: 0.5)),
+                label: const Text('Test Cuộc gọi đến', style: TextStyle(color: Color(0xFF1E8E3E), fontSize: 11, fontWeight: FontWeight.w700)),
                 onPressed: () {
                   final callService = context.read<PhoneCallService>();
                   callService.triggerMockCall(name: 'Vợ', number: '083 567 8628');
@@ -725,10 +741,10 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                 },
               ),
               ActionChip(
-                avatar: const Icon(Icons.chat_bubble_rounded, size: 14, color: Color(0xFFFFB800)),
-                backgroundColor: const Color(0xFFFFB800).withValues(alpha: 0.12),
-                side: const BorderSide(color: Color(0xFFFFB800)),
-                label: const Text('Test Tin nhắn Vợ', style: TextStyle(color: Color(0xFFFFB800), fontSize: 11, fontWeight: FontWeight.bold)),
+                avatar: const Icon(Icons.chat_bubble_rounded, size: 14, color: Color(0xFFC67100)),
+                backgroundColor: const Color(0xFFFF9500).withValues(alpha: 0.14),
+                side: BorderSide(color: const Color(0xFFFF9500).withValues(alpha: 0.5)),
+                label: const Text('Test Tin nhắn Vợ', style: TextStyle(color: Color(0xFFC67100), fontSize: 11, fontWeight: FontWeight.w700)),
                 onPressed: () {
                   final ble = context.read<BleService>();
                   ble.sendRawJson(jsonEncode({
@@ -743,10 +759,10 @@ class _EspSimulatorScreenState extends State<EspSimulatorScreen> {
                 },
               ),
               ActionChip(
-                avatar: const Icon(Icons.sync_rounded, size: 14, color: Color(0xFF38BDF8)),
-                backgroundColor: const Color(0xFF38BDF8).withValues(alpha: 0.12),
-                side: const BorderSide(color: Color(0xFF38BDF8)),
-                label: const Text('Gửi theme sang ESP32', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 11, fontWeight: FontWeight.bold)),
+                avatar: const Icon(Icons.sync_rounded, size: 14, color: Color(0xFF007AFF)),
+                backgroundColor: const Color(0xFF007AFF).withValues(alpha: 0.12),
+                side: BorderSide(color: const Color(0xFF007AFF).withValues(alpha: 0.45)),
+                label: const Text('Gửi theme sang ESP32', style: TextStyle(color: Color(0xFF007AFF), fontSize: 11, fontWeight: FontWeight.w700)),
                 onPressed: () {
                   _syncThemeToEsp32(_selectedTheme);
                   ScaffoldMessenger.of(context).showSnackBar(

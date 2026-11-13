@@ -413,10 +413,14 @@ class NavigationManager extends ChangeNotifier {
     });
   }
 
-  /// Nội suy góc ngắn nhất (0..360 độ) giúp xe và camera xoay mượt qua khúc cua không bị giật
-  static double _lerpAngleDeg(double current, double target, double t) {
+  /// Nội suy góc ngắn nhất (0..360 độ) có giới hạn tốc độ xoay tối đa mỗi frame để cua góc mượt mà không giật
+  static double _lerpAngleDeg(double current, double target, double t, {double maxStepDeg = 6.0}) {
     final diff = ((target - current + 540.0) % 360.0) - 180.0;
-    return (current + diff * t + 360.0) % 360.0;
+    double step = diff * t;
+    if (maxStepDeg > 0 && step.abs() > maxStepDeg) {
+      step = step.isNegative ? -maxStepDeg : maxStepDeg;
+    }
+    return (current + step + 360.0) % 360.0;
   }
 
   /// Nội suy tuyến tính tọa độ LatLng
@@ -616,8 +620,8 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
-    // Tính góc hướng nhìn mượt mà (Look-Ahead 22m dọc theo lộ trình) để xoay camera êm ái trước khi vào cua
-    final double lookAheadMeters = (_currentSpeedKmh * 0.6).clamp(16.0, 32.0);
+    // Tính góc hướng nhìn vừa phải theo tốc độ (8m - 22m) để xoay camera êm ái qua góc cua mà không văng tâm
+    final double lookAheadMeters = (_currentSpeedKmh * 0.35).clamp(8.0, 22.0);
     final LatLng lookAheadPt = _pointAlongPolylineAhead(pts, bestIdx, bestPoint, lookAheadMeters);
     final double dLook = distCalc.as(LengthUnit.Meter, bestPoint, lookAheadPt);
     if (dLook > 1.5) {
@@ -682,7 +686,7 @@ class NavigationManager extends ChangeNotifier {
         _targetLocation = adv.point;
         _closestPointIndex = adv.segmentIndex;
 
-        final double lookAheadM = (_currentSpeedKmh * 0.6).clamp(16.0, 32.0);
+        final double lookAheadM = (_currentSpeedKmh * 0.35).clamp(8.0, 22.0);
         final lookPt = _pointAlongPolylineAhead(pts, _closestPointIndex, _targetLocation!, lookAheadM);
         final dLook = const Distance().as(LengthUnit.Meter, _targetLocation!, lookPt);
         if (dLook > 1.5) {
@@ -711,9 +715,9 @@ class NavigationManager extends ChangeNotifier {
         }
       }
 
-      // 3. Làm mượt góc xoay camera (_smoothedHeading -> _targetHeading) theo cung ngắn nhất
+      // 3. Làm mượt góc xoay camera (_smoothedHeading -> _targetHeading) với giới hạn góc xoay tối đa
       if (_hasHeadingLock) {
-        _smoothedHeading = _lerpAngleDeg(_smoothedHeading, _targetHeading, 0.18);
+        _smoothedHeading = _lerpAngleDeg(_smoothedHeading, _targetHeading, 0.14, maxStepDeg: 4.5);
       } else {
         _smoothedHeading = _targetHeading;
         _hasHeadingLock = true;
@@ -860,13 +864,13 @@ class NavigationManager extends ChangeNotifier {
         return;
       }
 
-      final lookPt = _pointAlongPolylineAhead(polyline, _closestPointIndex, _currentLocation!, 24.0);
+      final lookPt = _pointAlongPolylineAhead(polyline, _closestPointIndex, _currentLocation!, 18.0);
       final dLook = const Distance().as(LengthUnit.Meter, _currentLocation!, lookPt);
       if (dLook > 1.0) {
         _targetHeading = (const Distance().bearing(_currentLocation!, lookPt) + 360.0) % 360.0;
         _closestSegmentBearing = _targetHeading;
       }
-      _smoothedHeading = _lerpAngleDeg(_smoothedHeading, _targetHeading, 0.20);
+      _smoothedHeading = _lerpAngleDeg(_smoothedHeading, _targetHeading, 0.14, maxStepDeg: 4.5);
       _currentHeading = _smoothedHeading;
 
       _updateStepAndMetricsOnTick(_currentLocation!);

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/esp_payload.dart';
 
 class BleDeviceItem {
@@ -60,18 +61,21 @@ class BleService extends ChangeNotifier {
   Timer? _wifiProbeTimer;
   DateTime _lastTxTime = DateTime.now();
 
-  // ESP32 WiFi SoftAP Streaming State (Default: ysiduc navi / 192.168.4.1:8080)
+  // ESP32 WiFi SoftAP & Bluetooth Configuration State (Default: ysiducnaga / 192.168.4.1:8081)
   String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
   String? _wifiIp;
-  int _wifiPort = 8080;
-  final String _wifiSsid = 'ysiduc navi';
-  final String _wifiPass = '00000000';
+  int _wifiPort = 8081;
+  String _customBleName = 'ysiducnaga';
+  String _wifiSsid = 'ysiducnaga';
+  String _wifiPass = '12345678';
+  String? _lastConnectedDeviceId;
 
   // Getters
   bool get isScanning => _isScanning;
   bool get isConnected => _isConnected;
   bool get isConnecting => _isConnecting;
   String? get connectedDeviceName => _connectedDeviceName;
+  String get customBleName => _customBleName;
   BluetoothDevice? get connectedDevice => _connectedDevice;
   BluetoothDevice? get systemBondedDevice => _systemBondedDevice;
   List<BleDeviceItem> get discoveredDevices => List.unmodifiable(_discoveredDevices);
@@ -112,10 +116,52 @@ class BleService extends ChangeNotifier {
   }
 
   BleService() {
+    _loadSavedDeviceConfig();
     _initBle();
     _initNativeChannels();
     _startWifiProbe();
     checkSystemDevices();
+  }
+
+  Future<void> _loadSavedDeviceConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedBle = prefs.getString('esp_custom_ble_name');
+      final savedSsid = prefs.getString('esp_wifi_ssid');
+      final savedPass = prefs.getString('esp_wifi_pass');
+      final savedId = prefs.getString('esp_last_ble_id');
+      if (savedBle != null && savedBle.trim().isNotEmpty) {
+        _customBleName = savedBle.trim();
+      }
+      if (savedSsid != null && savedSsid.trim().isNotEmpty) {
+        _wifiSsid = savedSsid.trim();
+      }
+      if (savedPass != null && savedPass.length >= 8) {
+        _wifiPass = savedPass;
+      }
+      if (savedId != null && savedId.isNotEmpty) {
+        _lastConnectedDeviceId = savedId;
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _saveDeviceConfigPrefs({String? bleName, String? ssid, String? pass, String? lastId}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (bleName != null && bleName.trim().isNotEmpty) {
+        await prefs.setString('esp_custom_ble_name', bleName.trim());
+      }
+      if (ssid != null && ssid.trim().isNotEmpty) {
+        await prefs.setString('esp_wifi_ssid', ssid.trim());
+      }
+      if (pass != null && pass.length >= 8) {
+        await prefs.setString('esp_wifi_pass', pass);
+      }
+      if (lastId != null && lastId.isNotEmpty) {
+        await prefs.setString('esp_last_ble_id', lastId);
+      }
+    } catch (_) {}
   }
 
   void _initNativeChannels() {
@@ -217,16 +263,20 @@ class BleService extends ChangeNotifier {
         allKnown[d.remoteId.str] = d;
       }
 
+      final customLower = _customBleName.trim().toLowerCase();
       for (final d in allKnown.values) {
         final pName = d.platformName;
-        final isEsp = pName.toLowerCase().contains('ysiducnaga') ||
-            pName.toLowerCase().contains('ysiduc') ||
-            pName.toLowerCase().contains('esp32') ||
-            pName.toLowerCase().contains('nav') ||
+        final lower = pName.toLowerCase();
+        final isEsp = lower.contains('ysiducnaga') ||
+            lower.contains('ysiduc') ||
+            lower.contains('esp32') ||
+            lower.contains('nav') ||
+            (customLower.isNotEmpty && lower.contains(customLower)) ||
+            (_lastConnectedDeviceId != null && d.remoteId.str == _lastConnectedDeviceId) ||
             pName.isEmpty; // iOS sometimes hides name until connected
 
         if (isEsp) {
-          final name = pName.isNotEmpty ? pName : 'ysiducnaga';
+          final name = pName.isNotEmpty ? pName : _customBleName;
           _systemBondedDevice = d;
           matched.add(d);
 
@@ -341,19 +391,22 @@ class BleService extends ChangeNotifier {
     if (_isConnecting) return false;
 
     // 1. Ưu tiên kiểm tra thiết bị đã ghép nối sẵn trong hệ thống Bluetooth iOS
+    final customLower = _customBleName.trim().toLowerCase();
     final sysList = await checkSystemDevices();
     if (sysList.isNotEmpty) {
       final preferred = sysList.firstWhere(
-        (d) => d.platformName.toLowerCase().contains('ysiducnaga') ||
-               d.platformName.toLowerCase().contains('ysiduc'),
+        (d) => (_lastConnectedDeviceId != null && d.remoteId.str == _lastConnectedDeviceId) ||
+               d.platformName.toLowerCase().contains('ysiducnaga') ||
+               d.platformName.toLowerCase().contains('ysiduc') ||
+               (customLower.isNotEmpty && d.platformName.toLowerCase().contains(customLower)),
         orElse: () => sysList.first,
       );
-      final name = preferred.platformName.isNotEmpty ? preferred.platformName : 'ysiducnaga';
+      final name = preferred.platformName.isNotEmpty ? preferred.platformName : _customBleName;
       final ok = await connectToDevice(preferred, displayName: name);
       if (ok) return true;
     }
 
-    // 2. Nếu chưa ghép nối sẵn, quét nhanh tối đa 5 giây và tự động kết nối ngay khi thấy ysiducnaga
+    // 2. Nếu chưa ghép nối sẵn, quét nhanh tối đa 5 giây và tự động kết nối ngay khi thấy thiết bị ESP32
     try {
       final isSupported = await FlutterBluePlus.isSupported;
       if (!isSupported) return false;
@@ -384,12 +437,14 @@ class BleService extends ChangeNotifier {
             }
           }
 
-          if (lower.contains('ysiducnaga') ||
+          if ((_lastConnectedDeviceId != null && r.device.remoteId.str == _lastConnectedDeviceId) ||
+              lower.contains('ysiducnaga') ||
               lower.contains('ysiduc') ||
               lower.contains('esp32') ||
+              (customLower.isNotEmpty && lower.contains(customLower)) ||
               hasNavUuid) {
             if (!completer.isCompleted) {
-              foundName = name.isNotEmpty ? name : 'ysiducnaga';
+              foundName = name.isNotEmpty ? name : _customBleName;
               completer.complete(r.device);
             }
           }
@@ -409,7 +464,7 @@ class BleService extends ChangeNotifier {
       await stopScan();
 
       if (targetDevice != null) {
-        return await connectToDevice(targetDevice, displayName: foundName ?? 'ysiducnaga');
+        return await connectToDevice(targetDevice, displayName: foundName ?? _customBleName);
       }
     } catch (e) {
       _isScanning = false;
@@ -461,6 +516,8 @@ class BleService extends ChangeNotifier {
 
       if (_writeCharacteristic != null) {
         _isConnected = true;
+        _lastConnectedDeviceId = device.remoteId.str;
+        _saveDeviceConfigPrefs(lastId: _lastConnectedDeviceId);
         _enableBackgroundKeepAlive();
         _addLog('Đã kết nối thành công với: $_connectedDeviceName!', isTx: false);
 
@@ -476,6 +533,8 @@ class BleService extends ChangeNotifier {
           });
           await sendRawJson(handshake);
           _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32 (Pin: $bat%)', isTx: true);
+          await Future.delayed(const Duration(milliseconds: 120));
+          await requestDeviceConfig();
         } catch (e) {
           _addLog('Lỗi gửi APP_CONNECT: $e', isError: true);
         }
@@ -744,33 +803,74 @@ class BleService extends ChangeNotifier {
   void _handleIncomingBleMessage(String msg) {
     try {
       final json = jsonDecode(msg) as Map<String, dynamic>;
-      if (json['type'] == 'WIFI_STATUS') {
+      final type = json['type'] as String? ?? '';
+      if (type == 'WIFI_STATUS') {
         _wifiStatus = json['status'] as String? ?? 'disconnected';
         _wifiIp = json['ip'] as String?;
-        _wifiPort = (json['port'] as num?)?.toInt() ?? 8080;
+        _wifiPort = (json['port'] as num?)?.toInt() ?? 8081;
         _addLog('ESP32 WiFi: $_wifiStatus (IP: $_wifiIp:$_wifiPort)', isTx: false);
+        notifyListeners();
+      } else if (type == 'DEVICE_CONFIG' || type == 'DEVICE_CONFIG_ACK') {
+        final bleName = (json['bleName'] as String?)?.trim();
+        final ssid = (json['ssid'] as String?)?.trim();
+        final pass = json['pass'] as String?;
+        if (bleName != null && bleName.isNotEmpty) {
+          _customBleName = bleName;
+        }
+        if (ssid != null && ssid.isNotEmpty) {
+          _wifiSsid = ssid;
+        }
+        if (pass != null && pass.length >= 8) {
+          _wifiPass = pass;
+        }
+        _saveDeviceConfigPrefs(bleName: bleName, ssid: ssid, pass: pass);
+        _addLog('Đồng bộ cấu hình ESP32: BT="$_customBleName", WiFi="$_wifiSsid"', isTx: false);
         notifyListeners();
       }
     } catch (_) {}
   }
 
-  /// Send iPhone Personal Hotspot WiFi Credentials to ESP32 over BLE
-  Future<bool> sendWifiConfig(String ssid, String pass) async {
+  /// Query current BLE name and Wi-Fi SoftAP credentials from ESP32 NVS
+  Future<bool> requestDeviceConfig() async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    return await sendRawString(jsonEncode({'type': 'DEVICE_QUERY'}));
+  }
+
+  /// Update ESP32 Bluetooth device name and/or SoftAP Wi-Fi SSID & password.
+  /// Persists locally even before ESP32 applies & reboots if BLE name changed.
+  Future<bool> sendDeviceConfig({
+    String? bleName,
+    String? ssid,
+    String? pass,
+  }) async {
+    final cleanBle = bleName?.trim();
+    final cleanSsid = ssid?.trim();
+    final cleanPass = pass?.trim();
+
+    if (cleanBle != null && cleanBle.isNotEmpty) _customBleName = cleanBle;
+    if (cleanSsid != null && cleanSsid.isNotEmpty) _wifiSsid = cleanSsid;
+    if (cleanPass != null && cleanPass.length >= 8) _wifiPass = cleanPass;
+    await _saveDeviceConfigPrefs(bleName: cleanBle, ssid: cleanSsid, pass: cleanPass);
+    notifyListeners();
+
     if (!_isConnected || _writeCharacteristic == null) {
-      _addLog('Chưa kết nối BLE với ESP32', isError: true);
+      _addLog('Chưa kết nối BLE với ESP32 (đã lưu cấu hình cục bộ)', isError: true);
       return false;
     }
 
-    final payload = jsonEncode({
-      'type': 'WIFI_CONFIG',
-      'ssid': ssid.trim(),
-      'pass': pass.trim(),
-    });
+    final payloadMap = <String, dynamic>{'type': 'DEVICE_CONFIG'};
+    if (cleanBle != null && cleanBle.isNotEmpty) payloadMap['bleName'] = cleanBle;
+    if (cleanSsid != null && cleanSsid.isNotEmpty) payloadMap['ssid'] = cleanSsid;
+    if (cleanPass != null && cleanPass.length >= 8) payloadMap['pass'] = cleanPass;
 
-    _wifiStatus = 'connecting';
-    notifyListeners();
-    _addLog('Gửi cấu hình WiFi Hotspot: $ssid');
+    final payload = jsonEncode(payloadMap);
+    _addLog('Gửi cấu hình ESP32 (BT: ${cleanBle ?? '-'}, WiFi: ${cleanSsid ?? '-'})', isTx: true);
     return await sendRawString(payload);
+  }
+
+  /// Send Wi-Fi SSID & Password to ESP32 over BLE
+  Future<bool> sendWifiConfig(String ssid, String pass) async {
+    return sendDeviceConfig(ssid: ssid, pass: pass);
   }
 
   void clearLogs() {
