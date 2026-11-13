@@ -278,6 +278,8 @@ public:
     }
     if (!connected) {
       _isAppConnected = false;
+      _navData.isNavigating = false;
+      _fullScreenStreamActive = false;
       _currentState = STATE_STANDBY_WATCHFACE;
       _needFullRedraw = true;
     }
@@ -290,6 +292,7 @@ public:
         _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
       } else {
         _currentState = STATE_STANDBY_WATCHFACE;
+        _navData.isNavigating = false;
         _fullScreenStreamActive = false;
       }
       _needFullRedraw = true;
@@ -524,10 +527,6 @@ public:
 
     // 3. Render appropriate screen based on state
     if (_currentState == STATE_STANDBY_WATCHFACE) {
-      if (isStreamingActive) {
-        // When simulator or phone is actively streaming frames, do not overwrite with standby watchface
-        return;
-      }
       _renderStandbyWatchface();
     } else if (_currentState == STATE_APP_IDLE_MAP) {
       _renderAppIdleMap();
@@ -1262,8 +1261,8 @@ private:
       }
     }
 
-    // Notification box (messages / calls)
-    if (_notifShown && millis() > _notifExpire) {
+    // Notification box (messages persist until next notification; active ringing calls auto-expire)
+    if (_notifShown && _notif.isCall && millis() > _notifExpire) {
       _notifShown = false;
       _notifDirty = true;
     }
@@ -1633,7 +1632,7 @@ private:
   // Ô thông báo (tin nhắn / cuộc gọi) mở rộng ở góc dưới phải Màn 2: x164 y124 w146 h106
   void _drawNotifBox() {
     const uint16_t cPill = tft.color565(11, 17, 26);
-    if (_notifShown && millis() > _notifExpire) {
+    if (_notifShown && _notif.isCall && millis() > _notifExpire) {
       _notifShown = false;
     }
 

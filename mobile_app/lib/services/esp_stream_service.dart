@@ -96,8 +96,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  bool _lastBleConnected = false;
+
+  void _handleBleConnectionChange() {
+    final nowConnected = bleService.isConnected;
+    if (_lastBleConnected && !nowConnected) {
+      broadcastTelemetry('{"type":"APP_DISCONNECT"}');
+    }
+    _lastBleConnected = nowConnected;
+  }
+
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
+    _lastBleConnected = bleService.isConnected;
+    bleService.addListener(_handleBleConnectionChange);
     _startWebSocketServer();
     _startEspApConnector();
   }
@@ -302,7 +314,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void updateReferences(BleService newBle, NavigationManager newNav) {
-    bleService = newBle;
+    if (!identical(bleService, newBle)) {
+      bleService.removeListener(_handleBleConnectionChange);
+      bleService = newBle;
+      _lastBleConnected = bleService.isConnected;
+      bleService.addListener(_handleBleConnectionChange);
+    }
     navManager = newNav;
   }
 
@@ -349,6 +366,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    bleService.removeListener(_handleBleConnectionChange);
     stopStreaming();
     _persistentWifiSocket?.destroy();
     _persistentWifiSocket = null;
@@ -485,18 +503,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     if (!_isStreaming || _isCapturing || _isSendingWifi) return;
 
-    if (!bleService.isConnected && _tcpApSocket == null && _wsClients.isEmpty && !(navManager?.isNavigating ?? false)) {
+    if (!bleService.isConnected && !_isForeground) {
       return;
     }
 
     // Strict 1-in-flight closed-loop flow control: wait up to 650ms for ST7789 draw-complete ACK ('K')
     // so stale frames NEVER pile up in the OS TCP send buffer!
-    if (_tcpApSocket != null &&
+    if (bleService.isConnected &&
+        _tcpApSocket != null &&
         !_tcpApReadyForNextFrame &&
         DateTime.now().difference(_lastTcpSendTime).inMilliseconds < 650) {
       return;
     }
-    if (_tcpApSocket == null &&
+    if (bleService.isConnected &&
+        _tcpApSocket == null &&
         _wsClients.isNotEmpty &&
         !_wsReadyForNextFrame &&
         DateTime.now().difference(_lastWsSendTime).inMilliseconds < 650) {
@@ -587,8 +607,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         notifyListeners();
       }
 
-      // 3. Decoupled Asynchronous Transmission
-      _dispatchTransmission(jpegBytes);
+      // 3. Transmit over Wi-Fi ONLY while BLE is actively connected (keeps Màn 1 undisturbed when disconnected)
+      if (bleService.isConnected) {
+        _dispatchTransmission(jpegBytes);
+      }
     } catch (_) {
     } finally {
       _isCapturing = false;
@@ -617,7 +639,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Create a 320x320 CPU patch centered on user (covers 144x208 frame at all rotation angles)
       const int patchSize = 320;
       final patch = img.Image(width: patchSize, height: patchSize, numChannels: 4);
-      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(223, 245, 232, 255);
+      final bgColor = isDark ? img.ColorRgba8(11, 17, 26, 255) : img.ColorRgba8(240, 243, 246, 255);
       img.fill(patch, color: bgColor);
 
       const double patchCenter = patchSize / 2.0;
@@ -780,7 +802,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       const int vx = 226;
       final int vy = (h * 0.74).round(); // ~160 for h=216
       const double tilt = 0.74; // vertical foreshortening (camera pitch)
-      const int extrude = 10; // building height in screen px
+      const int extrude = 8; // building height in screen px (matches Goong daylight 3D)
       final double th = headingDeg * (math.pi / 180.0);
       final double cosT = math.cos(th);
       final double sinT = math.sin(th);
@@ -791,14 +813,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final int fh = h + extrude + 1; // footprint rows (buildings below frame still extrude into it)
       final Uint8List foot = Uint8List(w * fh);
 
-      final int baseR = isDark ? 11 : 223;
-      final int baseG = isDark ? 17 : 245;
-      final int baseB = isDark ? 26 : 232;
-      final int wallR = isDark ? 40 : 156, wallG = isDark ? 52 : 174, wallB = isDark ? 66 : 164;
+      final int baseR = isDark ? 11 : 240;
+      final int baseG = isDark ? 17 : 243;
+      final int baseB = isDark ? 26 : 246;
+      final int wallR = isDark ? 40 : 196, wallG = isDark ? 52 : 203, wallB = isDark ? 66 : 210;
       final int baseColor32 = 0xFF000000 | (baseB << 16) | (baseG << 8) | baseR;
       final int wallColor32 = 0xFF000000 | (wallB << 16) | (wallG << 8) | wallR;
-      const int roofEdge32 = 0xFF000000 | (152 << 16) | (162 << 8) | 144;
-      const int roofFlat32 = 0xFF000000 | (198 << 16) | (209 << 8) | 192;
+      final int roofEdge32 = isDark
+          ? (0xFF000000 | (84 << 16) | (66 << 8) | 50)
+          : (0xFF000000 | (192 << 16) | (184 << 8) | 176);
+      final int roofFlat32 = isDark
+          ? (0xFF000000 | (68 << 16) | (52 << 8) | 38)
+          : (0xFF000000 | (236 << 16) | (232 << 8) | 228);
 
       int lastTx = -999999, lastTy = -999999;
       Uint32List? curTile32;
@@ -1265,7 +1291,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   static const String _goongMapApiStyle =
-      's.e%3Al.t%7Cp.v%3Aoff%2Cs.t%3A2%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A4%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A5%7Cs.e%3Ag%7Cp.c%3A%23dff5e8%2Cs.t%3A81%7Cs.e%3Ag.f%7Cp.c%3A%23dff5e8%2Cs.t%3A1297%7Cs.e%3Ag.f%7Cp.c%3A%23d4b8c8%2Cs.t%3A1297%7Cs.e%3Ag.s%7Cp.v%3Aoff%2Cs.t%3A3%7Cs.e%3Ag.f%7Cp.c%3A%23e2e8f0%2Cs.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%2394a3b8%2Cs.t%3A2%7Cs.e%3Ag%7Cp.c%3A%23a7e3b8%2Cs.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2360a5fa';
+      's.e%3Al.t%7Cp.v%3Aoff%2Cs.t%3A2%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A4%7Cs.e%3Al.i%7Cp.v%3Aoff%2Cs.t%3A5%7Cs.e%3Ag%7Cp.c%3A%23eff2f6%2Cs.t%3A81%7Cs.e%3Ag.f%7Cp.c%3A%23eff2f6%2Cs.t%3A82%7Cs.e%3Ag%7Cp.c%3A%23cce8d0%2Cs.t%3A1297%7Cs.e%3Ag.f%7Cp.c%3A%23e45ca8%2Cs.t%3A1297%7Cs.e%3Ag.s%7Cp.v%3Aoff%2Cs.t%3A3%7Cs.e%3Ag.f%7Cp.c%3A%23ffffff%2Cs.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%23cbd5e1%2Cs.t%3A2%7Cs.e%3Ag%7Cp.c%3A%23c8e8cc%2Cs.t%3A6%7Cs.e%3Ag%7Cp.c%3A%239fd0fa';
 
   Future<void> _fetchTileImage(String key, int x, int y, int z) async {
     _pendingTileFetches.add(key);
@@ -1321,16 +1347,16 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
               cpuImg = img.copyResize(cpuImg, width: 256, height: 256, interpolation: img.Interpolation.average);
             }
             if (isGoong && cpuImg.width == 256 && cpuImg.height == 256) {
-              // Building fill uses marker color #d4b8c8 (r > g); extract footprint mask, recolor to flat roof color
+              // Building fill uses magenta marker #e45ca8; extract footprint mask, recolor to soft light-gray building block
               final mask = Uint8List(256 * 256);
               for (int my = 0; my < 256; my++) {
                 for (int mx = 0; mx < 256; mx++) {
                   final p = cpuImg.getPixel(mx, my);
-                  if (p.r.toInt() - p.g.toInt() >= -3) {
+                  if (p.r.toInt() - p.g.toInt() >= 18 && p.b.toInt() - p.g.toInt() >= 10) {
                     mask[my * 256 + mx] = 1;
-                    p.r = 192;
-                    p.g = 209;
-                    p.b = 198;
+                    p.r = 224;
+                    p.g = 229;
+                    p.b = 234;
                   }
                 }
               }
@@ -1403,7 +1429,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final isDark = _streamMapStyle.contains('dark');
 
     // 1. Background Fill: Clean Light Cream for Apple Maps / Goong (#F4F6F8) or Dark Navy (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFEBF0F0);
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF0F3F6);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle screen anchor (lower center: x=72, y=140)
@@ -1570,7 +1596,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final isDark = _streamMapStyle.contains('dark');
 
     // 1. Background Fill: Mint-Green Goong Daylight Map (#DFF5E8) or Dark Mode (#0B111A)
-    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFDFF5E8);
+    final bgPaint = Paint()..color = isDark ? const Color(0xFF0B111A) : const Color(0xFFF0F3F6);
     canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgPaint);
 
     // Vehicle anchor at bottom-right (x=226, y=158 on 320x216 canvas)

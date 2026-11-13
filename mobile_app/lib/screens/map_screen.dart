@@ -54,6 +54,8 @@ class MapScreenState extends State<MapScreen> {
   bool _isCameraMoveInFlight = false;
   DateTime _cameraLockUntil = DateTime.fromMillisecondsSinceEpoch(0);
   Offset? _mapPointerDownPos;
+  double _currentCameraBearing = 0.0;
+  bool _isSyncingPuckPos = false;
   LatLng? _lastLineTrimPos;
   final GlobalKey _directionsSheetKey = GlobalKey();
   MapPlace? _queuedFinalDestination;
@@ -180,9 +182,13 @@ class MapScreenState extends State<MapScreen> {
               final pt = await ctrl.toScreenLocation(ml.LatLng(loc.latitude, loc.longitude));
               if (!mounted) return;
               final screenW = MediaQuery.of(context).size.width;
+              final camBearing = (_isAutoCentering && !_isDrivingZoomOverview)
+                  ? (_isNorthUpLocked ? 0.0 : heading)
+                  : (ctrl.cameraPosition?.bearing ?? _currentCameraBearing);
+              _currentCameraBearing = camBearing;
               final rotRad = (_isAutoCentering && !_isDrivingZoomOverview && !_isNorthUpLocked)
                   ? 0.0
-                  : heading * (math.pi / 180.0);
+                  : (heading - camBearing) * (math.pi / 180.0);
               final pos = (_isAutoCentering && !_isDrivingZoomOverview)
                   ? Offset(screenW / 2.0, pt.y.toDouble())
                   : Offset(pt.x.toDouble(), pt.y.toDouble());
@@ -260,7 +266,9 @@ class MapScreenState extends State<MapScreen> {
 
   /// Called when MaplibreMap is created and controller is ready
   void _onMapCreated(ml.MapLibreMapController controller) {
+    _mapController?.removeListener(_onMapCameraChanged);
     _mapController = controller;
+    controller.addListener(_onMapCameraChanged);
     _mapReady = true;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
@@ -268,6 +276,33 @@ class MapScreenState extends State<MapScreen> {
       _userPosition = navManager.currentLocation!;
     }
     _tryCenterOnInitialUserLocation(animate: false);
+  }
+
+  void _onMapCameraChanged() {
+    final camPos = _mapController?.cameraPosition;
+    if (camPos == null || !mounted) return;
+    _currentCameraBearing = camPos.bearing;
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    if (!navManager.isNavigating) return;
+    if (!_isAutoCentering || _isDrivingZoomOverview) {
+      final loc = navManager.currentLocation ?? _userPosition;
+      _syncPuckToCamera(loc, navManager.effectiveHeading, camPos.bearing);
+    }
+  }
+
+  void _syncPuckToCamera(LatLng loc, double heading, double camBearing) {
+    final ctrl = _mapController;
+    if (ctrl == null || !_mapReady || _isSyncingPuckPos) return;
+    _isSyncingPuckPos = true;
+    ctrl.toScreenLocation(ml.LatLng(loc.latitude, loc.longitude)).then((pt) {
+      if (!mounted) return;
+      _vehiclePuckNotifier.value = (
+        pos: Offset(pt.x.toDouble(), pt.y.toDouble()),
+        rotationRad: (heading - camBearing) * (math.pi / 180.0),
+      );
+    }).catchError((_) {}).whenComplete(() {
+      _isSyncingPuckPos = false;
+    });
   }
 
   /// Được gọi từ Menu 3 gạch khi người dùng chọn một địa điểm đã lưu
@@ -496,6 +531,7 @@ class MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    _mapController?.removeListener(_onMapCameraChanged);
     MapSettingsService().removeListener(_onMapProviderChanged);
     _savedPlacesService.removeListener(_refreshSearchModal);
     _debounceTimer?.cancel();
@@ -976,7 +1012,7 @@ class MapScreenState extends State<MapScreen> {
               },
               onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
               onMapLongClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
-              trackCameraPosition: false,
+              trackCameraPosition: true,
               compassEnabled: false,
               myLocationEnabled: !isDriving,
               myLocationTrackingMode: ml.MyLocationTrackingMode.none,

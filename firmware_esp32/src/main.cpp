@@ -894,12 +894,13 @@ void loop() {
   portEXIT_CRITICAL(&frameMux);
 
   if (slotToDraw >= 0) {
-    lastFrameTime = millis();
     uint8_t* frameBuf = framePool[slotToDraw];
 
     #if defined(DISPLAY_TFT_ST7789)
-    // Render live map/simulator when app has established handshake (isAppConnected) or WiFi stream is active
-    if (frameLen > 100 && (display.isAppConnected() || wsConnected || tcpConnected)) {
+    // Only draw streamed map/minimap onto ST7789 while app is actively connected (Màn 2 / Màn 3).
+    // Never overwrite Màn 1 (STATE_STANDBY_WATCHFACE) when BLE/app disconnected, even if Wi-Fi stays connected.
+    if (frameLen > 100 && display.isAppConnected() && display.getCurrentState() != STATE_STANDBY_WATCHFACE) {
+      lastFrameTime = millis();
       uint16_t jpgW = 0, jpgH = 0;
       TJpgDec.getJpgSize(&jpgW, &jpgH, frameBuf, frameLen);
       if (jpgW >= 300) {
@@ -947,7 +948,7 @@ void loop() {
   }
 
   // 2. Update HUD and status UI
-  bool isStreaming = (display.isAppConnected() || wsConnected || tcpConnected) && (millis() - lastFrameTime < 4000);
+  bool isStreaming = display.isAppConnected() && (wsConnected || tcpConnected) && (millis() - lastFrameTime < 4000);
   display.update(isStreaming);
 
   // 3. Delayed Security Request execution to prompt iOS native Pairing dialog

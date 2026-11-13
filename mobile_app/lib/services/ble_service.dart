@@ -776,6 +776,7 @@ class BleService extends ChangeNotifier {
     try {
       final handshake = jsonEncode({'type': 'APP_DISCONNECT'});
       await sendRawJson(handshake);
+      await Future.delayed(const Duration(milliseconds: 80));
     } catch (_) {}
     if (_connectedDevice != null) {
       try {
