@@ -69,6 +69,7 @@ class BleService extends ChangeNotifier {
   String _wifiSsid = 'ysiducnaga';
   String _wifiPass = '12345678';
   String? _lastConnectedDeviceId;
+  int _brightnessPct = 100;
 
   // Getters
   bool get isScanning => _isScanning;
@@ -76,6 +77,7 @@ class BleService extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
   String? get connectedDeviceName => _connectedDeviceName;
   String get customBleName => _customBleName;
+  int get brightnessPct => _brightnessPct;
   BluetoothDevice? get connectedDevice => _connectedDevice;
   BluetoothDevice? get systemBondedDevice => _systemBondedDevice;
   List<BleDeviceItem> get discoveredDevices => List.unmodifiable(_discoveredDevices);
@@ -130,6 +132,7 @@ class BleService extends ChangeNotifier {
       final savedSsid = prefs.getString('esp_wifi_ssid');
       final savedPass = prefs.getString('esp_wifi_pass');
       final savedId = prefs.getString('esp_last_ble_id');
+      final savedBrightness = prefs.getInt('esp_brightness_pct');
       if (savedBle != null && savedBle.trim().isNotEmpty) {
         _customBleName = savedBle.trim();
       }
@@ -141,6 +144,9 @@ class BleService extends ChangeNotifier {
       }
       if (savedId != null && savedId.isNotEmpty) {
         _lastConnectedDeviceId = savedId;
+      }
+      if (savedBrightness != null) {
+        _brightnessPct = savedBrightness.clamp(5, 100);
       }
       notifyListeners();
     } catch (_) {}
@@ -530,6 +536,7 @@ class BleService extends ChangeNotifier {
             'type': 'APP_CONNECT',
             'clock': timeStr,
             'bat': bat,
+            'brightness': _brightnessPct,
           });
           await sendRawJson(handshake);
           _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32 (Pin: $bat%)', isTx: true);
@@ -579,6 +586,7 @@ class BleService extends ChangeNotifier {
                     'type': 'APP_CONNECT',
                     'clock': clockStr,
                     'bat': bat,
+                    'brightness': _brightnessPct,
                   });
                   await sendRawJson(handshake);
                   _addLog('Đã gửi lại APP_CONNECT sau auto-reconnect (Pin: $bat%)', isTx: true);
@@ -872,6 +880,82 @@ class BleService extends ChangeNotifier {
   /// Send Wi-Fi SSID & Password to ESP32 over BLE
   Future<bool> sendWifiConfig(String ssid, String pass) async {
     return sendDeviceConfig(ssid: ssid, pass: pass);
+  }
+
+  /// Updates ESP32 LCD backlight brightness (5..100%) and persists in prefs.
+  Future<void> setBrightness(int pct, {bool sendToDevice = true}) async {
+    final clamped = pct.clamp(5, 100);
+    if (_brightnessPct != clamped) {
+      _brightnessPct = clamped;
+      notifyListeners();
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('esp_brightness_pct', clamped);
+      } catch (_) {}
+    }
+    if (sendToDevice && _isConnected && _writeCharacteristic != null) {
+      await sendRawJson(jsonEncode({'type': 'SET_BRIGHTNESS', 'value': clamped}));
+    }
+  }
+
+  /// Controls whether ESP32 locks Màn 1 (1), previews Màn 2 (2), or returns to auto (0).
+  Future<bool> setPreviewScreenMode(int mode) async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    return await sendRawJson(
+      jsonEncode({'type': 'SET_PREVIEW_SCREEN', 'screen': mode.clamp(0, 2)}),
+    );
+  }
+
+  Future<bool> _uploadSpiffsChunked(int magic2, Uint8List data) async {
+    if (!_isConnected || _writeCharacteristic == null || data.isEmpty) {
+      return false;
+    }
+    final payloadMax = (safeChunkSize - 5).clamp(40, 170);
+    final totalChunks = (data.length / payloadMax).ceil();
+    if (totalChunks > 255) {
+      _addLog('File vượt quá giới hạn BLE 255 chunks', isError: true);
+      return false;
+    }
+    final useWithoutResponse = !_writeCharacteristic!.properties.write;
+    for (var idx = 0; idx < totalChunks; idx++) {
+      final start = idx * payloadMax;
+      final end = (start + payloadMax).clamp(0, data.length);
+      final chunk = data.sublist(start, end);
+      final pkt = Uint8List(5 + chunk.length);
+      pkt[0] = 0xAA;
+      pkt[1] = magic2;
+      pkt[2] = 0x00;
+      pkt[3] = totalChunks;
+      pkt[4] = idx;
+      pkt.setRange(5, pkt.length, chunk);
+
+      await _writeCharacteristic!.write(pkt, withoutResponse: useWithoutResponse);
+      _lastTxTime = DateTime.now();
+      await Future.delayed(const Duration(milliseconds: 12));
+    }
+    return true;
+  }
+
+  /// Uploads an imported custom ZIP theme's background image & JSON spec to ESP32 SPIFFS and activates style 250.
+  Future<bool> sendCustomThemeToEsp32({
+    required Uint8List bgJpegBytes,
+    required Map<String, dynamic> specJson,
+  }) async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    try {
+      final okBg = await _uploadSpiffsChunked(0xBE, bgJpegBytes);
+      if (!okBg) return false;
+      final specBytes = Uint8List.fromList(utf8.encode(jsonEncode(specJson)));
+      final okSpec = await _uploadSpiffsChunked(0xBF, specBytes);
+      if (!okSpec) return false;
+      await Future.delayed(const Duration(milliseconds: 40));
+      await sendRawJson(jsonEncode({'type': 'THEME_SELECT', 'theme': 250}));
+      _addLog('Đã đồng bộ theme ZIP sang ESP32 (${bgJpegBytes.length ~/ 1024} KB)', isTx: true);
+      return true;
+    } catch (e) {
+      _addLog('Lỗi gửi theme ZIP sang ESP32: $e', isError: true);
+      return false;
+    }
   }
 
   void clearLogs() {

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
@@ -66,18 +67,68 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
   String _streamMapStyle = GoongConfig.isConfigured ? 'goong-streets' : 'streets-v2';
+  bool _hasUserSelectedMapStyle = false;
   String get streamMapStyle => _streamMapStyle;
+  bool get hasUserSelectedMapStyle => _hasUserSelectedMapStyle;
+
+  void _clearTileCaches() {
+    _tileCache.forEach((_, img) => img.dispose());
+    _tileCache.clear();
+    _cpuTileCache.clear();
+    _cpuTileRgba32.clear();
+    _tileMasks.clear();
+    _lastPrefetchPos = null;
+  }
+
+  Future<void> _persistMapPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('esp_stream_map_style', _streamMapStyle);
+      await prefs.setBool('esp_stream_map_style_custom', _hasUserSelectedMapStyle);
+      await prefs.setInt('esp_minimap_zoom', _minimapZoom);
+    } catch (_) {}
+  }
+
+  Future<void> _loadSavedMapPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedZoom = prefs.getInt('esp_minimap_zoom');
+      final savedCustom = prefs.getBool('esp_stream_map_style_custom') ?? false;
+      final savedStyle = prefs.getString('esp_stream_map_style');
+      var changed = false;
+      if (savedZoom != null && savedZoom >= 14 && savedZoom <= 18 && savedZoom != _minimapZoom) {
+        _minimapZoom = savedZoom;
+        changed = true;
+      }
+      _hasUserSelectedMapStyle = savedCustom;
+      if (savedCustom && savedStyle != null && savedStyle.isNotEmpty && savedStyle != _streamMapStyle) {
+        _streamMapStyle = savedStyle;
+        changed = true;
+      }
+      if (changed) {
+        _clearTileCaches();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
   set streamMapStyle(String val) {
     if (_streamMapStyle != val) {
       _streamMapStyle = val;
-      _tileCache.forEach((_, img) => img.dispose());
-      _tileCache.clear();
-      _cpuTileCache.clear();
-      _cpuTileRgba32.clear();
-      _tileMasks.clear();
-      _lastPrefetchPos = null;
+      _clearTileCaches();
+      if (_hasUserSelectedMapStyle) {
+        _persistMapPrefs();
+      }
       notifyListeners();
     }
+  }
+
+  Future<void> setUserMapStyle(String val) async {
+    _hasUserSelectedMapStyle = true;
+    _streamMapStyle = val;
+    _clearTileCaches();
+    notifyListeners();
+    await _persistMapPrefs();
   }
 
   int _minimapZoom = 17; // 14 to 18 (default 17 for detailed building polygons & POIs like Image 2)
@@ -86,12 +137,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final clamped = val.clamp(14, 18);
     if (_minimapZoom != clamped) {
       _minimapZoom = clamped;
-      _tileCache.forEach((_, img) => img.dispose());
-      _tileCache.clear();
-      _cpuTileCache.clear();
-      _cpuTileRgba32.clear();
-      _tileMasks.clear();
-      _lastPrefetchPos = null;
+      _clearTileCaches();
+      _persistMapPrefs();
       notifyListeners();
     }
   }
@@ -110,6 +157,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _lastBleConnected = bleService.isConnected;
     bleService.addListener(_handleBleConnectionChange);
+    _loadSavedMapPrefs();
     _startWebSocketServer();
     _startEspApConnector();
   }

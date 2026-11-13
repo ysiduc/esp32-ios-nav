@@ -8,8 +8,7 @@ import '../services/navigation_manager.dart';
 import '../services/saved_places_service.dart';
 import '../widgets/map_provider_settings_sheet.dart';
 import 'ble_screen.dart';
-import 'esp_preview_screen.dart';
-import 'esp_simulator_screen.dart';
+import 'esp_interface_screen.dart';
 import 'map_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -55,10 +54,8 @@ class _HomeScreenState extends State<HomeScreen> {
       BleScreen(
         onBackToMap: _switchToMap,
       ),
-      EspSimulatorScreen(
-        onBackToMap: _switchToMap,
-      ),
-      EspPreviewScreen(
+      EspInterfaceScreen(
+        isActive: _currentIndex == 2,
         onBackToMap: _switchToMap,
       ),
     ];
@@ -373,26 +370,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const Divider(height: 1, indent: 58, color: Color(0xFFE5E5EA)),
                         _buildIosMenuTile(
-                          icon: Icons.watch_rounded,
+                          icon: Icons.display_settings_rounded,
                           iconBg: const Color(0xFF5856D6),
-                          title: 'Giao diện Màn chờ (6 Themes)',
-                          subtitle: 'Đổi mặt đồng hồ & tải ảnh nền cá nhân lên ESP32',
+                          title: 'Giao diện ESP32',
+                          subtitle: 'Độ sáng, mô phỏng Màn 1/2, theme ZIP & minimap',
                           isSelected: _currentIndex == 2,
                           onTap: () {
                             Navigator.pop(context);
                             setState(() => _currentIndex = 2);
-                          },
-                        ),
-                        const Divider(height: 1, indent: 58, color: Color(0xFFE5E5EA)),
-                        _buildIosMenuTile(
-                          icon: Icons.cast_connected_rounded,
-                          iconBg: const Color(0xFFFF2D55),
-                          title: 'Trạng thái Stream & Test HUD',
-                          subtitle: 'Xem trước khung hình 30 FPS & test cuộc gọi/SMS',
-                          isSelected: _currentIndex == 3,
-                          onTap: () {
-                            Navigator.pop(context);
-                            setState(() => _currentIndex = 3);
                           },
                         ),
                       ],

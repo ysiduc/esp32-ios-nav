@@ -5,6 +5,7 @@ import CallKit
 import CoreLocation
 import MapKit
 import AVFoundation
+import UniformTypeIdentifiers
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -13,6 +14,7 @@ import AVFoundation
   private var locationChannel: FlutterMethodChannel?
   private var isChannelSetup = false
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+  private var zipPickerDelegate: ZipDocumentPickerDelegate?
 
   // CallKit observer - theo dõi cuộc gọi
   private var callObserver: CXCallObserver?
@@ -242,6 +244,47 @@ import AVFoundation
       case "stopGuidance":
         NavigationSpeechSynthesizer.shared.stop()
         result(true)
+      case "pickZipFile":
+        DispatchQueue.main.async {
+          guard let presenter = self?.topPresentingViewController() else {
+            result(FlutterError(code: "NO_UI", message: "No rootViewController", details: nil))
+            return
+          }
+          let delegate = ZipDocumentPickerDelegate { [weak self] payload in
+            self?.zipPickerDelegate = nil
+            result(payload)
+          }
+          self?.zipPickerDelegate = delegate
+          let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.zip], asCopy: true)
+          picker.delegate = delegate
+          picker.allowsMultipleSelection = false
+          presenter.present(picker, animated: true, completion: nil)
+        }
+      case "shareFileBytes":
+        guard let args = call.arguments as? [String: Any],
+              let typed = args["bytes"] as? FlutterStandardTypedData else {
+          result(FlutterError(code: "INVALID_ARGS", message: "Missing bytes", details: nil))
+          return
+        }
+        let rawName = (args["fileName"] as? String) ?? "esp32_theme_template.zip"
+        let safeName = URL(fileURLWithPath: rawName).lastPathComponent
+        let tempUrl = FileManager.default.temporaryDirectory.appendingPathComponent(safeName)
+        do {
+          try typed.data.write(to: tempUrl, options: .atomic)
+          DispatchQueue.main.async {
+            let activityVC = UIActivityViewController(activityItems: [tempUrl], applicationActivities: nil)
+            let rootVC = self?.topPresentingViewController()
+            if let popover = activityVC.popoverPresentationController, let rvc = rootVC {
+              popover.sourceView = rvc.view
+              popover.sourceRect = CGRect(x: rvc.view.bounds.midX, y: rvc.view.bounds.midY, width: 0, height: 0)
+              popover.permittedArrowDirections = []
+            }
+            rootVC?.present(activityVC, animated: true, completion: nil)
+            result(true)
+          }
+        } catch {
+          result(FlutterError(code: "WRITE_ERROR", message: error.localizedDescription, details: nil))
+        }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -252,6 +295,14 @@ import AVFoundation
 
     // Khởi động CallKit observer
     setupCallObserver()
+  }
+
+  private func topPresentingViewController() -> UIViewController? {
+    var top = self.window?.rootViewController ?? UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? UIApplication.shared.windows.first?.rootViewController
+    while let presented = top?.presentedViewController {
+      top = presented
+    }
+    return top
   }
 
 
@@ -960,6 +1011,46 @@ final class NavigationSpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
     do {
       try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     } catch {}
+  }
+}
+
+class ZipDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
+  private var onFinish: (Any?) -> Void
+  private var completed = false
+
+  init(onFinish: @escaping (Any?) -> Void) {
+    self.onFinish = onFinish
+    super.init()
+  }
+
+  private func finish(_ value: Any?) {
+    guard !completed else { return }
+    completed = true
+    onFinish(value)
+  }
+
+  func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+    guard let url = urls.first else {
+      finish(nil)
+      return
+    }
+    let scoped = url.startAccessingSecurityScopedResource()
+    defer {
+      if scoped { url.stopAccessingSecurityScopedResource() }
+    }
+    do {
+      let data = try Data(contentsOf: url)
+      finish([
+        "name": url.lastPathComponent,
+        "bytes": FlutterStandardTypedData(bytes: data)
+      ])
+    } catch {
+      finish(FlutterError(code: "READ_ERROR", message: error.localizedDescription, details: nil))
+    }
+  }
+
+  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+    finish(nil)
   }
 }
 

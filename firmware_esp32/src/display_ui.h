@@ -2,6 +2,7 @@
 #define DISPLAY_UI_H
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <SPIFFS.h>
 #include <Preferences.h>
 
@@ -84,8 +85,63 @@ private:
   bool _fullScreenStreamActive = false;
   unsigned long _lastRenderTime = 0;
 
-  // Watchface selection (0 = Digital Minimal, 1 = Analog Sport, 2 = Info Dashboard, 3 = Cyberpunk Neon)
+  // Watchface selection (0..5 built-in, 250 = custom ZIP theme on SPIFFS)
   uint8_t _watchfaceStyle = 0;
+  uint8_t _brightnessPct = 100;
+  uint8_t _previewScreenMode = 0; // 0=auto, 1=lock Màn 1, 2=preview Màn 2
+
+  struct CustomThemeBox {
+    int16_t x = 0, y = 0, w = 0, h = 0, r = 0;
+    uint16_t fill = 0, border = 0;
+    bool hasFill = false, hasBorder = false;
+  };
+  struct CustomThemeLabel {
+    char text[40] = {0};
+    int16_t x = 0, y = 0, maxW = 140;
+    uint16_t color = 0xFFFF;
+    bool center = false;
+    bool visible = false;
+  };
+  struct CustomThemeSpec {
+    uint16_t bgColor = 0x0841;
+    bool showWaybar = false;
+    uint8_t boxCount = 0;
+    CustomThemeBox boxes[6];
+    uint8_t labelCount = 0;
+    CustomThemeLabel labels[6];
+    // Clock
+    bool clockVisible = true;
+    int16_t clockX = 20, clockY = 24;
+    uint16_t clockColor = 0xFFE0;
+    uint8_t clockFont = 6; // TFT_eSPI font 2,4,6,7
+    bool clockCenter = false;
+    // Date
+    bool dateVisible = true;
+    int16_t dateX = 22, dateY = 72;
+    uint16_t dateColor = 0xFFFF;
+    char dateFormat[12] = "vn_short";
+    bool dateCenter = false;
+    // Song
+    bool songVisible = true;
+    int16_t songX = 20, songY = 202, songW = 200;
+    uint16_t songColor = 0xFEF1, songBgColor = 0x0841;
+    // Duration
+    bool durVisible = false;
+    char durMode[12] = "ratio";
+    int16_t durX = 232, durY = 202;
+    uint16_t durColor = 0xFB40, durSecondary = 0xFFFF;
+    // Notif title & message
+    bool notifTitleVisible = true;
+    int16_t notifTitleX = 180, notifTitleY = 44, notifTitleW = 120;
+    uint16_t notifTitleColor = 0xFFE0;
+    bool notifMsgVisible = true;
+    int16_t notifMsgX = 180, notifMsgY = 64, notifMsgW = 120;
+    uint8_t notifMsgLines = 4, notifMsgLineH = 16;
+    uint16_t notifMsgColor = 0xFFFF;
+  };
+  CustomThemeSpec _customTheme;
+  bool _customThemeLoaded = false;
+  bool _customThemeDirty = true;
 
   // Real-time Clock & Date
   uint8_t _clockHour = 12;
@@ -141,11 +197,23 @@ private:
 public:
   void init() {
 #if defined(DISPLAY_TFT_ST7789)
+    Preferences prefs;
+    prefs.begin("nav_ui", true);
+    uint8_t savedStyle = prefs.getUChar("wf_style", 0);
+    _watchfaceStyle = (savedStyle == 250) ? 250 : (savedStyle % 6);
+    _brightnessPct = constrain(prefs.getUChar("bl_pct", 100), 5, 100);
+    prefs.end();
+
     #if defined(TFT_BL) && TFT_BL >= 0
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, HIGH);
+    digitalWrite(TFT_BL, LOW);
     #endif
     tft.init();
+    #if defined(TFT_BL) && TFT_BL >= 0
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(TFT_BL, 0);
+    _applyBrightnessPwm(_brightnessPct);
+    #endif
     tft.setRotation(1); // Landscape 320x240
     tft.invertDisplay(false);
     tft.fillScreen(TFT_BLACK);
@@ -166,18 +234,28 @@ public:
     u8f_marquee.setFontDirection(0);
     u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
 
-    // Load saved watchface style
-    Preferences prefs;
-    prefs.begin("nav_ui", true);
-    _watchfaceStyle = prefs.getUChar("wf_style", 0) % 6;
-    prefs.end();
-
+    // Initial screen ready; saved style & brightness already loaded before tft.init()
     _needFullRedraw = true;
 #endif
   }
 
+  void setBrightness(uint8_t pct, bool persist = true) {
+    _applyBrightnessPwm(pct);
+    if (persist) {
+      Preferences prefs;
+      prefs.begin("nav_ui", false);
+      prefs.putUChar("bl_pct", _brightnessPct);
+      prefs.end();
+    }
+    Serial.printf("[UI] Brightness set to %d%%\n", _brightnessPct);
+  }
+
+  uint8_t getBrightness() const {
+    return _brightnessPct;
+  }
+
   void setWatchfaceStyle(uint8_t style) {
-    _watchfaceStyle = style % 6;
+    _watchfaceStyle = (style == 250) ? 250 : (style % 6);
     Preferences prefs;
     prefs.begin("nav_ui", false);
     prefs.putUChar("wf_style", _watchfaceStyle);
@@ -186,13 +264,38 @@ public:
     Serial.printf("[UI] Watchface/Theme style set to %d\n", _watchfaceStyle);
   }
 
+  void markCustomThemeReload() {
+    _customThemeDirty = true;
+    _customThemeLoaded = false;
+    _needFullRedraw = true;
+  }
+
+  void setPreviewScreenMode(uint8_t mode) {
+    _previewScreenMode = (mode <= 2) ? mode : 0;
+    if (_previewScreenMode == 1) {
+      _fullScreenStreamActive = false;
+      _currentState = STATE_STANDBY_WATCHFACE;
+    } else if (_previewScreenMode == 2) {
+      _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+    } else {
+      _currentState = _navData.isNavigating
+          ? STATE_NAVIGATION
+          : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    }
+    _needFullRedraw = true;
+    Serial.printf("[UI] Preview screen mode -> %d (state=%d)\n", _previewScreenMode, (int)_currentState);
+  }
+
   void forceShowWatchfaceTheme() {
+    _previewScreenMode = 1;
+    _fullScreenStreamActive = false;
     _currentState = STATE_STANDBY_WATCHFACE;
     _needFullRedraw = true;
-    Serial.println(F("[UI] Switched to Watchface/Theme display mode"));
+    Serial.println(F("[UI] Switched to Watchface/Theme display mode (Man 1)"));
   }
 
   void restoreIdleMap() {
+    _previewScreenMode = 0;
     _isAppConnected = true;
     _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
     _needFullRedraw = true;
@@ -278,6 +381,7 @@ public:
     }
     if (!connected) {
       _isAppConnected = false;
+      _previewScreenMode = 0;
       _navData.isNavigating = false;
       _fullScreenStreamActive = false;
       _currentState = STATE_STANDBY_WATCHFACE;
@@ -289,8 +393,11 @@ public:
     if (_isAppConnected != connected) {
       _isAppConnected = connected;
       if (connected) {
-        _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+        _currentState = _navData.isNavigating
+            ? STATE_NAVIGATION
+            : (_previewScreenMode == 1 ? STATE_STANDBY_WATCHFACE : STATE_APP_IDLE_MAP);
       } else {
+        _previewScreenMode = 0;
         _currentState = STATE_STANDBY_WATCHFACE;
         _navData.isNavigating = false;
         _fullScreenStreamActive = false;
@@ -310,7 +417,12 @@ public:
   void setNavigating(bool isNav) {
     bool stateChanged = (_navData.isNavigating != isNav);
     _navData.isNavigating = isNav;
-    DisplayState targetState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    if (isNav) _previewScreenMode = 0;
+    DisplayState targetState = isNav
+        ? STATE_NAVIGATION
+        : (_previewScreenMode == 1
+            ? STATE_STANDBY_WATCHFACE
+            : ((_previewScreenMode == 2 || _isAppConnected) ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE));
     if (_currentState != targetState || stateChanged) {
       _currentState = targetState;
       _needFullRedraw = true;
@@ -331,7 +443,9 @@ public:
       if (active) {
         _currentState = STATE_NAVIGATION;
       } else {
-        _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+        _currentState = _navData.isNavigating
+            ? STATE_NAVIGATION
+            : (_previewScreenMode == 1 ? STATE_STANDBY_WATCHFACE : STATE_APP_IDLE_MAP);
       }
       _needFullRedraw = true;
     }
@@ -343,7 +457,12 @@ public:
                   bool isNav = false, int16_t head = 0) {
     bool stateChanged = (_navData.isNavigating != isNav);
     _navData.isNavigating = isNav;
-    DisplayState targetState = isNav ? STATE_NAVIGATION : (_isAppConnected ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE);
+    if (isNav) _previewScreenMode = 0;
+    DisplayState targetState = isNav
+        ? STATE_NAVIGATION
+        : (_previewScreenMode == 1
+            ? STATE_STANDBY_WATCHFACE
+            : ((_previewScreenMode == 2 || _isAppConnected) ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE));
     if (_currentState != targetState || stateChanged) {
       _currentState = targetState;
       _needFullRedraw = true;
@@ -552,9 +671,8 @@ public:
           _navPopupDirty = false;
         }
       } else if (_currentState == STATE_STANDBY_WATCHFACE) {
-        // Chỉ hiện popup banner khi ở Theme 0 (Màn chờ mặc định).
-        // Các theme 1..5 đã có khung riêng trên màn hình để hiện thông báo, không vẽ popup đè lên!
-        if (_watchfaceStyle == 0) {
+        // Chỉ hiện popup banner khi ở Theme 0 hoặc Theme 250 có bật waybar (không có khung notif riêng)
+        if (_watchfaceStyle == 0 || (_watchfaceStyle == 250 && _customTheme.showWaybar && !_customTheme.notifMsgVisible)) {
           static unsigned long lastBanner = 0;
           if (millis() - lastBanner > 400) {
             lastBanner = millis();
@@ -566,6 +684,159 @@ public:
   }
 
 private:
+  void _applyBrightnessPwm(uint8_t pct) {
+    _brightnessPct = constrain(pct, 5, 100);
+#if defined(DISPLAY_TFT_ST7789) && defined(TFT_BL) && TFT_BL >= 0
+    uint8_t duty = (uint8_t)map((long)_brightnessPct, 0, 100, 0, 255);
+    ledcWrite(0, duty);
+#endif
+  }
+
+  uint16_t _parseHexColor565(const char* hexStr, uint16_t fallback) {
+    if (!hexStr || hexStr[0] == '\0') return fallback;
+    const char* p = hexStr;
+    if (p[0] == '#') p++;
+    else if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    size_t len = strlen(p);
+    if (len < 6) return fallback;
+    char* endPtr = nullptr;
+    uint32_t rgb = strtoul(p, &endPtr, 16);
+    if (endPtr == p) return fallback;
+    if (len == 8) rgb &= 0x00FFFFFF;
+    uint8_t r = (rgb >> 16) & 0xFF;
+    uint8_t g = (rgb >> 8) & 0xFF;
+    uint8_t b = rgb & 0xFF;
+    return tft.color565(r, g, b);
+  }
+
+  uint8_t _mapClockFont(int px, const char* family = "") {
+    if (family && (strstr(family, "7seg") || strstr(family, "segment") || strstr(family, "mono")) && px >= 32) {
+      return 7;
+    }
+    if (px >= 34) return 6;
+    if (px >= 20) return 4;
+    return 2;
+  }
+
+  void _loadCustomThemeSpec() {
+    _customTheme = CustomThemeSpec();
+    _customThemeLoaded = true;
+    _customThemeDirty = false;
+    if (!SPIFFS.exists("/custom_theme.json")) return;
+    File f = SPIFFS.open("/custom_theme.json", "r");
+    if (!f) return;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) {
+      Serial.printf("[UI] Failed parsing /custom_theme.json: %s\n", err.c_str());
+      return;
+    }
+    _customTheme.bgColor = _parseHexColor565(doc["bgColor"] | "#0B111A", 0x0841);
+    _customTheme.showWaybar = doc["showWaybar"] | false;
+
+    if (doc["boxes"].is<JsonArray>()) {
+      uint8_t idx = 0;
+      for (JsonObject b : doc["boxes"].as<JsonArray>()) {
+        if (idx >= 6) break;
+        CustomThemeBox& dst = _customTheme.boxes[idx++];
+        dst.x = b["x"] | 0;
+        dst.y = b["y"] | 0;
+        dst.w = b["w"] | 0;
+        dst.h = b["h"] | 0;
+        dst.r = b["r"] | 0;
+        const char* fillStr = b["fill"] | "";
+        const char* borderStr = b["border"] | "";
+        dst.hasFill = (fillStr[0] != '\0');
+        dst.hasBorder = (borderStr[0] != '\0');
+        dst.fill = _parseHexColor565(fillStr, _customTheme.bgColor);
+        dst.border = _parseHexColor565(borderStr, 0xFFFF);
+      }
+      _customTheme.boxCount = idx;
+    }
+
+    if (doc["labels"].is<JsonArray>()) {
+      uint8_t idx = 0;
+      for (JsonObject l : doc["labels"].as<JsonArray>()) {
+        if (idx >= 6) break;
+        CustomThemeLabel& dst = _customTheme.labels[idx++];
+        dst.visible = l["visible"] | true;
+        strncpy(dst.text, l["text"] | "", sizeof(dst.text) - 1);
+        dst.text[sizeof(dst.text) - 1] = '\0';
+        dst.x = l["x"] | 0;
+        dst.y = l["y"] | 0;
+        dst.maxW = l["maxW"] | 140;
+        dst.color = _parseHexColor565(l["color"] | "#FFFFFF", 0xFFFF);
+        dst.center = l["center"] | false;
+      }
+      _customTheme.labelCount = idx;
+    }
+
+    if (doc["clock"].is<JsonObject>()) {
+      JsonObject c = doc["clock"];
+      _customTheme.clockVisible = c["visible"] | true;
+      _customTheme.clockX = c["x"] | 20;
+      _customTheme.clockY = c["y"] | 24;
+      _customTheme.clockColor = _parseHexColor565(c["color"] | "#FACC15", 0xFFE0);
+      _customTheme.clockFont = _mapClockFont(c["fontSize"] | 42, c["font"] | "");
+      _customTheme.clockCenter = c["center"] | false;
+    }
+
+    if (doc["date"].is<JsonObject>()) {
+      JsonObject d = doc["date"];
+      _customTheme.dateVisible = d["visible"] | true;
+      _customTheme.dateX = d["x"] | 22;
+      _customTheme.dateY = d["y"] | 72;
+      _customTheme.dateColor = _parseHexColor565(d["color"] | "#FFFFFF", 0xFFFF);
+      strncpy(_customTheme.dateFormat, d["format"] | "vn_short", sizeof(_customTheme.dateFormat) - 1);
+      _customTheme.dateFormat[sizeof(_customTheme.dateFormat) - 1] = '\0';
+      _customTheme.dateCenter = d["center"] | false;
+    }
+
+    if (doc["song"].is<JsonObject>()) {
+      JsonObject s = doc["song"];
+      _customTheme.songVisible = s["visible"] | true;
+      _customTheme.songX = s["x"] | 20;
+      _customTheme.songY = s["y"] | 202;
+      _customTheme.songW = s["w"] | 200;
+      _customTheme.songColor = _parseHexColor565(s["color"] | "#FEF08A", 0xFEF1);
+      _customTheme.songBgColor = _parseHexColor565(s["bgColor"] | "#0B111A", _customTheme.bgColor);
+    }
+
+    if (doc["duration"].is<JsonObject>()) {
+      JsonObject du = doc["duration"];
+      _customTheme.durVisible = du["visible"] | false;
+      strncpy(_customTheme.durMode, du["mode"] | "ratio", sizeof(_customTheme.durMode) - 1);
+      _customTheme.durMode[sizeof(_customTheme.durMode) - 1] = '\0';
+      _customTheme.durX = du["x"] | 232;
+      _customTheme.durY = du["y"] | 202;
+      _customTheme.durColor = _parseHexColor565(du["color"] | "#FB923C", 0xFB40);
+      _customTheme.durSecondary = _parseHexColor565(du["secondaryColor"] | "#FFFFFF", 0xFFFF);
+    }
+
+    if (doc["notifTitle"].is<JsonObject>()) {
+      JsonObject nt = doc["notifTitle"];
+      _customTheme.notifTitleVisible = nt["visible"] | true;
+      _customTheme.notifTitleX = nt["x"] | 180;
+      _customTheme.notifTitleY = nt["y"] | 44;
+      _customTheme.notifTitleW = nt["maxW"] | 120;
+      _customTheme.notifTitleColor = _parseHexColor565(nt["color"] | "#FACC15", 0xFFE0);
+    }
+
+    if (doc["notifMsg"].is<JsonObject>()) {
+      JsonObject nm = doc["notifMsg"];
+      _customTheme.notifMsgVisible = nm["visible"] | true;
+      _customTheme.notifMsgX = nm["x"] | 180;
+      _customTheme.notifMsgY = nm["y"] | 64;
+      _customTheme.notifMsgW = nm["maxW"] | 120;
+      _customTheme.notifMsgLines = constrain((int)(nm["maxLines"] | 4), 1, 8);
+      _customTheme.notifMsgLineH = constrain((int)(nm["lineHeight"] | 16), 12, 24);
+      _customTheme.notifMsgColor = _parseHexColor565(nm["color"] | "#FFFFFF", 0xFFFF);
+    }
+    Serial.printf("[UI] Loaded /custom_theme.json (boxes=%d, labels=%d, waybar=%d)\n",
+                  _customTheme.boxCount, _customTheme.labelCount, _customTheme.showWaybar);
+  }
+
   const char* _getDayOfWeekString(uint8_t dow) {
     switch (dow) {
       case 1: return "Thứ Hai";
@@ -1099,7 +1370,140 @@ private:
     }
   }
 
+  // --- GIAO DIỆN 250: DYNAMIC ZIP CUSTOM THEME (/custom_theme_bg.jpg + /custom_theme.json) ---
+  void _drawTheme250CustomContent(bool isRedraw) {
+    if (isRedraw) {
+      for (uint8_t i = 0; i < _customTheme.boxCount; i++) {
+        const CustomThemeBox& b = _customTheme.boxes[i];
+        if (b.w <= 0 || b.h <= 0) continue;
+        if (b.hasFill) {
+          if (b.r > 0) tft.fillRoundRect(b.x, b.y, b.w, b.h, b.r, b.fill);
+          else tft.fillRect(b.x, b.y, b.w, b.h, b.fill);
+        }
+        if (b.hasBorder) {
+          if (b.r > 0) tft.drawRoundRect(b.x, b.y, b.w, b.h, b.r, b.border);
+          else tft.drawRect(b.x, b.y, b.w, b.h, b.border);
+        }
+      }
+
+      for (uint8_t i = 0; i < _customTheme.labelCount; i++) {
+        const CustomThemeLabel& l = _customTheme.labels[i];
+        if (!l.visible || l.text[0] == '\0') continue;
+        if (l.center) _drawCentreUtf8StringTransparent(l.text, l.x, l.y, l.color);
+        else _drawTruncatedUtf8StringTransparent(l.text, l.x, l.y, l.maxW, l.color);
+      }
+
+      if (_customTheme.clockVisible) {
+        char timeBuf[16];
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", _clockHour, _clockMin);
+        tft.setTextColor(_customTheme.clockColor);
+        if (_customTheme.clockCenter) {
+          tft.drawCentreString(timeBuf, _customTheme.clockX, _customTheme.clockY, _customTheme.clockFont);
+        } else {
+          tft.drawString(timeBuf, _customTheme.clockX, _customTheme.clockY, _customTheme.clockFont);
+        }
+      }
+
+      if (_customTheme.dateVisible) {
+        char dateBuf[48];
+        if (strcmp(_customTheme.dateFormat, "dmy_dot") == 0) {
+          snprintf(dateBuf, sizeof(dateBuf), "T%d, %02d.%02d.%04d",
+                   _clockDayOfWeek == 7 ? 0 : _clockDayOfWeek + 1, _clockDay, _clockMonth, _clockYear);
+        } else if (strcmp(_customTheme.dateFormat, "dmy_slash") == 0) {
+          snprintf(dateBuf, sizeof(dateBuf), "%02d/%02d/%04d", _clockDay, _clockMonth, _clockYear);
+        } else if (strcmp(_customTheme.dateFormat, "en_upper") == 0) {
+          const char* enDays[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+          const char* enMonths[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+          int di = (_clockDayOfWeek == 7) ? 0 : (_clockDayOfWeek % 7);
+          int mi = constrain((int)_clockMonth - 1, 0, 11);
+          snprintf(dateBuf, sizeof(dateBuf), "%s %s %02d", enDays[di], enMonths[mi], _clockDay);
+        } else {
+          snprintf(dateBuf, sizeof(dateBuf), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
+          for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
+        }
+        if (_customTheme.dateCenter) _drawCentreUtf8StringTransparent(dateBuf, _customTheme.dateX, _customTheme.dateY, _customTheme.dateColor);
+        else _drawUtf8StringTransparent(dateBuf, _customTheme.dateX, _customTheme.dateY, _customTheme.dateColor);
+      }
+
+      if (_customTheme.durVisible && _navData.songDurationSec > 0) {
+        char elBuf[16], durBuf[24];
+        snprintf(elBuf, sizeof(elBuf), "%02d:%02d", _navData.songElapsedSec / 60, _navData.songElapsedSec % 60);
+        snprintf(durBuf, sizeof(durBuf), "%02d:%02d", _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+        if (strcmp(_customTheme.durMode, "split") == 0) {
+          tft.setTextColor(_customTheme.durColor);
+          tft.drawString(elBuf, _customTheme.durX, _customTheme.durY, 1);
+          tft.setTextColor(_customTheme.durSecondary);
+          tft.drawString(durBuf, _customTheme.durX, _customTheme.durY + 10, 1);
+        } else if (strcmp(_customTheme.durMode, "elapsed") == 0) {
+          tft.setTextColor(_customTheme.durColor);
+          tft.drawString(elBuf, _customTheme.durX, _customTheme.durY, 1);
+        } else {
+          char ratioBuf[32];
+          snprintf(ratioBuf, sizeof(ratioBuf), "%s / %s", elBuf, durBuf);
+          tft.setTextColor(_customTheme.durColor);
+          tft.drawString(ratioBuf, _customTheme.durX, _customTheme.durY, 1);
+        }
+      }
+
+      if (_notifShown && _notif.title[0] != '\0') {
+        if (_customTheme.notifTitleVisible) {
+          _drawTruncatedUtf8StringTransparent(_notif.title, _customTheme.notifTitleX, _customTheme.notifTitleY, _customTheme.notifTitleW, _customTheme.notifTitleColor);
+        }
+        if (_customTheme.notifMsgVisible && _notif.message[0] != '\0') {
+          _drawWrappedUtf8StringTransparent(_notif.message, _customTheme.notifMsgX, _customTheme.notifMsgY, _customTheme.notifMsgW, _customTheme.notifMsgLines, _customTheme.notifMsgColor, _customTheme.notifMsgLineH);
+        }
+      }
+    }
+
+    if (_customTheme.songVisible && !_customTheme.showWaybar && _navData.songTitle[0] != '\0') {
+      _drawSongTitle(_navData.songTitle, _customTheme.songX, _customTheme.songY, _customTheme.songW, 16, _customTheme.songColor, _customTheme.songBgColor, isRedraw);
+    }
+  }
+
   void _renderStandbyWatchface() {
+    if (_watchfaceStyle == 250) {
+      if (_customThemeDirty || !_customThemeLoaded) {
+        _loadCustomThemeSpec();
+      }
+      bool minuteChanged = (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin);
+      bool songChanged = (strcmp(_navData.songTitle, _lastDrawnSong) != 0);
+      bool needsFullThemeRedraw = _needFullRedraw || minuteChanged || _notifDirty || songChanged;
+
+      if (needsFullThemeRedraw) {
+        _lastState = _currentState;
+        _lastWatchfaceStyle = _watchfaceStyle;
+        _lastDrawnHour = _clockHour;
+        _lastDrawnMin = _clockMin;
+        _lastDrawnDay = _clockDay;
+        _needFullRedraw = false;
+        _notifDirty = false;
+        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+
+        tft.fillScreen(_customTheme.bgColor);
+        if (SPIFFS.exists("/custom_theme_bg.jpg")) {
+          File f = SPIFFS.open("/custom_theme_bg.jpg", "r");
+          if (f) {
+            size_t fSize = f.size();
+            f.close();
+            if (fSize > 200) {
+              TJpgDec.drawFsJpg(0, 0, "/custom_theme_bg.jpg");
+            }
+          }
+        }
+        _drawTheme250CustomContent(true);
+        if (_customTheme.showWaybar) {
+          _drawTheme0WaybarStatic();
+          _updateTheme0CustomStatic(true);
+        }
+      } else {
+        _drawTheme250CustomContent(false);
+        if (_customTheme.showWaybar) {
+          _updateTheme0CustomStatic(false);
+        }
+      }
+      return;
+    }
+
     if (_watchfaceStyle == 0) {
       bool needRedraw = _needFullRedraw;
       if (_needFullRedraw) {

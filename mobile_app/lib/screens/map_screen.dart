@@ -204,16 +204,18 @@ class MapScreenState extends State<MapScreen> {
         }
       };
 
-      // Auto-start headless live map stream and sync current theme
+      // Auto-start headless live map stream and sync initial style unless user picked one
       final streamService = Provider.of<EspStreamService>(context, listen: false);
-      if (GoongConfig.isConfigured) {
-        streamService.streamMapStyle = 'goong-streets';
-      } else if (_currentTheme == MapThemeMode.dark || _currentTheme == MapThemeMode.navigationNight) {
-        streamService.streamMapStyle = 'streets-v2-dark';
-      } else if (_currentTheme == MapThemeMode.satellite) {
-        streamService.streamMapStyle = 'hybrid';
-      } else {
-        streamService.streamMapStyle = 'streets-v2';
+      if (!streamService.hasUserSelectedMapStyle) {
+        if (GoongConfig.isConfigured) {
+          streamService.streamMapStyle = 'goong-streets';
+        } else if (_currentTheme == MapThemeMode.dark || _currentTheme == MapThemeMode.navigationNight) {
+          streamService.streamMapStyle = 'streets-v2-dark';
+        } else if (_currentTheme == MapThemeMode.satellite) {
+          streamService.streamMapStyle = 'hybrid';
+        } else {
+          streamService.streamMapStyle = 'streets-v2';
+        }
       }
       if (!streamService.isStreaming) {
         streamService.startStreaming();

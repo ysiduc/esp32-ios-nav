@@ -7,6 +7,7 @@ import 'services/navigation_manager.dart';
 
 import 'services/phone_media_service.dart';
 import 'services/phone_call_service.dart';
+import 'services/custom_theme_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +23,9 @@ class Esp32NavApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider<BleService>(
           create: (_) => BleService(),
+        ),
+        ChangeNotifierProvider<CustomThemeService>(
+          create: (_) => CustomThemeService()..ensureLoaded(),
         ),
         ChangeNotifierProvider<PhoneMediaService>(
           create: (_) => PhoneMediaService(),

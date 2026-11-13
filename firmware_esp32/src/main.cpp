@@ -282,6 +282,10 @@ void processJsonPacket(const char* jsonStr) {
         Serial.printf("[JSON] APP_CONNECT: Battery updated to %d%%\n", curBattery);
       }
     }
+    if (!doc["brightness"].isNull()) {
+      int br = doc["brightness"].as<int>();
+      display.setBrightness((uint8_t)constrain(br, 5, 100), true);
+    }
     if (pNavChar != nullptr && bleConnected) {
       String resp = "{\"type\":\"APP_CONNECT_ACK\",\"status\":\"connected\"}";
       pNavChar->setValue(resp.c_str());
@@ -393,6 +397,16 @@ void processJsonPacket(const char* jsonStr) {
     prefs.putUChar("theme", (uint8_t)s);
     prefs.end();
     Serial.printf("[JSON] Set Watchface/Theme style: %d and switched display\n", s);
+    return;
+
+  } else if (typeStr == "SET_BRIGHTNESS") {
+    int br = doc["value"] | doc["brightness"] | 100;
+    display.setBrightness((uint8_t)constrain(br, 5, 100), true);
+    return;
+
+  } else if (typeStr == "SET_PREVIEW_SCREEN") {
+    int scr = doc["screen"] | doc["mode"] | 0;
+    display.setPreviewScreenMode((uint8_t)constrain(scr, 0, 2));
     return;
 
   } else if (typeStr == "EXIT_SIMULATOR" || typeStr == "RESTORE_IDLE_MAP" || typeStr == "MAP_MODE") {
@@ -564,11 +578,14 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
           }
         }
         return;
-      } else if (magic2 == 0xBC || magic2 == 0xBD) {
+      } else if (magic2 == 0xBC || magic2 == 0xBD || magic2 == 0xBE || magic2 == 0xBF) {
         uint8_t totalChunks = (uint8_t)value[3];
         uint8_t chunkIdx = (uint8_t)value[4];
         size_t payloadLen = value.length() - 5;
-        const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg" : "/bg_map.jpg";
+        const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg"
+                               : (magic2 == 0xBD) ? "/bg_map.jpg"
+                               : (magic2 == 0xBE) ? "/custom_theme_bg.jpg"
+                                                  : "/custom_theme.json";
 
         static File bgUploadFile;
         if (chunkIdx == 0) {
@@ -587,7 +604,11 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
             bgUploadFile.close();
             Serial.printf("[SPIFFS] Finished uploading %s! Saved to flash.\n", targetPath);
           }
-          display.forceRedraw();
+          if (magic2 == 0xBE || magic2 == 0xBF) {
+            display.markCustomThemeReload();
+          } else {
+            display.forceRedraw();
+          }
         }
         return;
       }
