@@ -22,6 +22,7 @@ static WiFiClient tcpStreamClient;
 static uint8_t wsClientNum = 255;
 static bool wsConnected = false;
 static volatile bool tcpConnected = false;
+static volatile bool tcpNeedDrawAck = false;
 static volatile bool needSoftApRestart = false;
 static volatile bool pendingBleRestart = false;
 static unsigned long pendingBleRestartAt = 0;
@@ -643,8 +644,14 @@ static void tcpStreamTask(void* param) {
     }
 
     if (tcpStreamClient && tcpStreamClient.connected()) {
+      if (tcpNeedDrawAck) {
+        tcpNeedDrawAck = false;
+        const uint8_t ack = 'K';
+        tcpStreamClient.write(&ack, 1);
+      }
+
       int loops = 0;
-      while (tcpStreamClient.available() > 0 && loops++ < 64) {
+      while (tcpStreamClient.available() > 0 && loops++ < 256) {
         if (rxState == 0) {
           int c = tcpStreamClient.read();
           if (c == 0xAA) rxState = 1;
@@ -699,18 +706,26 @@ static void tcpStreamTask(void* param) {
             if (pktType == 0xBB) {
               if (pktLen > 100 && framePool[writerSlot][0] == 0xFF && framePool[writerSlot][1] == 0xD8) {
                 publishCompleteFrameFromWriter(writerSlot, pktLen);
+              } else {
+                tcpNeedDrawAck = true;
               }
             } else if (pktType == 0xCC) {
               tcpJsonBuf[pktLen] = '\0';
               tcpJsonLen = pktLen;
               tcpJsonAvailable = true;
+              const uint8_t ack = 'K';
+              tcpStreamClient.write(&ack, 1);
             }
-            const uint8_t ack = 'K';
-            tcpStreamClient.write(&ack, 1);
             rxState = 0;
             rxPos = 0;
           }
         }
+      }
+
+      if (tcpNeedDrawAck) {
+        tcpNeedDrawAck = false;
+        const uint8_t ack = 'K';
+        tcpStreamClient.write(&ack, 1);
       }
     }
 
@@ -882,10 +897,6 @@ void loop() {
     lastFrameTime = millis();
     uint8_t* frameBuf = framePool[slotToDraw];
 
-    if (wsConnected && wsClientNum != 255) {
-      webSocketServer.sendTXT(wsClientNum, "K");
-    }
-
     #if defined(DISPLAY_TFT_ST7789)
     // Render live map/simulator when app has established handshake (isAppConnected) or WiFi stream is active
     if (frameLen > 100 && (display.isAppConnected() || wsConnected || tcpConnected)) {
@@ -912,6 +923,14 @@ void loop() {
       }
     }
     #endif
+
+    // Signal iPhone AFTER physical ST7789 draw completes so TCP never queues stale frames
+    if (tcpConnected) {
+      tcpNeedDrawAck = true;
+    }
+    if (wsConnected && wsClientNum != 255) {
+      webSocketServer.sendTXT(wsClientNum, "K");
+    }
 
     portENTER_CRITICAL(&frameMux);
     readingSlot = -1;

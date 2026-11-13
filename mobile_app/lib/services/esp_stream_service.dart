@@ -209,6 +209,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           for (final b in chunk) {
             if (b == 0x4B) {
               _tcpApReadyForNextFrame = true;
+              if (!_isDisposed && _isStreaming && !_isCapturing) {
+                scheduleMicrotask(_renderAndStreamHeadlessFrame);
+              }
               break;
             }
           }
@@ -288,6 +291,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             : (data is List<int> ? utf8.decode(data, allowMalformed: true).trim() : '');
         if (msg == 'K' || msg == 'ACK' || msg.contains('K')) {
           _wsReadyForNextFrame = true;
+          if (!_isDisposed && _isStreaming && !_isCapturing) {
+            scheduleMicrotask(_renderAndStreamHeadlessFrame);
+          }
         }
       },
       onDone: onGone,
@@ -428,10 +434,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Max JPEG payload bytes allowed for active transport
   int get _maxJpegFrameBytes {
-    // Raw TCP 8081 (32KB framePool on ESP32) allows up to 30.5 KB for crisp text & lines.
-    // Legacy WebSocket 8080 (WebSockets.h 15KB cap) falls back safely to 14.5 KB.
-    if (_tcpApSocket != null) return 30500;
-    if (_wsClients.isEmpty) return 30500;
+    // Raw TCP 8081: cap at 18.5 KB so frames stay crisp on 320x216 ST7789 while fitting 2.4GHz BLE+WiFi airtime with 0 queue lag.
+    if (_tcpApSocket != null) return 18500;
+    if (_wsClients.isEmpty) return 18500;
     return 14500;
   }
 
@@ -440,7 +445,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     Uint8List rawBytes,
     int w,
     int h, {
-    int quality = 82,
+    int quality = 74,
     Map<String, dynamic>? hud,
   }) async {
     final maxBytes = _maxJpegFrameBytes;
@@ -455,7 +460,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         };
         var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         if (res != null && res.length > maxBytes) {
-          args['quality'] = maxBytes > 20000 ? 0.62 : 0.42;
+          args['quality'] = maxBytes > 16000 ? 0.54 : 0.40;
           res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         }
         if (res != null && res.isNotEmpty) {
@@ -471,12 +476,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     );
     var jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: quality));
     if (jpg.length > maxBytes) {
-      jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: maxBytes > 20000 ? 60 : 42));
+      jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: maxBytes > 16000 ? 54 : 40));
     }
     return jpg;
   }
 
-  /// Render 144x224 (Standby) or 320x216 (Active Navigation) Real Street Map & Stream at up to 30 FPS
+  /// Render 144x224 (Standby) or 320x216 (Active Navigation) Real Street Map & Stream with Zero-Lag Flow Control
   Future<void> _renderAndStreamHeadlessFrame() async {
     if (!_isStreaming || _isCapturing || _isSendingWifi) return;
 
@@ -484,16 +489,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    // Strict 1-in-flight closed-loop flow control so we don't decode/encode wasted frames
+    // Strict 1-in-flight closed-loop flow control: wait up to 650ms for ST7789 draw-complete ACK ('K')
+    // so stale frames NEVER pile up in the OS TCP send buffer!
     if (_tcpApSocket != null &&
         !_tcpApReadyForNextFrame &&
-        DateTime.now().difference(_lastTcpSendTime).inMilliseconds < 50) {
+        DateTime.now().difference(_lastTcpSendTime).inMilliseconds < 650) {
       return;
     }
     if (_tcpApSocket == null &&
         _wsClients.isNotEmpty &&
         !_wsReadyForNextFrame &&
-        DateTime.now().difference(_lastWsSendTime).inMilliseconds < 65) {
+        DateTime.now().difference(_lastWsSendTime).inMilliseconds < 650) {
       return;
     }
     _isCapturing = true;
@@ -852,35 +858,128 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       if (pts.length >= 2) {
         final casingColor = img.ColorRgba8(0, 62, 179, 255);
         final coreColor = img.ColorRgba8(0, 102, 255, 255);
-        final screenPts = <img.Point>[];
-        for (final pt in pts) {
+        const double geoMarginDeg = 0.06;
+        final double minGeoLat = userPos.latitude - geoMarginDeg;
+        final double maxGeoLat = userPos.latitude + geoMarginDeg;
+        final double minGeoLng = userPos.longitude - geoMarginDeg;
+        final double maxGeoLng = userPos.longitude + geoMarginDeg;
+
+        final visibleSegs = <({int x1, int y1, int x2, int y2})>[];
+        double? cachedX;
+        double? cachedY;
+        int cachedIdx = -1;
+
+        void projectPoint(int index, LatLng pt, void Function(double x, double y) out) {
+          if (cachedIdx == index && cachedX != null && cachedY != null) {
+            out(cachedX!, cachedY!);
+            return;
+          }
           final double ptLatRad = pt.latitude * (math.pi / 180.0);
           final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
           final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
           final double px = ptWorldX - worldX;
           final double py = ptWorldY - worldY;
-          final double rx = px * cosT + py * sinT;
-          final double ry = (-px * sinT + py * cosT) * tilt;
-          screenPts.add(img.Point((vx + rx).round(), (vy + ry).round()));
+          final double sx = vx + (px * cosT + py * sinT);
+          final double sy = vy + (-px * sinT + py * cosT) * tilt;
+          cachedIdx = index;
+          cachedX = sx;
+          cachedY = sy;
+          out(sx, sy);
         }
-        bool inView(img.Point p) => p.x >= -40 && p.x <= w + 40 && p.y >= -40 && p.y <= h + 40;
-        for (int i = 0; i < screenPts.length - 1; i++) {
-          final p1 = screenPts[i];
-          final p2 = screenPts[i + 1];
-          if (inView(p1) || inView(p2)) {
-            img.drawLine(frame, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: casingColor, thickness: 10);
-            img.fillCircle(frame, x: p1.x.toInt(), y: p1.y.toInt(), radius: 5, color: casingColor);
-            img.fillCircle(frame, x: p2.x.toInt(), y: p2.y.toInt(), radius: 5, color: casingColor);
+
+        final double clipMinX = -24.0;
+        final double clipMaxX = w + 24.0;
+        final double clipMinY = -24.0;
+        final double clipMaxY = h + 24.0;
+
+        for (int i = 0; i < pts.length - 1; i++) {
+          final a = pts[i];
+          final b = pts[i + 1];
+          if ((a.latitude < minGeoLat && b.latitude < minGeoLat) ||
+              (a.latitude > maxGeoLat && b.latitude > maxGeoLat) ||
+              (a.longitude < minGeoLng && b.longitude < minGeoLng) ||
+              (a.longitude > maxGeoLng && b.longitude > maxGeoLng)) {
+            continue;
           }
+
+          double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+          projectPoint(i, a, (x, y) {
+            x1 = x;
+            y1 = y;
+          });
+          projectPoint(i + 1, b, (x, y) {
+            x2 = x;
+            y2 = y;
+          });
+
+          // Liang-Barsky clip to viewport + casing margin so off-screen highway segments never waste rasterizer cycles
+          final double dx = x2 - x1;
+          final double dy = y2 - y1;
+          double t0 = 0.0;
+          double t1 = 1.0;
+          bool visible = true;
+          for (int edge = 0; edge < 4; edge++) {
+            final double p = edge == 0
+                ? -dx
+                : edge == 1
+                    ? dx
+                    : edge == 2
+                        ? -dy
+                        : dy;
+            final double q = edge == 0
+                ? x1 - clipMinX
+                : edge == 1
+                    ? clipMaxX - x1
+                    : edge == 2
+                        ? y1 - clipMinY
+                        : clipMaxY - y1;
+            if (p.abs() < 1e-9) {
+              if (q < 0) {
+                visible = false;
+                break;
+              }
+            } else {
+              final double r = q / p;
+              if (p < 0) {
+                if (r > t1) {
+                  visible = false;
+                  break;
+                }
+                if (r > t0) t0 = r;
+              } else {
+                if (r < t0) {
+                  visible = false;
+                  break;
+                }
+                if (r < t1) t1 = r;
+              }
+            }
+          }
+          if (!visible) continue;
+
+          final cx1 = (x1 + t0 * dx).round();
+          final cy1 = (y1 + t0 * dy).round();
+          final cx2 = (x1 + t1 * dx).round();
+          final cy2 = (y1 + t1 * dy).round();
+          if (cx1 == cx2 && cy1 == cy2 && visibleSegs.isNotEmpty) continue;
+          visibleSegs.add((x1: cx1, y1: cy1, x2: cx2, y2: cy2));
         }
-        for (int i = 0; i < screenPts.length - 1; i++) {
-          final p1 = screenPts[i];
-          final p2 = screenPts[i + 1];
-          if (inView(p1) || inView(p2)) {
-            img.drawLine(frame, x1: p1.x.toInt(), y1: p1.y.toInt(), x2: p2.x.toInt(), y2: p2.y.toInt(), color: coreColor, thickness: 6);
-            img.fillCircle(frame, x: p1.x.toInt(), y: p1.y.toInt(), radius: 3, color: coreColor);
-            img.fillCircle(frame, x: p2.x.toInt(), y: p2.y.toInt(), radius: 3, color: coreColor);
+
+        for (int i = 0; i < visibleSegs.length; i++) {
+          final seg = visibleSegs[i];
+          img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: casingColor, thickness: 10);
+          if (i == 0) {
+            img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 5, color: casingColor);
           }
+          img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 5, color: casingColor);
+        }
+        for (int i = 0; i < visibleSegs.length; i++) {
+          final seg = visibleSegs[i];
+          img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: coreColor, thickness: 6);
+          if (i == 0) {
+            img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 3, color: coreColor);
+          }
+          img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 3, color: coreColor);
         }
       }
 
@@ -991,11 +1090,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void _dispatchTransmission(Uint8List jpegBytes) {
     final now = DateTime.now();
 
-    // 1. Primary SoftAP Raw TCP Stream (192.168.4.1:8081) -> Zero-alloc lock-free 30 FPS
+    // 1. Primary SoftAP Raw TCP Stream (192.168.4.1:8081) -> Strict zero-backlog pacing via post-draw 'K' ACK
     final tcpSock = _tcpApSocket;
     if (tcpSock != null) {
       final elapsed = now.difference(_lastTcpSendTime).inMilliseconds;
-      if (!_tcpApReadyForNextFrame && elapsed < 50) {
+      if (!_tcpApReadyForNextFrame && elapsed < 650) {
         return;
       }
       if (elapsed < 16) {
@@ -1008,7 +1107,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     // 2. WebSocket Broadcast (iPhone Hotspot 172.20.10.1:8080 or Legacy SoftAP WS 8080)
     if (_wsClients.isNotEmpty) {
       final elapsedSinceLastWs = now.difference(_lastWsSendTime).inMilliseconds;
-      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 65) {
+      if (!_wsReadyForNextFrame && elapsedSinceLastWs < 650) {
         return;
       }
       if (elapsedSinceLastWs < 16) {

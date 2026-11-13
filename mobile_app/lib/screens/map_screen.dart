@@ -52,6 +52,8 @@ class MapScreenState extends State<MapScreen> {
   bool _hasCenteredOnInitialUserLocation = false;
   bool _isNorthUpLocked = false;
   bool _isCameraMoveInFlight = false;
+  DateTime _cameraLockUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset? _mapPointerDownPos;
   LatLng? _lastLineTrimPos;
   final GlobalKey _directionsSheetKey = GlobalKey();
   MapPlace? _queuedFinalDestination;
@@ -96,6 +98,10 @@ class MapScreenState extends State<MapScreen> {
     try {
       _searchModalSetState?.call(() {});
     } catch (_) {}
+  }
+
+  void _lockCameraDuringTransition([int milliseconds = 450]) {
+    _cameraLockUntil = DateTime.now().add(Duration(milliseconds: milliseconds));
   }
 
   /// Dịch tâm camera về phía trước xe ~42m theo hướng di chuyển để xe nằm ở 1/3 dưới màn hình chuẩn Apple Maps
@@ -154,7 +160,9 @@ class MapScreenState extends State<MapScreen> {
           if (ctrl != null && _mapReady && !_isCameraMoveInFlight) {
             _isCameraMoveInFlight = true;
             try {
-              if (_isAutoCentering && !_isDrivingZoomOverview) {
+              if (_isAutoCentering &&
+                  !_isDrivingZoomOverview &&
+                  DateTime.now().isAfter(_cameraLockUntil)) {
                 final camTarget = _isNorthUpLocked
                     ? loc
                     : _offsetCameraTarget(loc, heading, 26.0);
@@ -872,6 +880,8 @@ class MapScreenState extends State<MapScreen> {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final current = navManager.currentLocation ?? _userPosition;
     final heading = navManager.effectiveHeading;
+    HapticFeedback.selectionClick();
+    _lockCameraDuringTransition(450);
     setState(() {
       _isAutoCentering = true;
       _isDrivingZoomOverview = false;
@@ -934,13 +944,23 @@ class MapScreenState extends State<MapScreen> {
           // 1. MapLibre Native Vector Map (60fps GPU-rendered)
           // -----------------------------------------------------------
           Listener(
-            onPointerDown: (_) {
-              if (isDriving && _isAutoCentering) {
+            onPointerDown: (ev) {
+              _mapPointerDownPos = ev.position;
+            },
+            onPointerMove: (ev) {
+              final downPos = _mapPointerDownPos;
+              if (isDriving &&
+                  _isAutoCentering &&
+                  downPos != null &&
+                  (ev.position - downPos).distance > 12.0) {
+                _mapPointerDownPos = null;
                 setState(() {
                   _isAutoCentering = false;
                 });
               }
             },
+            onPointerUp: (_) => _mapPointerDownPos = null,
+            onPointerCancel: (_) => _mapPointerDownPos = null,
             child: ml.MapLibreMap(
               styleString: _buildMaplibreStyleString(),
               initialCameraPosition: ml.CameraPosition(
@@ -1109,92 +1129,107 @@ class MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
-          // 6. Active Driving Right-side 4-Button Stack (Google Maps Layout)
+          // 6. Active Driving Bottom HUD + Right 4-Button Stack + Left "Về giữa" (Google Maps Layout)
           // -----------------------------------------------------------
           if (isDriving)
             Positioned(
-              right: 16,
-              bottom: 112,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildDrivingCompassButton(navManager),
-                  const SizedBox(height: 12),
-                  _buildDrivingCircleButton(
-                    icon: Icons.search_rounded,
-                    tooltip: 'Tìm kiếm quanh lộ trình',
-                    onTap: _openDrivingAlongRouteSearchModal,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDrivingCircleButton(
-                    icon: navManager.isVoiceEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                    iconColor: navManager.isVoiceEnabled ? const Color(0xFF007AFF) : const Color(0xFF8E8E93),
-                    tooltip: 'Đọc chỉ dẫn đường',
-                    isActive: navManager.isVoiceEnabled,
-                    onTap: () {
-                      final nextState = !navManager.isVoiceEnabled;
-                      navManager.setVoiceEnabled(nextState);
-                      if (nextState) {
-                        navManager.testVoiceGuidance();
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  _buildDrivingCircleButton(
-                    icon: _isDrivingZoomOverview ? Icons.navigation_rounded : Icons.alt_route_rounded,
-                    iconColor: _isDrivingZoomOverview ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
-                    tooltip: _isDrivingZoomOverview ? 'Quay lại dẫn đường' : 'Xem tổng quan lộ trình',
-                    isActive: _isDrivingZoomOverview,
-                    onTap: () => _toggleDrivingOverview(navManager),
-                  ),
-                ],
-              ),
-            ),
-
-          // -----------------------------------------------------------
-          // 7. Bottom-Left "Về giữa" Capsule (Google Maps Style)
-          // -----------------------------------------------------------
-          if (isDriving && (!_isAutoCentering || _isDrivingZoomOverview))
-            Positioned(
-              left: 16,
-              bottom: 112,
-              child: GestureDetector(
-                onTap: _recenterToVehicle,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.96),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: const Color(0xFFE5E5EA)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.14),
-                        blurRadius: 12,
-                        offset: const Offset(0, 3),
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (!_isAutoCentering || _isDrivingZoomOverview)
+                            Material(
+                              color: Colors.white.withValues(alpha: 0.96),
+                              elevation: 4,
+                              shadowColor: Colors.black26,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                side: const BorderSide(color: Color(0xFFE5E5EA)),
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(24),
+                                onTap: _recenterToVehicle,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.near_me_rounded, color: Color(0xFF007AFF), size: 18),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Về giữa',
+                                        style: TextStyle(
+                                          color: Color(0xFF1C1C1E),
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            const SizedBox.shrink(),
+                          const Spacer(),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildDrivingCompassButton(navManager),
+                              const SizedBox(height: 10),
+                              _buildDrivingCircleButton(
+                                icon: Icons.search_rounded,
+                                tooltip: 'Tìm kiếm quanh lộ trình',
+                                onTap: () {
+                                  HapticFeedback.selectionClick();
+                                  _openDrivingAlongRouteSearchModal();
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              _buildDrivingCircleButton(
+                                icon: navManager.isVoiceEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                                iconColor: navManager.isVoiceEnabled ? const Color(0xFF007AFF) : const Color(0xFF8E8E93),
+                                tooltip: navManager.isVoiceEnabled ? 'Tắt giọng đọc chỉ dẫn' : 'Bật giọng đọc chỉ dẫn',
+                                isActive: navManager.isVoiceEnabled,
+                                onTap: () {
+                                  HapticFeedback.selectionClick();
+                                  final nextState = !navManager.isVoiceEnabled;
+                                  navManager.setVoiceEnabled(nextState);
+                                  if (nextState) {
+                                    navManager.testVoiceGuidance();
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              _buildDrivingCircleButton(
+                                icon: _isDrivingZoomOverview ? Icons.navigation_rounded : Icons.alt_route_rounded,
+                                iconColor: _isDrivingZoomOverview ? const Color(0xFF007AFF) : const Color(0xFF1C1C1E),
+                                tooltip: _isDrivingZoomOverview ? 'Quay lại dẫn đường' : 'Xem tổng quan lộ trình',
+                                isActive: _isDrivingZoomOverview,
+                                onTap: () => _toggleDrivingOverview(navManager),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.near_me_rounded, color: Color(0xFF007AFF), size: 18),
-                      SizedBox(width: 6),
-                      Text(
-                        'Về giữa',
-                        style: TextStyle(
-                          color: Color(0xFF1C1C1E),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                    _buildAppleActiveDrivingBottomHud(navManager, bleService),
+                  ],
                 ),
               ),
             ),
 
           // -----------------------------------------------------------
-          // 8. Bottom Panels
+          // 7. Bottom Panels (Browse / Place Sheet / Route Preview)
           // -----------------------------------------------------------
           // Mode 0: Browse Map Bottom Search Capsule (Screenshot 1)
           if (!isDriving && _viewMode == 0)
@@ -1217,13 +1252,6 @@ class MapScreenState extends State<MapScreen> {
             Align(
               alignment: Alignment.bottomCenter,
               child: _buildAppleRouteDirectionsSheet(),
-            ),
-
-          // Driving Mode: Bottom HUD Capsule (Screenshot 5)
-          if (isDriving)
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildAppleActiveDrivingBottomHud(navManager, bleService),
             ),
         ],
       ),
@@ -3240,27 +3268,24 @@ class MapScreenState extends State<MapScreen> {
   }) {
     return Tooltip(
       message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white.withValues(alpha: 0.96),
-            border: Border.all(
-              color: isActive ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
-              width: isActive ? 1.8 : 1.0,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.14),
-                blurRadius: 12,
-                offset: const Offset(0, 3),
-              ),
-            ],
+      child: Material(
+        color: isActive ? const Color(0xFFEAF3FF) : Colors.white.withValues(alpha: 0.96),
+        elevation: 4,
+        shadowColor: Colors.black26,
+        shape: CircleBorder(
+          side: BorderSide(
+            color: isActive ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
+            width: isActive ? 1.8 : 1.0,
           ),
-          child: Icon(icon, color: iconColor ?? const Color(0xFF1C1C1E), size: 23),
+        ),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Icon(icon, color: iconColor ?? const Color(0xFF1C1C1E), size: 23),
+          ),
         ),
       ),
     );
@@ -3272,49 +3297,31 @@ class MapScreenState extends State<MapScreen> {
         : (-navManager.effectiveHeading * math.pi / 180.0);
     return Tooltip(
       message: _isNorthUpLocked ? 'Xoay bản đồ theo hướng đi' : 'Ghim bản đồ hướng Bắc',
-      child: GestureDetector(
-        onTap: () => _toggleDrivingNorthLock(navManager),
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white.withValues(alpha: 0.96),
-            border: Border.all(
-              color: _isNorthUpLocked ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
-              width: _isNorthUpLocked ? 1.8 : 1.0,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.14),
-                blurRadius: 12,
-                offset: const Offset(0, 3),
-              ),
-            ],
+      child: Material(
+        color: _isNorthUpLocked ? const Color(0xFFEAF3FF) : Colors.white.withValues(alpha: 0.96),
+        elevation: 4,
+        shadowColor: Colors.black26,
+        shape: CircleBorder(
+          side: BorderSide(
+            color: _isNorthUpLocked ? const Color(0xFF007AFF) : const Color(0xFFE5E5EA),
+            width: _isNorthUpLocked ? 1.8 : 1.0,
           ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Transform.rotate(
+        ),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => _toggleDrivingNorthLock(navManager),
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(
+              child: Transform.rotate(
                 angle: needleAngleRad,
                 child: CustomPaint(
-                  size: const Size(22, 22),
+                  size: const Size(24, 24),
                   painter: _CompassNeedlePainter(),
                 ),
               ),
-              if (_isNorthUpLocked)
-                Positioned(
-                  top: 4,
-                  child: Text(
-                    'N',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.w900,
-                      color: const Color(0xFFFF3B30).withValues(alpha: 0.95),
-                    ),
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
@@ -3326,31 +3333,36 @@ class MapScreenState extends State<MapScreen> {
     if (ctrl == null) return;
     final pos = navManager.currentLocation ?? _userPosition;
     final heading = navManager.effectiveHeading;
+    final nextLocked = !_isNorthUpLocked;
 
+    HapticFeedback.selectionClick();
+    _lockCameraDuringTransition(450);
     setState(() {
-      _isNorthUpLocked = !_isNorthUpLocked;
+      _isNorthUpLocked = nextLocked;
       _isDrivingZoomOverview = false;
       _isAutoCentering = true;
     });
 
-    final camTarget = _isNorthUpLocked ? pos : _offsetCameraTarget(pos, heading, 26.0);
+    final camTarget = nextLocked ? pos : _offsetCameraTarget(pos, heading, 26.0);
     ctrl.animateCamera(
       ml.CameraUpdate.newCameraPosition(
         ml.CameraPosition(
           target: ml.LatLng(camTarget.latitude, camTarget.longitude),
-          zoom: _isNorthUpLocked ? 16.8 : 17.4,
-          tilt: _isNorthUpLocked ? 0.0 : 46.0,
-          bearing: _isNorthUpLocked ? 0.0 : heading,
+          zoom: nextLocked ? 16.6 : 17.4,
+          tilt: nextLocked ? 0.0 : 46.0,
+          bearing: nextLocked ? 0.0 : heading,
         ),
       ),
     );
   }
 
   void _toggleDrivingOverview(NavigationManager navManager) {
+    HapticFeedback.selectionClick();
     if (_isDrivingZoomOverview) {
       _recenterToVehicle();
       return;
     }
+    _lockCameraDuringTransition(520);
     setState(() {
       _isDrivingZoomOverview = true;
       _isAutoCentering = false;
@@ -3358,8 +3370,35 @@ class MapScreenState extends State<MapScreen> {
     final pts = navManager.remainingPolylinePoints.isNotEmpty
         ? navManager.remainingPolylinePoints
         : (navManager.activeRoute?.polylinePoints ?? <LatLng>[]);
-    if (pts.isNotEmpty) {
-      _fitRouteBounds(pts, topPadding: 135.0, bottomPadding: 135.0);
+    final ctrl = _mapController;
+    if (ctrl != null && pts.isNotEmpty) {
+      double minLat = pts.first.latitude, maxLat = pts.first.latitude;
+      double minLng = pts.first.longitude, maxLng = pts.first.longitude;
+      for (final p in pts) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+      final span = math.max((maxLat - minLat).abs(), (maxLng - minLng).abs()).clamp(0.002, 20.0);
+      final approxZoom = (math.log(360.0 / span) / math.ln2 - 1.5).clamp(5.0, 16.0);
+      unawaited(() async {
+        try {
+          await ctrl.moveCamera(
+            ml.CameraUpdate.newCameraPosition(
+              ml.CameraPosition(
+                target: ml.LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
+                zoom: approxZoom,
+                tilt: 0.0,
+                bearing: 0.0,
+              ),
+            ),
+          );
+        } catch (_) {}
+        if (mounted && _isDrivingZoomOverview) {
+          _fitRouteBounds(pts, topPadding: 145.0, bottomPadding: 190.0);
+        }
+      }());
     }
   }
 
@@ -3387,16 +3426,22 @@ class MapScreenState extends State<MapScreen> {
     Timer? debounce;
     bool isSearching = false;
     String activeQuery = '';
+    String? routingButtonKey;
+    String? modalError;
+    int searchToken = 0;
     List<({MapPlace place, double fromUserMeters, double offRouteMeters})> results = [];
 
     const quickChips = <({String label, String query, IconData icon})>[
       (label: 'Cây xăng', query: 'Cây xăng', icon: Icons.local_gas_station_rounded),
-      (label: 'Cà phê', query: 'Quán cà phê', icon: Icons.local_cafe_rounded),
+      (label: 'Cà phê', query: 'Cà phê', icon: Icons.local_cafe_rounded),
       (label: 'Sửa xe', query: 'Sửa xe máy', icon: Icons.build_rounded),
       (label: 'ATM', query: 'ATM', icon: Icons.atm_rounded),
       (label: 'Nhà thuốc', query: 'Nhà thuốc', icon: Icons.local_pharmacy_rounded),
       (label: 'Quán ăn', query: 'Quán ăn', icon: Icons.restaurant_rounded),
     ];
+
+    bool hasValidCoord(MapPlace p) =>
+        p.coordinate.latitude.abs() > 0.001 || p.coordinate.longitude.abs() > 0.001;
 
     List<LatLng> buildRouteAnchors() {
       final anchors = <LatLng>[userPos];
@@ -3423,52 +3468,80 @@ class MapScreenState extends State<MapScreen> {
           builder: (ctx, setModalState) {
             Future<void> runSearch(String query) async {
               final q = query.trim();
+              final myToken = ++searchToken;
               if (q.isEmpty) {
                 setModalState(() {
                   activeQuery = '';
                   results = [];
                   isSearching = false;
+                  modalError = null;
                 });
                 return;
               }
               setModalState(() {
                 activeQuery = q;
                 isSearching = true;
+                modalError = null;
               });
               final anchors = buildRouteAnchors();
               try {
-                final batches = await Future.wait(
-                  anchors.map((a) => _searchService.searchPlaces(q, nearLocation: a)),
-                );
+                final candidates = <MapPlace>[];
+                if (AppleMapsService.isSupported) {
+                  final appleBatches = await Future.wait(
+                    anchors.map((a) => AppleMapsService().searchPlaces(q, nearLocation: a, limit: 8)),
+                  );
+                  for (final b in appleBatches) {
+                    candidates.addAll(b);
+                  }
+                }
+                if (candidates.where(hasValidCoord).length < 4) {
+                  final fallbackBatch = await _searchService.searchPlaces(q, nearLocation: anchors.first);
+                  candidates.addAll(fallbackBatch);
+                }
+
+                // Phân giải tọa độ cho các kết quả Goong trả về (0, 0) trước khi tính khoảng cách
+                final needsResolve = candidates.where((p) => !hasValidCoord(p)).take(6).toList();
+                final resolvedExtras = needsResolve.isNotEmpty
+                    ? await Future.wait(needsResolve.map(_resolvePlaceCoordinateIfNeeded))
+                    : const <MapPlace>[];
+
+                if (myToken != searchToken) return;
+
+                final allPlaces = <MapPlace>[
+                  ...candidates.where(hasValidCoord),
+                  ...resolvedExtras.where(hasValidCoord),
+                ];
+
                 final seen = <String>{};
                 final merged = <({MapPlace place, double fromUserMeters, double offRouteMeters})>[];
                 const distCalc = Distance();
 
-                for (final batch in batches) {
-                  for (final p in batch) {
-                    final key = p.placeId ??
-                        '${p.coordinate.latitude.toStringAsFixed(4)},${p.coordinate.longitude.toStringAsFixed(4)}_${p.name.toLowerCase()}';
-                    if (seen.add(key)) {
-                      final dUser = distCalc.as(LengthUnit.Meter, userPos, p.coordinate);
-                      final dRoute = _minDistanceToPolyline(p.coordinate, remainingPts);
-                      merged.add((place: p, fromUserMeters: dUser, offRouteMeters: dRoute));
-                    }
+                for (final p in allPlaces) {
+                  final key =
+                      '${p.coordinate.latitude.toStringAsFixed(4)},${p.coordinate.longitude.toStringAsFixed(4)}_${p.name.trim().toLowerCase()}';
+                  if (seen.add(key)) {
+                    final dUser = distCalc.as(LengthUnit.Meter, userPos, p.coordinate);
+                    final dRoute = _minDistanceToPolyline(p.coordinate, remainingPts);
+                    merged.add((place: p, fromUserMeters: dUser, offRouteMeters: dRoute));
                   }
                 }
                 merged.sort((a, b) {
-                  final scoreA = a.offRouteMeters * 1.4 + a.fromUserMeters * 0.3;
-                  final scoreB = b.offRouteMeters * 1.4 + b.fromUserMeters * 0.3;
+                  final scoreA = a.offRouteMeters * 1.5 + a.fromUserMeters * 0.25;
+                  final scoreB = b.offRouteMeters * 1.5 + b.fromUserMeters * 0.25;
                   return scoreA.compareTo(scoreB);
                 });
-                if (ctx.mounted) {
+                if (ctx.mounted && myToken == searchToken) {
                   setModalState(() {
                     results = merged.take(15).toList();
                     isSearching = false;
                   });
                 }
               } catch (_) {
-                if (ctx.mounted) {
-                  setModalState(() => isSearching = false);
+                if (ctx.mounted && myToken == searchToken) {
+                  setModalState(() {
+                    isSearching = false;
+                    modalError = 'Không thể tìm kiếm lúc này. Vui lòng thử lại.';
+                  });
                 }
               }
             }
@@ -3515,7 +3588,9 @@ class MapScreenState extends State<MapScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: TextField(
                       controller: searchCtrl,
+                      textInputAction: TextInputAction.search,
                       onChanged: (val) {
+                        setModalState(() {});
                         debounce?.cancel();
                         debounce = Timer(const Duration(milliseconds: 350), () => runSearch(val));
                       },
@@ -3593,6 +3668,27 @@ class MapScreenState extends State<MapScreen> {
                       },
                     ),
                   ),
+                  if (modalError != null)
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF3B30).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline_rounded, color: Color(0xFFFF3B30), size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              modalError!,
+                              style: const TextStyle(color: Color(0xFFC62828), fontSize: 12.5, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   const SizedBox(height: 10),
                   Expanded(
                     child: isSearching
@@ -3624,6 +3720,14 @@ class MapScreenState extends State<MapScreen> {
                                     itemBuilder: (_, idx) {
                                       final item = results[idx];
                                       final p = item.place;
+                                      final itemBaseKey =
+                                          '${p.coordinate.latitude.toStringAsFixed(5)}_${p.coordinate.longitude.toStringAsFixed(5)}_${p.name}';
+                                      final stopKey = '${itemBaseKey}_stop';
+                                      final directKey = '${itemBaseKey}_direct';
+                                      final isStopBusy = routingButtonKey == stopKey;
+                                      final isDirectBusy = routingButtonKey == directKey;
+                                      final isAnyBusy = routingButtonKey != null;
+
                                       final userDistStr = item.fromUserMeters >= 1000
                                           ? '${(item.fromUserMeters / 1000).toStringAsFixed(1)} km'
                                           : '${item.fromUserMeters.round()} m';
@@ -3694,11 +3798,31 @@ class MapScreenState extends State<MapScreen> {
                                                         borderRadius: BorderRadius.circular(10),
                                                       ),
                                                     ),
-                                                    onPressed: () async {
-                                                      Navigator.pop(modalCtx);
-                                                      await _routeAlongWithStop(p);
-                                                    },
-                                                    icon: const Icon(Icons.add_road_rounded, size: 16),
+                                                    onPressed: isAnyBusy
+                                                        ? null
+                                                        : () async {
+                                                            HapticFeedback.selectionClick();
+                                                            setModalState(() {
+                                                              routingButtonKey = stopKey;
+                                                              modalError = null;
+                                                            });
+                                                            final ok = await _routeAlongWithStop(p);
+                                                            if (ok) {
+                                                              if (modalCtx.mounted) Navigator.pop(modalCtx);
+                                                            } else if (ctx.mounted) {
+                                                              setModalState(() {
+                                                                routingButtonKey = null;
+                                                                modalError = 'Không thể ghép đường ghé "${p.name}".';
+                                                              });
+                                                            }
+                                                          },
+                                                    icon: isStopBusy
+                                                        ? const SizedBox(
+                                                            width: 14,
+                                                            height: 14,
+                                                            child: CupertinoActivityIndicator(color: Colors.white, radius: 7),
+                                                          )
+                                                        : const Icon(Icons.add_road_rounded, size: 16),
                                                     label: const Text(
                                                       'Ghé qua điểm này',
                                                       style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
@@ -3715,14 +3839,30 @@ class MapScreenState extends State<MapScreen> {
                                                       borderRadius: BorderRadius.circular(10),
                                                     ),
                                                   ),
-                                                  onPressed: () async {
-                                                    Navigator.pop(modalCtx);
-                                                    await _routeDirectlyToPlace(p);
-                                                  },
-                                                  child: const Text(
-                                                    'Đi thẳng',
-                                                    style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-                                                  ),
+                                                  onPressed: isAnyBusy
+                                                      ? null
+                                                      : () async {
+                                                          HapticFeedback.selectionClick();
+                                                          setModalState(() {
+                                                            routingButtonKey = directKey;
+                                                            modalError = null;
+                                                          });
+                                                          final ok = await _routeDirectlyToPlace(p);
+                                                          if (ok) {
+                                                            if (modalCtx.mounted) Navigator.pop(modalCtx);
+                                                          } else if (ctx.mounted) {
+                                                            setModalState(() {
+                                                              routingButtonKey = null;
+                                                              modalError = 'Không tìm thấy đường đi tới "${p.name}".';
+                                                            });
+                                                          }
+                                                        },
+                                                  child: isDirectBusy
+                                                      ? const CupertinoActivityIndicator(radius: 7)
+                                                      : const Text(
+                                                          'Đi thẳng',
+                                                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                                                        ),
                                                 ),
                                               ],
                                             ),
@@ -3743,10 +3883,15 @@ class MapScreenState extends State<MapScreen> {
     searchCtrl.dispose();
   }
 
-  Future<void> _routeAlongWithStop(MapPlace stop) async {
+  Future<bool> _routeAlongWithStop(MapPlace rawStop) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final startPos = navManager.currentLocation ?? _userPosition;
     final currentPts = navManager.activeRoute?.polylinePoints ?? <LatLng>[];
+    final stop = await _resolvePlaceCoordinateIfNeeded(rawStop);
+    if (stop.coordinate.latitude.abs() < 0.001 && stop.coordinate.longitude.abs() < 0.001) {
+      return false;
+    }
+
     final finalDest = _queuedFinalDestination ??
         _selectedPlace ??
         (currentPts.isNotEmpty
@@ -3755,17 +3900,13 @@ class MapScreenState extends State<MapScreen> {
     final wasSim = navManager.isSimulating;
 
     try {
-      final leg1List = await _directionsService.calculateMultipleRoutes(
-        startPos,
-        stop.coordinate,
-        mode: _transportMode,
-      );
-      final leg2List = await _directionsService.calculateMultipleRoutes(
-        stop.coordinate,
-        finalDest.coordinate,
-        mode: _transportMode,
-      );
-      if (leg1List.isEmpty || leg2List.isEmpty || !mounted) return;
+      final legs = await Future.wait([
+        _directionsService.calculateMultipleRoutes(startPos, stop.coordinate, mode: _transportMode),
+        _directionsService.calculateMultipleRoutes(stop.coordinate, finalDest.coordinate, mode: _transportMode),
+      ]);
+      final leg1List = legs[0];
+      final leg2List = legs[1];
+      if (leg1List.isEmpty || leg2List.isEmpty || !mounted) return false;
 
       final leg1 = leg1List.first;
       final leg2 = leg2List.first;
@@ -3826,6 +3967,7 @@ class MapScreenState extends State<MapScreen> {
         _queuedFinalDestination = finalDest;
         _isAutoCentering = true;
         _isDrivingZoomOverview = false;
+        _cameraLockUntil = DateTime.fromMillisecondsSinceEpoch(0);
         _lastLineTrimPos = null;
       });
       if (wasSim) {
@@ -3846,12 +3988,20 @@ class MapScreenState extends State<MapScreen> {
           ),
         );
       }
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
-  Future<void> _routeDirectlyToPlace(MapPlace dest) async {
+  Future<bool> _routeDirectlyToPlace(MapPlace rawDest) async {
     final navManager = Provider.of<NavigationManager>(context, listen: false);
     final startPos = navManager.currentLocation ?? _userPosition;
+    final dest = await _resolvePlaceCoordinateIfNeeded(rawDest);
+    if (dest.coordinate.latitude.abs() < 0.001 && dest.coordinate.longitude.abs() < 0.001) {
+      return false;
+    }
+
     final wasSim = navManager.isSimulating;
     try {
       final newRoutes = await _directionsService.calculateMultipleRoutes(
@@ -3859,7 +4009,7 @@ class MapScreenState extends State<MapScreen> {
         dest.coordinate,
         mode: _transportMode,
       );
-      if (newRoutes.isEmpty || !mounted) return;
+      if (newRoutes.isEmpty || !mounted) return false;
       final chosen = newRoutes.first;
       setState(() {
         _routes = newRoutes;
@@ -3868,6 +4018,7 @@ class MapScreenState extends State<MapScreen> {
         _queuedFinalDestination = dest;
         _isAutoCentering = true;
         _isDrivingZoomOverview = false;
+        _cameraLockUntil = DateTime.fromMillisecondsSinceEpoch(0);
         _lastLineTrimPos = null;
       });
       if (wasSim) {
@@ -3877,7 +4028,10 @@ class MapScreenState extends State<MapScreen> {
       }
       _updateRouteOnMap();
       _updateDestinationMarker();
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _stopDrivingAndReset(NavigationManager navManager) async {
@@ -3925,91 +4079,88 @@ class MapScreenState extends State<MapScreen> {
             : '${(totalMeters / 1000).toStringAsFixed(1)} km')
         : '$totalMeters m';
 
-    return SafeArea(
-      top: false,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.96),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color(0xFFE5E5EA)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.14),
-              blurRadius: 18,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          durationLabel,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF1C1C1E),
-                            letterSpacing: -0.5,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFE5E5EA)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.14),
+            blurRadius: 18,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        durationLabel,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1C1C1E),
+                          letterSpacing: -0.5,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(width: 6),
-                      const Icon(Icons.eco_rounded, color: Color(0xFF34C759), size: 19),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '$distFormatted · $timeStr',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      color: Color(0xFF8E8E93),
-                      fontWeight: FontWeight.w600,
                     ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.eco_rounded, color: Color(0xFF34C759), size: 19),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$distFormatted · $timeStr',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: Color(0xFF8E8E93),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () => _stopDrivingAndReset(navManager),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF3B30),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFFF3B30).withValues(alpha: 0.30),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 12),
-            GestureDetector(
-              onTap: () => _stopDrivingAndReset(navManager),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF3B30),
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFFFF3B30).withValues(alpha: 0.30),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: const Text(
-                  'Thoát',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
+              child: const Text(
+                'Thoát',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
