@@ -1351,7 +1351,7 @@ class NavigationManager extends ChangeNotifier {
       distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
       totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
       etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
-      streetName: _isNavigating ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '') : 'SAN SANG',
+      streetName: _isNavigating ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '') : 'Sẵn sàng',
       currentSpeed: _currentSpeedKmh.round(),
       stepIndex: _isNavigating ? _currentStepIndex : 0,
       totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,

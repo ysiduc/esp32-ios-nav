@@ -1490,7 +1490,9 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             ),
           ),
           DropdownButton<String>(
-            value: streamService.streamMapStyle,
+            value: EspStreamService.supportedMapStyles.contains(streamService.streamMapStyle)
+                ? streamService.streamMapStyle
+                : 'osm-3d',
             dropdownColor: Colors.white,
             underline: const SizedBox(),
             icon: const Icon(Icons.arrow_drop_down_rounded, color: Color(0xFF007AFF)),
@@ -1500,6 +1502,8 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
               fontWeight: FontWeight.w700,
             ),
             items: const [
+              DropdownMenuItem(value: 'osm-3d', child: Text('OSM 3D Khối')),
+              DropdownMenuItem(value: 'osm-3d-dark', child: Text('OSM 3D Khối (Tối)')),
               DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN')),
               DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
               DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),

@@ -38,8 +38,8 @@ public:
   static bool isSubscribed;
   static bool isDiscovering;
   static unsigned long lastCheckTime;
-  static char currentTitle[64];
-  static char currentArtist[64];
+  static char currentTitle[96];
+  static char currentArtist[96];
 
   static uint16_t svcStartHdl;
   static uint16_t svcEndHdl;
@@ -205,13 +205,13 @@ private:
     // Entity 2 = Track
     if (entityId == 2) {
       if (attrId == 2) { // Title
-        strncpy(currentTitle, valStr, sizeof(currentTitle) - 1);
-        currentTitle[sizeof(currentTitle) - 1] = '\0';
+        size_t valBytes = copyLen > 3 ? (copyLen - 3) : 0;
+        copyUtf8NfcBounded(valStr, valBytes, currentTitle, sizeof(currentTitle));
         Serial.printf("[AMS] Track Title: %s\n", currentTitle);
         display.setSongInfo(currentTitle, currentArtist);
       } else if (attrId == 0) { // Artist
-        strncpy(currentArtist, valStr, sizeof(currentArtist) - 1);
-        currentArtist[sizeof(currentArtist) - 1] = '\0';
+        size_t valBytes = copyLen > 3 ? (copyLen - 3) : 0;
+        copyUtf8NfcBounded(valStr, valBytes, currentArtist, sizeof(currentArtist));
         Serial.printf("[AMS] Track Artist: %s\n", currentArtist);
         display.setSongInfo(currentTitle, currentArtist);
       }
@@ -225,8 +225,8 @@ uint16_t AppleMediaService::connHandle = 0;
 bool AppleMediaService::isSubscribed = false;
 bool AppleMediaService::isDiscovering = false;
 unsigned long AppleMediaService::lastCheckTime = 0;
-char AppleMediaService::currentTitle[64] = "";
-char AppleMediaService::currentArtist[64] = "";
+char AppleMediaService::currentTitle[96] = "";
+char AppleMediaService::currentArtist[96] = "";
 uint16_t AppleMediaService::svcStartHdl = 0;
 uint16_t AppleMediaService::svcEndHdl = 0;
 

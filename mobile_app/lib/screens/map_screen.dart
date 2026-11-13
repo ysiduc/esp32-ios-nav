@@ -207,14 +207,10 @@ class MapScreenState extends State<MapScreen> {
       // Auto-start headless live map stream and sync initial style unless user picked one
       final streamService = Provider.of<EspStreamService>(context, listen: false);
       if (!streamService.hasUserSelectedMapStyle) {
-        if (GoongConfig.isConfigured) {
-          streamService.streamMapStyle = 'goong-streets';
-        } else if (_currentTheme == MapThemeMode.dark || _currentTheme == MapThemeMode.navigationNight) {
-          streamService.streamMapStyle = 'streets-v2-dark';
-        } else if (_currentTheme == MapThemeMode.satellite) {
-          streamService.streamMapStyle = 'hybrid';
+        if (_currentTheme == MapThemeMode.dark || _currentTheme == MapThemeMode.navigationNight) {
+          streamService.streamMapStyle = 'osm-3d-dark';
         } else {
-          streamService.streamMapStyle = 'streets-v2';
+          streamService.streamMapStyle = 'osm-3d';
         }
       }
       if (!streamService.isStreaming) {
@@ -4464,12 +4460,12 @@ class MapScreenState extends State<MapScreen> {
           setState(() => _currentTheme = mode);
           try {
             final streamService = Provider.of<EspStreamService>(context, listen: false);
-            if (mode == MapThemeMode.dark || mode == MapThemeMode.navigationNight) {
-              streamService.streamMapStyle = 'streets-v2-dark';
-            } else if (mode == MapThemeMode.satellite) {
-              streamService.streamMapStyle = 'hybrid';
-            } else {
-              streamService.streamMapStyle = 'streets-v2';
+            if (!streamService.hasUserSelectedMapStyle || streamService.streamMapStyle.startsWith('osm-3d')) {
+              if (mode == MapThemeMode.dark || mode == MapThemeMode.navigationNight) {
+                streamService.streamMapStyle = 'osm-3d-dark';
+              } else {
+                streamService.streamMapStyle = 'osm-3d';
+              }
             }
           } catch (_) {}
           Navigator.pop(context);

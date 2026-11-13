@@ -350,13 +350,13 @@ import UniformTypeIdentifiers
 
     let vx = CGFloat((hud["vx"] as? Double) ?? 226.0)
     let vy = CGFloat((hud["vy"] as? Double) ?? (Double(height) * 0.74)) // ~158 on h=216
-    let curRoad = (hud["curRoad"] as? String) ?? "Đường hiện tại"
-    let nextStreet = (hud["nextStreet"] as? String) ?? "Đi thẳng"
+    let curRoad = ((hud["curRoad"] as? String) ?? "Đường hiện tại").precomposedStringWithCanonicalMapping
+    let nextStreet = ((hud["nextStreet"] as? String) ?? "Đi thẳng").precomposedStringWithCanonicalMapping
     let distStr = (hud["distStr"] as? String) ?? "0 m"
     let turnCode = (hud["turnCode"] as? Int) ?? 0
     let speedStr = (hud["speedStr"] as? String) ?? "0"
-    let etaText = (hud["etaText"] as? String) ?? "1 phút"
-    let subText = (hud["subText"] as? String) ?? "00:00 • 0 km"
+    let etaText = ((hud["etaText"] as? String) ?? "1 phút").precomposedStringWithCanonicalMapping
+    let subText = ((hud["subText"] as? String) ?? "00:00 • 0 km").precomposedStringWithCanonicalMapping
 
     // 1. Vehicle 3D Chevron at (vx, vy)
     ctx.saveGState()
@@ -759,8 +759,8 @@ class MediaRemoteObserver {
     if let getInfo = getNowPlayingInfoFunc {
       getInfo(DispatchQueue.main) { [weak self] cfDict in
         let dict = cfDict as NSDictionary
-        let title = (dict["kMRMediaRemoteNowPlayingInfoTitle"] as? String) ?? ""
-        let artist = (dict["kMRMediaRemoteNowPlayingInfoArtist"] as? String) ?? ""
+        let title = ((dict["kMRMediaRemoteNowPlayingInfoTitle"] as? String) ?? "").precomposedStringWithCanonicalMapping
+        let artist = ((dict["kMRMediaRemoteNowPlayingInfoArtist"] as? String) ?? "").precomposedStringWithCanonicalMapping
         let rate = (dict["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? 0.0
         let isPlaying = rate > 0.0
 

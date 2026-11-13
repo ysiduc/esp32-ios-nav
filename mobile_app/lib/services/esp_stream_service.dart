@@ -11,11 +11,11 @@ import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../config/goong_config.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'navigation_manager.dart';
+import 'osm_vector_tile.dart';
 
 class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   BleService bleService;
@@ -50,6 +50,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, Uint8List> _tileMasks = {}; // 1 = building footprint (for pseudo-3D extrusion)
   final Set<String> _pendingTileFetches = {};
 
+  // OpenStreetMap 3D Vector Tile Cache & Software Block Renderer
+  final Map<String, OsmVectorTile> _osmTileCache = {};
+  final Set<String> _pendingOsmFetches = {};
+  final Osm3dRenderer _osm3dRenderer = Osm3dRenderer();
+  String? _openFreeMapTileTemplate;
+
   // Persistent TCP Socket for continuous screen-off background streaming (SoftAP mode)
   Socket? _persistentWifiSocket;
 
@@ -66,10 +72,21 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   int get frameSizeKb => _frameSizeKb;
   Uint8List? get latestJpegBytes => _latestJpegBytes;
 
-  String _streamMapStyle = GoongConfig.isConfigured ? 'goong-streets' : 'streets-v2';
+  static const Set<String> supportedMapStyles = {
+    'osm-3d',
+    'osm-3d-dark',
+    'goong-streets',
+    'goong-dark',
+    'streets-v2',
+    'streets-v2-dark',
+    'hybrid',
+  };
+
+  String _streamMapStyle = 'osm-3d';
   bool _hasUserSelectedMapStyle = false;
   String get streamMapStyle => _streamMapStyle;
   bool get hasUserSelectedMapStyle => _hasUserSelectedMapStyle;
+  bool get _isOsm3dStyle => _streamMapStyle == 'osm-3d' || _streamMapStyle == 'osm-3d-dark';
 
   void _clearTileCaches() {
     _tileCache.forEach((_, img) => img.dispose());
@@ -101,7 +118,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         changed = true;
       }
       _hasUserSelectedMapStyle = savedCustom;
-      if (savedCustom && savedStyle != null && savedStyle.isNotEmpty && savedStyle != _streamMapStyle) {
+      if (savedCustom && savedStyle != null && supportedMapStyles.contains(savedStyle) && savedStyle != _streamMapStyle) {
         _streamMapStyle = savedStyle;
         changed = true;
       }
@@ -113,9 +130,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   set streamMapStyle(String val) {
-    if (_streamMapStyle != val) {
-      _streamMapStyle = val;
-      _clearTileCaches();
+    final normalized = supportedMapStyles.contains(val) ? val : 'osm-3d';
+    if (_streamMapStyle != normalized) {
+      final keepOsmCache = _isOsm3dStyle && (normalized == 'osm-3d' || normalized == 'osm-3d-dark');
+      _streamMapStyle = normalized;
+      if (!keepOsmCache) {
+        _clearTileCaches();
+      }
       if (_hasUserSelectedMapStyle) {
         _persistMapPrefs();
       }
@@ -124,9 +145,13 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> setUserMapStyle(String val) async {
+    final normalized = supportedMapStyles.contains(val) ? val : 'osm-3d';
+    final keepOsmCache = _isOsm3dStyle && (normalized == 'osm-3d' || normalized == 'osm-3d-dark');
     _hasUserSelectedMapStyle = true;
-    _streamMapStyle = val;
-    _clearTileCaches();
+    _streamMapStyle = normalized;
+    if (!keepOsmCache) {
+      _clearTileCaches();
+    }
     notifyListeners();
     await _persistMapPrefs();
   }
@@ -588,8 +613,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       Uint8List? jpegBytes;
 
-      if (_isForeground && !isNav) {
-        // 1. In foreground: High-Speed Flutter Canvas rendering
+      if (_isForeground && !isNav && !_isOsm3dStyle) {
+        // 1. In foreground (raster modes): High-Speed Flutter Canvas rendering
         try {
           final recorder = ui.PictureRecorder();
           final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()));
@@ -631,8 +656,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      // 2. In background / screen-off: Pure CPU Software Map + CoreGraphics HUD Renderer (100% CPU RAM, 0% GPU)
-      jpegBytes ??= isNav ? await _renderCpuNavigationFrame(w, h) : _renderCpuMapFrame(w, h);
+      // 2. OSM 3D Vector Block Renderer (both foreground & background) or CPU background raster/HUD renderer
+      jpegBytes ??= isNav ? await _renderCpuNavigationFrame(w, h) : await _renderCpuMapFrame(w, h);
 
 
       if (jpegBytes == null) {
@@ -665,8 +690,163 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  List<OsmVectorTile> _collectVisibleOsmTiles(LatLng pos, {int radius = 1}) {
+    const double n15 = 32768.0; // 2^15
+    final double latRad = pos.latitude * (math.pi / 180.0);
+    final int cx15 = ((pos.longitude + 180.0) / 360.0 * n15).floor();
+    final int cy15 = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n15).floor();
+    final seen = <String>{};
+    final out = <OsmVectorTile>[];
+    for (int dx = -radius; dx <= radius; dx++) {
+      for (int dy = -radius; dy <= radius; dy++) {
+        final int tx = cx15 + dx;
+        final int ty = cy15 + dy;
+        final k15 = '15/$tx/$ty';
+        final t15 = _osmTileCache[k15];
+        if (t15 != null) {
+          if (seen.add(k15)) out.add(t15);
+          continue;
+        }
+        final k14 = '14/${tx >> 1}/${ty >> 1}';
+        final t14 = _osmTileCache[k14];
+        if (t14 != null && seen.add(k14)) {
+          out.add(t14);
+        }
+      }
+    }
+    return out;
+  }
+
+  void _drawProjectedRouteOnFrame({
+    required img.Image frame,
+    required int w,
+    required int h,
+    required LatLng userPos,
+    required double worldX,
+    required double worldY,
+    required double n,
+    required double anchorX,
+    required double anchorY,
+    required double pitchY,
+    required double cosT,
+    required double sinT,
+    required List<LatLng> pts,
+    required bool isDark,
+  }) {
+    if (pts.length < 2) return;
+    final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 62, 179, 255);
+    final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 102, 255, 255);
+    const double geoMarginDeg = 0.06;
+    final double minGeoLat = userPos.latitude - geoMarginDeg;
+    final double maxGeoLat = userPos.latitude + geoMarginDeg;
+    final double minGeoLng = userPos.longitude - geoMarginDeg;
+    final double maxGeoLng = userPos.longitude + geoMarginDeg;
+
+    final visibleSegs = <({int x1, int y1, int x2, int y2})>[];
+    double? cachedX;
+    double? cachedY;
+    int cachedIdx = -1;
+
+    (double, double) projectPoint(int index, LatLng pt) {
+      if (cachedIdx == index && cachedX != null && cachedY != null) {
+        return (cachedX!, cachedY!);
+      }
+      final double ptLatRad = pt.latitude * (math.pi / 180.0);
+      final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
+      final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
+      final double px = ptWorldX - worldX;
+      final double py = ptWorldY - worldY;
+      final double sx = anchorX + (px * cosT + py * sinT);
+      final double sy = anchorY + (-px * sinT + py * cosT) * pitchY;
+      cachedIdx = index;
+      cachedX = sx;
+      cachedY = sy;
+      return (sx, sy);
+    }
+
+    final double clipMinX = -24.0;
+    final double clipMaxX = w + 24.0;
+    final double clipMinY = -24.0;
+    final double clipMaxY = h + 24.0;
+
+    for (int i = 0; i < pts.length - 1; i++) {
+      final a = pts[i];
+      final b = pts[i + 1];
+      if ((a.latitude < minGeoLat && b.latitude < minGeoLat) ||
+          (a.latitude > maxGeoLat && b.latitude > maxGeoLat) ||
+          (a.longitude < minGeoLng && b.longitude < minGeoLng) ||
+          (a.longitude > maxGeoLng && b.longitude > maxGeoLng)) {
+        continue;
+      }
+
+      final (x1, y1) = projectPoint(i, a);
+      final (x2, y2) = projectPoint(i + 1, b);
+      final double dx = x2 - x1;
+      final double dy = y2 - y1;
+      double t0 = 0.0;
+      double t1 = 1.0;
+      bool visible = true;
+      for (int edge = 0; edge < 4; edge++) {
+        final double p = edge == 0 ? -dx : (edge == 1 ? dx : (edge == 2 ? -dy : dy));
+        final double q = edge == 0 ? (x1 - clipMinX) : (edge == 1 ? (clipMaxX - x1) : (edge == 2 ? (y1 - clipMinY) : (clipMaxY - y1)));
+        if (p.abs() < 1e-9) {
+          if (q < 0) {
+            visible = false;
+            break;
+          }
+        } else {
+          final double r = q / p;
+          if (p < 0) {
+            if (r > t1) {
+              visible = false;
+              break;
+            }
+            if (r > t0) t0 = r;
+          } else {
+            if (r < t0) {
+              visible = false;
+              break;
+            }
+            if (r < t1) t1 = r;
+          }
+        }
+      }
+      if (!visible) continue;
+
+      final cx1 = (x1 + t0 * dx).round();
+      final cy1 = (y1 + t0 * dy).round();
+      final cx2 = (x1 + t1 * dx).round();
+      final cy2 = (y1 + t1 * dy).round();
+      if (cx1 == cx2 && cy1 == cy2 && visibleSegs.isNotEmpty) continue;
+      visibleSegs.add((x1: cx1, y1: cy1, x2: cx2, y2: cy2));
+    }
+
+    for (int i = 0; i < visibleSegs.length; i++) {
+      final seg = visibleSegs[i];
+      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: casingColor, thickness: 9);
+      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 4, color: casingColor);
+      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 4, color: casingColor);
+    }
+    for (int i = 0; i < visibleSegs.length; i++) {
+      final seg = visibleSegs[i];
+      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: coreColor, thickness: 5);
+      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 2, color: coreColor);
+      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 2, color: coreColor);
+    }
+
+    // Destination pin if close to screen
+    final (destSx, destSy) = projectPoint(pts.length - 1, pts.last);
+    final int dx = destSx.round();
+    final int dy = destSy.round();
+    if (dx >= -10 && dx <= w + 10 && dy >= -10 && dy <= h + 10) {
+      img.fillCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
+      img.drawCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
+      img.fillCircle(frame, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
+    }
+  }
+
   /// Pure CPU Software Map Renderer (Runs 100% in CPU RAM without Metal GPU, perfect for background)
-  Uint8List? _renderCpuMapFrame(int w, int h) {
+  Future<Uint8List?> _renderCpuMapFrame(int w, int h) async {
     try {
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
@@ -678,6 +858,50 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double latRad = userPos.latitude * (math.pi / 180.0);
       final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
       final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
+
+      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
+          ? navManager!.remainingPolylinePoints
+          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
+
+      if (_isOsm3dStyle) {
+        final double anchorX = w / 2.0;
+        final double anchorY = h * 0.67;
+        const double pitchY = 0.88;
+        final double th = headingDeg * (math.pi / 180.0);
+        final frame = img.Image(width: w, height: h, numChannels: 4);
+        _osm3dRenderer.renderFrame(
+          buf32: frame.buffer.asUint32List(),
+          width: w,
+          height: h,
+          tiles: _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1),
+          userWorldX: worldX,
+          userWorldY: worldY,
+          displayZoom: zoom,
+          headingDeg: headingDeg,
+          anchorX: anchorX,
+          anchorY: anchorY,
+          pitchY: pitchY,
+          isDark: isDark,
+        );
+        _drawProjectedRouteOnFrame(
+          frame: frame,
+          w: w,
+          h: h,
+          userPos: userPos,
+          worldX: worldX,
+          worldY: worldY,
+          n: n,
+          anchorX: anchorX,
+          anchorY: anchorY,
+          pitchY: pitchY,
+          cosT: math.cos(th),
+          sinT: math.sin(th),
+          pts: pts,
+          isDark: isDark,
+        );
+        _drawStandbyVehiclePuck(frame, anchorX.round(), anchorY.round(), isDark);
+        return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 85);
+      }
 
       final int centerTileX = (worldX / 256.0).floor();
       final int centerTileY = (worldY / 256.0).floor();
@@ -724,9 +948,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // Draw active route polyline (matching Image 2: Apple blue casing + core with round joint caps)
-      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
-          ? navManager!.remainingPolylinePoints
-          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
       if (pts.length >= 2) {
         final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 81, 179, 255);
         final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
@@ -799,32 +1020,26 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         height: h,
       );
 
-      // Draw Vehicle Location Puck at (72, 140) pointing straight UP (exact match to Image 2!)
-      final int vx = (w / 2.0).round();
-      final int vy = (h * 0.67).round();
-      final puckColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
-      final auraColor = isDark ? img.ColorRgba8(0, 240, 255, 45) : img.ColorRgba8(0, 122, 255, 45);
-
-      // 1. Translucent radar aura ring (radius 16)
-      img.fillCircle(frame, x: vx, y: vy, radius: 16, color: auraColor);
-      // 2. Crisp outer white border (radius 11)
-      img.fillCircle(frame, x: vx, y: vy, radius: 11, color: img.ColorRgba8(255, 255, 255, 255));
-      // 3. Inner vibrant blue core (radius 9)
-      img.fillCircle(frame, x: vx, y: vy, radius: 9, color: puckColor);
-
-      // 4. Sharp white arrow pointing straight UP (matching Image 2)
-      img.fillPolygon(frame, vertices: [
-        img.Point(vx, vy - 7),
-        img.Point(vx + 4, vy + 4),
-        img.Point(vx, vy + 2),
-        img.Point(vx - 4, vy + 4),
-      ], color: img.ColorRgba8(255, 255, 255, 255));
-
-      return Uint8List.fromList(img.encodeJpg(frame, quality: 84));
+      _drawStandbyVehiclePuck(frame, (w / 2.0).round(), (h * 0.67).round(), isDark);
+      return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 84);
     } catch (e, stack) {
       debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
     }
+  }
+
+  void _drawStandbyVehiclePuck(img.Image frame, int vx, int vy, bool isDark) {
+    final puckColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
+    final auraColor = isDark ? img.ColorRgba8(0, 240, 255, 45) : img.ColorRgba8(0, 122, 255, 45);
+    img.fillCircle(frame, x: vx, y: vy, radius: 16, color: auraColor);
+    img.fillCircle(frame, x: vx, y: vy, radius: 11, color: img.ColorRgba8(255, 255, 255, 255));
+    img.fillCircle(frame, x: vx, y: vy, radius: 9, color: puckColor);
+    img.fillPolygon(frame, vertices: [
+      img.Point(vx, vy - 7),
+      img.Point(vx + 4, vy + 4),
+      img.Point(vx, vy + 2),
+      img.Point(vx - 4, vy + 4),
+    ], color: img.ColorRgba8(255, 255, 255, 255));
   }
 
   /// Pure CPU Software 320x240 Full-Screen Navigation Frame Renderer (for background / screen-off)
@@ -846,242 +1061,163 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
       final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
 
-      // ===== Pseudo-3D "nổi khối" map: heading-up + tilt + extruded buildings (100% CPU) =====
+      // ===== Heading-up + tilt + 3D extruded buildings (100% CPU) =====
       const int vx = 226;
       final int vy = (h * 0.74).round(); // ~160 for h=216
       const double tilt = 0.74; // vertical foreshortening (camera pitch)
-      const int extrude = 8; // building height in screen px (matches Goong daylight 3D)
       final double th = headingDeg * (math.pi / 180.0);
       final double cosT = math.cos(th);
       final double sinT = math.sin(th);
-      final bool hasTiles3d = !isDark;
 
       final frame = img.Image(width: w, height: h, numChannels: 4);
       final Uint32List buf32 = frame.buffer.asUint32List();
-      final int fh = h + extrude + 1; // footprint rows (buildings below frame still extrude into it)
-      final Uint8List foot = Uint8List(w * fh);
-
-      final int baseR = isDark ? 11 : 240;
-      final int baseG = isDark ? 17 : 243;
-      final int baseB = isDark ? 26 : 246;
-      final int wallR = isDark ? 40 : 196, wallG = isDark ? 52 : 203, wallB = isDark ? 66 : 210;
-      final int baseColor32 = 0xFF000000 | (baseB << 16) | (baseG << 8) | baseR;
-      final int wallColor32 = 0xFF000000 | (wallB << 16) | (wallG << 8) | wallR;
-      final int roofEdge32 = isDark
-          ? (0xFF000000 | (84 << 16) | (66 << 8) | 50)
-          : (0xFF000000 | (192 << 16) | (184 << 8) | 176);
-      final int roofFlat32 = isDark
-          ? (0xFF000000 | (68 << 16) | (52 << 8) | 38)
-          : (0xFF000000 | (236 << 16) | (232 << 8) | 228);
-
-      int lastTx = -999999, lastTy = -999999;
-      Uint32List? curTile32;
-      Uint8List? curMask;
-
-      // 1. Ground + footprint (fast 32-bit inverse mapping screen -> world tile pixel, zero object allocation)
-      for (int sy = 0; sy < fh; sy++) {
-        final double dy = (sy - vy) / tilt;
-        double wx = worldX - vx * cosT - dy * sinT;
-        double wy = worldY - vx * sinT + dy * cosT;
-        final int rowOff = sy * w;
-        final bool inScreenY = sy < h;
-
-        for (int sx = 0; sx < w; sx++) {
-          final int iwx = wx.floor();
-          final int iwy = wy.floor();
-          wx += cosT;
-          wy += sinT;
-
-          final int tx = iwx >> 8;
-          final int ty = iwy >> 8;
-          if (tx != lastTx || ty != lastTy) {
-            lastTx = tx;
-            lastTy = ty;
-            final String key = '$zoom/$tx/$ty';
-            curTile32 = _cpuTileRgba32[key];
-            curMask = _tileMasks[key];
-          }
-
-          int color32 = baseColor32;
-          bool isBuilding = false;
-          final tile32 = curTile32;
-          if (tile32 != null) {
-            final int pIdx = ((iwy & 255) << 8) | (iwx & 255);
-            color32 = tile32[pIdx] | 0xFF000000;
-            if (hasTiles3d) {
-              final mask = curMask;
-              if (mask != null && mask[pIdx] == 1) {
-                isBuilding = true;
-              }
-            }
-          }
-          final int idx = rowOff + sx;
-          if (isBuilding) {
-            foot[idx] = 1;
-            if (inScreenY) buf32[idx] = wallColor32;
-          } else if (inScreenY) {
-            buf32[idx] = color32;
-          }
-        }
-      }
-
-      // 2. Route polyline projected through the same transform (drawn on the ground, trimmed behind vehicle)
       final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
           ? navManager!.remainingPolylinePoints
           : (activeRoute?.polylinePoints ?? const <LatLng>[]);
-      if (pts.length >= 2) {
-        final casingColor = img.ColorRgba8(0, 62, 179, 255);
-        final coreColor = img.ColorRgba8(0, 102, 255, 255);
-        const double geoMarginDeg = 0.06;
-        final double minGeoLat = userPos.latitude - geoMarginDeg;
-        final double maxGeoLat = userPos.latitude + geoMarginDeg;
-        final double minGeoLng = userPos.longitude - geoMarginDeg;
-        final double maxGeoLng = userPos.longitude + geoMarginDeg;
 
-        final visibleSegs = <({int x1, int y1, int x2, int y2})>[];
-        double? cachedX;
-        double? cachedY;
-        int cachedIdx = -1;
+      if (_isOsm3dStyle) {
+        _osm3dRenderer.renderFrame(
+          buf32: buf32,
+          width: w,
+          height: h,
+          tiles: _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1),
+          userWorldX: worldX,
+          userWorldY: worldY,
+          displayZoom: zoom,
+          headingDeg: headingDeg,
+          anchorX: vx.toDouble(),
+          anchorY: vy.toDouble(),
+          pitchY: tilt,
+          isDark: isDark,
+        );
+        _drawProjectedRouteOnFrame(
+          frame: frame,
+          w: w,
+          h: h,
+          userPos: userPos,
+          worldX: worldX,
+          worldY: worldY,
+          n: n,
+          anchorX: vx.toDouble(),
+          anchorY: vy.toDouble(),
+          pitchY: tilt,
+          cosT: cosT,
+          sinT: sinT,
+          pts: pts,
+          isDark: isDark,
+        );
+      } else {
+        const int extrude = 8;
+        final bool hasTiles3d = !isDark;
+        final int fh = h + extrude + 1;
+        final Uint8List foot = Uint8List(w * fh);
 
-        void projectPoint(int index, LatLng pt, void Function(double x, double y) out) {
-          if (cachedIdx == index && cachedX != null && cachedY != null) {
-            out(cachedX!, cachedY!);
-            return;
-          }
-          final double ptLatRad = pt.latitude * (math.pi / 180.0);
-          final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
-          final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
-          final double px = ptWorldX - worldX;
-          final double py = ptWorldY - worldY;
-          final double sx = vx + (px * cosT + py * sinT);
-          final double sy = vy + (-px * sinT + py * cosT) * tilt;
-          cachedIdx = index;
-          cachedX = sx;
-          cachedY = sy;
-          out(sx, sy);
-        }
+        final int baseR = isDark ? 11 : 240;
+        final int baseG = isDark ? 17 : 243;
+        final int baseB = isDark ? 26 : 246;
+        final int wallR = isDark ? 40 : 196, wallG = isDark ? 52 : 203, wallB = isDark ? 66 : 210;
+        final int baseColor32 = 0xFF000000 | (baseB << 16) | (baseG << 8) | baseR;
+        final int wallColor32 = 0xFF000000 | (wallB << 16) | (wallG << 8) | wallR;
+        final int roofEdge32 = isDark
+            ? (0xFF000000 | (84 << 16) | (66 << 8) | 50)
+            : (0xFF000000 | (192 << 16) | (184 << 8) | 176);
+        final int roofFlat32 = isDark
+            ? (0xFF000000 | (68 << 16) | (52 << 8) | 38)
+            : (0xFF000000 | (236 << 16) | (232 << 8) | 228);
 
-        final double clipMinX = -24.0;
-        final double clipMaxX = w + 24.0;
-        final double clipMinY = -24.0;
-        final double clipMaxY = h + 24.0;
+        int lastTx = -999999, lastTy = -999999;
+        Uint32List? curTile32;
+        Uint8List? curMask;
 
-        for (int i = 0; i < pts.length - 1; i++) {
-          final a = pts[i];
-          final b = pts[i + 1];
-          if ((a.latitude < minGeoLat && b.latitude < minGeoLat) ||
-              (a.latitude > maxGeoLat && b.latitude > maxGeoLat) ||
-              (a.longitude < minGeoLng && b.longitude < minGeoLng) ||
-              (a.longitude > maxGeoLng && b.longitude > maxGeoLng)) {
-            continue;
-          }
-
-          double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
-          projectPoint(i, a, (x, y) {
-            x1 = x;
-            y1 = y;
-          });
-          projectPoint(i + 1, b, (x, y) {
-            x2 = x;
-            y2 = y;
-          });
-
-          // Liang-Barsky clip to viewport + casing margin so off-screen highway segments never waste rasterizer cycles
-          final double dx = x2 - x1;
-          final double dy = y2 - y1;
-          double t0 = 0.0;
-          double t1 = 1.0;
-          bool visible = true;
-          for (int edge = 0; edge < 4; edge++) {
-            final double p = edge == 0
-                ? -dx
-                : edge == 1
-                    ? dx
-                    : edge == 2
-                        ? -dy
-                        : dy;
-            final double q = edge == 0
-                ? x1 - clipMinX
-                : edge == 1
-                    ? clipMaxX - x1
-                    : edge == 2
-                        ? y1 - clipMinY
-                        : clipMaxY - y1;
-            if (p.abs() < 1e-9) {
-              if (q < 0) {
-                visible = false;
-                break;
-              }
-            } else {
-              final double r = q / p;
-              if (p < 0) {
-                if (r > t1) {
-                  visible = false;
-                  break;
-                }
-                if (r > t0) t0 = r;
-              } else {
-                if (r < t0) {
-                  visible = false;
-                  break;
-                }
-                if (r < t1) t1 = r;
-              }
-            }
-          }
-          if (!visible) continue;
-
-          final cx1 = (x1 + t0 * dx).round();
-          final cy1 = (y1 + t0 * dy).round();
-          final cx2 = (x1 + t1 * dx).round();
-          final cy2 = (y1 + t1 * dy).round();
-          if (cx1 == cx2 && cy1 == cy2 && visibleSegs.isNotEmpty) continue;
-          visibleSegs.add((x1: cx1, y1: cy1, x2: cx2, y2: cy2));
-        }
-
-        for (int i = 0; i < visibleSegs.length; i++) {
-          final seg = visibleSegs[i];
-          img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: casingColor, thickness: 10);
-          if (i == 0) {
-            img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 5, color: casingColor);
-          }
-          img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 5, color: casingColor);
-        }
-        for (int i = 0; i < visibleSegs.length; i++) {
-          final seg = visibleSegs[i];
-          img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: coreColor, thickness: 6);
-          if (i == 0) {
-            img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 3, color: coreColor);
-          }
-          img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 3, color: coreColor);
-        }
-      }
-
-      // 3. Extrude buildings upward (painter's algorithm: far rows first, near rows overlap)
-      if (hasTiles3d) {
+        // 1. Ground + footprint
         for (int sy = 0; sy < fh; sy++) {
+          final double dy = (sy - vy) / tilt;
+          double wx = worldX - vx * cosT - dy * sinT;
+          double wy = worldY - vx * sinT + dy * cosT;
           final int rowOff = sy * w;
+          final bool inScreenY = sy < h;
+
           for (int sx = 0; sx < w; sx++) {
-            if (foot[rowOff + sx] != 1) continue;
-            // walls
-            for (int dh = 1; dh < extrude; dh++) {
-              final int ny = sy - dh;
-              if (ny >= 0 && ny < h) {
-                buf32[ny * w + sx] = wallColor32;
+            final int iwx = wx.floor();
+            final int iwy = wy.floor();
+            wx += cosT;
+            wy += sinT;
+
+            final int tx = iwx >> 8;
+            final int ty = iwy >> 8;
+            if (tx != lastTx || ty != lastTy) {
+              lastTx = tx;
+              lastTy = ty;
+              final String key = '$zoom/$tx/$ty';
+              curTile32 = _cpuTileRgba32[key];
+              curMask = _tileMasks[key];
+            }
+
+            int color32 = baseColor32;
+            bool isBuilding = false;
+            final tile32 = curTile32;
+            if (tile32 != null) {
+              final int pIdx = ((iwy & 255) << 8) | (iwx & 255);
+              color32 = tile32[pIdx] | 0xFF000000;
+              if (hasTiles3d) {
+                final mask = curMask;
+                if (mask != null && mask[pIdx] == 1) {
+                  isBuilding = true;
+                }
               }
             }
-            // roof
-            final int ry = sy - extrude;
-            if (ry >= 0 && ry < h) {
-              final bool edge = sx == 0 ||
-                  sx == w - 1 ||
-                  sy == 0 ||
-                  sy >= fh - 1 ||
-                  foot[rowOff - w + sx] == 0 ||
-                  foot[rowOff + w + sx] == 0 ||
-                  foot[rowOff + sx - 1] == 0 ||
-                  foot[rowOff + sx + 1] == 0;
-              buf32[ry * w + sx] = edge ? roofEdge32 : roofFlat32;
+            final int idx = rowOff + sx;
+            if (isBuilding) {
+              foot[idx] = 1;
+              if (inScreenY) buf32[idx] = wallColor32;
+            } else if (inScreenY) {
+              buf32[idx] = color32;
+            }
+          }
+        }
+
+        // 2. Route polyline projected through the same transform
+        _drawProjectedRouteOnFrame(
+          frame: frame,
+          w: w,
+          h: h,
+          userPos: userPos,
+          worldX: worldX,
+          worldY: worldY,
+          n: n,
+          anchorX: vx.toDouble(),
+          anchorY: vy.toDouble(),
+          pitchY: tilt,
+          cosT: cosT,
+          sinT: sinT,
+          pts: pts,
+          isDark: isDark,
+        );
+
+        // 3. Extrude raster buildings upward
+        if (hasTiles3d) {
+          for (int sy = 0; sy < fh; sy++) {
+            final int rowOff = sy * w;
+            for (int sx = 0; sx < w; sx++) {
+              if (foot[rowOff + sx] != 1) continue;
+              for (int dh = 1; dh < extrude; dh++) {
+                final int ny = sy - dh;
+                if (ny >= 0 && ny < h) {
+                  buf32[ny * w + sx] = wallColor32;
+                }
+              }
+              final int ry = sy - extrude;
+              if (ry >= 0 && ry < h) {
+                final bool edge = sx == 0 ||
+                    sx == w - 1 ||
+                    sy == 0 ||
+                    sy >= fh - 1 ||
+                    foot[rowOff - w + sx] == 0 ||
+                    foot[rowOff + w + sx] == 0 ||
+                    foot[rowOff + sx - 1] == 0 ||
+                    foot[rowOff + sx + 1] == 0;
+                buf32[ry * w + sx] = edge ? roofEdge32 : roofFlat32;
+              }
             }
           }
         }
@@ -1296,8 +1432,32 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   LatLng? _lastPrefetchPos;
 
-  /// Asynchronously pre-fetch surrounding MapTiler / OSM HD tiles
+  /// Asynchronously pre-fetch surrounding OSM Vector 3D or MapTiler / Goong raster tiles
   void _prefetchSurroundingTiles(LatLng pos, int zoom) {
+    if (_isOsm3dStyle) {
+      const int vZoom = 15;
+      const double n15 = 32768.0;
+      final double latRad = pos.latitude * (math.pi / 180.0);
+      final int cx15 = ((pos.longitude + 180.0) / 360.0 * n15).floor();
+      final int cy15 = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n15).floor();
+      final int rad = zoom <= 14 ? 2 : 1;
+
+      for (int dx = -rad; dx <= rad; dx++) {
+        for (int dy = -rad; dy <= rad; dy++) {
+          final int tx = cx15 + dx;
+          final int ty = cy15 + dy;
+          final String k15 = '15/$tx/$ty';
+          final String k14 = '14/${tx >> 1}/${ty >> 1}';
+          if (!_osmTileCache.containsKey(k15) &&
+              !_osmTileCache.containsKey(k14) &&
+              !_pendingOsmFetches.contains(k15)) {
+            _fetchOsmVectorTile(k15, tx, ty, vZoom);
+          }
+        }
+      }
+      return;
+    }
+
     final double n = math.pow(2.0, zoom).toDouble();
     final double latRad = pos.latitude * (math.pi / 180.0);
     final int cx = ((pos.longitude + 180.0) / 360.0 * n).floor();
@@ -1336,6 +1496,91 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     }
+  }
+
+  Future<String?> _resolveOpenFreeMapTemplate() async {
+    if (_openFreeMapTileTemplate != null) return _openFreeMapTileTemplate;
+    try {
+      final resp = await http.get(
+        Uri.parse('https://tiles.openfreemap.org/planet'),
+        headers: {'User-Agent': 'Mozilla/5.0'},
+      ).timeout(const Duration(seconds: 5));
+      if (resp.statusCode == 200) {
+        final json = jsonDecode(resp.body) as Map<String, dynamic>;
+        final tiles = json['tiles'] as List?;
+        if (tiles != null && tiles.isNotEmpty) {
+          _openFreeMapTileTemplate = tiles.first.toString();
+          return _openFreeMapTileTemplate;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _fetchOsmVectorTile(String key15, int x15, int y15, int z15) async {
+    _pendingOsmFetches.add(key15);
+    try {
+      final apiKey = MapboxConfig.maptilerApiKey;
+      OsmVectorTile? parsed;
+
+      if (apiKey.isNotEmpty) {
+        try {
+          final url = 'https://api.maptiler.com/tiles/v3/$z15/$x15/$y15.pbf?key=$apiKey';
+          final resp = await http.get(
+            Uri.parse(url),
+            headers: {'User-Agent': 'Mozilla/5.0'},
+          ).timeout(const Duration(seconds: 6));
+          if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+            parsed = OsmVectorTile.parsePbf(resp.bodyBytes, z15, x15, y15);
+            if (parsed != null) {
+              _storeOsmTile(key15, parsed);
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Zero-key OpenFreeMap OSM MVT fallback at z14
+      final x14 = x15 >> 1;
+      final y14 = y15 >> 1;
+      final k14 = '14/$x14/$y14';
+      if (!_osmTileCache.containsKey(k14) && !_pendingOsmFetches.contains(k14)) {
+        _pendingOsmFetches.add(k14);
+        try {
+          final tmpl = await _resolveOpenFreeMapTemplate();
+          if (tmpl != null) {
+            final url = tmpl
+                .replaceAll('{z}', '14')
+                .replaceAll('{x}', '$x14')
+                .replaceAll('{y}', '$y14');
+            final resp = await http.get(
+              Uri.parse(url),
+              headers: {'User-Agent': 'Mozilla/5.0'},
+            ).timeout(const Duration(seconds: 6));
+            if (resp.statusCode == 200 && resp.bodyBytes.isNotEmpty) {
+              parsed = OsmVectorTile.parsePbf(resp.bodyBytes, 14, x14, y14);
+              if (parsed != null) {
+                _storeOsmTile(k14, parsed);
+              }
+            }
+          }
+        } finally {
+          _pendingOsmFetches.remove(k14);
+        }
+      }
+    } catch (_) {
+    } finally {
+      _pendingOsmFetches.remove(key15);
+    }
+  }
+
+  void _storeOsmTile(String key, OsmVectorTile tile) {
+    _osmTileCache[key] = tile;
+    if (_osmTileCache.length > 28) {
+      _osmTileCache.remove(_osmTileCache.keys.first);
+    }
+    _latestJpegBytes = null;
+    notifyListeners();
   }
 
   static const String _goongMapApiStyle =

@@ -60,8 +60,8 @@ public:
   // Pending notification context
   static uint32_t pendingUID;
   static uint8_t pendingCategoryID;
-  static char currentTitle[64];
-  static char currentMessage[128];
+  static char currentTitle[96];
+  static char currentMessage[192];
   static char currentAppId[64];
 
   // ANCS Data Source multi-packet stream accumulator
@@ -450,21 +450,15 @@ private:
         memcpy(currentAppId, valPtr, safeLen);
         currentAppId[safeLen] = '\0';
       } else if (attrId == 1) { // Title (Caller name or Message sender)
-        size_t safeLen = attrLen < sizeof(currentTitle) - 1 ? attrLen : sizeof(currentTitle) - 1;
-        memcpy(currentTitle, valPtr, safeLen);
-        currentTitle[safeLen] = '\0';
+        copyUtf8NfcBounded((const char*)valPtr, attrLen, currentTitle, sizeof(currentTitle));
         hasTitle = true;
       } else if (attrId == 2) { // Subtitle
         if (currentTitle[0] == '\0') {
-          size_t safeLen = attrLen < sizeof(currentTitle) - 1 ? attrLen : sizeof(currentTitle) - 1;
-          memcpy(currentTitle, valPtr, safeLen);
-          currentTitle[safeLen] = '\0';
+          copyUtf8NfcBounded((const char*)valPtr, attrLen, currentTitle, sizeof(currentTitle));
           hasTitle = true;
         }
       } else if (attrId == 3) { // Message (Phone number or Message text)
-        size_t safeLen = attrLen < sizeof(currentMessage) - 1 ? attrLen : sizeof(currentMessage) - 1;
-        memcpy(currentMessage, valPtr, safeLen);
-        currentMessage[safeLen] = '\0';
+        copyUtf8NfcBounded((const char*)valPtr, attrLen, currentMessage, sizeof(currentMessage));
         hasMessage = true;
       }
 
@@ -533,8 +527,8 @@ uint16_t AppleNotificationService::svcStartHandle = 0;
 uint16_t AppleNotificationService::svcEndHandle = 0;
 uint32_t AppleNotificationService::pendingUID = 0;
 uint8_t AppleNotificationService::pendingCategoryID = 0;
-char AppleNotificationService::currentTitle[64] = "";
-char AppleNotificationService::currentMessage[128] = "";
+char AppleNotificationService::currentTitle[96] = "";
+char AppleNotificationService::currentMessage[192] = "";
 char AppleNotificationService::currentAppId[64] = "";
 uint8_t AppleNotificationService::dsStreamBuf[512];
 uint16_t AppleNotificationService::dsStreamLen = 0;

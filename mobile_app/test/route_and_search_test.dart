@@ -92,13 +92,13 @@ void main() {
       expect(payload.formattedDist, '150 m');
       expect(payload.formattedTotalDist, '5.4 km');
       expect(payload.formattedRemainingTime, '18 phút');
-      expect(payload.sanitizedStreet, 'Duong Nguyen Trai');
+      expect(payload.sanitizedStreet, 'Đường Nguyễn Trãi');
       expect(payload.arrivalTimeClock.contains(':'), isTrue);
 
       final jsonStr = payload.toJsonString();
       expect(jsonStr.contains('"turn":2'), isTrue);
       expect(jsonStr.contains('"dist":150'), isTrue);
-      expect(jsonStr.contains('"street":"Duong Nguyen Trai"'), isTrue);
+      expect(jsonStr.contains('"street":"Đường Nguyễn Trãi"'), isTrue);
       expect(jsonStr.contains('"arr":"${payload.arrivalTimeClock}"'), isTrue);
     });
   });

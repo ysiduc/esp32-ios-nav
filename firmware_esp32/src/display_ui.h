@@ -43,20 +43,216 @@ struct RoutePoint {
   int8_t dy;
 };
 
+static const uint16_t kVnVowelTable[24][6] = {
+  {0x0041, 0x00C0, 0x00C1, 0x1EA2, 0x00C3, 0x1EA0}, // A
+  {0x0061, 0x00E0, 0x00E1, 0x1EA3, 0x00E3, 0x1EA1}, // a
+  {0x00C2, 0x1EA6, 0x1EA4, 0x1EA8, 0x1EAA, 0x1EAC}, // Â
+  {0x00E2, 0x1EA7, 0x1EA5, 0x1EA9, 0x1EAB, 0x1EAD}, // â
+  {0x0102, 0x1EB0, 0x1EAE, 0x1EB2, 0x1EB4, 0x1EB6}, // Ă
+  {0x0103, 0x1EB1, 0x1EAF, 0x1EB3, 0x1EB5, 0x1EB7}, // ă
+  {0x0045, 0x00C8, 0x00C9, 0x1EBA, 0x1EBC, 0x1EB8}, // E
+  {0x0065, 0x00E8, 0x00E9, 0x1EBB, 0x1EBD, 0x1EB9}, // e
+  {0x00CA, 0x1EC0, 0x1EBE, 0x1EC2, 0x1EC4, 0x1EC6}, // Ê
+  {0x00EA, 0x1EC1, 0x1EBF, 0x1EC3, 0x1EC5, 0x1EC7}, // ê
+  {0x0049, 0x00CC, 0x00CD, 0x1EC8, 0x0128, 0x1ECA}, // I
+  {0x0069, 0x00EC, 0x00ED, 0x1EC9, 0x0129, 0x1ECB}, // i
+  {0x004F, 0x00D2, 0x00D3, 0x1ECE, 0x00D5, 0x1ECC}, // O
+  {0x006F, 0x00F2, 0x00F3, 0x1ECF, 0x00F5, 0x1ECD}, // o
+  {0x00D4, 0x1ED2, 0x1ED0, 0x1ED4, 0x1ED6, 0x1ED8}, // Ô
+  {0x00F4, 0x1ED3, 0x1ED1, 0x1ED5, 0x1ED7, 0x1ED9}, // ô
+  {0x01A0, 0x1EDC, 0x1EDA, 0x1EDE, 0x1EE0, 0x1EE2}, // Ơ
+  {0x01A1, 0x1EDD, 0x1EDB, 0x1EDF, 0x1EE1, 0x1EE3}, // ơ
+  {0x0055, 0x00D9, 0x00DA, 0x1EE6, 0x0168, 0x1EE4}, // U
+  {0x0075, 0x00F9, 0x00FA, 0x1EE7, 0x0169, 0x1EE5}, // u
+  {0x01AF, 0x1EEA, 0x1EE8, 0x1EEC, 0x1EEE, 0x1EF0}, // Ư
+  {0x01B0, 0x1EEB, 0x1EE9, 0x1EED, 0x1EEF, 0x1EF1}, // ư
+  {0x0059, 0x1EF2, 0x00DD, 0x1EF6, 0x1EF8, 0x1EF4}, // Y
+  {0x0079, 0x1EF3, 0x00FD, 0x1EF7, 0x1EF9, 0x1EF5}, // y
+};
+
+inline bool _findVnCell(uint32_t cp, int& outRow, int& outCol) {
+  if (cp > 0xFFFF) return false;
+  uint16_t u16 = (uint16_t)cp;
+  for (int r = 0; r < 24; r++) {
+    for (int c = 0; c < 6; c++) {
+      if (kVnVowelTable[r][c] == u16) {
+        outRow = r;
+        outCol = c;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+inline uint32_t _composeVnCombining(uint32_t base, uint32_t mark, bool& consumed) {
+  consumed = false;
+  if (mark < 0x0300 || mark > 0x036F) return base;
+  consumed = true; // Swallow all combining diacritics so unknown ones never print boxes
+  int r = -1, c = -1;
+  if (!_findVnCell(base, r, c)) return base;
+
+  int tone = -1;
+  if (mark == 0x0300) tone = 1;
+  else if (mark == 0x0301) tone = 2;
+  else if (mark == 0x0309) tone = 3;
+  else if (mark == 0x0303) tone = 4;
+  else if (mark == 0x0323) tone = 5;
+  if (tone >= 0) return kVnVowelTable[r][tone];
+
+  int targetRow = -1;
+  if (mark == 0x0302) { // Circumflex: A/a, E/e, O/o
+    if (r == 0 || r == 1 || r == 6 || r == 7 || r == 12 || r == 13) targetRow = r + 2;
+  } else if (mark == 0x0306) { // Breve: A/a
+    if (r == 0 || r == 1) targetRow = r + 4;
+  } else if (mark == 0x031B) { // Horn: O/o, U/u
+    if (r == 12 || r == 13 || r == 18 || r == 19) targetRow = r + 4;
+  }
+  if (targetRow >= 0) return kVnVowelTable[targetRow][c];
+  return base;
+}
+
+inline uint32_t _decodeUtf8Bounded(const char*& p, const char* srcEnd) {
+  if (p >= srcEnd) return 0;
+  const uint8_t* s = (const uint8_t*)p;
+  uint8_t c = s[0];
+  if (c == 0) { p = srcEnd; return 0; }
+  if (c < 0x80) { p += 1; return c; }
+  if ((c & 0xE0) == 0xC0 && (p + 2 <= srcEnd) && (s[1] & 0xC0) == 0x80) {
+    uint32_t cp = ((uint32_t)(c & 0x1F) << 6) | (uint32_t)(s[1] & 0x3F);
+    p += 2;
+    return cp >= 0x80 ? cp : 0xFFFE;
+  }
+  if ((c & 0xF0) == 0xE0 && (p + 3 <= srcEnd) && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
+    uint32_t cp = ((uint32_t)(c & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3F) << 6) | (uint32_t)(s[2] & 0x3F);
+    p += 3;
+    return cp >= 0x800 ? cp : 0xFFFE;
+  }
+  if ((c & 0xF8) == 0xF0 && (p + 4 <= srcEnd) && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
+    uint32_t cp = ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(s[1] & 0x3F) << 12) | ((uint32_t)(s[2] & 0x3F) << 6) | (uint32_t)(s[3] & 0x3F);
+    p += 4;
+    return cp;
+  }
+  p += 1;
+  return 0xFFFE;
+}
+
+inline int _encodeUtf8Cp(uint32_t cp, char* out, size_t avail) {
+  if (cp == 0 || cp == 0xFFFE) return 0;
+  if (cp < 0x80) {
+    if (avail < 1) return -1;
+    out[0] = (char)cp;
+    return 1;
+  } else if (cp < 0x800) {
+    if (avail < 2) return -1;
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  } else if (cp < 0x10000) {
+    if (avail < 3) return -1;
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  if (avail < 4) return -1;
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+inline void _normalizeAndCopyUtf8(const char* src, size_t maxSrcBytes, char* dst, size_t dstSize, bool toUpper) {
+  if (!dst || dstSize == 0) return;
+  if (!src || maxSrcBytes == 0) {
+    dst[0] = '\0';
+    return;
+  }
+  const char* p = src;
+  const char* srcEnd = src + maxSrcBytes;
+  size_t outLen = 0;
+  uint32_t pending = 0;
+
+  auto flushPending = [&]() {
+    if (pending == 0) return true;
+    uint32_t cp = pending;
+    pending = 0;
+    if (toUpper) {
+      if (cp >= 'a' && cp <= 'z') {
+        cp -= 32;
+      } else if (cp == 0x0111) { // đ -> Đ
+        cp = 0x0110;
+      } else {
+        int r = -1, c = -1;
+        if (_findVnCell(cp, r, c) && (r & 1) == 1) {
+          cp = kVnVowelTable[r - 1][c];
+        }
+      }
+    }
+    if (cp == 0x2026) { // … missing in unifont -> "..."
+      if (outLen + 3 >= dstSize) return false;
+      dst[outLen++] = '.'; dst[outLen++] = '.'; dst[outLen++] = '.';
+      return true;
+    }
+    int n = _encodeUtf8Cp(cp, dst + outLen, (dstSize - 1) - outLen);
+    if (n < 0) return false;
+    outLen += (size_t)n;
+    return true;
+  };
+
+  while (p < srcEnd && *p != '\0') {
+    uint32_t cp = _decodeUtf8Bounded(p, srcEnd);
+    if (cp == 0) break;
+    if (cp == 0xFFFE || cp == 0xFEFF || (cp >= 0x200B && cp <= 0x200D)) continue;
+    if (cp == 0x00A0 || cp == 0x2009 || cp == 0x202F) cp = ' ';
+    else if (cp == 0x2018 || cp == 0x2019) cp = '\'';
+    else if (cp == 0x201C || cp == 0x201D) cp = '"';
+    else if (cp == 0x2013 || cp == 0x2014 || cp == 0x2022) cp = '-';
+
+    if (cp >= 0x0300 && cp <= 0x036F) {
+      if (pending != 0) {
+        bool consumed = false;
+        pending = _composeVnCombining(pending, cp, consumed);
+        if (consumed) continue;
+      }
+      continue;
+    }
+
+    if (!flushPending()) break;
+    pending = cp;
+  }
+
+  flushPending();
+  dst[outLen] = '\0';
+}
+
+inline void copyUtf8NfcBounded(const char* src, size_t maxSrcBytes, char* dst, size_t dstSize) {
+  _normalizeAndCopyUtf8(src, maxSrcBytes, dst, dstSize, false);
+}
+
+inline void copyUtf8Nfc(const char* src, char* dst, size_t dstSize) {
+  _normalizeAndCopyUtf8(src, src ? strlen(src) : 0, dst, dstSize, false);
+}
+
+inline void utf8ToUpperCopy(const char* src, char* dst, size_t dstSize) {
+  _normalizeAndCopyUtf8(src, src ? strlen(src) : 0, dst, dstSize, true);
+}
+
 struct NavStateData {
   uint8_t turnCode = 0;
   uint16_t distMeters = 0;
   uint16_t totalDistMeters = 0;
   uint8_t speedKmh = 0;
   uint8_t etaMinutes = 0;
-  char streetName[48] = "";
+  char streetName[96] = "";
   char arrivalTime[16] = "12:00";
   char currentTime[16] = "12:00";
   uint8_t batteryLevel = 85;
   bool isConnected = false;    // System Bluetooth connected
   bool isNavigating = false;
-  char songTitle[48] = "";
-  char songArtist[32] = "";
+  char songTitle[96] = "";
+  char songArtist[64] = "";
   uint16_t songElapsedSec = 0;
   uint16_t songDurationSec = 0;
   uint8_t routePointCount = 0;
@@ -66,8 +262,8 @@ struct NavStateData {
 
 struct NotificationPopup {
   char app[16] = "";     // "call", "sms", "zalo", "messenger", "telegram", "bell"
-  char title[64] = "";
-  char message[128] = "";
+  char title[96] = "";
+  char message[192] = "";
   unsigned long expireMillis = 0;
   bool isCall = false;
   bool active = false;
@@ -199,19 +395,19 @@ private:
   uint8_t _lastDrawnSec = 255;
   uint8_t _lastDrawnDay = 255;
   uint8_t _lastDrawnBat = 255;
-  char _lastDrawnSong[48] = "";
+  char _lastDrawnSong[96] = "";
   char _lastWaybarTime[16] = "";
-  char _lastWaybarSong[64] = "";
+  char _lastWaybarSong[96] = "";
   uint16_t _lastWaybarElapsed = 0xFFFF;
   uint8_t _lastWaybarBat = 255;
-  char _lastDrawnArtist[32] = "";
+  char _lastDrawnArtist[64] = "";
   bool _lastDrawnBleState = false;
 
   // Minimap cached state
   bool _minimapDrawn = false;
 
   // Marquee (thả trôi) state
-  struct Marquee { char text[96]; int textW; int off; unsigned long last; unsigned long pauseUntil; };
+  struct Marquee { char text[160]; int textW; int off; unsigned long last; unsigned long pauseUntil; };
   Marquee _mqIdle = {"", 0, 0, 0, 0};
   Marquee _mqBar = {"", 0, 0, 0, 0};
   TFT_eSprite _wbSpr = TFT_eSprite(&tft);
@@ -254,19 +450,19 @@ public:
     u8f.begin(tft);
     u8f.setFontMode(0);
     u8f.setFontDirection(0);
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
 
     _wbSpr.createSprite(192, 24);
     _wbU8.begin(_wbSpr);
     _wbU8.setFontMode(0);
     _wbU8.setFontDirection(0);
-    _wbU8.setFont(u8g2_font_unifont_t_vietnamese1);
+    _wbU8.setFont(u8g2_font_unifont_t_vietnamese2);
 
     marqueeSpr.createSprite(140, 24);
     u8f_marquee.begin(marqueeSpr);
     u8f_marquee.setFontMode(0);
     u8f_marquee.setFontDirection(0);
-    u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f_marquee.setFont(u8g2_font_unifont_t_vietnamese2);
 
     // Initial screen ready; saved style & brightness already loaded before tft.init()
     _needFullRedraw = true;
@@ -416,15 +612,13 @@ public:
 
   void setSongInfo(const char* song, const char* artist, uint16_t elapsedSec = 0, uint16_t durationSec = 0) {
     if (song != nullptr && strlen(song) > 0 && strcmp(song, "CHUA PHAT NHAC") != 0) {
-      strncpy(_navData.songTitle, song, sizeof(_navData.songTitle) - 1);
-      _navData.songTitle[sizeof(_navData.songTitle) - 1] = '\0';
+      copyUtf8Nfc(song, _navData.songTitle, sizeof(_navData.songTitle));
     } else if (song != nullptr && (strlen(song) == 0 || strcmp(song, "CHUA PHAT NHAC") == 0)) {
       _navData.songTitle[0] = '\0';
     }
 
     if (artist != nullptr && strlen(artist) > 0 && strcmp(artist, "MO NHAC TREN IPHONE") != 0) {
-      strncpy(_navData.songArtist, artist, sizeof(_navData.songArtist) - 1);
-      _navData.songArtist[sizeof(_navData.songArtist) - 1] = '\0';
+      copyUtf8Nfc(artist, _navData.songArtist, sizeof(_navData.songArtist));
     } else if (artist != nullptr && strlen(artist) == 0) {
       _navData.songArtist[0] = '\0';
     }
@@ -535,7 +729,9 @@ public:
     _navData.etaMinutes = eta;
     _navData.heading = head;
 
-    if (street) strncpy(_navData.streetName, street, sizeof(_navData.streetName) - 1);
+    if (street) {
+      copyUtf8Nfc(street, _navData.streetName, sizeof(_navData.streetName));
+    }
     if (arrival) strncpy(_navData.arrivalTime, arrival, sizeof(_navData.arrivalTime) - 1);
     if (clock && strlen(clock) > 0) strncpy(_navData.currentTime, clock, sizeof(_navData.currentTime) - 1);
     if (battery > 0 && battery <= 100) _navData.batteryLevel = battery;
@@ -559,10 +755,10 @@ public:
   void showNotificationPopup(const char* app, const char* title, const char* msg, bool isCall = false, uint32_t durationMs = 5000) {
     strncpy(_popupData.app, (app && strlen(app) > 0) ? app : (isCall ? "call" : "bell"), sizeof(_popupData.app) - 1);
     _popupData.app[sizeof(_popupData.app) - 1] = '\0';
-    strncpy(_popupData.title, (title && strlen(title) > 0) ? title : (isCall ? "Cuộc gọi đến" : "Thông báo"), sizeof(_popupData.title) - 1);
-    _popupData.title[sizeof(_popupData.title) - 1] = '\0';
-    strncpy(_popupData.message, (msg && strlen(msg) > 0) ? msg : (isCall ? "Đang đổ chuông..." : ""), sizeof(_popupData.message) - 1);
-    _popupData.message[sizeof(_popupData.message) - 1] = '\0';
+    copyUtf8Nfc((title && strlen(title) > 0) ? title : (isCall ? "Cuộc gọi đến" : "Thông báo"),
+                _popupData.title, sizeof(_popupData.title));
+    copyUtf8Nfc((msg && strlen(msg) > 0) ? msg : (isCall ? "Đang đổ chuông..." : ""),
+                _popupData.message, sizeof(_popupData.message));
     _popupData.isCall = isCall;
     _popupData.expireMillis = millis() + durationMs;
     _popupData.active = true;
@@ -596,16 +792,12 @@ public:
 
   void updatePopupDetails(const char* title, const char* msg, AppSourceType app) {
     if (title && strlen(title) > 0) {
-      strncpy(_popupData.title, title, sizeof(_popupData.title) - 1);
-      _popupData.title[sizeof(_popupData.title) - 1] = '\0';
-      strncpy(_notif.title, title, sizeof(_notif.title) - 1);
-      _notif.title[sizeof(_notif.title) - 1] = '\0';
+      copyUtf8Nfc(title, _popupData.title, sizeof(_popupData.title));
+      copyUtf8Nfc(title, _notif.title, sizeof(_notif.title));
     }
     if (msg && strlen(msg) > 0) {
-      strncpy(_popupData.message, msg, sizeof(_popupData.message) - 1);
-      _popupData.message[sizeof(_popupData.message) - 1] = '\0';
-      strncpy(_notif.message, msg, sizeof(_notif.message) - 1);
-      _notif.message[sizeof(_notif.message) - 1] = '\0';
+      copyUtf8Nfc(msg, _popupData.message, sizeof(_popupData.message));
+      copyUtf8Nfc(msg, _notif.message, sizeof(_notif.message));
     }
     _popupData.appSource = app;
     _notif.appSource = app;
@@ -1068,7 +1260,7 @@ private:
     }
   }
 
-  void _drawUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+  void _drawUtf8String(const char* str, int x, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese2) {
     if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setForegroundColor(fgColor);
@@ -1077,7 +1269,7 @@ private:
     u8f.print(str);
   }
 
-  void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+  void _drawCentreUtf8String(const char* str, int cx, int y, uint16_t fgColor, uint16_t bgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese2) {
     if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setForegroundColor(fgColor);
@@ -1189,7 +1381,7 @@ private:
   // =========================================================================
   // MÀN 1: STANDBY WATCHFACE / 6 GIAO DIỆN MÔ PHỎNG (Styles 0..5)
   // =========================================================================
-  void _drawUtf8StringTransparent(const char* str, int x, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+  void _drawUtf8StringTransparent(const char* str, int x, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese2) {
     if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setFontMode(1);
@@ -1199,7 +1391,7 @@ private:
     u8f.setFontMode(0);
   }
 
-  void _drawCentreUtf8StringTransparent(const char* str, int cx, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+  void _drawCentreUtf8StringTransparent(const char* str, int cx, int y, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese2) {
     if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setFontMode(1);
@@ -1210,24 +1402,23 @@ private:
     u8f.setFontMode(0);
   }
 
-  void _drawTruncatedUtf8StringTransparent(const char* str, int x, int y, int maxW, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese1) {
+  void _drawTruncatedUtf8StringTransparent(const char* str, int x, int y, int maxW, uint16_t fgColor, const uint8_t* font = u8g2_font_unifont_t_vietnamese2) {
     if (str == nullptr || str[0] == '\0') return;
     u8f.setFont(font);
     u8f.setFontMode(1);
     u8f.setForegroundColor(fgColor);
 
-    if (u8f.getUTF8Width(str) <= maxW) {
+    char buf[128];
+    copyUtf8Nfc(str, buf, sizeof(buf));
+
+    if (u8f.getUTF8Width(buf) <= maxW) {
       u8f.setCursor(x, y + 13);
-      u8f.print(str);
+      u8f.print(buf);
       u8f.setFontMode(0);
       return;
     }
 
     // Tên quá dài so với maxW -> Cắt ngắn và thêm '...'
-    char buf[128];
-    strncpy(buf, str, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
     int dotW = u8f.getUTF8Width("...");
     int availW = maxW - dotW;
     if (availW < 10) availW = maxW;
@@ -1239,7 +1430,7 @@ private:
       }
       if (len > 0) len--;
       buf[len] = '\0';
-      if (u8f.getUTF8Width(buf) <= availW) {
+      if (u8f.getUTF8Width(buf) <= availW && len + 4 <= (int)sizeof(buf)) {
         break;
       }
     }
@@ -1252,7 +1443,7 @@ private:
 
   void _drawWrappedUtf8StringTransparent(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, int lineHeight = 16) {
     if (!text || text[0] == '\0') return;
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
     u8f.setFontMode(1);
     u8f.setForegroundColor(fgColor);
 
@@ -1270,24 +1461,33 @@ private:
           nextWord++;
         }
         int wordLen = nextWord - ptr;
+        char wordBuf[96];
+        copyUtf8NfcBounded(ptr, (size_t)wordLen, wordBuf, sizeof(wordBuf));
 
         char testBuf[96];
         if (lineLen > 0) {
-          snprintf(testBuf, sizeof(testBuf), "%s %.*s", lineBuf, wordLen, ptr);
+          snprintf(testBuf, sizeof(testBuf), "%s %s", lineBuf, wordBuf);
         } else {
-          snprintf(testBuf, sizeof(testBuf), "%.*s", wordLen, ptr);
+          copyUtf8Nfc(wordBuf, testBuf, sizeof(testBuf));
         }
 
         if (u8f.getUTF8Width(testBuf) > maxWidth) {
           if (lineLen == 0) {
-            strncpy(lineBuf, testBuf, sizeof(lineBuf) - 1);
+            copyUtf8Nfc(wordBuf, lineBuf, sizeof(lineBuf));
+            int l = strlen(lineBuf);
+            while (l > 0 && u8f.getUTF8Width(lineBuf) > maxWidth) {
+              while (l > 0 && ((unsigned char)lineBuf[l - 1] & 0xC0) == 0x80) l--;
+              if (l > 0) l--;
+              lineBuf[l] = '\0';
+            }
+            lineLen = strlen(lineBuf);
             ptr = nextWord;
             if (*ptr == ' ') ptr++;
           }
           break;
         }
 
-        strncpy(lineBuf, testBuf, sizeof(lineBuf) - 1);
+        copyUtf8Nfc(testBuf, lineBuf, sizeof(lineBuf));
         lineLen = strlen(lineBuf);
         ptr = nextWord;
         if (*ptr == ' ') ptr++;
@@ -1309,13 +1509,13 @@ private:
   void _drawSongTitle(const char* title, int x, int y, int w, int h, uint16_t fgColor, uint16_t bgColor, bool isRedraw) {
     if (!title || title[0] == '\0') return;
 
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
     int textW = u8f.getUTF8Width(title);
 
     if (textW <= w) {
       // Song title fits inside container! Only draw on full redraw (transparent, zero box)
       if (isRedraw) {
-        _drawUtf8StringTransparent(title, x, y, fgColor);
+        _drawUtf8StringTransparent(title, x, y, fgColor, u8g2_font_unifont_t_vietnamese2);
       }
       return;
     }
@@ -1328,19 +1528,20 @@ private:
     int gap = 28;
     int cycle = textW + gap;
     int offset = ((millis() / 60) % cycle);
+    int baseY = (h >= 18) ? 14 : ((h <= 15) ? 12 : 13);
 
     tft.setViewport(x, y, w, h);
     tft.fillRect(0, 0, w, h, bgColor);
 
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
     u8f.setFontMode(1);
     u8f.setForegroundColor(fgColor);
 
-    u8f.setCursor(-offset, 13);
+    u8f.setCursor(-offset, baseY);
     u8f.print(title);
 
     if (w - (-offset + textW) > 0) {
-      u8f.setCursor(-offset + cycle, 13);
+      u8f.setCursor(-offset + cycle, baseY);
       u8f.print(title);
     }
 
@@ -1376,7 +1577,7 @@ private:
 
     // Phần nhạc kéo dài từ x: 70 đến 314 (rộng 244px), xóa bỏ hoàn toàn phần thông báo trên waybar
     const char* sTitle = (_navData.songTitle[0] != '\0') ? _navData.songTitle : "Nhac tat";
-    _drawSongTitle(sTitle, 70, 220, 244, 16, tft.color565(254, 240, 138), cWb, forceRedraw);
+    _drawSongTitle(sTitle, 70, 219, 244, 19, tft.color565(254, 240, 138), cWb, forceRedraw);
   }
 
   // --- GIAO DIỆN 1: SUNFLOWER BENTO ---
@@ -1390,9 +1591,10 @@ private:
 
       // 2. Date
       char dateBuf[48];
+      char upperDate[64];
       snprintf(dateBuf, sizeof(dateBuf), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
-      for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
-      _drawUtf8StringTransparent(dateBuf, 22, 70, TFT_WHITE);
+      utf8ToUpperCopy(dateBuf, upperDate, sizeof(upperDate));
+      _drawUtf8StringTransparent(upperDate, 22, 70, TFT_WHITE);
 
       // 3. Music Duration (chỉ vẽ khi durationSec > 0)
       if (_navData.songDurationSec > 0) {
@@ -1416,7 +1618,7 @@ private:
 
     // 5. Song Title (nhỏ lại 2px, dời xuống 3px: y=201, thả trôi nếu dài hơn 175px)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 60, 201, 175, 16, tft.color565(254, 240, 138), tft.color565(37, 27, 18), isRedraw);
+      _drawSongTitle(_navData.songTitle, 60, 200, 175, 18, tft.color565(254, 240, 138), tft.color565(37, 27, 18), isRedraw);
     }
   }
 
@@ -1456,7 +1658,7 @@ private:
 
     // 5. Song Title (thanh nhạc đáy: x: 52, y: 188, w: 180, thả trôi)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 52, 188, 180, 16, tft.color565(103, 232, 249), tft.color565(13, 13, 41), isRedraw);
+      _drawSongTitle(_navData.songTitle, 52, 187, 180, 18, tft.color565(103, 232, 249), tft.color565(13, 13, 41), isRedraw);
     }
   }
 
@@ -1485,7 +1687,7 @@ private:
       // 4. Notification: "From: Người gửi" ngang hàng với hộp thư (hộp thư x: 14..36, y: 155..170).
       //    Tên người gửi cố định không trôi. Nội dung tin nhắn xuống dòng đến hết ô (x: 16, y: 174, w: 124, 3 lines) không trôi.
       if (_notifShown && _notif.title[0] != '\0') {
-        char fromBuf[48];
+        char fromBuf[104];
         snprintf(fromBuf, sizeof(fromBuf), "From: %s", _notif.title);
         _drawTruncatedUtf8StringTransparent(fromBuf, 42, 155, 98, TFT_BLACK);
         if (_notif.message[0] != '\0') {
@@ -1496,7 +1698,7 @@ private:
 
     // 5. Song Title (thả trôi nếu dài hơn 110px, trong khung đen x: 176, y: 63, w: 112, h: 14)
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 176, 63, 112, 14, TFT_WHITE, TFT_BLACK, isRedraw);
+      _drawSongTitle(_navData.songTitle, 176, 63, 112, 15, TFT_WHITE, TFT_BLACK, isRedraw);
     }
   }
 
@@ -1536,11 +1738,9 @@ private:
 
     // 5. Cuộn băng Cassette: Tên bài hát in hoa trên dải nhãn trên (thả trôi nếu dài hơn 120px)
     if (_navData.songTitle[0] != '\0') {
-      char upperSong[64];
-      strncpy(upperSong, _navData.songTitle, sizeof(upperSong) - 1);
-      upperSong[sizeof(upperSong) - 1] = '\0';
-      for (int i = 0; upperSong[i]; i++) upperSong[i] = toupper((unsigned char)upperSong[i]);
-      _drawSongTitle(upperSong, 175, 58, 120, 16, TFT_WHITE, tft.color565(47, 10, 62), isRedraw);
+      char upperSong[96];
+      utf8ToUpperCopy(_navData.songTitle, upperSong, sizeof(upperSong));
+      _drawSongTitle(upperSong, 175, 57, 120, 18, TFT_WHITE, tft.color565(47, 10, 62), isRedraw);
     }
   }
 
@@ -1584,7 +1784,7 @@ private:
 
     // 5. Song Title: chữ đen nổi bật trên badge vàng Comic, thả trôi không bao giờ tràn
     if (_navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, 188, 20, 116, 16, TFT_BLACK, tft.color565(250, 204, 21), isRedraw);
+      _drawSongTitle(_navData.songTitle, 188, 19, 116, 18, TFT_BLACK, tft.color565(250, 204, 21), isRedraw);
     }
   }
 
@@ -1637,7 +1837,9 @@ private:
           snprintf(dateBuf, sizeof(dateBuf), "%s %s %02d", enDays[di], enMonths[mi], _clockDay);
         } else {
           snprintf(dateBuf, sizeof(dateBuf), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
-          for (int i = 0; dateBuf[i]; i++) dateBuf[i] = toupper((unsigned char)dateBuf[i]);
+          char upperDate[48];
+          utf8ToUpperCopy(dateBuf, upperDate, sizeof(upperDate));
+          memcpy(dateBuf, upperDate, sizeof(dateBuf));
         }
         if (_customTheme.dateCenter) _drawCentreUtf8StringTransparent(dateBuf, _customTheme.dateX, _customTheme.dateY, _customTheme.dateColor);
         else _drawUtf8StringTransparent(dateBuf, _customTheme.dateX, _customTheme.dateY, _customTheme.dateColor);
@@ -1674,7 +1876,7 @@ private:
     }
 
     if (_customTheme.songVisible && !_customTheme.showWaybar && _navData.songTitle[0] != '\0') {
-      _drawSongTitle(_navData.songTitle, _customTheme.songX, _customTheme.songY, _customTheme.songW, 16, _customTheme.songColor, _customTheme.songBgColor, isRedraw);
+      _drawSongTitle(_navData.songTitle, _customTheme.songX, _customTheme.songY, _customTheme.songW, 18, _customTheme.songColor, _customTheme.songBgColor, isRedraw);
     }
   }
 
@@ -1695,7 +1897,7 @@ private:
         _lastDrawnDay = _clockDay;
         _needFullRedraw = false;
         _notifDirty = false;
-        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+        copyUtf8Nfc(_navData.songTitle, _lastDrawnSong, sizeof(_lastDrawnSong));
 
         tft.fillScreen(_customTheme.bgColor);
         if (SPIFFS.exists("/custom_theme_bg.jpg")) {
@@ -1760,7 +1962,7 @@ private:
       _lastDrawnDay = _clockDay;
       _needFullRedraw = false;
       _notifDirty = false;
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+      copyUtf8Nfc(_navData.songTitle, _lastDrawnSong, sizeof(_lastDrawnSong));
 
       switch (_watchfaceStyle) {
         case 1: TJpgDec.drawJpg(0, 0, THEME_1_BG_JPG, THEME_1_BG_LEN); break;
@@ -1867,7 +2069,7 @@ private:
     if (l.songVisible) {
       int musicCx = l.musicX + l.musicW / 2;
       if (songChanged) {
-        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+        copyUtf8Nfc(_navData.songTitle, _lastDrawnSong, sizeof(_lastDrawnSong));
         _lastDrawnSong[sizeof(_lastDrawnSong) - 1] = '\0';
         musicRedraw = true;
         tft.fillRect(l.musicX + 2, l.musicY + 2, l.musicW - 4, l.musicH - 4, l.musicBg);
@@ -1879,7 +2081,7 @@ private:
       }
       if (hasSong) {
         char full[100];
-        if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
+        if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s - %s", _navData.songTitle, _navData.songArtist);
         else snprintf(full, sizeof(full), "%s", _navData.songTitle);
         _marquee(_mqIdle, marqueeSpr, u8f_marquee, l.musicX + 3, l.musicY + 2, full, l.musicColor, l.musicBg, musicRedraw);
 
@@ -2054,7 +2256,7 @@ private:
 
     // ETA
     char etaStr[16];
-    snprintf(etaStr, sizeof(etaStr), "%d ph  •  %s", _navData.etaMinutes, _navData.arrivalTime);
+    snprintf(etaStr, sizeof(etaStr), "%d ph - %s", _navData.etaMinutes, _navData.arrivalTime);
     _drawCentreUtf8String(etaStr, 237, 160, TFT_GREEN, tft.color565(19, 27, 38));
   }
 
@@ -2064,9 +2266,8 @@ private:
       if (out && outSz > 0) out[0] = '\0';
       return 0;
     }
-    strncpy(out, in, outSz - 1);
-    out[outSz - 1] = '\0';
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    copyUtf8Nfc(in, out, outSz);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
     int n = strlen(out);
     while (n > 0 && u8f.getUTF8Width(out) > maxW) {
       n--;
@@ -2080,10 +2281,11 @@ private:
   void _marquee(Marquee& m, TFT_eSprite& spr, U8g2_for_TFT_eSPI& u8, int x, int y,
                 const char* text, uint16_t fg, uint16_t bg, bool force) {
     if (text == nullptr) text = "";
-    if (strcmp(text, m.text) != 0) {
-      strncpy(m.text, text, sizeof(m.text) - 1);
-      m.text[sizeof(m.text) - 1] = '\0';
-      u8.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8.setFont(u8g2_font_unifont_t_vietnamese2);
+    char norm[sizeof(m.text)];
+    copyUtf8Nfc(text, norm, sizeof(norm));
+    if (strcmp(norm, m.text) != 0) {
+      strcpy(m.text, norm);
       m.textW = u8.getUTF8Width(m.text);
       m.off = 0;
       m.pauseUntil = millis() + 1500;
@@ -2159,16 +2361,16 @@ private:
 
     bool hasSong = (_navData.songTitle[0] != '\0' && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
     if (hasSong) {
-      char full[128];
+      char full[192];
       int elM = _navData.songElapsedSec / 60;
       int elS = _navData.songElapsedSec % 60;
       bool hasElapsed = (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0);
 
       if (_navData.songArtist[0] != '\0') {
         if (hasElapsed) {
-          snprintf(full, sizeof(full), "%s • %s [%02d:%02d]", _navData.songTitle, _navData.songArtist, elM, elS);
+          snprintf(full, sizeof(full), "%s - %s [%02d:%02d]", _navData.songTitle, _navData.songArtist, elM, elS);
         } else {
-          snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
+          snprintf(full, sizeof(full), "%s - %s", _navData.songTitle, _navData.songArtist);
         }
       } else {
         if (hasElapsed) {
@@ -2206,39 +2408,51 @@ private:
   void _drawWrappedUtf8String(const char* text, int startX, int startY, int maxWidth, int maxLines, uint16_t fgColor, uint16_t bgColor, int lineHeight = 19) {
     if (text == nullptr || text[0] == '\0') return;
 
-    u8f.setFont(u8g2_font_unifont_t_vietnamese1);
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
     u8f.setForegroundColor(fgColor);
     u8f.setBackgroundColor(bgColor);
 
-    char currentLine[128];
+    char normText[256];
+    copyUtf8Nfc(text, normText, sizeof(normText));
+
+    char currentLine[192];
     currentLine[0] = '\0';
     int lineCount = 0;
     int curY = startY;
 
-    const char* ptr = text;
+    const char* ptr = normText;
     while (*ptr != '\0' && lineCount < maxLines) {
       while (*ptr == ' ') ptr++;
       if (*ptr == '\0') break;
 
-      char word[64];
+      char word[96];
       int wordLen = 0;
       while (*ptr != '\0' && *ptr != ' ' && wordLen < (int)sizeof(word) - 1) {
         word[wordLen++] = *ptr++;
       }
+      if (*ptr != '\0' && *ptr != ' ') {
+        while (wordLen > 0 && (((uint8_t)word[wordLen - 1]) & 0xC0) == 0x80) {
+          wordLen--;
+          ptr--;
+        }
+        if (wordLen > 0 && (((uint8_t)word[wordLen - 1]) & 0x80) != 0) {
+          wordLen--;
+          ptr--;
+        }
+      }
       word[wordLen] = '\0';
 
-      char candidate[128];
+      char candidate[192];
       if (currentLine[0] == '\0') {
-        strncpy(candidate, word, sizeof(candidate) - 1);
+        copyUtf8Nfc(word, candidate, sizeof(candidate));
       } else {
         snprintf(candidate, sizeof(candidate), "%s %s", currentLine, word);
+        candidate[sizeof(candidate) - 1] = '\0';
       }
-      candidate[sizeof(candidate) - 1] = '\0';
 
       int w = u8f.getUTF8Width(candidate);
       if (w <= maxWidth) {
-        strncpy(currentLine, candidate, sizeof(currentLine) - 1);
-        currentLine[sizeof(currentLine) - 1] = '\0';
+        copyUtf8Nfc(candidate, currentLine, sizeof(currentLine));
       } else {
         if (currentLine[0] != '\0') {
           u8f.setCursor(startX, curY + 13);
@@ -2247,8 +2461,11 @@ private:
           curY += lineHeight;
         }
         if (lineCount < maxLines) {
-          strncpy(currentLine, word, sizeof(currentLine) - 1);
-          currentLine[sizeof(currentLine) - 1] = '\0';
+          if (u8f.getUTF8Width(word) > maxWidth) {
+            _fitUtf8(word, currentLine, sizeof(currentLine), maxWidth);
+          } else {
+            copyUtf8Nfc(word, currentLine, sizeof(currentLine));
+          }
         } else {
           currentLine[0] = '\0';
           break;
@@ -2258,7 +2475,12 @@ private:
 
     if (currentLine[0] != '\0' && lineCount < maxLines) {
       if (*ptr != '\0') {
-        strncat(currentLine, "...", sizeof(currentLine) - strlen(currentLine) - 1);
+        char fitted[192];
+        _fitUtf8(currentLine, fitted, sizeof(fitted), max(20, maxWidth - u8f.getUTF8Width("...")));
+        copyUtf8Nfc(fitted, currentLine, sizeof(currentLine));
+        if (strlen(currentLine) + 4 <= sizeof(currentLine)) {
+          strcat(currentLine, "...");
+        }
       }
       u8f.setCursor(startX, curY + 13);
       u8f.print(currentLine);
