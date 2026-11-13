@@ -272,11 +272,54 @@ Uint8List _buildSyntheticOsmTile() {
     ],
   );
 
+  final transportNameLayer = _encodeLayer(
+    name: 'transportation_name',
+    keys: ['class', 'name'],
+    encodedValues: [
+      _encodeStringValue('primary'),
+      _encodeStringValue('Phố Nguyễn Cảnh Dị'),
+      _encodeStringValue('secondary'),
+      _encodeStringValue('Phố Đại Từ'),
+    ],
+    features: [
+      _encodeFeature(
+        tags: [0, 0, 1, 1],
+        geomType: 2,
+        geomBytes: _encodeLineString([
+          [2048, 200],
+          [2048, 3900],
+        ]),
+      ),
+      _encodeFeature(
+        tags: [0, 2, 1, 3],
+        geomType: 2,
+        geomBytes: _encodeLineString([
+          [200, 2048],
+          [3900, 2048],
+        ]),
+      ),
+    ],
+  );
+
   final tileBuilder = BytesBuilder(copy: false);
-  for (final layer in [parkLayer, waterLayer, transportLayer, buildingLayer]) {
+  for (final layer in [
+    parkLayer,
+    waterLayer,
+    transportLayer,
+    transportNameLayer,
+    buildingLayer,
+  ]) {
     _writeLengthPrefixed(tileBuilder, 3, layer);
   }
   return tileBuilder.toBytes();
+}
+
+int _blendAbgr(int dst, int sr, int sg, int sb, int alpha) {
+  final int inv = 255 - alpha;
+  final int r = (sr * alpha + (dst & 0xFF) * inv) >> 8;
+  final int g = (sg * alpha + ((dst >> 8) & 0xFF) * inv) >> 8;
+  final int b = (sb * alpha + ((dst >> 16) & 0xFF) * inv) >> 8;
+  return 0xFF000000 | (b << 16) | (g << 8) | r;
 }
 
 void main() {
@@ -300,6 +343,10 @@ void main() {
         expect(tile.roads.any((r) => r.tier == 4), isTrue);
         expect(tile.roads.any((r) => r.tier == 3), isTrue);
 
+        // transportation_name labels decoded cleanly
+        expect(tile.roadLabels.length, 2);
+        expect(tile.roadLabels.map((l) => l.name), containsAll(['Phố Nguyễn Cảnh Dị', 'Phố Đại Từ']));
+
         // Hole ring & hide_3d building excluded -> 2 extruded buildings
         expect(tile.buildings.length, 2);
         expect(tile.buildings[0].heightMeters, closeTo(14.0, 0.01));
@@ -307,7 +354,7 @@ void main() {
       }
     });
 
-    test('Osm3dRenderer rasterizes light and dark 3D blocks, walls, roads, park, water', () {
+    test('Osm3dRenderer rasterizes 3D perspective translucent blocks, walls, roads, park, water & sky', () {
       final tile = OsmVectorTile.parsePbf(_buildSyntheticOsmTile(), 15, 26095, 14424)!;
       final renderer = Osm3dRenderer();
       const w = 320;
@@ -332,6 +379,8 @@ void main() {
         anchorY: h * 0.65,
         pitchY: 0.74,
         isDark: false,
+        perspective3d: true,
+        skyHorizonPx: 22,
       );
 
       renderer.renderFrame(
@@ -347,36 +396,167 @@ void main() {
         anchorY: h * 0.65,
         pitchY: 0.74,
         isDark: true,
+        perspective3d: true,
+        skyHorizonPx: 22,
       );
 
       final lightColors = lightBuf.toSet();
-      expect(lightColors.contains(_abgr(241, 239, 233)), isTrue); // ground
-      expect(lightColors.contains(_abgr(235, 227, 217)), isTrue); // standard roof
-      expect(lightColors.contains(_abgr(209, 221, 235)), isTrue); // tall roof
-      expect(lightColors.contains(_abgr(252, 214, 146)), isTrue); // primary road
-      expect(lightColors.contains(_abgr(199, 231, 173)), isTrue); // park
-      expect(lightColors.contains(_abgr(150, 206, 236)), isTrue); // water
-      // At least one 3D shaded wall pixel must be rasterized
+      final lightGround = _abgr(236, 239, 239);
+      expect(lightColors.contains(lightGround), isTrue); // Google 3D ground
+      expect(lightColors.contains(_abgr(252, 235, 168)), isTrue); // primary road
+      expect(lightColors.contains(_abgr(188, 230, 189)), isTrue); // park mint
+      expect(lightColors.contains(_abgr(154, 208, 245)), isTrue); // azure water
+
+      // Translucent standard & tall roofs blended cleanly over light ground
+      expect(lightColors.contains(_blendAbgr(lightGround, 206, 216, 218, 138)), isTrue);
+      expect(lightColors.contains(_blendAbgr(lightGround, 192, 206, 214, 152)), isTrue);
+
+      // At least one translucent 3D shaded wall pixel blended over light ground
       final lightWallColors = {
-        _abgr(214, 204, 192),
-        _abgr(191, 180, 167),
-        _abgr(166, 154, 142),
-        _abgr(180, 196, 216),
-        _abgr(150, 169, 192),
-        _abgr(122, 141, 166),
+        _blendAbgr(lightGround, 184, 196, 198, 148),
+        _blendAbgr(lightGround, 158, 172, 176, 162),
+        _blendAbgr(lightGround, 134, 148, 154, 174),
+        _blendAbgr(lightGround, 168, 184, 196, 158),
+        _blendAbgr(lightGround, 140, 158, 172, 172),
+        _blendAbgr(lightGround, 114, 132, 148, 184),
       };
       expect(lightColors.intersection(lightWallColors).isNotEmpty, isTrue);
 
+      // Top horizon sky row (y=0) must be distinctly sky-blue compared to ground
+      final topLeftPixel = lightBuf[0];
+      final topBlue = (topLeftPixel >> 16) & 0xFF;
+      final topRed = topLeftPixel & 0xFF;
+      expect(topBlue, greaterThan(topRed + 60));
+
       final darkColors = darkBuf.toSet();
-      expect(darkColors.contains(_abgr(13, 21, 34)), isTrue); // night ground
-      expect(darkColors.contains(_abgr(36, 51, 74)), isTrue); // night std roof
-      expect(darkColors.contains(_abgr(46, 68, 98)), isTrue); // night tall roof
+      final darkGround = _abgr(20, 29, 43);
+      expect(darkColors.contains(darkGround), isTrue); // night ground
+      expect(darkColors.contains(_blendAbgr(darkGround, 64, 82, 104, 150)), isTrue); // night std roof
+      expect(darkColors.contains(_blendAbgr(darkGround, 78, 102, 130, 165)), isTrue); // night tall roof
 
       int diffs = 0;
       for (int i = 0; i < lightBuf.length; i++) {
         if (lightBuf[i] != darkBuf[i]) diffs++;
       }
       expect(diffs, greaterThan(10000));
+    });
+
+    test('Osm3dCamera pinhole projection tapers distance, tilts height, and round-trips ground coords', () {
+      final cam = Osm3dCamera(
+        width: 320,
+        height: 216,
+        anchorX: 226,
+        anchorY: 160,
+        headingDeg: 25.0,
+      );
+      final atAnchor = cam.projectLocal(0, 0, 0);
+      expect(atAnchor.sx, closeTo(226.0, 1e-6));
+      expect(atAnchor.sy, closeTo(160.0, 1e-6));
+      expect(atAnchor.scale, closeTo(1.0, 1e-6));
+
+      final ahead = cam.projectLocal(100, -180, 0);
+      final behind = cam.projectLocal(100, 60, 0);
+      expect(ahead.scale, lessThan(0.85)); // horizon convergence
+      expect(behind.scale, greaterThan(1.08)); // foreground magnification
+      expect(ahead.sy, lessThan(atAnchor.sy));
+      expect(behind.sy, greaterThan(atAnchor.sy));
+
+      // Ground unprojection round-trips cleanly across heading rotation
+      for (final sample in [(-90.0, -140.0), (0.0, 0.0), (75.0, 35.0), (140.0, -240.0)]) {
+        final p = cam.projectWorld(sample.$1, sample.$2);
+        final back = cam.screenToWorldOffset(p.sx, p.sy);
+        expect(back.wx, closeTo(sample.$1, 1e-3));
+        expect(back.wy, closeTo(sample.$2, 1e-3));
+      }
+    });
+
+    test('Osm3dRenderer.collectVisibleRoadLabels projects upright labels and avoids HUD zones', () {
+      final tile = OsmVectorTile.parsePbf(_buildSyntheticOsmTile(), 15, 26095, 14424)!;
+      final renderer = Osm3dRenderer();
+      final cam = Osm3dCamera(
+        width: 320,
+        height: 216,
+        anchorX: 226,
+        anchorY: 160,
+        headingDeg: 0.0,
+      );
+      final labels = renderer.collectVisibleRoadLabels(
+        width: 320,
+        height: 216,
+        tiles: [tile],
+        userWorldX: tile.x * 1024.0 + 512.0,
+        userWorldY: tile.y * 1024.0 + 512.0,
+        displayZoom: 17,
+        camera: cam,
+        skyHorizonPx: 22,
+        avoidHudPills: true,
+      );
+      expect(labels, isNotEmpty);
+      for (final l in labels) {
+        expect(l.angleDeg, greaterThan(-90.0));
+        expect(l.angleDeg, lessThanOrEqualTo(90.0));
+        expect(l.sy, greaterThanOrEqualTo(28.0));
+        // Must stay outside top-left maneuver HUD card
+        expect(l.sx < 148 && l.sy < 88, isFalse);
+      }
+    });
+
+    test('OsmVectorTile.extractBuildingsFromMask separates black-bordered magenta buildings into CW footprints', () {
+      const w = 128;
+      const h = 128;
+      final rgba = Uint8List(w * h * 4);
+      // Fill pale ground (#EFF2F6)
+      for (int i = 0; i < w * h; i++) {
+        rgba[i * 4] = 0xEF;
+        rgba[i * 4 + 1] = 0xF2;
+        rgba[i * 4 + 2] = 0xF6;
+        rgba[i * 4 + 3] = 0xFF;
+      }
+
+      void paintRect(int x0, int y0, int x1, int y1, int r, int g, int b) {
+        for (int y = y0; y <= y1; y++) {
+          for (int x = x0; x <= x1; x++) {
+            final idx = (y * w + x) * 4;
+            rgba[idx] = r;
+            rgba[idx + 1] = g;
+            rgba[idx + 2] = b;
+            rgba[idx + 3] = 255;
+          }
+        }
+      }
+
+      // Row house 1 with 1px black border (#000000) separating from adjacent house 2 (#E45CA8)
+      paintRect(10, 20, 36, 48, 0, 0, 0);
+      paintRect(11, 21, 35, 47, 0xE4, 0x5C, 0xA8);
+      paintRect(36, 20, 62, 48, 0, 0, 0);
+      paintRect(37, 21, 61, 47, 0xE4, 0x5C, 0xA8);
+
+      // Large apartment block
+      paintRect(70, 50, 114, 102, 0, 0, 0);
+      paintRect(71, 51, 113, 101, 0xE4, 0x5C, 0xA8);
+
+      final extracted = OsmVectorTile.extractBuildingsFromMask(rgba, w, h, 17, 104069, 57722);
+      expect(extracted.isSupplemental, isTrue);
+      expect(extracted.buildings.length, 3);
+      for (final b in extracted.buildings) {
+        expect(b.pts.length, greaterThanOrEqualTo(6));
+        expect(b.heightMeters, greaterThanOrEqualTo(8.5));
+      }
+      // Large apartment block (>= 950 px^2 -> 43*51 = 2193 px) gets tower height >= 26m
+      final apartment = extracted.buildings.reduce((a, b) => a.cx > b.cx ? a : b);
+      expect(apartment.heightMeters, greaterThanOrEqualTo(26.0));
+
+      // withoutOverlapsFrom strips overlapping buildings while keeping disjoint ones
+      final primaryTile = OsmVectorTile(
+        z: 17,
+        x: 104069,
+        y: 57722,
+        areas: const [],
+        roads: const [],
+        buildings: [extracted.buildings.first],
+      );
+      final filtered = extracted.withoutOverlapsFrom([primaryTile]);
+      expect(filtered.buildings.length, 2);
     });
 
     test('EspStreamService includes osm-3d and osm-3d-dark styles', () {

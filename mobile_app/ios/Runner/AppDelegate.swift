@@ -196,10 +196,22 @@ import UniformTypeIdentifiers
              intent: .defaultIntent
            ) {
           var finalImage = UIImage(cgImage: cgImage)
+          let roadLabels = args["roadLabels"] as? [[String: Any]]
+          let isDark = (args["isDark"] as? Bool) ?? false
           if let hud = args["hud"] as? [String: Any] {
             finalImage = Self.drawNavigationHud(
               baseImage: finalImage,
               hud: hud,
+              roadLabels: roadLabels,
+              isDark: isDark,
+              width: CGFloat(width),
+              height: CGFloat(height)
+            )
+          } else if let labels = roadLabels, !labels.isEmpty {
+            finalImage = Self.drawRoadLabelsOnImage(
+              baseImage: finalImage,
+              labels: labels,
+              isDark: isDark,
               width: CGFloat(width),
               height: CGFloat(height)
             )
@@ -334,10 +346,81 @@ import UniformTypeIdentifiers
     MediaRemoteObserver.shared.fetchNowPlaying(completion: completion)
   }
 
-  // ─── Pure-CPU CoreGraphics HUD Renderer (Works 100% in Background & Foreground) ───
+  // ─── Pure-CPU CoreGraphics Street Labels & HUD Renderer (Works 100% in Background & Foreground) ───
+  static func drawRoadLabelsOnImage(
+    baseImage: UIImage,
+    labels: [[String: Any]],
+    isDark: Bool,
+    width: CGFloat,
+    height: CGFloat
+  ) -> UIImage {
+    let size = CGSize(width: width, height: height)
+    UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
+    defer { UIGraphicsEndImageContext() }
+    guard let ctx = UIGraphicsGetCurrentContext() else { return baseImage }
+    baseImage.draw(in: CGRect(origin: .zero, size: size))
+    drawRoadLabels(in: ctx, labels: labels, isDark: isDark)
+    return UIGraphicsGetImageFromCurrentImageContext() ?? baseImage
+  }
+
+  static func drawRoadLabels(
+    in ctx: CGContext,
+    labels: [[String: Any]],
+    isDark: Bool
+  ) {
+    let textColor = isDark
+      ? UIColor(red: 0.90, green: 0.94, blue: 0.98, alpha: 1.0)
+      : UIColor(red: 0.16, green: 0.20, blue: 0.24, alpha: 1.0)
+    let haloColor = isDark
+      ? UIColor(red: 0.08, green: 0.11, blue: 0.17, alpha: 0.92)
+      : UIColor(white: 1.0, alpha: 0.94)
+
+    for item in labels {
+      guard let rawText = item["text"] as? String, !rawText.isEmpty,
+            let sx = (item["sx"] as? NSNumber)?.doubleValue,
+            let sy = (item["sy"] as? NSNumber)?.doubleValue else {
+        continue
+      }
+      let angleDeg = (item["angleDeg"] as? NSNumber)?.doubleValue ?? 0.0
+      let tier = (item["tier"] as? NSNumber)?.intValue ?? 1
+      let text = rawText.precomposedStringWithCanonicalMapping as NSString
+      let fontSize: CGFloat = tier >= 3 ? 8.5 : 7.5
+      let weight: UIFont.Weight = tier >= 3 ? .semibold : .medium
+      let font = UIFont.systemFont(ofSize: fontSize, weight: weight)
+
+      let haloAttrs: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: haloColor,
+        .strokeColor: haloColor,
+        .strokeWidth: 3.5
+      ]
+      let textAttrs: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: textColor
+      ]
+
+      let textSize = text.size(withAttributes: textAttrs)
+      let drawRect = CGRect(
+        x: -textSize.width / 2.0,
+        y: -textSize.height / 2.0,
+        width: textSize.width,
+        height: textSize.height
+      )
+
+      ctx.saveGState()
+      ctx.translateBy(x: CGFloat(sx), y: CGFloat(sy))
+      ctx.rotate(by: CGFloat(angleDeg * Double.pi / 180.0))
+      text.draw(in: drawRect, withAttributes: haloAttrs)
+      text.draw(in: drawRect, withAttributes: textAttrs)
+      ctx.restoreGState()
+    }
+  }
+
   static func drawNavigationHud(
     baseImage: UIImage,
     hud: [String: Any],
+    roadLabels: [[String: Any]]? = nil,
+    isDark: Bool = false,
     width: CGFloat,
     height: CGFloat
   ) -> UIImage {
@@ -347,6 +430,9 @@ import UniformTypeIdentifiers
     guard let ctx = UIGraphicsGetCurrentContext() else { return baseImage }
 
     baseImage.draw(in: CGRect(origin: .zero, size: size))
+    if let labels = roadLabels, !labels.isEmpty {
+      drawRoadLabels(in: ctx, labels: labels, isDark: isDark)
+    }
 
     let vx = CGFloat((hud["vx"] as? Double) ?? 226.0)
     let vy = CGFloat((hud["vy"] as? Double) ?? (Double(height) * 0.74)) // ~158 on h=216
@@ -358,37 +444,25 @@ import UniformTypeIdentifiers
     let etaText = ((hud["etaText"] as? String) ?? "1 phút").precomposedStringWithCanonicalMapping
     let subText = ((hud["subText"] as? String) ?? "00:00 • 0 km").precomposedStringWithCanonicalMapping
 
-    // 1. Vehicle 3D Chevron at (vx, vy)
+    // 1. Google Maps 3D Vehicle Puck (Soft blue aura + white disc + cobalt arrow)
     ctx.saveGState()
-    UIColor(red: 0.145, green: 0.388, blue: 0.922, alpha: 0.28).setFill()
-    ctx.fillEllipse(in: CGRect(x: vx - 15.0, y: vy - 14.0, width: 30.0, height: 30.0))
+    UIColor(red: 0.102, green: 0.451, blue: 0.910, alpha: 0.22).setFill()
+    ctx.fillEllipse(in: CGRect(x: vx - 14.5, y: vy - 14.5, width: 29.0, height: 29.0))
 
-    let leftWing = UIBezierPath()
-    leftWing.move(to: CGPoint(x: vx, y: vy - 12.0))
-    leftWing.addLine(to: CGPoint(x: vx, y: vy + 3.0))
-    leftWing.addLine(to: CGPoint(x: vx - 10.5, y: vy + 7.5))
-    leftWing.close()
-    UIColor(red: 0.220, green: 0.741, blue: 0.973, alpha: 1.0).setFill()
-    leftWing.fill()
+    UIColor(red: 0.420, green: 0.540, blue: 0.720, alpha: 0.35).setFill()
+    ctx.fillEllipse(in: CGRect(x: vx - 10.8, y: vy - 10.3, width: 21.6, height: 21.6))
 
-    let rightWing = UIBezierPath()
-    rightWing.move(to: CGPoint(x: vx, y: vy - 12.0))
-    rightWing.addLine(to: CGPoint(x: vx + 10.5, y: vy + 7.5))
-    rightWing.addLine(to: CGPoint(x: vx, y: vy + 3.0))
-    rightWing.close()
-    UIColor(red: 0.008, green: 0.518, blue: 0.780, alpha: 1.0).setFill()
-    rightWing.fill()
+    UIColor.white.setFill()
+    ctx.fillEllipse(in: CGRect(x: vx - 10.0, y: vy - 10.0, width: 20.0, height: 20.0))
 
-    let fullChevron = UIBezierPath()
-    fullChevron.move(to: CGPoint(x: vx, y: vy - 12.0))
-    fullChevron.addLine(to: CGPoint(x: vx + 10.5, y: vy + 7.5))
-    fullChevron.addLine(to: CGPoint(x: vx, y: vy + 3.0))
-    fullChevron.addLine(to: CGPoint(x: vx - 10.5, y: vy + 7.5))
-    fullChevron.close()
-    fullChevron.lineJoinStyle = .round
-    fullChevron.lineWidth = 2.0
-    UIColor.white.setStroke()
-    fullChevron.stroke()
+    let puckArrow = UIBezierPath()
+    puckArrow.move(to: CGPoint(x: vx, y: vy - 5.8))
+    puckArrow.addLine(to: CGPoint(x: vx + 4.8, y: vy + 4.8))
+    puckArrow.addLine(to: CGPoint(x: vx, y: vy + 1.8))
+    puckArrow.addLine(to: CGPoint(x: vx - 4.8, y: vy + 4.8))
+    puckArrow.close()
+    UIColor(red: 0.102, green: 0.451, blue: 0.910, alpha: 1.0).setFill()
+    puckArrow.fill()
     ctx.restoreGState()
 
     // 2. Bottom-Right Current Street Pill (Blue pill matching iPhone UI)

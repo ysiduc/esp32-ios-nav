@@ -52,7 +52,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   // OpenStreetMap 3D Vector Tile Cache & Software Block Renderer
   final Map<String, OsmVectorTile> _osmTileCache = {};
+  final Map<String, OsmVectorTile> _osmSuppBuildingCache = {};
   final Set<String> _pendingOsmFetches = {};
+  final Set<String> _pendingSuppFetches = {};
   final Osm3dRenderer _osm3dRenderer = Osm3dRenderer();
   String? _openFreeMapTileTemplate;
 
@@ -538,6 +540,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     int h, {
     int quality = 74,
     Map<String, dynamic>? hud,
+    List<Map<String, dynamic>>? roadLabels,
+    bool isDark = false,
   }) async {
     final maxBytes = _maxJpegFrameBytes;
     if (Platform.isIOS) {
@@ -547,7 +551,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           'width': w,
           'height': h,
           'quality': quality / 100.0,
+          'isDark': isDark,
           if (hud != null) 'hud': hud,
+          if (roadLabels != null && roadLabels.isNotEmpty) 'roadLabels': roadLabels,
         };
         var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         if (res != null && res.length > maxBytes) {
@@ -690,6 +696,39 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Osm3dCamera _buildOsm3dCamera({
+    required int width,
+    required int height,
+    required double anchorX,
+    required double anchorY,
+    required double headingDeg,
+  }) =>
+      Osm3dCamera(
+        width: width.toDouble(),
+        height: height.toDouble(),
+        anchorX: anchorX,
+        anchorY: anchorY,
+        headingDeg: headingDeg,
+        perspective3d: true,
+        tiltDeg: 31.0,
+        focal: 420.0,
+      );
+
+  static List<Map<String, dynamic>> _serializeRoadLabels(
+    List<OsmScreenRoadLabel> labels,
+  ) =>
+      labels
+          .map(
+            (l) => <String, dynamic>{
+              'text': l.text,
+              'sx': l.sx,
+              'sy': l.sy,
+              'angleDeg': l.angleDeg,
+              'tier': l.tier,
+            },
+          )
+          .toList(growable: false);
+
   List<OsmVectorTile> _collectVisibleOsmTiles(LatLng pos, {int radius = 1}) {
     const double n15 = 32768.0; // 2^15
     final double latRad = pos.latitude * (math.pi / 180.0);
@@ -705,6 +744,17 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final t15 = _osmTileCache[k15];
         if (t15 != null) {
           if (seen.add(k15)) out.add(t15);
+          if (t15.buildings.length < 80 && _osmSuppBuildingCache.isNotEmpty) {
+            for (int sx = 0; sx < 4; sx++) {
+              for (int sy = 0; sy < 4; sy++) {
+                final k17 = '17/${(tx << 2) + sx}/${(ty << 2) + sy}';
+                final supp = _osmSuppBuildingCache[k17];
+                if (supp != null && supp.buildings.isNotEmpty && seen.add(k17)) {
+                  out.add(supp);
+                }
+              }
+            }
+          }
           continue;
         }
         final k14 = '14/${tx >> 1}/${ty >> 1}';
@@ -732,36 +782,47 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required double sinT,
     required List<LatLng> pts,
     required bool isDark,
+    Osm3dCamera? camera,
   }) {
     if (pts.length < 2) return;
-    final casingColor = isDark ? img.ColorRgba8(0, 61, 102, 255) : img.ColorRgba8(0, 62, 179, 255);
-    final coreColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 102, 255, 255);
+    final casingColor = isDark
+        ? img.ColorRgba8(0, 66, 138, 255)
+        : img.ColorRgba8(8, 66, 168, 255);
+    final coreColor = isDark
+        ? img.ColorRgba8(48, 136, 255, 255)
+        : img.ColorRgba8(15, 98, 254, 255);
+    final chevronColor = img.ColorRgba8(255, 255, 255, 240);
+
     const double geoMarginDeg = 0.06;
     final double minGeoLat = userPos.latitude - geoMarginDeg;
     final double maxGeoLat = userPos.latitude + geoMarginDeg;
     final double minGeoLng = userPos.longitude - geoMarginDeg;
     final double maxGeoLng = userPos.longitude + geoMarginDeg;
 
-    final visibleSegs = <({int x1, int y1, int x2, int y2})>[];
-    double? cachedX;
-    double? cachedY;
+    final visibleSegs = <({int x1, int y1, int x2, int y2, double scale})>[];
+    double? cachedRx;
+    double? cachedRy;
     int cachedIdx = -1;
 
-    (double, double) projectPoint(int index, LatLng pt) {
-      if (cachedIdx == index && cachedX != null && cachedY != null) {
-        return (cachedX!, cachedY!);
+    (double, double) toCameraLocal(int index, LatLng pt) {
+      if (cachedIdx == index && cachedRx != null && cachedRy != null) {
+        return (cachedRx!, cachedRy!);
       }
       final double ptLatRad = pt.latitude * (math.pi / 180.0);
       final double ptWorldX = (pt.longitude + 180.0) / 360.0 * n * 256.0;
-      final double ptWorldY = (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) / 2.0 * n * 256.0;
-      final double px = ptWorldX - worldX;
-      final double py = ptWorldY - worldY;
-      final double sx = anchorX + (px * cosT + py * sinT);
-      final double sy = anchorY + (-px * sinT + py * cosT) * pitchY;
+      final double ptWorldY =
+          (1.0 - (math.log(math.tan(ptLatRad) + 1.0 / math.cos(ptLatRad)) / math.pi)) /
+              2.0 *
+              n *
+              256.0;
+      final double wx = ptWorldX - worldX;
+      final double wy = ptWorldY - worldY;
+      final double rx = camera != null ? camera.worldToRight(wx, wy) : (wx * cosT + wy * sinT);
+      final double ry = camera != null ? camera.worldToBack(wx, wy) : (-wx * sinT + wy * cosT);
       cachedIdx = index;
-      cachedX = sx;
-      cachedY = sy;
-      return (sx, sy);
+      cachedRx = rx;
+      cachedRy = ry;
+      return (rx, ry);
     }
 
     final double clipMinX = -24.0;
@@ -769,18 +830,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     final double clipMinY = -24.0;
     final double clipMaxY = h + 24.0;
 
-    for (int i = 0; i < pts.length - 1; i++) {
-      final a = pts[i];
-      final b = pts[i + 1];
-      if ((a.latitude < minGeoLat && b.latitude < minGeoLat) ||
-          (a.latitude > maxGeoLat && b.latitude > maxGeoLat) ||
-          (a.longitude < minGeoLng && b.longitude < minGeoLng) ||
-          (a.longitude > maxGeoLng && b.longitude > maxGeoLng)) {
-        continue;
-      }
-
-      final (x1, y1) = projectPoint(i, a);
-      final (x2, y2) = projectPoint(i + 1, b);
+    void pushClippedSegment(double x1, double y1, double x2, double y2, double scale) {
       final double dx = x2 - x1;
       final double dy = y2 - y1;
       double t0 = 0.0;
@@ -788,7 +838,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       bool visible = true;
       for (int edge = 0; edge < 4; edge++) {
         final double p = edge == 0 ? -dx : (edge == 1 ? dx : (edge == 2 ? -dy : dy));
-        final double q = edge == 0 ? (x1 - clipMinX) : (edge == 1 ? (clipMaxX - x1) : (edge == 2 ? (y1 - clipMinY) : (clipMaxY - y1)));
+        final double q = edge == 0
+            ? (x1 - clipMinX)
+            : (edge == 1 ? (clipMaxX - x1) : (edge == 2 ? (y1 - clipMinY) : (clipMaxY - y1)));
         if (p.abs() < 1e-9) {
           if (q < 0) {
             visible = false;
@@ -811,37 +863,136 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
       }
-      if (!visible) continue;
-
+      if (!visible) return;
       final cx1 = (x1 + t0 * dx).round();
       final cy1 = (y1 + t0 * dy).round();
       final cx2 = (x1 + t1 * dx).round();
       final cy2 = (y1 + t1 * dy).round();
-      if (cx1 == cx2 && cy1 == cy2 && visibleSegs.isNotEmpty) continue;
-      visibleSegs.add((x1: cx1, y1: cy1, x2: cx2, y2: cy2));
+      if (cx1 == cx2 && cy1 == cy2 && visibleSegs.isNotEmpty) return;
+      visibleSegs.add((x1: cx1, y1: cy1, x2: cx2, y2: cy2, scale: scale));
+    }
+
+    for (int i = 0; i < pts.length - 1; i++) {
+      final a = pts[i];
+      final b = pts[i + 1];
+      if ((a.latitude < minGeoLat && b.latitude < minGeoLat) ||
+          (a.latitude > maxGeoLat && b.latitude > maxGeoLat) ||
+          (a.longitude < minGeoLng && b.longitude < minGeoLng) ||
+          (a.longitude > maxGeoLng && b.longitude > maxGeoLng)) {
+        continue;
+      }
+
+      var (rx1, ry1) = toCameraLocal(i, a);
+      var (rx2, ry2) = toCameraLocal(i + 1, b);
+
+      if (camera != null && camera.perspective3d) {
+        double cz1 = camera.camZAt(ry1);
+        double cz2 = camera.camZAt(ry2);
+        if (cz1 < camera.nearCamZ && cz2 < camera.nearCamZ) continue;
+        if (cz1 < camera.nearCamZ) {
+          final double t = (camera.nearCamZ - cz1) / (cz2 - cz1);
+          rx1 = rx1 + t * (rx2 - rx1);
+          ry1 = ry1 + t * (ry2 - ry1);
+          cz1 = camera.nearCamZ;
+        }
+        if (cz2 < camera.nearCamZ) {
+          final double t = (camera.nearCamZ - cz2) / (cz1 - cz2);
+          rx2 = rx2 + t * (rx1 - rx2);
+          ry2 = ry2 + t * (ry1 - ry2);
+          cz2 = camera.nearCamZ;
+        }
+        final int parts = (cz1 - cz2).abs() > 38.0
+            ? ((cz1 - cz2).abs() / 38.0).ceil().clamp(2, 6)
+            : 1;
+        for (int k = 0; k < parts; k++) {
+          final double t0 = k / parts;
+          final double t1 = (k + 1) / parts;
+          final p0 = camera.projectLocal(rx1 + t0 * (rx2 - rx1), ry1 + t0 * (ry2 - ry1));
+          final p1 = camera.projectLocal(rx1 + t1 * (rx2 - rx1), ry1 + t1 * (ry2 - ry1));
+          pushClippedSegment(p0.sx, p0.sy, p1.sx, p1.sy, (p0.scale + p1.scale) * 0.5);
+        }
+      } else {
+        pushClippedSegment(
+          anchorX + rx1,
+          anchorY + ry1 * pitchY,
+          anchorX + rx2,
+          anchorY + ry2 * pitchY,
+          1.0,
+        );
+      }
     }
 
     for (int i = 0; i < visibleSegs.length; i++) {
       final seg = visibleSegs[i];
-      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: casingColor, thickness: 9);
-      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 4, color: casingColor);
-      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 4, color: casingColor);
+      final int caseW = (9.5 * seg.scale).round().clamp(5, 13);
+      final int capR = math.max(2, caseW ~/ 2);
+      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: casingColor, thickness: caseW);
+      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: capR, color: casingColor);
+      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: capR, color: casingColor);
     }
     for (int i = 0; i < visibleSegs.length; i++) {
       final seg = visibleSegs[i];
-      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: coreColor, thickness: 5);
-      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: 2, color: coreColor);
-      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: 2, color: coreColor);
+      final int coreW = (5.5 * seg.scale).round().clamp(3, 8);
+      final int capR = math.max(1, coreW ~/ 2);
+      img.drawLine(frame, x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, color: coreColor, thickness: coreW);
+      if (i == 0) img.fillCircle(frame, x: seg.x1, y: seg.y1, radius: capR, color: coreColor);
+      img.fillCircle(frame, x: seg.x2, y: seg.y2, radius: capR, color: coreColor);
     }
 
-    // Destination pin if close to screen
-    final (destSx, destSy) = projectPoint(pts.length - 1, pts.last);
-    final int dx = destSx.round();
-    final int dy = destSy.round();
-    if (dx >= -10 && dx <= w + 10 && dy >= -10 && dy <= h + 10) {
-      img.fillCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
-      img.drawCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
-      img.fillCircle(frame, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
+    // Directional white chevrons (>) along route matching Google Maps 3D navigation
+    double accumPx = 0.0;
+    double nextMarkPx = 28.0;
+    const double chevronSpacingPx = 44.0;
+    for (final seg in visibleSegs) {
+      final double dx = (seg.x2 - seg.x1).toDouble();
+      final double dy = (seg.y2 - seg.y1).toDouble();
+      final double segLen = math.sqrt(dx * dx + dy * dy);
+      if (segLen < 1.5) continue;
+      final double tx = dx / segLen;
+      final double ty = dy / segLen;
+      final double nx = -ty;
+      final double ny = tx;
+      while (accumPx + segLen >= nextMarkPx) {
+        final double t = (nextMarkPx - accumPx) / segLen;
+        final double px = seg.x1 + dx * t;
+        final double py = seg.y1 + dy * t;
+        final double arm = (2.8 * seg.scale).clamp(1.6, 3.8);
+        if ((px - anchorX).abs() >= 15.0 || (py - anchorY).abs() >= 15.0) {
+          final int tipX = (px + tx * arm).round();
+          final int tipY = (py + ty * arm).round();
+          final int lX = (px - tx * arm * 0.8 + nx * arm * 0.95).round();
+          final int lY = (py - ty * arm * 0.8 + ny * arm * 0.95).round();
+          final int rX = (px - tx * arm * 0.8 - nx * arm * 0.95).round();
+          final int rY = (py - ty * arm * 0.8 - ny * arm * 0.95).round();
+          final int thick = seg.scale >= 0.72 ? 2 : 1;
+          img.drawLine(frame, x1: lX, y1: lY, x2: tipX, y2: tipY, color: chevronColor, thickness: thick);
+          img.drawLine(frame, x1: rX, y1: rY, x2: tipX, y2: tipY, color: chevronColor, thickness: thick);
+        }
+        nextMarkPx += chevronSpacingPx;
+      }
+      accumPx += segLen;
+    }
+
+    // Destination pin if close and ahead of near plane
+    final (destRx, destRy) = toCameraLocal(pts.length - 1, pts.last);
+    if (camera == null || !camera.perspective3d || camera.camZAt(destRy) >= camera.nearCamZ) {
+      final double destSx;
+      final double destSy;
+      if (camera != null) {
+        final dp = camera.projectLocal(destRx, destRy);
+        destSx = dp.sx;
+        destSy = dp.sy;
+      } else {
+        destSx = anchorX + destRx;
+        destSy = anchorY + destRy * pitchY;
+      }
+      final int dx = destSx.round();
+      final int dy = destSy.round();
+      if (dx >= -10 && dx <= w + 10 && dy >= -10 && dy <= h + 10) {
+        img.fillCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 59, 48, 255));
+        img.drawCircle(frame, x: dx, y: dy, radius: 7, color: img.ColorRgba8(255, 255, 255, 255));
+        img.fillCircle(frame, x: dx, y: dy, radius: 3, color: img.ColorRgba8(255, 255, 255, 255));
+      }
     }
   }
 
@@ -868,12 +1019,20 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         final double anchorY = h * 0.67;
         const double pitchY = 0.88;
         final double th = headingDeg * (math.pi / 180.0);
+        final camera = _buildOsm3dCamera(
+          width: w,
+          height: h,
+          anchorX: anchorX,
+          anchorY: anchorY,
+          headingDeg: headingDeg,
+        );
+        final tiles = _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1);
         final frame = img.Image(width: w, height: h, numChannels: 4);
         _osm3dRenderer.renderFrame(
           buf32: frame.buffer.asUint32List(),
           width: w,
           height: h,
-          tiles: _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1),
+          tiles: tiles,
           userWorldX: worldX,
           userWorldY: worldY,
           displayZoom: zoom,
@@ -882,6 +1041,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           anchorY: anchorY,
           pitchY: pitchY,
           isDark: isDark,
+          perspective3d: true,
+          skyHorizonPx: 12,
         );
         _drawProjectedRouteOnFrame(
           frame: frame,
@@ -898,9 +1059,29 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           sinT: math.sin(th),
           pts: pts,
           isDark: isDark,
+          camera: camera,
         );
         _drawStandbyVehiclePuck(frame, anchorX.round(), anchorY.round(), isDark);
-        return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 85);
+        final labels = _osm3dRenderer.collectVisibleRoadLabels(
+          width: w,
+          height: h,
+          tiles: tiles,
+          userWorldX: worldX,
+          userWorldY: worldY,
+          displayZoom: zoom,
+          camera: camera,
+          skyHorizonPx: 12,
+          avoidHudPills: false,
+          maxLabels: 4,
+        );
+        return await _compressRgbaToJpeg(
+          frame.toUint8List(),
+          w,
+          h,
+          quality: 85,
+          roadLabels: _serializeRoadLabels(labels),
+          isDark: isDark,
+        );
       }
 
       final int centerTileX = (worldX / 256.0).floor();
@@ -1029,17 +1210,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _drawStandbyVehiclePuck(img.Image frame, int vx, int vy, bool isDark) {
-    final puckColor = isDark ? img.ColorRgba8(0, 240, 255, 255) : img.ColorRgba8(0, 122, 255, 255);
-    final auraColor = isDark ? img.ColorRgba8(0, 240, 255, 45) : img.ColorRgba8(0, 122, 255, 45);
-    img.fillCircle(frame, x: vx, y: vy, radius: 16, color: auraColor);
-    img.fillCircle(frame, x: vx, y: vy, radius: 11, color: img.ColorRgba8(255, 255, 255, 255));
-    img.fillCircle(frame, x: vx, y: vy, radius: 9, color: puckColor);
+    final auraColor = isDark ? img.ColorRgba8(48, 136, 255, 56) : img.ColorRgba8(26, 115, 232, 48);
+    final rimColor = isDark ? img.ColorRgba8(100, 148, 210, 220) : img.ColorRgba8(186, 206, 232, 235);
+    final arrowColor = isDark ? img.ColorRgba8(48, 136, 255, 255) : img.ColorRgba8(26, 115, 232, 255);
+    img.fillCircle(frame, x: vx, y: vy, radius: 14, color: auraColor);
+    img.fillCircle(frame, x: vx, y: vy, radius: 10, color: img.ColorRgba8(255, 255, 255, 255));
+    img.drawCircle(frame, x: vx, y: vy, radius: 10, color: rimColor);
     img.fillPolygon(frame, vertices: [
-      img.Point(vx, vy - 7),
-      img.Point(vx + 4, vy + 4),
+      img.Point(vx, vy - 6),
+      img.Point(vx + 5, vy + 5),
       img.Point(vx, vy + 2),
-      img.Point(vx - 4, vy + 4),
-    ], color: img.ColorRgba8(255, 255, 255, 255));
+      img.Point(vx - 5, vy + 5),
+    ], color: arrowColor);
   }
 
   /// Pure CPU Software 320x240 Full-Screen Navigation Frame Renderer (for background / screen-off)
@@ -1061,10 +1243,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
       final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
 
-      // ===== Heading-up + tilt + 3D extruded buildings (100% CPU) =====
+      // ===== Heading-up + 3D perspective projection (100% CPU) =====
       const int vx = 226;
       final int vy = (h * 0.74).round(); // ~160 for h=216
-      const double tilt = 0.74; // vertical foreshortening (camera pitch)
+      const double tilt = 0.74;
       final double th = headingDeg * (math.pi / 180.0);
       final double cosT = math.cos(th);
       final double sinT = math.sin(th);
@@ -1074,13 +1256,22 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
           ? navManager!.remainingPolylinePoints
           : (activeRoute?.polylinePoints ?? const <LatLng>[]);
+      List<Map<String, dynamic>>? osmNavRoadLabels;
 
       if (_isOsm3dStyle) {
+        final camera = _buildOsm3dCamera(
+          width: w,
+          height: h,
+          anchorX: vx.toDouble(),
+          anchorY: vy.toDouble(),
+          headingDeg: headingDeg,
+        );
+        final tiles = _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1);
         _osm3dRenderer.renderFrame(
           buf32: buf32,
           width: w,
           height: h,
-          tiles: _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1),
+          tiles: tiles,
           userWorldX: worldX,
           userWorldY: worldY,
           displayZoom: zoom,
@@ -1089,6 +1280,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           anchorY: vy.toDouble(),
           pitchY: tilt,
           isDark: isDark,
+          perspective3d: true,
+          skyHorizonPx: 22,
         );
         _drawProjectedRouteOnFrame(
           frame: frame,
@@ -1105,7 +1298,21 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           sinT: sinT,
           pts: pts,
           isDark: isDark,
+          camera: camera,
         );
+        final labels = _osm3dRenderer.collectVisibleRoadLabels(
+          width: w,
+          height: h,
+          tiles: tiles,
+          userWorldX: worldX,
+          userWorldY: worldY,
+          displayZoom: zoom,
+          camera: camera,
+          skyHorizonPx: 22,
+          avoidHudPills: true,
+          maxLabels: 7,
+        );
+        osmNavRoadLabels = _serializeRoadLabels(labels);
       } else {
         const int extrude = 8;
         final bool hasTiles3d = !isDark;
@@ -1253,17 +1460,27 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         'speedStr': '${speedKmh.round()}',
         'etaText': etaText,
         'subText': '$arrStr • $totDistStr',
+        'isDark': isDark,
       };
 
       if (Platform.isIOS) {
         final rawRgba = frame.toUint8List();
-        final iosJpg = await _compressRgbaToJpeg(rawRgba, w, h, quality: 82, hud: hudData);
+        final iosJpg = await _compressRgbaToJpeg(
+          rawRgba,
+          w,
+          h,
+          quality: 82,
+          hud: hudData,
+          roadLabels: osmNavRoadLabels,
+          isDark: isDark,
+        );
         if (iosJpg != null && iosJpg.isNotEmpty) {
           return iosJpg;
         }
       }
 
       // Pure-Dart fallback if non-iOS
+      _drawStandbyVehiclePuck(frame, vx, vy, isDark);
       final maxBytes = _maxJpegFrameBytes;
       var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 82));
       if (jpg.length > maxBytes) {
@@ -1455,6 +1672,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
       }
+      _maybePrefetchSupplementalBuildings(pos, latRad);
       return;
     }
 
@@ -1581,6 +1799,78 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _latestJpegBytes = null;
     notifyListeners();
+  }
+
+  void _maybePrefetchSupplementalBuildings(LatLng pos, double latRad) {
+    const double n17 = 131072.0; // 2^17
+    final int cx17 = ((pos.longitude + 180.0) / 360.0 * n17).floor();
+    final int cy17 =
+        ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n17)
+            .floor();
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
+        if (_pendingSuppFetches.length >= 6) return;
+        final int x17 = cx17 + dx;
+        final int y17 = cy17 + dy;
+        final String k17 = '17/$x17/$y17';
+        if (_osmSuppBuildingCache.containsKey(k17) || _pendingSuppFetches.contains(k17)) {
+          continue;
+        }
+        final String parentKey15 = '15/${x17 >> 2}/${y17 >> 2}';
+        final parent15 = _osmTileCache[parentKey15];
+        if (parent15 == null || parent15.buildings.length >= 80) {
+          continue;
+        }
+        _fetchSupplementalBuildingTile(k17, x17, y17, parent15);
+      }
+    }
+  }
+
+  Future<void> _fetchSupplementalBuildingTile(
+    String k17,
+    int x17,
+    int y17,
+    OsmVectorTile parent15,
+  ) async {
+    _pendingSuppFetches.add(k17);
+    try {
+      final url =
+          'https://mt1.google.com/vt/lyrs=m&x=$x17&y=$y17&z=17&hl=vi&apistyle='
+          's.e%3Al|p.v%3Aoff%2C'
+          's.t%3A2|p.v%3Aoff%2C'
+          's.t%3A4|p.v%3Aoff%2C'
+          's.t%3A5|s.e%3Ag|p.c%3A%23eff2f6%2C'
+          's.t%3A81|s.e%3Ag.f|p.c%3A%23eff2f6%2C'
+          's.t%3A1297|s.e%3Ag.f|p.c%3A%23e45ca8%2C'
+          's.t%3A1297|s.e%3Ag.s|p.c%3A%23000000';
+      final resp = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'Mozilla/5.0'},
+      ).timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) return;
+
+      final decoded = img.decodePng(resp.bodyBytes);
+      if (decoded == null) return;
+      final rgba = decoded.numChannels == 4 ? decoded : decoded.convert(numChannels: 4);
+      final rawExtracted = OsmVectorTile.extractBuildingsFromMask(
+        rgba.toUint8List(),
+        rgba.width,
+        rgba.height,
+        17,
+        x17,
+        y17,
+      );
+      final deduplicated = rawExtracted.withoutOverlapsFrom([parent15]);
+      _osmSuppBuildingCache[k17] = deduplicated;
+      if (_osmSuppBuildingCache.length > 64) {
+        _osmSuppBuildingCache.remove(_osmSuppBuildingCache.keys.first);
+      }
+      _latestJpegBytes = null;
+      notifyListeners();
+    } catch (_) {
+    } finally {
+      _pendingSuppFetches.remove(k17);
+    }
   }
 
   static const String _goongMapApiStyle =
