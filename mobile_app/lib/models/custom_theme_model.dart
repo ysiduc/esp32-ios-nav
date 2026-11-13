@@ -223,6 +223,12 @@ class CustomThemeSongSpec {
   final double fontSize;
   final String color;
   final String bgColor;
+  final double? boxX;
+  final double? boxY;
+  final double? boxW;
+  final double? boxH;
+  final String? border;
+  final String? durColor;
 
   const CustomThemeSongSpec({
     this.visible = true,
@@ -232,6 +238,12 @@ class CustomThemeSongSpec {
     this.fontSize = 11,
     this.color = '#FEF08A',
     this.bgColor = '#0B111A',
+    this.boxX,
+    this.boxY,
+    this.boxW,
+    this.boxH,
+    this.border,
+    this.durColor,
   });
 
   factory CustomThemeSongSpec.fromJson(Map<String, dynamic> json) {
@@ -243,6 +255,12 @@ class CustomThemeSongSpec {
       fontSize: (json['fontSize'] as num?)?.toDouble() ?? 11,
       color: json['color']?.toString() ?? '#FEF08A',
       bgColor: json['bgColor']?.toString() ?? '#0B111A',
+      boxX: (json['boxX'] as num?)?.toDouble(),
+      boxY: (json['boxY'] as num?)?.toDouble(),
+      boxW: (json['boxW'] as num?)?.toDouble(),
+      boxH: (json['boxH'] as num?)?.toDouble(),
+      border: json['border']?.toString(),
+      durColor: json['durColor']?.toString(),
     );
   }
 
@@ -255,6 +273,12 @@ class CustomThemeSongSpec {
       fontSize: fontSize,
       color: color,
       bgColor: bgColor ?? this.bgColor,
+      boxX: boxX,
+      boxY: boxY,
+      boxW: boxW,
+      boxH: boxH,
+      border: border,
+      durColor: durColor,
     );
   }
 
@@ -266,6 +290,12 @@ class CustomThemeSongSpec {
         'fontSize': fontSize.round(),
         'color': color,
         'bgColor': bgColor,
+        if (boxX != null) 'boxX': boxX!.round(),
+        if (boxY != null) 'boxY': boxY!.round(),
+        if (boxW != null) 'boxW': boxW!.round(),
+        if (boxH != null) 'boxH': boxH!.round(),
+        if (border != null && border!.isNotEmpty) 'border': border,
+        if (durColor != null && durColor!.isNotEmpty) 'durColor': durColor,
       };
 
   Map<String, dynamic> toEsp32Json() => {
@@ -276,6 +306,25 @@ class CustomThemeSongSpec {
         'color': CustomThemeSpec.toHex6(color, fallback: '#FEF08A'),
         'bgColor': CustomThemeSpec.toHex6(bgColor, fallback: '#0B111A'),
       };
+
+  /// Compact Màn 2 song box specification uploaded inside /custom_man2.json.
+  Map<String, dynamic> toEsp32Man2Json({double fallbackCardX = 158, double fallbackCardW = 158}) {
+    final effX = (boxX ?? (fallbackCardX + 6)).round();
+    final effY = (boxY ?? 80).round();
+    final effW = (boxW ?? (fallbackCardW - 12)).round();
+    final effH = (boxH ?? 40).round();
+    return {
+      'visible': visible,
+      'boxX': effX,
+      'boxY': effY,
+      'boxW': effW,
+      'boxH': effH,
+      'bgColor': CustomThemeSpec.toHex6(bgColor, fallback: '#0B111A'),
+      'border': CustomThemeSpec.toHex6(border, fallback: '#1E293B'),
+      'color': CustomThemeSpec.toHex6(color, fallback: '#FACC15'),
+      'durColor': CustomThemeSpec.toHex6(durColor, fallback: '#38BDF8'),
+    };
+  }
 }
 
 class CustomThemeDurationSpec {
@@ -432,13 +481,133 @@ class CustomThemeNotifMsgSpec {
       };
 }
 
+/// Minimap placement & frame specification for Màn 2 (320x240 canvas).
+class CustomMan2MinimapSpec {
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+  final double r;
+  final String border;
+
+  const CustomMan2MinimapSpec({
+    this.x = 6,
+    this.y = 8,
+    this.w = 144,
+    this.h = 224,
+    this.r = 10,
+    this.border = '#38BDF8',
+  });
+
+  factory CustomMan2MinimapSpec.fromJson(Map<String, dynamic> json) {
+    return CustomMan2MinimapSpec(
+      x: (json['x'] as num?)?.toDouble() ?? 6,
+      y: (json['y'] as num?)?.toDouble() ?? 8,
+      w: ((json['w'] as num?)?.toDouble() ?? 144).clamp(60.0, 144.0),
+      h: ((json['h'] as num?)?.toDouble() ?? 224).clamp(60.0, 224.0),
+      r: (json['r'] as num?)?.toDouble() ?? 10,
+      border: json['border']?.toString() ?? '#38BDF8',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'x': x.round(),
+        'y': y.round(),
+        'w': w.round(),
+        'h': h.round(),
+        'r': r.round(),
+        'border': border,
+      };
+
+  Map<String, dynamic> toEsp32Json() => {
+        'x': x.round(),
+        'y': y.round(),
+        'w': w.round().clamp(60, 144),
+        'h': h.round().clamp(60, 224),
+        'r': r.round(),
+        'border': CustomThemeSpec.toHex6(border, fallback: '#38BDF8'),
+      };
+}
+
+/// Notification card placement & colors for Màn 2 (320x240 canvas).
+class CustomMan2NotifSpec {
+  final bool visible;
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+  final double r;
+  final String fill;
+  final String border;
+  final String titleColor;
+  final String msgColor;
+
+  const CustomMan2NotifSpec({
+    this.visible = true,
+    this.x = 164,
+    this.y = 124,
+    this.w = 146,
+    this.h = 106,
+    this.r = 8,
+    this.fill = '#0B111A',
+    this.border = '#1E293B',
+    this.titleColor = '#FACC15',
+    this.msgColor = '#FFFFFF',
+  });
+
+  factory CustomMan2NotifSpec.fromJson(Map<String, dynamic> json) {
+    return CustomMan2NotifSpec(
+      visible: json['visible'] != false,
+      x: (json['x'] as num?)?.toDouble() ?? 164,
+      y: (json['y'] as num?)?.toDouble() ?? 124,
+      w: ((json['w'] as num?)?.toDouble() ?? 146).clamp(100.0, 160.0),
+      h: ((json['h'] as num?)?.toDouble() ?? 106).clamp(68.0, 130.0),
+      r: (json['r'] as num?)?.toDouble() ?? 8,
+      fill: json['fill']?.toString() ?? '#0B111A',
+      border: json['border']?.toString() ?? '#1E293B',
+      titleColor: json['titleColor']?.toString() ?? '#FACC15',
+      msgColor: json['msgColor']?.toString() ?? '#FFFFFF',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'visible': visible,
+        'x': x.round(),
+        'y': y.round(),
+        'w': w.round(),
+        'h': h.round(),
+        'r': r.round(),
+        'fill': fill,
+        'border': border,
+        'titleColor': titleColor,
+        'msgColor': msgColor,
+      };
+
+  Map<String, dynamic> toEsp32Json() => {
+        'visible': visible,
+        'x': x.round(),
+        'y': y.round(),
+        'w': w.round().clamp(100, 160),
+        'h': h.round().clamp(68, 130),
+        'fill': CustomThemeSpec.toHex6(fill, fallback: '#0B111A'),
+        'border': CustomThemeSpec.toHex6(border, fallback: '#1E293B'),
+        'titleColor': CustomThemeSpec.toHex6(titleColor, fallback: '#FACC15'),
+        'msgColor': CustomThemeSpec.toHex6(msgColor, fallback: '#FFFFFF'),
+      };
+}
+
 /// Complete declarative theme layout (320x240) rendered identically on Flutter & ESP32.
 class CustomThemeSpec {
+  final int targetScreen; // 1 = Màn chờ (theme 250), 2 = Màn bản đồ chờ (style 250)
   final String name;
   final String subtitle;
   final String accentColor;
   final String bgColor;
   final bool showWaybar;
+  final bool showPanel;
+  final CustomThemeBox? panel;
+  final CustomMan2MinimapSpec minimap;
+  final CustomMan2NotifSpec notif;
   final List<CustomThemeBox> boxes;
   final List<CustomThemeLabel> labels;
   final CustomThemeClockSpec clock;
@@ -449,11 +618,16 @@ class CustomThemeSpec {
   final CustomThemeNotifMsgSpec notifMsg;
 
   const CustomThemeSpec({
+    this.targetScreen = 1,
     required this.name,
     this.subtitle = 'Theme ZIP tùy chỉnh',
     this.accentColor = '#00E5FF',
     this.bgColor = '#0B111A',
     this.showWaybar = false,
+    this.showPanel = true,
+    this.panel,
+    this.minimap = const CustomMan2MinimapSpec(),
+    this.notif = const CustomMan2NotifSpec(),
     this.boxes = const [],
     this.labels = const [],
     this.clock = const CustomThemeClockSpec(),
@@ -467,11 +641,17 @@ class CustomThemeSpec {
   factory CustomThemeSpec.fromJson(
     Map<String, dynamic> json, {
     String fallbackName = 'Theme tùy chỉnh',
+    int defaultTargetScreen = 1,
   }) {
     final rawBoxes = (json['boxes'] as List?) ?? const [];
     final rawLabels = (json['labels'] as List?) ?? const [];
+    final explicitScreen = (json['screen'] as num?)?.toInt();
+    final inferredScreen = explicitScreen == 2 || explicitScreen == 1
+        ? explicitScreen!
+        : (json['minimap'] is Map ? 2 : defaultTargetScreen);
 
     return CustomThemeSpec(
+      targetScreen: inferredScreen,
       name: (json['name']?.toString().trim().isNotEmpty == true)
           ? json['name'].toString().trim()
           : fallbackName,
@@ -481,6 +661,18 @@ class CustomThemeSpec {
       accentColor: json['accentColor']?.toString() ?? '#00E5FF',
       bgColor: json['bgColor']?.toString() ?? '#0B111A',
       showWaybar: json['showWaybar'] == true,
+      showPanel: json['showPanel'] != false,
+      panel: json['panel'] is Map
+          ? CustomThemeBox.fromJson(Map<String, dynamic>.from(json['panel']))
+          : null,
+      minimap: json['minimap'] is Map
+          ? CustomMan2MinimapSpec.fromJson(
+              Map<String, dynamic>.from(json['minimap']))
+          : const CustomMan2MinimapSpec(),
+      notif: json['notif'] is Map
+          ? CustomMan2NotifSpec.fromJson(
+              Map<String, dynamic>.from(json['notif']))
+          : const CustomMan2NotifSpec(),
       boxes: rawBoxes
           .whereType<Map>()
           .map((m) => CustomThemeBox.fromJson(Map<String, dynamic>.from(m)))
@@ -516,13 +708,21 @@ class CustomThemeSpec {
     );
   }
 
-  CustomThemeSpec copyWith({CustomThemeSongSpec? song}) {
+  CustomThemeSpec copyWith({
+    int? targetScreen,
+    CustomThemeSongSpec? song,
+  }) {
     return CustomThemeSpec(
+      targetScreen: targetScreen ?? this.targetScreen,
       name: name,
       subtitle: subtitle,
       accentColor: accentColor,
       bgColor: bgColor,
       showWaybar: showWaybar,
+      showPanel: showPanel,
+      panel: panel,
+      minimap: minimap,
+      notif: notif,
       boxes: boxes,
       labels: labels,
       clock: clock,
@@ -535,11 +735,16 @@ class CustomThemeSpec {
   }
 
   Map<String, dynamic> toJson() => {
+        'screen': targetScreen,
         'name': name,
         'subtitle': subtitle,
         'accentColor': accentColor,
         'bgColor': bgColor,
         'showWaybar': showWaybar,
+        'showPanel': showPanel,
+        if (panel != null) 'panel': panel!.toJson(),
+        if (targetScreen == 2) 'minimap': minimap.toJson(),
+        if (targetScreen == 2) 'notif': notif.toJson(),
         'boxes': boxes.map((b) => b.toJson()).toList(),
         'labels': labels.map((l) => l.toJson()).toList(),
         'clock': clock.toJson(),
@@ -550,7 +755,7 @@ class CustomThemeSpec {
         'notifMsg': notifMsg.toJson(),
       };
 
-  /// Compact 320x240 layout payload uploaded to ESP32 SPIFFS (/custom_theme.json).
+  /// Compact 320x240 layout payload uploaded to ESP32 SPIFFS (/custom_theme.json) for Màn 1.
   Map<String, dynamic> toEsp32CompactJson() => {
         'bgColor': toHex6(bgColor, fallback: '#0B111A'),
         'showWaybar': showWaybar,
@@ -563,6 +768,33 @@ class CustomThemeSpec {
         'notifTitle': notifTitle.toEsp32Json(),
         'notifMsg': notifMsg.toEsp32Json(),
       };
+
+  /// Compact 320x240 layout payload uploaded to ESP32 SPIFFS (/custom_man2.json) for Màn 2.
+  Map<String, dynamic> toEsp32Man2CompactJson() {
+    final effectivePanel = panel ??
+        const CustomThemeBox(
+          x: 158,
+          y: 6,
+          w: 158,
+          h: 228,
+          r: 12,
+          fill: '#131B26',
+          border: '#202D3D',
+        );
+    return {
+      'bgColor': toHex6(bgColor, fallback: '#0B111A'),
+      'showPanel': showPanel,
+      'panel': effectivePanel.toEsp32Json(),
+      'minimap': minimap.toEsp32Json(),
+      'clock': clock.toEsp32Json(),
+      'date': date.toEsp32Json(),
+      'song': song.toEsp32Man2Json(
+        fallbackCardX: effectivePanel.x,
+        fallbackCardW: effectivePanel.w,
+      ),
+      'notif': notif.toEsp32Json(),
+    };
+  }
 
   static Color parseColor(String? raw, Color fallback) {
     if (raw == null || raw.isEmpty) return fallback;
@@ -612,6 +844,8 @@ class ImportedCustomTheme {
     required this.spec,
   });
 
+  int get targetScreen => spec.targetScreen;
+
   Color get accentColor =>
       CustomThemeSpec.parseColor(accentHex, const Color(0xFF00E5FF));
 
@@ -648,3 +882,4 @@ class ImportedCustomTheme {
         'spec': spec.toJson(),
       };
 }
+

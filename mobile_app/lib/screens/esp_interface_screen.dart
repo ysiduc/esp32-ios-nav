@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../config/simulator_presets.dart';
@@ -24,10 +26,26 @@ import '../widgets/simulator/esp32_bezel.dart';
 import '../widgets/simulator/esp_man2_preview.dart';
 import '../widgets/simulator/retro_mac_theme.dart';
 
+class _Man2ThemePreset {
+  final int styleIndex;
+  final String name;
+  final String subtitle;
+  final Color accent;
+  final IconData icon;
+
+  const _Man2ThemePreset({
+    required this.styleIndex,
+    required this.name,
+    required this.subtitle,
+    required this.accent,
+    required this.icon,
+  });
+}
+
 /// Unified "Giao diện ESP32" screen combining:
 /// 1. Screen brightness slider
 /// 2. Synchronized Màn 1 / Màn 2 preview bezel + ESP32 hardware sync
-/// 3. Built-in 6 themes + ZIP custom theme importer
+/// 3. Màn 1 & Màn 2 themes (built-in + "+" custom photo + ZIP theme importer)
 /// 4. Minimap zoom level
 /// 5. Minimap source style
 class EspInterfaceScreen extends StatefulWidget {
@@ -51,6 +69,37 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
   Timer? _clockTimer;
   Timer? _brightnessDebounce;
   bool _isUploadingZipToEsp = false;
+
+  static const List<_Man2ThemePreset> _man2Presets = [
+    _Man2ThemePreset(
+      styleIndex: 0,
+      name: 'Màn 2 Mặc định',
+      subtitle: 'Minimap trái + HUD tối',
+      accent: Color(0xFF007AFF),
+      icon: Icons.splitscreen_rounded,
+    ),
+    _Man2ThemePreset(
+      styleIndex: 1,
+      name: 'Neon Cyber Map',
+      subtitle: 'Khung Cyber hồng & 7-đoạn',
+      accent: Color(0xFFEC4899),
+      icon: Icons.bolt_rounded,
+    ),
+    _Man2ThemePreset(
+      styleIndex: 2,
+      name: 'Sunflower Warm',
+      subtitle: 'Hổ phách vàng ấm dịu mắt',
+      accent: Color(0xFFEAB308),
+      icon: Icons.wb_sunny_rounded,
+    ),
+    _Man2ThemePreset(
+      styleIndex: 3,
+      name: 'Minimap Bên Phải',
+      subtitle: 'Đảo minimap sang phải ngọc',
+      accent: Color(0xFF10B981),
+      icon: Icons.compare_arrows_rounded,
+    ),
+  ];
 
   static const _zoomDescriptions = <int, String>{
     14: 'Toàn thành phố & trục giao thông chính',
@@ -130,16 +179,16 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     if (screenIdx == 0) {
       await ble.setPreviewScreenMode(1);
       final activeCustom = customThemes.activeCustomTheme;
-      if (activeCustom != null) {
-        await ble.sendRawJson(jsonEncode({'type': 'THEME_SELECT', 'theme': 250}));
-      } else {
-        await ble.sendRawJson(jsonEncode({
-          'type': 'THEME_SELECT',
-          'theme': customThemes.builtInIndex,
-        }));
-      }
+      await ble.sendRawJson(jsonEncode({
+        'type': 'THEME_SELECT',
+        'theme': activeCustom != null ? 250 : customThemes.builtInIndex,
+      }));
     } else {
       await ble.setPreviewScreenMode(2);
+      final activeMan2 = customThemes.activeMan2CustomTheme;
+      await ble.sendMan2StyleToEsp32(
+        activeMan2 != null ? 250 : customThemes.man2BuiltInIndex,
+      );
     }
   }
 
@@ -181,10 +230,66 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     }
   }
 
+  Future<void> _selectMan2BuiltInTheme(int styleIndex) async {
+    final customThemes = context.read<CustomThemeService>();
+    final ble = context.read<BleService>();
+
+    await customThemes.selectMan2BuiltIn(styleIndex);
+    setState(() => _previewScreen = 1);
+
+    if (ble.isConnected) {
+      await ble.setPreviewScreenMode(2);
+      await ble.sendMan2StyleToEsp32(styleIndex);
+    }
+  }
+
+  Future<void> _pickDefaultWaitImage() async {
+    final customThemes = context.read<CustomThemeService>();
+    final ble = context.read<BleService>();
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(source: ImageSource.gallery);
+      if (picked == null || !mounted) return;
+
+      final rawBytes = await picked.readAsBytes();
+      setState(() {
+        _previewScreen = 0;
+        _isUploadingZipToEsp = true;
+      });
+
+      final saved = await customThemes.saveDefaultStaticBackground(rawBytes);
+      if (ble.isConnected) {
+        await ble.setPreviewScreenMode(1);
+        final ok = await ble.sendDefaultWallpaperToEsp32(saved.espJpeg);
+        if (mounted) {
+          _showSnack(
+            ok
+                ? 'Đã đổi ảnh nền Màn Chờ Mặc Định sang ESP32!'
+                : 'Đã đổi ảnh trên app, chưa gửi được sang ESP32',
+            isError: !ok,
+          );
+        }
+      } else if (mounted) {
+        _showSnack('Đã cập nhật ảnh nền Màn Chờ Mặc Định!');
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnack('Không thể chọn ảnh: $e', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingZipToEsp = false);
+    }
+  }
+
   Future<void> _selectCustomTheme(ImportedCustomTheme theme) async {
     final customThemes = context.read<CustomThemeService>();
-    await customThemes.selectCustom(theme.id);
-    setState(() => _previewScreen = 0);
+    if (theme.targetScreen == 2) {
+      await customThemes.selectMan2Custom(theme.id);
+      setState(() => _previewScreen = 1);
+    } else {
+      await customThemes.selectCustom(theme.id);
+      setState(() => _previewScreen = 0);
+    }
     await _pushCustomThemeToEsp(theme);
   }
 
@@ -195,16 +300,20 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     setState(() => _isUploadingZipToEsp = true);
     try {
       final espFile = File(theme.espBgImagePath);
-      if (!await espFile.exists()) {
-        _showSnack('Không tìm thấy ảnh nền ESP32 của theme ${theme.name}', isError: true);
-        return;
-      }
-      final bgBytes = await espFile.readAsBytes();
-      await ble.setPreviewScreenMode(1);
-      final ok = await ble.sendCustomThemeToEsp32(
-        bgJpegBytes: bgBytes,
-        specJson: theme.spec.toEsp32CompactJson(),
-      );
+      final bgBytes =
+          await espFile.exists() ? await espFile.readAsBytes() : Uint8List(0);
+      final isMan2 = theme.targetScreen == 2;
+
+      await ble.setPreviewScreenMode(isMan2 ? 2 : 1);
+      final ok = isMan2
+          ? await ble.sendCustomMan2ThemeToEsp32(
+              bgJpegBytes: bgBytes,
+              specJson: theme.spec.toEsp32Man2CompactJson(),
+            )
+          : await ble.sendCustomThemeToEsp32(
+              bgJpegBytes: bgBytes,
+              specJson: theme.spec.toEsp32CompactJson(),
+            );
       if (mounted) {
         if (ok) {
           _showSnack('Đã đồng bộ theme "${theme.name}" sang ESP32!');
@@ -220,19 +329,22 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
   Future<void> _importZipTheme() async {
     final customThemes = context.read<CustomThemeService>();
     try {
-      final imported = await customThemes.importFromPicker();
+      final imported = await customThemes.importFromPicker(
+        defaultTargetScreen: _previewScreen + 1,
+      );
       if (!mounted || imported.isEmpty) return;
 
-      setState(() => _previewScreen = 0);
       final first = imported.first;
+      setState(() => _previewScreen = first.targetScreen == 2 ? 1 : 0);
+
       final ble = context.read<BleService>();
       if (ble.isConnected) {
         await _pushCustomThemeToEsp(first);
       } else {
         _showSnack(
           imported.length > 1
-              ? 'Đã nhập ${imported.length} theme từ ZIP!'
-              : 'Đã nhập theme "${first.name}"!',
+              ? 'Đã nhập ${imported.length} theme Màn ${first.targetScreen} từ ZIP!'
+              : 'Đã nhập theme "${first.name}" (Màn ${first.targetScreen})!',
         );
       }
     } catch (e) {
@@ -277,10 +389,13 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     );
     if (confirmed != true || !mounted) return;
 
-    final wasActive = customThemes.activeCustomThemeId == theme.id;
+    final wasActive1 = customThemes.activeCustomThemeId == theme.id;
+    final wasActive2 = customThemes.activeMan2CustomThemeId == theme.id;
     await customThemes.deleteCustomTheme(theme.id);
-    if (wasActive && _previewScreen == 0) {
+    if (wasActive1 && _previewScreen == 0) {
       await _selectBuiltInTheme(customThemes.builtInIndex);
+    } else if (wasActive2 && _previewScreen == 1) {
+      await _selectMan2BuiltInTheme(customThemes.man2BuiltInIndex);
     }
   }
 
@@ -309,11 +424,12 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
         ),
         content: const SingleChildScrollView(
           child: Text(
-            'Nén các file sau vào 1 file .zip:\n\n'
-            '1. Ảnh nền: bg.jpg hoặc bg.png (tỷ lệ chuẩn 4:3 — 320x240 hoặc 640x480).\n'
-            '2. File cấu hình: theme.json (hoặc file code .dart / .h chứa bố cục & mã màu).\n\n'
-            'Nếu file ZIP chứa nhiều thư mục theme con, ứng dụng sẽ tự nhập tất cả vào danh sách theme.\n\n'
-            'Bạn có thể xuất file ZIP mẫu để chỉnh sửa nhanh theo hệ tọa độ 320x240px.',
+            'Hỗ trợ ZIP cho cả Màn 1 (Màn chờ) & Màn 2 (Minimap chờ) trên canvas 320x240px:\n\n'
+            '1. Ảnh nền: bg.jpg hoặc bg.png (tỷ lệ 4:3 — 320x240 hoặc 640x480).\n'
+            '2. File theme.json (hoặc code .dart/.h):\n'
+            '   • "screen": 1 (Màn 1) hoặc "screen": 2 (Màn 2)\n'
+            '   • Màn 2 hỗ trợ panel, minimap, clock, date, song, notif.\n\n'
+            'Chọn xuất file mẫu bên dưới để tải nhanh mẫu Màn 1 hoặc Màn 2.',
             style: TextStyle(color: Color(0xFF3C3C43), fontSize: 13.5, height: 1.45),
           ),
         ),
@@ -321,6 +437,23 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Đóng', style: TextStyle(color: Color(0xFF8E8E93))),
+          ),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF007AFF),
+              side: const BorderSide(color: Color(0xFF007AFF)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await customThemes.exportSampleThemeZip(screen: 1);
+              } catch (e) {
+                if (mounted) _showSnack('Không thể chia sẻ mẫu Màn 1: $e', isError: true);
+              }
+            },
+            icon: const Icon(Icons.ios_share_rounded, size: 16),
+            label: const Text('Mẫu Màn 1', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
@@ -332,16 +465,13 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             onPressed: () async {
               Navigator.pop(ctx);
               try {
-                await customThemes.exportSampleThemeZip();
+                await customThemes.exportSampleThemeZip(screen: 2);
               } catch (e) {
-                if (mounted) _showSnack('Không thể chia sẻ mẫu ZIP: $e', isError: true);
+                if (mounted) _showSnack('Không thể chia sẻ mẫu Màn 2: $e', isError: true);
               }
             },
-            icon: const Icon(Icons.ios_share_rounded, size: 17),
-            label: const Text(
-              'Tải file ZIP mẫu',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
+            icon: const Icon(Icons.ios_share_rounded, size: 16),
+            label: const Text('Mẫu Màn 2', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -650,6 +780,8 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
                     mediaService: mediaService,
                     callService: callService,
                     currentTime: _currentTime,
+                    man2BuiltInStyle: customThemes.man2BuiltInIndex,
+                    man2CustomTheme: customThemes.activeMan2CustomTheme,
                   ),
                 if (brightnessDim > 0.02)
                   IgnorePointer(
@@ -793,7 +925,11 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
 
     switch (builtIn) {
       case ESP32Interface.customStatic:
-        return CustomStaticTheme(currentTime: _currentTime, mockData: mock);
+        return CustomStaticTheme(
+          currentTime: _currentTime,
+          mockData: mock,
+          customBgPath: customThemes.customStaticBgPath,
+        );
       case ESP32Interface.carbonSport:
         return CarbonSportTheme(currentTime: _currentTime, mockData: mock);
       case ESP32Interface.cyberRadar:
@@ -808,10 +944,12 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. LỰA CHỌN GIAO DIỆN (6 THEMES CÓ SẴN + NHẬP FILE ZIP)
+  // 3. LỰA CHỌN GIAO DIỆN (MÀN 1 + MÀN 2 • CÓ SẴN + "+" ẢNH NỀN + NHẬP FILE ZIP)
   // ---------------------------------------------------------------------------
   Widget _buildThemeSection(CustomThemeService customThemes) {
     final busy = customThemes.isImporting || _isUploadingZipToEsp;
+    final screenNum = _previewScreen + 1;
+    final importedForTab = customThemes.themesForScreen(screenNum);
 
     return _cardContainer(
       child: Column(
@@ -872,96 +1010,123 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+
+          // Screen 1 / Screen 2 theme selector (synchronized with bezel preview & ESP32)
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF2F2F7),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                _buildScreenSegmentButton(
+                  index: 0,
+                  title: 'Theme Màn 1',
+                  icon: Icons.watch_rounded,
+                ),
+                const SizedBox(width: 4),
+                _buildScreenSegmentButton(
+                  index: 1,
+                  title: 'Theme Màn 2',
+                  icon: Icons.map_rounded,
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 12),
 
-          // 6 built-in themes grid
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              childAspectRatio: 2.05,
+          if (_previewScreen == 0)
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 2.0,
+              ),
+              itemCount: ESP32Interface.values.length,
+              itemBuilder: (context, index) {
+                final theme = ESP32Interface.values[index];
+                final isSelected = !customThemes.isCustomThemeActive &&
+                    customThemes.builtInIndex == index;
+                final isDefaultWaybar = index == 0;
+                final hasCustomPhoto =
+                    isDefaultWaybar && customThemes.customStaticBgPath != null;
+
+                return _buildPresetTile(
+                  title: theme.displayName,
+                  subtitle: hasCustomPhoto
+                      ? 'Đã chọn ảnh nền riêng'
+                      : theme.subtitle,
+                  accent: _builtInAccent(theme),
+                  icon: _builtInIcon(theme),
+                  isSelected: isSelected,
+                  onTap: () => _selectBuiltInTheme(index),
+                  trailingAction: isDefaultWaybar
+                      ? Tooltip(
+                          message: 'Thêm / đổi ảnh nền từ thư viện',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: busy ? null : _pickDefaultWaitImage,
+                            child: Container(
+                              width: 26,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF007AFF)
+                                    .withValues(alpha: 0.14),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xFF007AFF)
+                                      .withValues(alpha: 0.4),
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.add_rounded,
+                                size: 17,
+                                color: Color(0xFF007AFF),
+                              ),
+                            ),
+                          ),
+                        )
+                      : null,
+                );
+              },
+            )
+          else
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 2.0,
+              ),
+              itemCount: _man2Presets.length,
+              itemBuilder: (context, index) {
+                final preset = _man2Presets[index];
+                final isSelected = !customThemes.isMan2CustomThemeActive &&
+                    customThemes.man2BuiltInIndex == preset.styleIndex;
+
+                return _buildPresetTile(
+                  title: preset.name,
+                  subtitle: preset.subtitle,
+                  accent: preset.accent,
+                  icon: preset.icon,
+                  isSelected: isSelected,
+                  onTap: () => _selectMan2BuiltInTheme(preset.styleIndex),
+                );
+              },
             ),
-            itemCount: ESP32Interface.values.length,
-            itemBuilder: (context, index) {
-              final theme = ESP32Interface.values[index];
-              final isSelected =
-                  !customThemes.isCustomThemeActive && customThemes.builtInIndex == index;
-              final accent = _builtInAccent(theme);
-              final icon = _builtInIcon(theme);
 
-              return InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _selectBuiltInTheme(index),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? accent.withValues(alpha: 0.08)
-                        : const Color(0xFFF9F9FB),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isSelected ? accent : const Color(0xFFE5E5EA),
-                      width: isSelected ? 1.8 : 1.0,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Icon(icon, color: accent, size: 18),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              theme.displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: isSelected ? accent : const Color(0xFF1C1C1E),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              theme.subtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Color(0xFF8E8E93),
-                                fontSize: 10,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (isSelected)
-                        Icon(Icons.check_circle_rounded, color: accent, size: 17),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-
-          // Imported custom ZIP themes
-          if (customThemes.themes.isNotEmpty) ...[
+          // Imported custom ZIP themes for the active screen tab
+          if (importedForTab.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
-              'THEME ĐÃ NHẬP TỪ ZIP (${customThemes.themes.length})',
+              'THEME MÀN $screenNum ĐÃ NHẬP TỪ ZIP (${importedForTab.length})',
               style: const TextStyle(
                 color: Color(0xFF6E6E73),
                 fontSize: 11,
@@ -971,8 +1136,10 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             ),
             const SizedBox(height: 8),
             Column(
-              children: customThemes.themes.map((t) {
-                final selected = customThemes.activeCustomThemeId == t.id;
+              children: importedForTab.map((t) {
+                final selected = screenNum == 2
+                    ? customThemes.activeMan2CustomThemeId == t.id
+                    : customThemes.activeCustomThemeId == t.id;
                 final accent = t.accentColor;
                 final bgFile = t.bgImagePath.isNotEmpty ? File(t.bgImagePath) : null;
                 final hasThumb = bgFile != null && bgFile.existsSync();
@@ -1060,6 +1227,83 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildPresetTile({
+    required String title,
+    required String subtitle,
+    required Color accent,
+    required IconData icon,
+    required bool isSelected,
+    required VoidCallback onTap,
+    Widget? trailingAction,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? accent.withValues(alpha: 0.08)
+              : const Color(0xFFF9F9FB),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? accent : const Color(0xFFE5E5EA),
+            width: isSelected ? 1.8 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, color: accent, size: 17),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: isSelected ? accent : const Color(0xFF1C1C1E),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF8E8E93),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              Icon(Icons.check_circle_rounded, color: accent, size: 16),
+            if (trailingAction != null) ...[
+              const SizedBox(width: 4),
+              trailingAction,
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1273,3 +1517,4 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     );
   }
 }
+

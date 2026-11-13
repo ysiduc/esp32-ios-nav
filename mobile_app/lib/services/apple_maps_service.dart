@@ -16,6 +16,21 @@ class AppleMapsService {
   /// Kiểm tra thiết bị có hỗ trợ Apple Maps Native (chỉ iOS thật hoặc Simulator)
   static bool get isSupported => !kIsWeb && Platform.isIOS;
 
+  /// Reverse-geocode tên đường thực tế tại tọa độ GPS hiện tại bằng CLGeocoder.
+  static Future<String?> reverseGeocodeStreet(LatLng point) async {
+    if (!isSupported) return null;
+    try {
+      final raw = await _channel.invokeMethod<String>('reverseGeocodeStreet', {
+        'lat': point.latitude,
+        'lng': point.longitude,
+      });
+      final clean = raw?.trim() ?? '';
+      return clean.isEmpty ? null : clean;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 1. Tìm kiếm địa điểm bằng Apple MapKit (MKLocalSearch)
   Future<List<MapPlace>> searchPlaces(
     String query, {

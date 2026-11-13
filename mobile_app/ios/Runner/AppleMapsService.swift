@@ -69,6 +69,15 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
           result: result
         )
 
+      case "reverseGeocodeStreet":
+        guard let args = call.arguments as? [String: Any],
+              let lat = args["lat"] as? Double,
+              let lng = args["lng"] as? Double else {
+          result(nil)
+          return
+        }
+        self.reverseGeocodeStreet(lat: lat, lng: lng, result: result)
+
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -277,6 +286,25 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
       result([
         "routes": routesData
       ])
+    }
+  }
+
+  // MARK: - 4. Định vị ngược tên con đường hiện tại bằng CLGeocoder
+  private func reverseGeocodeStreet(lat: Double, lng: Double, result: @escaping FlutterResult) {
+    let geocoder = CLGeocoder()
+    let loc = CLLocation(latitude: lat, longitude: lng)
+    geocoder.reverseGeocodeLocation(loc, preferredLocale: Locale(identifier: "vi_VN")) { placemarks, _ in
+      guard let p = placemarks?.first else {
+        result(nil)
+        return
+      }
+      let street = (p.thoroughfare?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+      if !street.isEmpty {
+        result(street)
+        return
+      }
+      let sub = (p.subLocality?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+      result(sub.isEmpty ? nil : sub)
     }
   }
 }

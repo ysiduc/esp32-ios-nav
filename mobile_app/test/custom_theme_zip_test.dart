@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:mobile_app/models/custom_theme_model.dart';
 import 'package:mobile_app/services/custom_theme_service.dart';
+import 'package:mobile_app/services/navigation_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Uint8List _makeSolidPng({int width = 800, int height = 400, int r = 20, int g = 40, int b = 80}) {
@@ -29,18 +30,19 @@ void main() {
     }
   });
 
-  test('sample template ZIP imports cleanly with <=24KB ESP32 JPEG & <=6 ESP boxes', () async {
+  test('Màn 1 sample ZIP imports cleanly with <=24KB ESP32 JPEG & <=6 ESP boxes', () async {
     final service = CustomThemeService(overrideStorageDir: tempDir);
-    final sampleZip = service.buildSampleThemeZipBytes();
+    final sampleZip = service.buildSampleMan1ZipBytes();
 
     final imported = await service.importZipBytes(
       sampleZip,
-      fileName: 'esp32_theme_template.zip',
+      fileName: 'esp32_theme_man1_sunset_horizon.zip',
     );
 
     expect(imported.length, 1);
     final theme = imported.first;
-    expect(theme.name, 'Midnight Neon Studio');
+    expect(theme.name, 'Sunset Horizon Màn 1');
+    expect(theme.targetScreen, 1);
     expect(service.isCustomThemeActive, isTrue);
     expect(service.activeCustomTheme?.id, theme.id);
 
@@ -162,5 +164,62 @@ class CustomNeonWidget {
     );
     final compact = spec.toEsp32CompactJson();
     expect(compact['bgColor'], '#123456');
+  });
+
+  test('Màn 2 sample ZIP imports with targetScreen 2 and valid ESP32 Man2 JSON', () async {
+    final service = CustomThemeService(overrideStorageDir: tempDir);
+    final man2Zip = service.buildSampleMan2ZipBytes();
+
+    final imported = await service.importZipBytes(
+      man2Zip,
+      fileName: 'theme_man2_emerald_cockpit.zip',
+    );
+
+    expect(imported.length, 1);
+    final t = imported.first;
+    expect(t.name, 'Emerald Cockpit Màn 2');
+    expect(t.targetScreen, 2);
+    expect(service.isMan2CustomThemeActive, isTrue);
+    expect(service.activeMan2CustomTheme?.id, t.id);
+
+    final espBytes = await File(t.espBgImagePath).readAsBytes();
+    expect(espBytes.length, lessThanOrEqualTo(CustomThemeService.maxEspBgBytes));
+
+    final man2Json = t.spec.toEsp32Man2CompactJson();
+    expect((man2Json['minimap'] as Map)['w'], 144);
+    expect((man2Json['panel'] as Map)['fill'], '#0A191B');
+    expect((man2Json['notif'] as Map)['visible'], isTrue);
+    expect((man2Json['song'] as Map)['boxY'], 80);
+  });
+
+  test('saveDefaultStaticBackground saves 640x480 sim & <=24KB 320x240 esp JPEG', () async {
+    final service = CustomThemeService(overrideStorageDir: tempDir);
+    await service.selectBuiltIn(3);
+    final res = await service.saveDefaultStaticBackground(
+      _makeSolidPng(width: 1200, height: 800, r: 45, g: 110, b: 200),
+    );
+
+    expect(service.builtInIndex, 0);
+    expect(service.customStaticBgPath, res.simPath);
+    expect(await File(res.simPath).exists(), isTrue);
+    expect(res.espJpeg.length, lessThanOrEqualTo(CustomThemeService.maxEspBgBytes));
+    final decodedEsp = img.decodeJpg(res.espJpeg)!;
+    expect(decodedEsp.width, 320);
+    expect(decodedEsp.height, 240);
+  });
+
+  test('normalizeRoadPillName strips street prefixes & house numbers cleanly', () {
+    expect(
+      NavigationManager.normalizeRoadPillName('Phố Nguyễn Cảnh Dị'),
+      'Nguyễn Cảnh Dị',
+    );
+    expect(
+      NavigationManager.normalizeRoadPillName('42 Đường Nguyễn Hữu Thọ'),
+      'Nguyễn Hữu Thọ',
+    );
+    expect(
+      NavigationManager.normalizeRoadPillName('Đường Láng'),
+      'Đường Láng',
+    );
   });
 }

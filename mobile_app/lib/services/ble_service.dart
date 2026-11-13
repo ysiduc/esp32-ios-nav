@@ -936,26 +936,93 @@ class BleService extends ChangeNotifier {
     return true;
   }
 
-  /// Uploads an imported custom ZIP theme's background image & JSON spec to ESP32 SPIFFS and activates style 250.
-  Future<bool> sendCustomThemeToEsp32({
+  Future<bool> _uploadThemeBundleToEsp32({
+    required int bgMagic2,
+    required int specMagic2,
     required Uint8List bgJpegBytes,
     required Map<String, dynamic> specJson,
+    required Map<String, dynamic> selectCmd,
+    required String label,
   }) async {
     if (!_isConnected || _writeCharacteristic == null) return false;
     try {
-      final okBg = await _uploadSpiffsChunked(0xBE, bgJpegBytes);
-      if (!okBg) return false;
+      if (bgJpegBytes.isNotEmpty) {
+        final okBg = await _uploadSpiffsChunked(bgMagic2, bgJpegBytes);
+        if (!okBg) return false;
+      }
       final specBytes = Uint8List.fromList(utf8.encode(jsonEncode(specJson)));
-      final okSpec = await _uploadSpiffsChunked(0xBF, specBytes);
+      final okSpec = await _uploadSpiffsChunked(specMagic2, specBytes);
       if (!okSpec) return false;
       await Future.delayed(const Duration(milliseconds: 40));
-      await sendRawJson(jsonEncode({'type': 'THEME_SELECT', 'theme': 250}));
-      _addLog('Đã đồng bộ theme ZIP sang ESP32 (${bgJpegBytes.length ~/ 1024} KB)', isTx: true);
+      await sendRawJson(jsonEncode(selectCmd));
+      _addLog(
+        'Đã đồng bộ $label sang ESP32 (${bgJpegBytes.length ~/ 1024} KB)',
+        isTx: true,
+      );
       return true;
     } catch (e) {
-      _addLog('Lỗi gửi theme ZIP sang ESP32: $e', isError: true);
+      _addLog('Lỗi gửi $label sang ESP32: $e', isError: true);
       return false;
     }
+  }
+
+  /// Uploads a custom JPEG wallpaper (/bg_wait.jpg) for Màn 1 default Waybar theme (index 0).
+  Future<bool> sendDefaultWallpaperToEsp32(Uint8List bgJpegBytes) async {
+    if (!_isConnected || _writeCharacteristic == null || bgJpegBytes.isEmpty) {
+      return false;
+    }
+    try {
+      final ok = await _uploadSpiffsChunked(0xBC, bgJpegBytes);
+      if (!ok) return false;
+      await Future.delayed(const Duration(milliseconds: 40));
+      await sendRawJson(jsonEncode({'type': 'THEME_SELECT', 'theme': 0}));
+      _addLog(
+        'Đã cập nhật ảnh nền Màn 1 (${bgJpegBytes.length ~/ 1024} KB)',
+        isTx: true,
+      );
+      return true;
+    } catch (e) {
+      _addLog('Lỗi gửi ảnh nền Màn 1: $e', isError: true);
+      return false;
+    }
+  }
+
+  /// Uploads a Màn 1 ZIP theme's background image & JSON spec and activates style 250.
+  Future<bool> sendCustomThemeToEsp32({
+    required Uint8List bgJpegBytes,
+    required Map<String, dynamic> specJson,
+  }) {
+    return _uploadThemeBundleToEsp32(
+      bgMagic2: 0xBE,
+      specMagic2: 0xBF,
+      bgJpegBytes: bgJpegBytes,
+      specJson: specJson,
+      selectCmd: const {'type': 'THEME_SELECT', 'theme': 250},
+      label: 'theme ZIP Màn 1',
+    );
+  }
+
+  /// Switches ESP32 Màn 2 built-in style (0..3) or custom ZIP style (250).
+  Future<bool> sendMan2StyleToEsp32(int style) async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    return sendRawJson(
+      jsonEncode({'type': 'SET_MAN2_STYLE', 'theme': style}),
+    );
+  }
+
+  /// Uploads a Màn 2 ZIP theme's background image & JSON spec and activates style 250.
+  Future<bool> sendCustomMan2ThemeToEsp32({
+    required Uint8List bgJpegBytes,
+    required Map<String, dynamic> specJson,
+  }) {
+    return _uploadThemeBundleToEsp32(
+      bgMagic2: 0xC0,
+      specMagic2: 0xC1,
+      bgJpegBytes: bgJpegBytes,
+      specJson: specJson,
+      selectCmd: const {'type': 'SET_MAN2_STYLE', 'theme': 250},
+      label: 'theme ZIP Màn 2',
+    );
   }
 
   void clearLogs() {

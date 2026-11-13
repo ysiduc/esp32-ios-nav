@@ -102,10 +102,11 @@ TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
 U8g2_for_TFT_eSPI u8f_marquee;
 #include <TJpg_Decoder.h>
 bool g_clipMapOnly = false;
+int16_t g_clipX = 6, g_clipY = 8, g_clipW = 144, g_clipH = 224;
 bool g_skipNavPopup = false;
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   if (y >= tft.height() || x >= tft.width()) return 1;
-  if (g_clipMapOnly && (x < 6 || x >= 150 || y < 8 || y >= 232)) return 1;
+  if (g_clipMapOnly && (x + (int16_t)w <= g_clipX || x >= g_clipX + g_clipW || y + (int16_t)h <= g_clipY || y >= g_clipY + g_clipH)) return 1;
   if (g_skipNavPopup && x >= 144 && y >= 24 && y < 72) return 1;
   tft.pushImage(x, y, w, h, bitmap);
   return 1;
@@ -409,6 +410,13 @@ void processJsonPacket(const char* jsonStr) {
     display.setPreviewScreenMode((uint8_t)constrain(scr, 0, 2));
     return;
 
+  } else if (typeStr == "SET_MAN2_STYLE" || typeStr == "MAN2_THEME_SELECT") {
+    int s = doc["theme"] | doc["style"] | 0;
+    display.setIdleMapStyle((uint8_t)s);
+    display.setPreviewScreenMode(2);
+    Serial.printf("[JSON] Set Man 2 style: %d and switched display\n", s);
+    return;
+
   } else if (typeStr == "EXIT_SIMULATOR" || typeStr == "RESTORE_IDLE_MAP" || typeStr == "MAP_MODE") {
     display.restoreIdleMap();
     return;
@@ -578,14 +586,16 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
           }
         }
         return;
-      } else if (magic2 == 0xBC || magic2 == 0xBD || magic2 == 0xBE || magic2 == 0xBF) {
+      } else if (magic2 == 0xBC || magic2 == 0xBD || magic2 == 0xBE || magic2 == 0xBF || magic2 == 0xC0 || magic2 == 0xC1) {
         uint8_t totalChunks = (uint8_t)value[3];
         uint8_t chunkIdx = (uint8_t)value[4];
         size_t payloadLen = value.length() - 5;
         const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg"
                                : (magic2 == 0xBD) ? "/bg_map.jpg"
                                : (magic2 == 0xBE) ? "/custom_theme_bg.jpg"
-                                                  : "/custom_theme.json";
+                               : (magic2 == 0xBF) ? "/custom_theme.json"
+                               : (magic2 == 0xC0) ? "/custom_man2_bg.jpg"
+                                                  : "/custom_man2.json";
 
         static File bgUploadFile;
         if (chunkIdx == 0) {
@@ -606,6 +616,8 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
           }
           if (magic2 == 0xBE || magic2 == 0xBF) {
             display.markCustomThemeReload();
+          } else if (magic2 == 0xC0 || magic2 == 0xC1) {
+            display.markMan2ThemeReload();
           } else {
             display.forceRedraw();
           }
@@ -933,14 +945,20 @@ void loop() {
         TJpgDec.drawJpg(0, mapY, frameBuf, frameLen);
         display.onFrameRendered();
       } else if (jpgW > 0) {
+        int16_t mx, my, mw, mh, br;
+        uint16_t bCol;
+        display.getIdleMinimapRect(mx, my, mw, mh, br, bCol);
         display.setFullScreenStream(false);
+        g_clipX = mx; g_clipY = my; g_clipW = mw; g_clipH = mh;
         g_clipMapOnly = true;
         g_skipNavPopup = false;
-        tft.setViewport(6, 8, 144, 224, false);
-        TJpgDec.drawJpg(6, 8, frameBuf, frameLen);
+        tft.setViewport(mx, my, mw, mh, false);
+        TJpgDec.drawJpg(mx - (144 - mw) / 2, my - (224 - mh) / 2, frameBuf, frameLen);
         tft.resetViewport();
         g_clipMapOnly = false;
-        tft.drawRoundRect(4, 6, 148, 228, 12, tft.color565(56, 189, 248));
+        if (bCol != 0) {
+          tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, bCol);
+        }
         display.onFrameRendered();
       }
     }

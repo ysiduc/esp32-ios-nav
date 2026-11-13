@@ -169,6 +169,17 @@ class GoongService {
     }
   }
 
+  /// Trả về tên con đường sạch tại tọa độ [point] (bỏ số nhà & phường/quận).
+  Future<String?> reverseGeocodeStreet(LatLng point) async {
+    final place = await reverseGeocode(point);
+    if (place == null) return null;
+    final firstSeg = place.displayName.split(',').first.trim();
+    if (firstSeg.isEmpty || firstSeg == 'Vị trí đã chọn') return null;
+    final withoutNumber =
+        firstSeg.replaceFirst(RegExp(r'^(?:Số\s+)?\d+[A-Za-z0-9/\-\.]*\s+'), '').trim();
+    return withoutNumber.isNotEmpty ? withoutNumber : null;
+  }
+
   /// 4. Dẫn đường & Tìm lộ trình (Direction API)
   /// Phương tiện hỗ trợ: 'bike' (xe máy Việt Nam), 'car' (ô tô), 'taxi', 'truck'
   Future<NavRoute?> calculateRoute(

@@ -10,11 +10,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/custom_theme_model.dart';
 
-/// Manages built-in (0..5) and user-imported ZIP custom themes for the ESP32 simulator & hardware.
+/// Manages built-in (0..5 Màn 1, 0..3 Màn 2), custom static wallpaper, and ZIP themes.
 class CustomThemeService extends ChangeNotifier {
   static const String _prefsThemesKey = 'esp_custom_themes_v1';
   static const String _prefsActiveCustomKey = 'esp_active_custom_theme_id';
   static const String _prefsBuiltInIdxKey = 'esp_builtin_theme_idx';
+  static const String _prefsMan2IdxKey = 'esp_man2_builtin_idx';
+  static const String _prefsActiveMan2CustomKey =
+      'esp_active_man2_custom_theme_id';
+  static const String _prefsCustomStaticBgKey = 'esp32_custom_bg_path';
+  static const String _prefsEspCustomStaticBgKey = 'esp32_custom_esp_bg_path';
   static const int maxEspBgBytes = 24000;
   static const MethodChannel _channel =
       MethodChannel('com.ysiduc.esp32_nav/location');
@@ -23,7 +28,11 @@ class CustomThemeService extends ChangeNotifier {
 
   List<ImportedCustomTheme> _themes = [];
   int _builtInIndex = 0;
+  int _man2BuiltInIndex = 0;
   String? _activeCustomThemeId;
+  String? _activeMan2CustomThemeId;
+  String? _customStaticBgPath;
+  String? _espCustomStaticBgPath;
   bool _loaded = false;
   bool _isImporting = false;
   String? _lastError;
@@ -32,20 +41,36 @@ class CustomThemeService extends ChangeNotifier {
       : _overrideStorageDir = overrideStorageDir;
 
   List<ImportedCustomTheme> get themes => List.unmodifiable(_themes);
+  List<ImportedCustomTheme> themesForScreen(int screen) =>
+      _themes.where((t) => t.targetScreen == screen).toList(growable: false);
+
   int get builtInIndex => _builtInIndex;
+  int get man2BuiltInIndex => _man2BuiltInIndex;
   String? get activeCustomThemeId => _activeCustomThemeId;
+  String? get activeMan2CustomThemeId => _activeMan2CustomThemeId;
+  String? get customStaticBgPath => _customStaticBgPath;
+  String? get espCustomStaticBgPath => _espCustomStaticBgPath;
   bool get isImporting => _isImporting;
   String? get lastError => _lastError;
 
   ImportedCustomTheme? get activeCustomTheme {
     if (_activeCustomThemeId == null) return null;
     for (final t in _themes) {
-      if (t.id == _activeCustomThemeId) return t;
+      if (t.id == _activeCustomThemeId && t.targetScreen == 1) return t;
+    }
+    return null;
+  }
+
+  ImportedCustomTheme? get activeMan2CustomTheme {
+    if (_activeMan2CustomThemeId == null) return null;
+    for (final t in _themes) {
+      if (t.id == _activeMan2CustomThemeId && t.targetScreen == 2) return t;
     }
     return null;
   }
 
   bool get isCustomThemeActive => activeCustomTheme != null;
+  bool get isMan2CustomThemeActive => activeMan2CustomTheme != null;
 
   Future<void> ensureLoaded() async {
     if (_loaded) return;
@@ -53,7 +78,18 @@ class CustomThemeService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       _builtInIndex = (prefs.getInt(_prefsBuiltInIdxKey) ?? 0).clamp(0, 5);
+      _man2BuiltInIndex = (prefs.getInt(_prefsMan2IdxKey) ?? 0).clamp(0, 3);
       _activeCustomThemeId = prefs.getString(_prefsActiveCustomKey);
+      _activeMan2CustomThemeId = prefs.getString(_prefsActiveMan2CustomKey);
+
+      final simStatic = prefs.getString(_prefsCustomStaticBgKey);
+      if (simStatic != null && simStatic.isNotEmpty && File(simStatic).existsSync()) {
+        _customStaticBgPath = simStatic;
+      }
+      final espStatic = prefs.getString(_prefsEspCustomStaticBgKey);
+      if (espStatic != null && espStatic.isNotEmpty && File(espStatic).existsSync()) {
+        _espCustomStaticBgPath = espStatic;
+      }
 
       final rawList = prefs.getString(_prefsThemesKey);
       if (rawList != null && rawList.isNotEmpty) {
@@ -68,6 +104,9 @@ class CustomThemeService extends ChangeNotifier {
       }
       if (_activeCustomThemeId != null && activeCustomTheme == null) {
         _activeCustomThemeId = null;
+      }
+      if (_activeMan2CustomThemeId != null && activeMan2CustomTheme == null) {
+        _activeMan2CustomThemeId = null;
       }
     } catch (e) {
       debugPrint('[CustomThemeService] Load error: $e');
@@ -87,10 +126,76 @@ class CustomThemeService extends ChangeNotifier {
 
   Future<void> selectCustom(String id) async {
     await ensureLoaded();
-    if (!_themes.any((t) => t.id == id)) return;
+    if (!_themes.any((t) => t.id == id && t.targetScreen == 1)) return;
     _activeCustomThemeId = id;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefsActiveCustomKey, id);
+    notifyListeners();
+  }
+
+  Future<void> selectMan2BuiltIn(int index) async {
+    await ensureLoaded();
+    _man2BuiltInIndex = index.clamp(0, 3);
+    _activeMan2CustomThemeId = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_prefsMan2IdxKey, _man2BuiltInIndex);
+    await prefs.remove(_prefsActiveMan2CustomKey);
+    notifyListeners();
+  }
+
+  Future<void> selectMan2Custom(String id) async {
+    await ensureLoaded();
+    if (!_themes.any((t) => t.id == id && t.targetScreen == 2)) return;
+    _activeMan2CustomThemeId = id;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsActiveMan2CustomKey, id);
+    notifyListeners();
+  }
+
+  /// Resizes & stores a custom gallery wallpaper for Màn 1 default Waybar theme (index 0).
+  Future<({String simPath, Uint8List espJpeg})> saveDefaultStaticBackground(
+    Uint8List rawBytes,
+  ) async {
+    await ensureLoaded();
+    final rootDir = await _resolveThemeRootDir();
+    final prepared = _prepareThemeImages(
+      rawBytes,
+      fallbackBgHex: '#0B111A',
+      songSampleX: 160,
+      songSampleY: 206,
+    );
+    final simPath = '${rootDir.path}/default_wait_sim.jpg';
+    final espPath = '${rootDir.path}/default_wait_esp.jpg';
+    await File(simPath).writeAsBytes(prepared.simJpeg, flush: true);
+    await File(espPath).writeAsBytes(prepared.espJpeg, flush: true);
+
+    _customStaticBgPath = simPath;
+    _espCustomStaticBgPath = espPath;
+    _builtInIndex = 0;
+    _activeCustomThemeId = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsCustomStaticBgKey, simPath);
+    await prefs.setString(_prefsEspCustomStaticBgKey, espPath);
+    await prefs.setInt(_prefsBuiltInIdxKey, 0);
+    await prefs.remove(_prefsActiveCustomKey);
+    notifyListeners();
+    return (simPath: simPath, espJpeg: prepared.espJpeg);
+  }
+
+  Future<void> clearDefaultStaticBackground() async {
+    await ensureLoaded();
+    if (_customStaticBgPath != null) {
+      await _tryDeleteFile(_customStaticBgPath!);
+    }
+    if (_espCustomStaticBgPath != null) {
+      await _tryDeleteFile(_espCustomStaticBgPath!);
+    }
+    _customStaticBgPath = null;
+    _espCustomStaticBgPath = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsCustomStaticBgKey);
+    await prefs.remove(_prefsEspCustomStaticBgKey);
     notifyListeners();
   }
 
@@ -104,6 +209,9 @@ class CustomThemeService extends ChangeNotifier {
 
     if (_activeCustomThemeId == id) {
       _activeCustomThemeId = null;
+    }
+    if (_activeMan2CustomThemeId == id) {
+      _activeMan2CustomThemeId = null;
     }
     await _saveThemesMetadata();
     notifyListeners();
@@ -130,6 +238,12 @@ class CustomThemeService extends ChangeNotifier {
     } else {
       await prefs.remove(_prefsActiveCustomKey);
     }
+    if (_activeMan2CustomThemeId != null) {
+      await prefs.setString(
+          _prefsActiveMan2CustomKey, _activeMan2CustomThemeId!);
+    } else {
+      await prefs.remove(_prefsActiveMan2CustomKey);
+    }
   }
 
   Future<Directory> _resolveThemeRootDir() async {
@@ -145,7 +259,9 @@ class CustomThemeService extends ChangeNotifier {
   }
 
   /// Opens native iOS UIDocumentPickerViewController to pick a `.zip` file and imports it.
-  Future<List<ImportedCustomTheme>> importFromPicker() async {
+  Future<List<ImportedCustomTheme>> importFromPicker({
+    int defaultTargetScreen = 1,
+  }) async {
     _lastError = null;
     try {
       final res = await _channel.invokeMethod<dynamic>('pickZipFile');
@@ -160,7 +276,11 @@ class CustomThemeService extends ChangeNotifier {
       if (rawBytes is! Uint8List || rawBytes.isEmpty) {
         throw const FormatException('Không đọc được nội dung file ZIP');
       }
-      return await importZipBytes(rawBytes, fileName: fileName);
+      return await importZipBytes(
+        rawBytes,
+        fileName: fileName,
+        defaultTargetScreen: defaultTargetScreen,
+      );
     } catch (e) {
       _lastError = e.toString().replaceFirst('Exception: ', '');
       notifyListeners();
@@ -169,10 +289,14 @@ class CustomThemeService extends ChangeNotifier {
   }
 
   /// Shares a sample template `.zip` archive via iOS UIActivityViewController.
-  Future<void> exportSampleThemeZip() async {
-    final bytes = buildSampleThemeZipBytes();
+  Future<void> exportSampleThemeZip({int screen = 1}) async {
+    final isMan2 = screen == 2;
+    final bytes =
+        isMan2 ? buildSampleMan2ZipBytes() : buildSampleMan1ZipBytes();
     await _channel.invokeMethod('shareFileBytes', {
-      'fileName': 'esp32_theme_template.zip',
+      'fileName': isMan2
+          ? 'esp32_theme_man2_emerald_cockpit.zip'
+          : 'esp32_theme_man1_sunset_horizon.zip',
       'bytes': bytes,
     });
   }
@@ -181,6 +305,7 @@ class CustomThemeService extends ChangeNotifier {
   Future<List<ImportedCustomTheme>> importZipBytes(
     Uint8List zipBytes, {
     String? fileName,
+    int defaultTargetScreen = 1,
   }) async {
     await ensureLoaded();
     _isImporting = true;
@@ -223,6 +348,7 @@ class CustomThemeService extends ChangeNotifier {
         final parsed = _parseGroupToTheme(
           entries: group.entries,
           fallbackName: fallbackTitle,
+          defaultTargetScreen: defaultTargetScreen,
         );
 
         final themeId = 'zip_${baseTs}_$i';
@@ -238,7 +364,8 @@ class CustomThemeService extends ChangeNotifier {
         await File(simPath).writeAsBytes(preparedImages.simJpeg, flush: true);
         await File(espPath).writeAsBytes(preparedImages.espJpeg, flush: true);
 
-        final finalSpec = (!parsed.explicitSongBg &&
+        final finalSpec = (parsed.spec.targetScreen == 1 &&
+                !parsed.explicitSongBg &&
                 preparedImages.sampledSongBgHex != null)
             ? parsed.spec.copyWith(
                 song: parsed.spec.song
@@ -262,8 +389,13 @@ class CustomThemeService extends ChangeNotifier {
         imported.add(theme);
       }
 
-      if (imported.isNotEmpty) {
-        _activeCustomThemeId = imported.first.id;
+      final firstMan1 = imported.where((t) => t.targetScreen == 1).firstOrNull;
+      final firstMan2 = imported.where((t) => t.targetScreen == 2).firstOrNull;
+      if (firstMan1 != null) {
+        _activeCustomThemeId = firstMan1.id;
+      }
+      if (firstMan2 != null) {
+        _activeMan2CustomThemeId = firstMan2.id;
       }
       await _saveThemesMetadata();
       return imported;
@@ -276,13 +408,17 @@ class CustomThemeService extends ChangeNotifier {
     }
   }
 
-  /// Generates a ready-to-edit 320x240 `.zip` template containing `bg.jpg`, `theme.json`, and `README.txt`.
-  Uint8List buildSampleThemeZipBytes() {
+  /// Alias preserving backwards compatibility for Màn 1 sample archive generation.
+  Uint8List buildSampleThemeZipBytes() => buildSampleMan1ZipBytes();
+
+  /// Builds a 320x240 Màn 1 custom `.zip` theme ("Sunset Horizon").
+  Uint8List buildSampleMan1ZipBytes() {
     final spec = CustomThemeSpec(
-      name: 'Midnight Neon Studio',
-      subtitle: 'Mẫu ZIP 320x240 tùy chỉnh',
-      accentColor: '#38BDF8',
-      bgColor: '#0A101D',
+      targetScreen: 1,
+      name: 'Sunset Horizon Màn 1',
+      subtitle: 'Mẫu ZIP Màn chờ 320x240',
+      accentColor: '#F59E0B',
+      bgColor: '#120C18',
       showWaybar: false,
       boxes: const [
         CustomThemeBox(
@@ -291,8 +427,8 @@ class CustomThemeService extends ChangeNotifier {
           w: 152,
           h: 170,
           r: 12,
-          fill: '#101A2E',
-          border: '#38BDF8',
+          fill: '#1A1328',
+          border: '#F59E0B',
         ),
         CustomThemeBox(
           x: 170,
@@ -300,8 +436,8 @@ class CustomThemeService extends ChangeNotifier {
           w: 140,
           h: 170,
           r: 12,
-          fill: '#101A2E',
-          border: '#1E293B',
+          fill: '#1A1328',
+          border: '#4C1D95',
         ),
         CustomThemeBox(
           x: 10,
@@ -309,18 +445,18 @@ class CustomThemeService extends ChangeNotifier {
           w: 300,
           h: 40,
           r: 10,
-          fill: '#0E1728',
-          border: '#1E293B',
+          fill: '#160F24',
+          border: '#7C3AED',
         ),
       ],
       labels: const [
         CustomThemeLabel(
-          text: 'THỜI GIAN',
+          text: 'HOÀNG HÔN',
           x: 20,
           y: 22,
           maxW: 120,
           fontSize: 9,
-          color: '#38BDF8',
+          color: '#FBBF24',
         ),
         CustomThemeLabel(
           text: 'THÔNG BÁO',
@@ -328,7 +464,7 @@ class CustomThemeService extends ChangeNotifier {
           y: 22,
           maxW: 118,
           fontSize: 9,
-          color: '#A78BFA',
+          color: '#C084FC',
         ),
       ],
       clock: const CustomThemeClockSpec(
@@ -337,14 +473,14 @@ class CustomThemeService extends ChangeNotifier {
         y: 44,
         fontSize: 40,
         font: 'sans',
-        color: '#F8FAFC',
+        color: '#FEF3C7',
       ),
       date: const CustomThemeDateSpec(
         visible: true,
         x: 20,
         y: 104,
         fontSize: 11,
-        color: '#93C5FD',
+        color: '#FDBA74',
         format: 'vn_short',
       ),
       song: const CustomThemeSongSpec(
@@ -354,7 +490,7 @@ class CustomThemeService extends ChangeNotifier {
         w: 206,
         fontSize: 11,
         color: '#FDE047',
-        bgColor: '#0E1728',
+        bgColor: '#160F24',
       ),
       duration: const CustomThemeDurationSpec(
         visible: true,
@@ -362,8 +498,8 @@ class CustomThemeService extends ChangeNotifier {
         x: 232,
         y: 205,
         fontSize: 10,
-        color: '#38BDF8',
-        secondaryColor: '#CBD5E1',
+        color: '#F59E0B',
+        secondaryColor: '#DDD6FE',
       ),
       notifTitle: const CustomThemeNotifTitleSpec(
         visible: true,
@@ -371,7 +507,7 @@ class CustomThemeService extends ChangeNotifier {
         y: 44,
         maxW: 120,
         fontSize: 11,
-        color: '#FACC15',
+        color: '#FBBF24',
       ),
       notifMsg: const CustomThemeNotifMsgSpec(
         visible: true,
@@ -381,41 +517,133 @@ class CustomThemeService extends ChangeNotifier {
         maxLines: 4,
         lineHeight: 16,
         fontSize: 10,
-        color: '#E2E8F0',
+        color: '#F3E8FF',
       ),
     );
 
-    // Draw clean 320x240 gradient wallpaper
+    final bgBytes = _encodeGradientJpg(
+      topRgb: (28, 12, 46),
+      bottomRgb: (78, 28, 36),
+    );
+    const readme = '''HƯỚNG DẪN THEME ZIP MÀN 1 (MÀN CHỜ ESP32 - 320x240)
+- screen: 1 (Màn chờ đồng hồ & thông báo)
+- Đặt bg.jpg (tỷ lệ 4:3, app tự nén <= 24KB) và theme.json.
+- Nén thành .zip -> mở "Giao diện ESP32" -> chọn tab Màn 1 -> "Nhập file ZIP".
+''';
+    return _packThemeZip(bgBytes: bgBytes, spec: spec, readme: readme);
+  }
+
+  /// Builds a 320x240 Màn 2 custom `.zip` theme ("Emerald Cockpit").
+  Uint8List buildSampleMan2ZipBytes() {
+    final spec = CustomThemeSpec(
+      targetScreen: 2,
+      name: 'Emerald Cockpit Màn 2',
+      subtitle: 'Mẫu ZIP Minimap chờ 320x240',
+      accentColor: '#10B981',
+      bgColor: '#050D0E',
+      showPanel: true,
+      panel: const CustomThemeBox(
+        x: 158,
+        y: 6,
+        w: 158,
+        h: 228,
+        r: 12,
+        fill: '#0A191B',
+        border: '#10B981',
+      ),
+      minimap: const CustomMan2MinimapSpec(
+        x: 6,
+        y: 8,
+        w: 144,
+        h: 224,
+        r: 10,
+        border: '#34D399',
+      ),
+      clock: const CustomThemeClockSpec(
+        visible: true,
+        x: 237,
+        y: 14,
+        fontSize: 28,
+        font: 'sans',
+        color: '#ECFDF5',
+        center: true,
+      ),
+      date: const CustomThemeDateSpec(
+        visible: true,
+        x: 237,
+        y: 46,
+        fontSize: 10,
+        color: '#6EE7B7',
+        format: 'vn_short',
+        center: true,
+      ),
+      song: const CustomThemeSongSpec(
+        visible: true,
+        boxX: 164,
+        boxY: 80,
+        boxW: 146,
+        boxH: 40,
+        color: '#FDE68A',
+        bgColor: '#061214',
+        border: '#059669',
+        durColor: '#34D399',
+      ),
+      notif: const CustomMan2NotifSpec(
+        visible: true,
+        x: 164,
+        y: 124,
+        w: 146,
+        h: 106,
+        r: 8,
+        fill: '#061214',
+        border: '#115E59',
+        titleColor: '#34D399',
+        msgColor: '#E2E8F0',
+      ),
+    );
+
+    final bgBytes = _encodeGradientJpg(
+      topRgb: (4, 16, 20),
+      bottomRgb: (12, 42, 36),
+    );
+    const readme = '''HƯỚNG DẪN THEME ZIP MÀN 2 (MINIMAP CHỜ ESP32 - 320x240)
+- screen: 2 (Bản đồ minimap + Panel đồng hồ/nhạc/thông báo)
+- Các khối chính trong theme.json:
+  * bgColor, showPanel
+  * panel: {x, y, w, h, r, fill, border}
+  * minimap: {x, y, w (60..144), h (60..224), r, border}
+  * clock: {visible, x, y, fontSize, font, color}
+  * date: {visible, x, y, color, format}
+  * song: {visible, boxX, boxY, boxW, boxH, bgColor, border, color, durColor}
+  * notif: {visible, x, y, w, h, fill, border, titleColor, msgColor}
+- Nén bg.jpg + theme.json thành .zip -> tab Màn 2 -> "Nhập file ZIP".
+''';
+    return _packThemeZip(bgBytes: bgBytes, spec: spec, readme: readme);
+  }
+
+  Uint8List _encodeGradientJpg({
+    required (int, int, int) topRgb,
+    required (int, int, int) bottomRgb,
+  }) {
     final canvas = img.Image(width: 320, height: 240);
     for (var y = 0; y < 240; y++) {
       final t = y / 239.0;
-      final r = (8 + t * 14).round();
-      final g = (14 + t * 24).round();
-      final b = (28 + t * 44).round();
+      final r = (topRgb.$1 + t * (bottomRgb.$1 - topRgb.$1)).round().clamp(0, 255);
+      final g = (topRgb.$2 + t * (bottomRgb.$2 - topRgb.$2)).round().clamp(0, 255);
+      final b = (topRgb.$3 + t * (bottomRgb.$3 - topRgb.$3)).round().clamp(0, 255);
       for (var x = 0; x < 320; x++) {
         canvas.setPixelRgb(x, y, r, g, b);
       }
     }
-    final bgBytes = Uint8List.fromList(img.encodeJpg(canvas, quality: 88));
+    return Uint8List.fromList(img.encodeJpg(canvas, quality: 88));
+  }
 
+  Uint8List _packThemeZip({
+    required Uint8List bgBytes,
+    required CustomThemeSpec spec,
+    required String readme,
+  }) {
     final jsonStr = const JsonEncoder.withIndent('  ').convert(spec.toJson());
-    const readme = '''HƯỚNG DẪN TẠO THEME ZIP CHO ESP32 YSIDUCNAGA
-1. Đặt 1 file ảnh nền: bg.jpg hoặc bg.png (tỷ lệ chuẩn 4:3, ví dụ 320x240 hoặc 640x480).
-2. Đặt file cấu hình layout: theme.json (hoặc mã nguồn .dart / .h để app tự phân tích tọa độ).
-3. Hệ tọa độ màn hình ESP32 cố định: rộng 320px, cao 240px.
-4. Các trường trong theme.json:
-   - name, subtitle, accentColor (#RRGGBB), bgColor (#RRGGBB), showWaybar (true/false)
-   - boxes (tối đa 6 khung trên ESP32): [{x, y, w, h, r, fill, border}]
-   - labels (tối đa 6 nhãn): [{text, x, y, maxW, fontSize, color, center}]
-   - clock: {visible, x, y, fontSize, font ("sans"|"7seg"), color, center}
-   - date: {visible, x, y, fontSize, color, format ("vn_short"|"en_upper"|"dmy_dot"|"dmy_slash")}
-   - song: {visible, x, y, w, fontSize, color, bgColor}
-   - duration: {visible, mode ("ratio"|"split"|"elapsed"), x, y, fontSize, color, secondaryColor}
-   - notifTitle: {visible, x, y, maxW, fontSize, color}
-   - notifMsg: {visible, x, y, maxW, maxLines, lineHeight, fontSize, color}
-5. Nén chung các file thành .zip và chọn "Nhập file ZIP" trong mục Giao diện ESP32.
-''';
-
     final archive = Archive();
     archive.addFile(ArchiveFile.bytes('bg.jpg', bgBytes));
     archive.addFile(ArchiveFile.string('theme.json', jsonStr));
@@ -511,6 +739,7 @@ class CustomThemeService extends ChangeNotifier {
   _ParsedGroup _parseGroupToTheme({
     required List<ArchiveFile> entries,
     required String fallbackName,
+    int defaultTargetScreen = 1,
   }) {
     ArchiveFile? jsonFile;
     final codeFiles = <ArchiveFile>[];
@@ -572,7 +801,11 @@ class CustomThemeService extends ChangeNotifier {
         final rawText = utf8.decode(jsonFile.readBytes() ?? const []);
         final decoded = jsonDecode(rawText);
         if (decoded is Map<String, dynamic>) {
-          spec = CustomThemeSpec.fromJson(decoded, fallbackName: fallbackName);
+          spec = CustomThemeSpec.fromJson(
+            decoded,
+            fallbackName: fallbackName,
+            defaultTargetScreen: defaultTargetScreen,
+          );
           if (decoded['song'] is Map &&
               (decoded['song'] as Map).containsKey('bgColor')) {
             explicitSongBg = true;
@@ -588,15 +821,39 @@ class CustomThemeService extends ChangeNotifier {
       final combinedCode = codeFiles
           .map((c) => utf8.decode(c.readBytes() ?? const [], allowMalformed: true))
           .join('\n');
-      spec = _parseThemeFromSourceCode(combinedCode, fallbackName: fallbackName);
+      spec = _parseThemeFromSourceCode(
+        combinedCode,
+        fallbackName: fallbackName,
+        defaultTargetScreen: defaultTargetScreen,
+      );
       codeSourceTag = _basename(codeFiles.first.name);
     }
 
-    spec ??= CustomThemeSpec(
-      name: fallbackName,
-      subtitle: 'Ảnh nền tùy chỉnh',
-      showWaybar: false,
-    );
+    spec ??= defaultTargetScreen == 2
+        ? CustomThemeSpec(
+            targetScreen: 2,
+            name: fallbackName,
+            subtitle: 'Theme ảnh nền Màn 2 tùy chỉnh',
+            clock: const CustomThemeClockSpec(
+              x: 237,
+              y: 14,
+              fontSize: 28,
+              color: '#FFFFFF',
+              center: true,
+            ),
+            date: const CustomThemeDateSpec(
+              x: 237,
+              y: 46,
+              color: '#94A3B8',
+              center: true,
+            ),
+          )
+        : CustomThemeSpec(
+            targetScreen: 1,
+            name: fallbackName,
+            subtitle: 'Ảnh nền tùy chỉnh',
+            showWaybar: false,
+          );
 
     final summaryParts = <String>[
       if (codeSourceTag.isNotEmpty) codeSourceTag,
@@ -616,6 +873,7 @@ class CustomThemeService extends ChangeNotifier {
   CustomThemeSpec _parseThemeFromSourceCode(
     String code, {
     required String fallbackName,
+    int defaultTargetScreen = 1,
   }) {
     final hexColors = <String>[];
 
@@ -652,18 +910,89 @@ class CustomThemeService extends ChangeNotifier {
             ))
         .toList();
 
-    final hasSevenSeg = code.toLowerCase().contains('monospace') ||
-        code.toLowerCase().contains('7seg') ||
-        code.contains(', 7)');
-    final showWaybar = code.toLowerCase().contains('waybar');
+    final lower = code.toLowerCase();
+    final detectedScreen =
+        lower.contains('minimap') || lower.contains('screen: 2')
+            ? 2
+            : defaultTargetScreen;
+    final hasSevenSeg =
+        lower.contains('monospace') || lower.contains('7seg') || code.contains(', 7)');
+    final showWaybar = lower.contains('waybar');
 
     // Look for largest fontSize mentioned near clock
-    double clockSize = 40;
+    double clockSize = detectedScreen == 2 ? 28 : 40;
     for (final m in RegExp(r'fontSize:\s*([\d.]+)').allMatches(code)) {
       final v = double.tryParse(m.group(1) ?? '') ?? 0;
       if (v >= 24 && v <= 56 && v > clockSize) {
         clockSize = v;
       }
+    }
+
+    if (detectedScreen == 2) {
+      return CustomThemeSpec(
+        targetScreen: 2,
+        name: fallbackName,
+        subtitle: 'Tự phân tích Màn 2 từ mã nguồn ZIP',
+        accentColor: accent,
+        bgColor: '#0B111A',
+        panel: CustomThemeBox(
+          x: 158,
+          y: 6,
+          w: 158,
+          h: 228,
+          r: 12,
+          fill: '#131B26',
+          border: accent,
+        ),
+        minimap: CustomMan2MinimapSpec(
+          x: 6,
+          y: 8,
+          w: 144,
+          h: 224,
+          r: 10,
+          border: accent,
+        ),
+        clock: CustomThemeClockSpec(
+          visible: true,
+          x: 237,
+          y: 14,
+          fontSize: clockSize,
+          font: hasSevenSeg ? '7seg' : 'sans',
+          color: '#FFFFFF',
+          center: true,
+        ),
+        date: CustomThemeDateSpec(
+          visible: true,
+          x: 237,
+          y: 46,
+          fontSize: 10,
+          color: accent,
+          center: true,
+        ),
+        song: CustomThemeSongSpec(
+          visible: true,
+          boxX: 164,
+          boxY: 80,
+          boxW: 146,
+          boxH: 40,
+          color: secondaryAccent,
+          bgColor: '#0B111A',
+          border: accent,
+          durColor: accent,
+        ),
+        notif: CustomMan2NotifSpec(
+          visible: true,
+          x: 164,
+          y: 124,
+          w: 146,
+          h: 106,
+          r: 8,
+          fill: '#0B111A',
+          border: '#1E293B',
+          titleColor: secondaryAccent,
+          msgColor: '#FFFFFF',
+        ),
+      );
     }
 
     final clockX = coords.isNotEmpty ? coords[0].$1.clamp(4, 220).toDouble() : 20.0;
@@ -674,6 +1003,7 @@ class CustomThemeService extends ChangeNotifier {
     final songY = coords.length > 2 ? coords[2].$2.clamp(160, 220).toDouble() : 202.0;
 
     return CustomThemeSpec(
+      targetScreen: 1,
       name: fallbackName,
       subtitle: 'Tự phân tích từ mã nguồn ZIP',
       accentColor: accent,

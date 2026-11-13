@@ -87,8 +87,40 @@ private:
 
   // Watchface selection (0..5 built-in, 250 = custom ZIP theme on SPIFFS)
   uint8_t _watchfaceStyle = 0;
+  // Idle map (Màn 2) theme selection (0..3 built-in, 250 = custom ZIP theme on SPIFFS)
+  uint8_t _idleMapStyle = 0;
   uint8_t _brightnessPct = 100;
   uint8_t _previewScreenMode = 0; // 0=auto, 1=lock Màn 1, 2=preview Màn 2
+
+  struct Man2Layout {
+    bool hasBgJpg = false;
+    bool drawPanelCard = true;
+    uint16_t screenBg = 0x0000;
+    // Minimap viewport (cropped from 144x224 JPEG centered inside)
+    int16_t mapX = 6, mapY = 8, mapW = 144, mapH = 224, mapR = 10;
+    uint16_t mapBorder = 0x3DF7;
+    // Right/left HUD panel
+    int16_t cardX = 158, cardY = 6, cardW = 158, cardH = 228, cardR = 12;
+    uint16_t cardBg = 0x10C4, cardBorder = 0x2167;
+    // Clock & Date
+    bool clockVisible = true;
+    int16_t clockX = 237, clockY = 14; uint8_t clockFont = 4; uint16_t clockColor = 0xFFFF;
+    bool dateVisible = true;
+    int16_t dateX = 237, dateY = 46; uint16_t dateColor = 0x9517;
+    char dateFormat[12] = "vn_short";
+    int16_t divX = 172, divY = 74, divW = 130;
+    // Music pill
+    bool songVisible = true;
+    int16_t musicX = 164, musicY = 80, musicW = 146, musicH = 40;
+    uint16_t musicBg = 0x0883, musicBorder = 0x1947, musicColor = 0xFE42, durColor = 0x07FF;
+    // Notif box
+    bool notifVisible = true;
+    int16_t notifX = 164, notifY = 124, notifW = 146, notifH = 106;
+    uint16_t notifBg = 0x0883, notifBorder = 0x1947, notifTitleColor = 0xFFE0, notifMsgColor = 0xFFFF;
+  };
+  Man2Layout _customMan2;
+  bool _customMan2Loaded = false;
+  bool _customMan2Dirty = true;
 
   struct CustomThemeBox {
     int16_t x = 0, y = 0, w = 0, h = 0, r = 0;
@@ -201,6 +233,8 @@ public:
     prefs.begin("nav_ui", true);
     uint8_t savedStyle = prefs.getUChar("wf_style", 0);
     _watchfaceStyle = (savedStyle == 250) ? 250 : (savedStyle % 6);
+    uint8_t savedM2 = prefs.getUChar("m2_style", 0);
+    _idleMapStyle = (savedM2 == 250) ? 250 : (savedM2 % 4);
     _brightnessPct = constrain(prefs.getUChar("bl_pct", 100), 5, 100);
     prefs.end();
 
@@ -268,6 +302,32 @@ public:
     _customThemeDirty = true;
     _customThemeLoaded = false;
     _needFullRedraw = true;
+  }
+
+  void setIdleMapStyle(uint8_t style) {
+    _idleMapStyle = (style == 250) ? 250 : (style % 4);
+    Preferences prefs;
+    prefs.begin("nav_ui", false);
+    prefs.putUChar("m2_style", _idleMapStyle);
+    prefs.end();
+    _needFullRedraw = true;
+    Serial.printf("[UI] Idle map (Man 2) style set to %d\n", _idleMapStyle);
+  }
+
+  void markMan2ThemeReload() {
+    _customMan2Dirty = true;
+    _customMan2Loaded = false;
+    _needFullRedraw = true;
+  }
+
+  void getIdleMinimapRect(int16_t& mx, int16_t& my, int16_t& mw, int16_t& mh, int16_t& br, uint16_t& borderCol) {
+    Man2Layout l = _activeMan2Layout();
+    mx = l.mapX;
+    my = l.mapY;
+    mw = l.mapW;
+    mh = l.mapH;
+    br = l.mapR;
+    borderCol = l.mapBorder;
   }
 
   void setPreviewScreenMode(uint8_t mode) {
@@ -835,6 +895,164 @@ private:
     }
     Serial.printf("[UI] Loaded /custom_theme.json (boxes=%d, labels=%d, waybar=%d)\n",
                   _customTheme.boxCount, _customTheme.labelCount, _customTheme.showWaybar);
+  }
+
+  void _loadCustomMan2Spec() {
+    _customMan2 = Man2Layout();
+    _customMan2Loaded = true;
+    _customMan2Dirty = false;
+    _customMan2.hasBgJpg = SPIFFS.exists("/custom_man2_bg.jpg");
+    if (!SPIFFS.exists("/custom_man2.json")) return;
+    File f = SPIFFS.open("/custom_man2.json", "r");
+    if (!f) return;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) {
+      Serial.printf("[UI] Failed parsing /custom_man2.json: %s\n", err.c_str());
+      return;
+    }
+
+    _customMan2.screenBg = _parseHexColor565(doc["bgColor"] | "#0B111A", 0x0841);
+    _customMan2.drawPanelCard = doc["showPanel"] | true;
+
+    if (doc["panel"].is<JsonObject>()) {
+      JsonObject p = doc["panel"];
+      _customMan2.cardX = p["x"] | 158;
+      _customMan2.cardY = p["y"] | 6;
+      _customMan2.cardW = p["w"] | 158;
+      _customMan2.cardH = p["h"] | 228;
+      _customMan2.cardR = p["r"] | 12;
+      _customMan2.cardBg = _parseHexColor565(p["fill"] | "#131B26", _customMan2.cardBg);
+      _customMan2.cardBorder = _parseHexColor565(p["border"] | "#202D3D", _customMan2.cardBorder);
+    }
+
+    if (doc["minimap"].is<JsonObject>()) {
+      JsonObject m = doc["minimap"];
+      _customMan2.mapX = constrain((int)(m["x"] | 6), 2, 300);
+      _customMan2.mapY = constrain((int)(m["y"] | 8), 2, 220);
+      _customMan2.mapW = constrain((int)(m["w"] | 144), 60, 144);
+      _customMan2.mapH = constrain((int)(m["h"] | 224), 60, 224);
+      _customMan2.mapR = m["r"] | 10;
+      _customMan2.mapBorder = _parseHexColor565(m["border"] | "#38BDF8", _customMan2.mapBorder);
+    }
+
+    if (doc["clock"].is<JsonObject>()) {
+      JsonObject c = doc["clock"];
+      _customMan2.clockVisible = c["visible"] | true;
+      _customMan2.clockX = c["x"] | 237;
+      _customMan2.clockY = c["y"] | 14;
+      _customMan2.clockColor = _parseHexColor565(c["color"] | "#FFFFFF", 0xFFFF);
+      _customMan2.clockFont = _mapClockFont(c["fontSize"] | 26, c["font"] | "");
+    }
+
+    if (doc["date"].is<JsonObject>()) {
+      JsonObject d = doc["date"];
+      _customMan2.dateVisible = d["visible"] | true;
+      _customMan2.dateX = d["x"] | 237;
+      _customMan2.dateY = d["y"] | 46;
+      _customMan2.dateColor = _parseHexColor565(d["color"] | "#94A3B8", _customMan2.dateColor);
+      strncpy(_customMan2.dateFormat, d["format"] | "vn_short", sizeof(_customMan2.dateFormat) - 1);
+      _customMan2.dateFormat[sizeof(_customMan2.dateFormat) - 1] = '\0';
+    }
+
+    if (doc["song"].is<JsonObject>()) {
+      JsonObject s = doc["song"];
+      _customMan2.songVisible = s["visible"] | true;
+      _customMan2.musicX = s["boxX"] | _customMan2.cardX + 6;
+      _customMan2.musicY = s["boxY"] | 80;
+      _customMan2.musicW = constrain((int)(s["boxW"] | (_customMan2.cardW - 12)), 110, 152);
+      _customMan2.musicH = s["boxH"] | 40;
+      _customMan2.musicBg = _parseHexColor565(s["bgColor"] | "#0B111A", _customMan2.musicBg);
+      _customMan2.musicBorder = _parseHexColor565(s["border"] | "#1E293B", _customMan2.musicBorder);
+      _customMan2.musicColor = _parseHexColor565(s["color"] | "#FACC15", _customMan2.musicColor);
+      _customMan2.durColor = _parseHexColor565(s["durColor"] | "#38BDF8", _customMan2.durColor);
+    }
+
+    if (doc["notif"].is<JsonObject>()) {
+      JsonObject n = doc["notif"];
+      _customMan2.notifVisible = n["visible"] | true;
+      _customMan2.notifX = n["x"] | (_customMan2.cardX + 6);
+      _customMan2.notifY = n["y"] | 124;
+      _customMan2.notifW = constrain((int)(n["w"] | (_customMan2.cardW - 12)), 100, 160);
+      _customMan2.notifH = constrain((int)(n["h"] | 106), 68, 130);
+      _customMan2.notifBg = _parseHexColor565(n["fill"] | "#0B111A", _customMan2.notifBg);
+      _customMan2.notifBorder = _parseHexColor565(n["border"] | "#1E293B", _customMan2.notifBorder);
+      _customMan2.notifTitleColor = _parseHexColor565(n["titleColor"] | "#FACC15", 0xFFE0);
+      _customMan2.notifMsgColor = _parseHexColor565(n["msgColor"] | "#FFFFFF", 0xFFFF);
+    }
+    _customMan2.divX = _customMan2.cardX + 14;
+    _customMan2.divY = _customMan2.dateY + 26;
+    _customMan2.divW = max(20, (int)_customMan2.cardW - 28);
+  }
+
+  Man2Layout _activeMan2Layout() {
+    if (_idleMapStyle == 250) {
+      if (_customMan2Dirty || !_customMan2Loaded) {
+        _loadCustomMan2Spec();
+      }
+      return _customMan2;
+    }
+
+    Man2Layout l;
+    l.screenBg = TFT_BLACK;
+    l.mapX = 6; l.mapY = 8; l.mapW = 144; l.mapH = 224; l.mapR = 10;
+    l.cardX = 158; l.cardY = 6; l.cardW = 158; l.cardH = 228; l.cardR = 12;
+
+    switch (_idleMapStyle) {
+      case 1: // Neon Cyber Map
+        l.screenBg = tft.color565(5, 7, 20);
+        l.mapBorder = tft.color565(236, 72, 153);
+        l.cardBg = tft.color565(12, 16, 38);
+        l.cardBorder = tft.color565(0, 240, 255);
+        l.clockColor = tft.color565(0, 240, 255);
+        l.clockFont = 7;
+        l.dateColor = tft.color565(192, 132, 252);
+        l.musicBg = tft.color565(9, 12, 28);
+        l.musicBorder = tft.color565(236, 72, 153);
+        l.musicColor = tft.color565(103, 232, 249);
+        l.durColor = tft.color565(244, 114, 182);
+        l.notifBg = tft.color565(9, 12, 28);
+        l.notifBorder = tft.color565(0, 240, 255);
+        break;
+      case 2: // Sunflower Warm HUD
+        l.screenBg = tft.color565(18, 14, 10);
+        l.mapBorder = tft.color565(250, 204, 21);
+        l.cardBg = tft.color565(34, 26, 18);
+        l.cardBorder = tft.color565(217, 119, 6);
+        l.clockColor = tft.color565(250, 204, 21);
+        l.dateColor = tft.color565(253, 230, 138);
+        l.musicBg = tft.color565(22, 17, 12);
+        l.musicBorder = tft.color565(180, 83, 9);
+        l.musicColor = tft.color565(254, 240, 138);
+        l.durColor = tft.color565(251, 146, 60);
+        l.notifBg = tft.color565(22, 17, 12);
+        l.notifBorder = tft.color565(217, 119, 6);
+        break;
+      case 3: // Right-Hand Minimap
+        l.screenBg = tft.color565(7, 12, 16);
+        l.mapX = 170; l.mapY = 8;
+        l.mapBorder = tft.color565(16, 185, 129);
+        l.cardX = 4; l.cardY = 6; l.cardW = 158; l.cardH = 228;
+        l.cardBg = tft.color565(14, 22, 30);
+        l.cardBorder = tft.color565(30, 58, 72);
+        l.clockX = 83; l.dateX = 83; l.divX = 18;
+        l.clockColor = TFT_WHITE;
+        l.dateColor = tft.color565(110, 231, 183);
+        l.musicX = 10; l.musicY = 80; l.musicW = 146; l.musicH = 40;
+        l.musicBg = tft.color565(9, 15, 22);
+        l.musicBorder = tft.color565(16, 185, 129);
+        l.durColor = tft.color565(52, 211, 153);
+        l.notifX = 10; l.notifY = 124; l.notifW = 146; l.notifH = 106;
+        l.notifBg = tft.color565(9, 15, 22);
+        l.notifBorder = tft.color565(30, 58, 72);
+        break;
+      case 0:
+      default:
+        l.mapBorder = TFT_CYAN;
+        break;
+    }
+    return l;
   }
 
   const char* _getDayOfWeekString(uint8_t dow) {
@@ -1576,13 +1794,22 @@ private:
   // MÀN 2: APP IDLE MAP (No Waybar, Minimap Left + Media & Clock Right, Flicker-Free)
   // =========================================================================
   void _renderAppIdleMap() {
-    uint16_t cCardBg = tft.color565(19, 27, 38);
-    uint16_t cPillBg = tft.color565(11, 17, 26);
-    uint16_t cBorder = tft.color565(32, 45, 61);
+    Man2Layout l = _activeMan2Layout();
     bool musicRedraw = false;
+    int cardCenterX = l.cardX + l.cardW / 2;
 
     if (_needFullRedraw) {
-      tft.fillScreen(TFT_BLACK);
+      tft.fillScreen(l.screenBg);
+      if (l.hasBgJpg && SPIFFS.exists("/custom_man2_bg.jpg")) {
+        File f = SPIFFS.open("/custom_man2_bg.jpg", "r");
+        if (f) {
+          size_t fSize = f.size();
+          f.close();
+          if (fSize > 200) {
+            TJpgDec.drawFsJpg(0, 0, "/custom_man2_bg.jpg");
+          }
+        }
+      }
       _lastState = _currentState;
       _needFullRedraw = false;
       _lastDrawnHour = 255;
@@ -1596,129 +1823,134 @@ private:
       _notifDirty = true;
       musicRedraw = true;
 
-      _renderStandbyVectorMap();
+      _renderStandbyVectorMapAt(l.mapX, l.mapY, l.mapW, l.mapH, l.mapR, l.mapBorder, l.musicBg);
 
-      tft.fillRoundRect(158, 6, 158, 228, 12, cCardBg);
-      tft.drawRoundRect(158, 6, 158, 228, 12, cBorder);
+      if (l.drawPanelCard && l.cardW > 0) {
+        tft.fillRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBg);
+        tft.drawRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBorder);
+      }
 
-      // Music pill (compact height: 40px, x164 y80 w146 h40)
-      tft.fillRoundRect(164, 80, 146, 40, 8, cPillBg);
-      tft.drawRoundRect(164, 80, 146, 40, 8, tft.color565(30, 41, 59));
+      if (l.songVisible) {
+        tft.fillRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBg);
+        tft.drawRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBorder);
+      }
 
-      // Notification pill (expanded height: 106px, x164 y124 w146 h106)
-      _drawNotifBox();
+      if (l.notifVisible) {
+        _drawNotifBoxAt(l.notifX, l.notifY, l.notifW, l.notifH, l.notifBg, l.notifBorder, l.notifTitleColor, l.notifMsgColor);
+      }
     }
 
-    if (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin) {
+    if (l.clockVisible && (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin)) {
       _lastDrawnHour = _clockHour;
       _lastDrawnMin = _clockMin;
-      tft.setTextPadding(140);
-      tft.setTextColor(TFT_WHITE, cCardBg);
-      tft.drawCentreString(_navData.currentTime, 237, 14, 4);
+      if (l.clockFont == 7) {
+        tft.fillRect(l.cardX + 4, l.clockY - 2, l.cardW - 8, 34, l.cardBg);
+      }
+      tft.setTextPadding(l.cardW - 14);
+      tft.setTextColor(l.clockColor, l.cardBg);
+      tft.drawCentreString(_navData.currentTime, l.clockX, l.clockY, l.clockFont == 7 ? 4 : l.clockFont);
       tft.setTextPadding(0);
     }
 
-    if (_clockDay != _lastDrawnDay) {
+    if (l.dateVisible && _clockDay != _lastDrawnDay) {
       _lastDrawnDay = _clockDay;
-      tft.fillRect(160, 44, 154, 26, cCardBg);
+      tft.fillRect(l.cardX + 2, l.dateY - 2, l.cardW - 4, 24, l.cardBg);
       char dateStr[32];
       snprintf(dateStr, sizeof(dateStr), "%s, %02d/%02d", _getDayOfWeekString(_clockDayOfWeek), _clockDay, _clockMonth);
-      _drawCentreUtf8String(dateStr, 237, 46, tft.color565(148, 163, 184), cCardBg);
-      tft.drawFastHLine(172, 74, 130, cBorder);
+      _drawCentreUtf8String(dateStr, l.dateX, l.dateY, l.dateColor, l.cardBg);
+      tft.drawFastHLine(l.divX, l.divY, l.divW, l.cardBorder);
     }
 
     // Music: "Tên bài • Tác giả" thả trôi trên 1 dòng + thời gian phát
     bool hasSong = (strlen(_navData.songTitle) > 0 && strcmp(_navData.songTitle, "CHUA PHAT NHAC") != 0);
     bool songChanged = (strcmp(_navData.songTitle, _lastDrawnSong) != 0);
-    if (songChanged) {
-      strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
-      _lastDrawnSong[sizeof(_lastDrawnSong) - 1] = '\0';
-      musicRedraw = true;
-      tft.fillRect(166, 82, 142, 36, cPillBg);
-      _mqIdle.text[0] = '\0';
-      _lastIdleElapsed = 0xFFFF;
-      if (!hasSong) {
-        _drawCentreUtf8String("Chưa phát nhạc", 237, 92, tft.color565(100, 116, 139), cPillBg);
+    if (l.songVisible) {
+      int musicCx = l.musicX + l.musicW / 2;
+      if (songChanged) {
+        strncpy(_lastDrawnSong, _navData.songTitle, sizeof(_lastDrawnSong) - 1);
+        _lastDrawnSong[sizeof(_lastDrawnSong) - 1] = '\0';
+        musicRedraw = true;
+        tft.fillRect(l.musicX + 2, l.musicY + 2, l.musicW - 4, l.musicH - 4, l.musicBg);
+        _mqIdle.text[0] = '\0';
+        _lastIdleElapsed = 0xFFFF;
+        if (!hasSong) {
+          _drawCentreUtf8String("Chưa phát nhạc", musicCx, l.musicY + 12, tft.color565(100, 116, 139), l.musicBg);
+        }
       }
-    }
-    if (hasSong) {
-      char full[100];
-      if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
-      else snprintf(full, sizeof(full), "%s", _navData.songTitle);
-      _marquee(_mqIdle, marqueeSpr, u8f_marquee, 167, 82, full, tft.color565(250, 204, 21), cPillBg, musicRedraw);
+      if (hasSong) {
+        char full[100];
+        if (_navData.songArtist[0] != '\0') snprintf(full, sizeof(full), "%s • %s", _navData.songTitle, _navData.songArtist);
+        else snprintf(full, sizeof(full), "%s", _navData.songTitle);
+        _marquee(_mqIdle, marqueeSpr, u8f_marquee, l.musicX + 3, l.musicY + 2, full, l.musicColor, l.musicBg, musicRedraw);
 
-      uint16_t elKey = (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0) ? _navData.songElapsedSec : 0xFFFE;
-      if (_lastIdleElapsed != elKey) {
-        _lastIdleElapsed = elKey;
-        tft.fillRect(166, 102, 142, 16, cPillBg);
-        if (elKey != 0xFFFE) {
-          char timeStr[32];
-          int elM = _navData.songElapsedSec / 60, elS = _navData.songElapsedSec % 60;
-          if (_navData.songDurationSec > 0) {
-            snprintf(timeStr, sizeof(timeStr), "%02d:%02d / %02d:%02d", elM, elS,
-                     _navData.songDurationSec / 60, _navData.songDurationSec % 60);
-          } else {
-            snprintf(timeStr, sizeof(timeStr), "%02d:%02d", elM, elS);
+        uint16_t elKey = (_navData.songElapsedSec > 0 || _navData.songDurationSec > 0) ? _navData.songElapsedSec : 0xFFFE;
+        if (_lastIdleElapsed != elKey) {
+          _lastIdleElapsed = elKey;
+          tft.fillRect(l.musicX + 2, l.musicY + 22, l.musicW - 4, 16, l.musicBg);
+          if (elKey != 0xFFFE) {
+            char timeStr[32];
+            int elM = _navData.songElapsedSec / 60, elS = _navData.songElapsedSec % 60;
+            if (_navData.songDurationSec > 0) {
+              snprintf(timeStr, sizeof(timeStr), "%02d:%02d / %02d:%02d", elM, elS,
+                       _navData.songDurationSec / 60, _navData.songDurationSec % 60);
+            } else {
+              snprintf(timeStr, sizeof(timeStr), "%02d:%02d", elM, elS);
+            }
+            _drawCentreUtf8String(timeStr, musicCx, l.musicY + 22, l.durColor, l.musicBg);
           }
-          _drawCentreUtf8String(timeStr, 237, 102, TFT_CYAN, cPillBg);
         }
       }
     }
 
-    // Notification box (messages persist until next notification; active ringing calls auto-expire)
+    // Notification box
     if (_notifShown && _notif.isCall && millis() > _notifExpire) {
       _notifShown = false;
       _notifDirty = true;
     }
-    if (_notifDirty) {
+    if (l.notifVisible && _notifDirty) {
       _notifDirty = false;
-      _drawNotifBox();
+      _drawNotifBoxAt(l.notifX, l.notifY, l.notifW, l.notifH, l.notifBg, l.notifBorder, l.notifTitleColor, l.notifMsgColor);
     }
+    (void)cardCenterX;
   }
 
-  // --- Vector Minimap for Standby Map Mode (Full height y: 6..234) ---
-  void _renderStandbyVectorMap() {
-    uint16_t cMapBg       = tft.color565(11, 17, 26);
-    uint16_t cCardBorder  = TFT_CYAN;
+  void _renderStandbyVectorMapAt(int16_t mx, int16_t my, int16_t mw, int16_t mh, int16_t br, uint16_t borderCol, uint16_t cMapBg) {
     uint16_t cRadarRing   = tft.color565(20, 32, 48);
-    uint16_t cRadarText   = tft.color565(60, 80, 105);
     uint16_t cAsphaltBed  = tft.color565(28, 38, 54);
     uint16_t cRoadBorder  = tft.color565(55, 75, 100);
-    uint16_t cRouteActive = TFT_CYAN;
+    uint16_t cRouteActive = borderCol;
 
-    tft.drawRoundRect(4, 6, 148, 228, 12, cCardBorder);
-    tft.fillRoundRect(6, 8, 144, 224, 10, cMapBg);
+    tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, borderCol);
+    tft.setViewport(mx, my, mw, mh, false);
+    tft.fillRect(0, 0, mw, mh, cMapBg);
 
-    const int minX = 7, maxX = 149;
-    const int minY = 9, maxY = 231;
-    const int cx = 78;
-    const int cy = 125;
+    const int cx = mw / 2;
+    const int cy = mh / 2;
 
-    // Range rings
-    tft.drawCircle(cx, cy, 45, cRadarRing);
-    tft.drawCircle(cx, cy, 85, cRadarRing);
+    tft.drawCircle(cx, cy, 42, cRadarRing);
+    tft.drawCircle(cx, cy, 80, cRadarRing);
 
-    // North-South Central Road
-    _drawThickLine(cx, maxY - 4, cx, minY + 4, cRoadBorder, 16);
-    _drawThickLine(cx, maxY - 4, cx, minY + 4, cAsphaltBed, 12);
+    _drawThickLine(cx, mh - 4, cx, 4, cRoadBorder, 14);
+    _drawThickLine(cx, mh - 4, cx, 4, cAsphaltBed, 10);
 
-    // East-West Crossroad
-    _drawThickLine(minX + 4, cy, maxX - 4, cy, cRoadBorder, 16);
-    _drawThickLine(minX + 4, cy, maxX - 4, cy, cAsphaltBed, 12);
+    _drawThickLine(4, cy, mw - 4, cy, cRoadBorder, 14);
+    _drawThickLine(4, cy, mw - 4, cy, cAsphaltBed, 10);
 
-    // Standby Location Puck
     tft.drawCircle(cx, cy, 12, tft.color565(0, 50, 80));
     tft.fillCircle(cx, cy, 7, cRouteActive);
     tft.drawCircle(cx, cy, 7, TFT_WHITE);
     tft.fillTriangle(cx, cy - 9, cx - 4, cy - 2, cx + 4, cy - 2, TFT_WHITE);
 
-    // Compass N
-    tft.setTextColor(TFT_CYAN, cMapBg);
-    tft.drawString("N", 12, 14, 2);
-    tft.fillTriangle(26, 15, 23, 23, 29, 23, TFT_CYAN);
+    tft.setTextColor(borderCol, cMapBg);
+    tft.drawString("N", 6, 6, 2);
+    tft.fillTriangle(20, 7, 17, 15, 23, 15, borderCol);
+    tft.fillCircle(mw - 10, 10, 3, TFT_GREEN);
+    tft.resetViewport();
+  }
 
-    // Live GPS Status Dot
-    tft.fillCircle(142, 18, 3, TFT_GREEN);
+  void _renderStandbyVectorMap() {
+    Man2Layout l = _activeMan2Layout();
+    _renderStandbyVectorMapAt(l.mapX, l.mapY, l.mapW, l.mapH, l.mapR, l.mapBorder, l.musicBg);
   }
 
   void _drawManeuverArrow(int x, int y, uint8_t turnCode) {
@@ -2033,14 +2265,18 @@ private:
     }
   }
 
-  // Ô thông báo (tin nhắn / cuộc gọi) mở rộng ở góc dưới phải Màn 2: x164 y124 w146 h106
+  // Ô thông báo (tin nhắn / cuộc gọi) theo tọa độ Màn 2 hiện tại
   void _drawNotifBox() {
-    const uint16_t cPill = tft.color565(11, 17, 26);
+    Man2Layout l = _activeMan2Layout();
+    _drawNotifBoxAt(l.notifX, l.notifY, l.notifW, l.notifH, l.notifBg, l.notifBorder, l.notifTitleColor, l.notifMsgColor);
+  }
+
+  void _drawNotifBoxAt(int16_t nx, int16_t ny, int16_t nw, int16_t nh, uint16_t cPill, uint16_t defaultBorder, uint16_t titleColor, uint16_t msgColor) {
     if (_notifShown && _notif.isCall && millis() > _notifExpire) {
       _notifShown = false;
     }
 
-    uint16_t border = tft.color565(30, 41, 59);
+    uint16_t border = defaultBorder;
     uint16_t circle = 0;
     const uint8_t* icon = icon_bell_20x20;
 
@@ -2048,39 +2284,40 @@ private:
       _notifStyle(_notif, border, circle, icon);
     }
 
-    tft.fillRoundRect(164, 124, 146, 106, 8, cPill);
-    tft.drawRoundRect(164, 124, 146, 106, 8, border);
+    tft.fillRoundRect(nx, ny, nw, nh, 8, cPill);
+    tft.drawRoundRect(nx, ny, nw, nh, 8, border);
     if (_notifShown && _notif.isCall) {
-      tft.drawRoundRect(165, 125, 144, 104, 7, border);
+      tft.drawRoundRect(nx + 1, ny + 1, nw - 2, nh - 2, 7, border);
     }
 
+    int cx = nx + nw / 2;
     if (!_notifShown) {
-      tft.fillCircle(237, 155, 12, tft.color565(20, 28, 40));
-      tft.drawBitmap(227, 145, icon_bell_20x20, 20, 20, tft.color565(71, 85, 105));
-      _drawCentreUtf8String("Chưa có thông báo", 237, 185, tft.color565(71, 85, 105), cPill);
+      tft.fillCircle(cx, ny + 31, 12, tft.color565(20, 28, 40));
+      tft.drawBitmap(cx - 10, ny + 21, icon_bell_20x20, 20, 20, tft.color565(71, 85, 105));
+      _drawCentreUtf8String("Chưa có thông báo", cx, ny + 61, tft.color565(71, 85, 105), cPill);
       return;
     }
 
     // Header: App icon + Sender/Caller Title
-    tft.fillCircle(181, 142, 12, circle);
-    tft.drawBitmap(171, 132, icon, 20, 20, TFT_WHITE);
+    tft.fillCircle(nx + 17, ny + 18, 12, circle);
+    tft.drawBitmap(nx + 7, ny + 8, icon, 20, 20, TFT_WHITE);
 
     char titleLine[64];
-    _fitUtf8(_notif.title, titleLine, sizeof(titleLine), 104);
-    _drawUtf8String(titleLine, 198, 133, _notif.isCall ? TFT_GREEN : TFT_YELLOW, cPill);
+    _fitUtf8(_notif.title, titleLine, sizeof(titleLine), max(40, (int)nw - 42));
+    _drawUtf8String(titleLine, nx + 34, ny + 9, _notif.isCall ? TFT_GREEN : titleColor, cPill);
 
-    tft.drawFastHLine(170, 158, 134, tft.color565(28, 38, 52));
+    tft.drawFastHLine(nx + 6, ny + 34, max(20, (int)nw - 12), tft.color565(28, 38, 52));
 
     // Body: Lines 1, 2, 3
     if (_notif.isCall) {
-      _drawUtf8String("Cuộc gọi đến", 172, 163, tft.color565(148, 163, 184), cPill);
+      _drawUtf8String("Cuộc gọi đến", nx + 8, ny + 39, tft.color565(148, 163, 184), cPill);
       const char* phone = (_notif.message[0] != '\0') ? _notif.message : "Đang đổ chuông...";
       char pLine[64];
-      _fitUtf8(phone, pLine, sizeof(pLine), 132);
-      _drawUtf8String(pLine, 172, 183, TFT_WHITE, cPill);
-      _drawUtf8String("Nhấc máy trên ĐT", 172, 203, tft.color565(100, 116, 139), cPill);
+      _fitUtf8(phone, pLine, sizeof(pLine), max(40, (int)nw - 14));
+      _drawUtf8String(pLine, nx + 8, ny + 59, msgColor, cPill);
+      _drawUtf8String("Nhấc máy trên ĐT", nx + 8, ny + 79, tft.color565(100, 116, 139), cPill);
     } else {
-      _drawWrappedUtf8String(_notif.message, 172, 163, 132, 3, TFT_WHITE, cPill, 19);
+      _drawWrappedUtf8String(_notif.message, nx + 8, ny + 39, max(40, (int)nw - 14), 3, msgColor, cPill, 19);
     }
   }
 };

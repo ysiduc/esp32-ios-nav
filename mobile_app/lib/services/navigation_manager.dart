@@ -8,7 +8,9 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/esp_payload.dart';
 import '../models/route_model.dart';
+import 'apple_maps_service.dart';
 import 'ble_service.dart';
+import 'goong_service.dart';
 import 'mapbox_directions_service.dart';
 import 'phone_media_service.dart';
 
@@ -44,6 +46,12 @@ class NavigationManager extends ChangeNotifier {
   DateTime? _lastRerouteTime;
   DateTime _lastGpsFixTime = DateTime.now();
   DateTime _lastUiNotifyTime = DateTime.now();
+
+  // Live reverse-geocoded street name under the vehicle
+  String _liveReverseStreetName = '';
+  LatLng? _lastStreetGeocodeLoc;
+  DateTime? _lastStreetGeocodeTime;
+  bool _isStreetGeocoding = false;
 
   // Voice guidance (TTS) state & initial GPS fix tracking
   static const String _prefVoiceKey = 'ysiducnaga_voice_guidance_enabled';
@@ -191,31 +199,82 @@ class NavigationManager extends ChangeNotifier {
         lower.startsWith('đích:');
   }
 
+  /// Normalizes a road name for compact bottom-pill display (e.g. "Phố Nguyễn Cảnh Dị" -> "Nguyễn Cảnh Dị").
+  static String normalizeRoadPillName(String raw) {
+    var s = cleanStreetName(raw)
+        .replaceFirst(RegExp(r'^(?:Số\s+)?\d+[A-Za-z0-9/\-\.]*\s+(?=[A-Za-zÀ-ỹĐđ])'), '')
+        .trim();
+    for (final prefix in const ['Phố ', 'Đường ']) {
+      if (s.toLowerCase().startsWith(prefix.toLowerCase())) {
+        final rest = s.substring(prefix.length).trim();
+        // Keep short names like "Đường Láng"; drop redundant prefix on multi-word names.
+        if (rest.split(RegExp(r'\s+')).length >= 2) {
+          s = rest;
+        }
+        break;
+      }
+    }
+    return s;
+  }
+
+  /// Refreshes the real street name under [loc] using Apple CLGeocoder with Goong fallback.
+  Future<void> _refreshCurrentStreetName(LatLng loc, {bool force = false}) async {
+    if (!_isNavigating) return;
+    final now = DateTime.now();
+    if (!force) {
+      if (_isStreetGeocoding) return;
+      if (_lastStreetGeocodeTime != null &&
+          now.difference(_lastStreetGeocodeTime!).inMilliseconds < 4000) {
+        return;
+      }
+      if (_lastStreetGeocodeLoc != null &&
+          const Distance().as(LengthUnit.Meter, _lastStreetGeocodeLoc!, loc) < 30.0) {
+        return;
+      }
+    }
+
+    _isStreetGeocoding = true;
+    _lastStreetGeocodeTime = now;
+    _lastStreetGeocodeLoc = loc;
+
+    try {
+      String? resolved = await AppleMapsService.reverseGeocodeStreet(loc);
+      resolved ??= await GoongService().reverseGeocodeStreet(loc);
+      if (!_isNavigating || resolved == null) return;
+      final normalized = normalizeRoadPillName(resolved);
+      if (!_isArrivalOrGenericLabel(normalized) && normalized != _liveReverseStreetName) {
+        _liveReverseStreetName = normalized;
+        notifyListeners();
+      }
+    } catch (_) {
+    } finally {
+      _isStreetGeocoding = false;
+    }
+  }
+
   /// Returns the clean name of the road currently being traveled on (for the bottom blue pill)
   String get currentStreetName {
+    if (_liveReverseStreetName.isNotEmpty && !_isArrivalOrGenericLabel(_liveReverseStreetName)) {
+      if (_lastStreetGeocodeLoc == null ||
+          _currentLocation == null ||
+          const Distance().as(LengthUnit.Meter, _lastStreetGeocodeLoc!, _currentLocation!) <= 300.0) {
+        return _liveReverseStreetName;
+      }
+    }
+
     final route = _activeRoute ?? _previewRoute;
     if (route != null && route.steps.isNotEmpty) {
       if (_currentStepIndex > 0 && _currentStepIndex <= route.steps.length) {
-        final prev = cleanStreetName(route.steps[_currentStepIndex - 1].streetName);
+        final prev = normalizeRoadPillName(route.steps[_currentStepIndex - 1].streetName);
         if (!_isArrivalOrGenericLabel(prev)) {
           return prev;
         }
       }
-      if (route.summary.isNotEmpty) {
-        final sum = cleanStreetName(route.summary);
-        if (!_isArrivalOrGenericLabel(sum) && !sum.toLowerCase().contains('apple maps')) {
-          return sum;
+      if (route.steps.length == 1) {
+        final single = normalizeRoadPillName(route.steps.first.streetName);
+        if (!_isArrivalOrGenericLabel(single)) {
+          return single;
         }
-      }
-      final cur = cleanStreetName(route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)].streetName);
-      if (!_isArrivalOrGenericLabel(cur)) {
-        return cur;
-      }
-    }
-    if (route != null && route.summary.isNotEmpty) {
-      final sum = cleanStreetName(route.summary);
-      if (!_isArrivalOrGenericLabel(sum)) {
-        return sum;
       }
     }
     return 'Đường hiện tại';
@@ -788,6 +847,7 @@ class NavigationManager extends ChangeNotifier {
     // Đảm bảo luồng GPS liên tục và bộ nội suy 30 FPS luôn chạy
     _startContinuousGpsStream();
     _startSmoothMotionLoop();
+    _refreshCurrentStreetName(_currentLocation!, force: true);
     if (_currentLocation != null) {
       _updateUserPosition(liveStartLoc, _currentSpeedKmh, _currentHeading);
     }
@@ -832,6 +892,7 @@ class NavigationManager extends ChangeNotifier {
     _hasHeadingLock = true;
     _lastSpokenStepIndex = _currentStepIndex;
     _lastSpokenStage = 0;
+    _refreshCurrentStreetName(_currentLocation!, force: true);
     if (route.steps.isNotEmpty) {
       final firstStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
       speakVoicePrompt('Bắt đầu mô phỏng lộ trình. ${firstStep.instruction}');
@@ -929,7 +990,10 @@ class NavigationManager extends ChangeNotifier {
         final roundedDist = (directDistToStep / 50).round() * 50;
         speakVoicePrompt('Tiếp tục đi $roundedDist mét, sau đó ${targetStep.instruction}');
       }
+      _refreshCurrentStreetName(effectiveLoc, force: true);
       notifyListeners();
+    } else {
+      _refreshCurrentStreetName(effectiveLoc);
     }
 
     _distanceToNextManeuver = directDistToStep;
@@ -1095,6 +1159,7 @@ class NavigationManager extends ChangeNotifier {
             }
             _syncStepIndexWithPolylineProgress();
             _updateRemainingMetrics();
+            _refreshCurrentStreetName(_currentLocation ?? latestPos, force: true);
             _lastSpokenStepIndex = _currentStepIndex;
             _lastSpokenStage = 0;
             if (currentStep != null) {
@@ -1319,6 +1384,10 @@ class NavigationManager extends ChangeNotifier {
     _isRerouting = false;
     _lastSpokenStepIndex = -1;
     _lastSpokenStage = 0;
+    _liveReverseStreetName = '';
+    _lastStreetGeocodeLoc = null;
+    _lastStreetGeocodeTime = null;
+    _isStreetGeocoding = false;
     _activeRoute = null; // Clear active route so minimap returns to standby mode!
     _previewRoute = null; // Also clear preview route to completely remove old route
     _currentStepIndex = 0;
