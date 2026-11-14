@@ -527,18 +527,30 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Max JPEG payload bytes allowed for active transport
   int get _maxJpegFrameBytes {
-    // Raw TCP 8081: cap at 18.5 KB so frames stay crisp on 320x216 ST7789 while fitting 2.4GHz BLE+WiFi airtime with 0 queue lag.
-    if (_tcpApSocket != null) return 18500;
-    if (_wsClients.isEmpty) return 18500;
-    return 14500;
+    // ESP32 framePool supports up to 32,768 bytes per frame; allow crisp JPEGs without 0.40 crush.
+    if (_tcpApSocket != null) return 26500;
+    if (_wsClients.isEmpty) return 26500;
+    return 22500;
   }
+
+  @visibleForTesting
+  int get debugMaxJpegFrameBytes => _maxJpegFrameBytes;
+
+  @visibleForTesting
+  Future<Uint8List?> debugCompressRgbaToJpeg(
+    Uint8List rawBytes,
+    int w,
+    int h, {
+    int quality = 86,
+  }) =>
+      _compressRgbaToJpeg(rawBytes, w, h, quality: quality);
 
   /// Hardware-accelerated RGBA-to-JPEG encoding on iOS (with pure-Dart fallback)
   Future<Uint8List?> _compressRgbaToJpeg(
     Uint8List rawBytes,
     int w,
     int h, {
-    int quality = 74,
+    int quality = 86,
     Map<String, dynamic>? hud,
     List<Map<String, dynamic>>? roadLabels,
     bool isDark = false,
@@ -557,8 +569,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         };
         var res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
         if (res != null && res.length > maxBytes) {
-          args['quality'] = maxBytes > 16000 ? 0.54 : 0.40;
-          res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
+          for (final fallbackQ in const [0.78, 0.70, 0.62]) {
+            if ((quality / 100.0) <= fallbackQ) continue;
+            args['quality'] = fallbackQ;
+            res = await _locationChannel.invokeMethod<Uint8List>('compressRgbaToJpeg', args);
+            if (res == null || res.length <= maxBytes) break;
+          }
         }
         if (res != null && res.isNotEmpty) {
           return res;
@@ -573,7 +589,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     );
     var jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: quality));
     if (jpg.length > maxBytes) {
-      jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: maxBytes > 16000 ? 54 : 40));
+      for (final fallbackQ in const [78, 70, 62]) {
+        if (quality <= fallbackQ) continue;
+        jpg = Uint8List.fromList(img.encodeJpg(imgImage, quality: fallbackQ));
+        if (jpg.length <= maxBytes) break;
+      }
     }
     return jpg;
   }
@@ -657,7 +677,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
           if (byteData != null) {
             final rawBytes = byteData.buffer.asUint8List();
-            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 82 : 85);
+            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 86 : 88);
           }
         } catch (_) {}
       }
@@ -1078,7 +1098,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           frame.toUint8List(),
           w,
           h,
-          quality: 85,
+          quality: 88,
           roadLabels: _serializeRoadLabels(labels),
           isDark: isDark,
         );
@@ -1184,7 +1204,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Rotate patch by -headingDeg so ahead is UP
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.cubic);
       }
 
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
@@ -1202,7 +1222,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       );
 
       _drawStandbyVehiclePuck(frame, (w / 2.0).round(), (h * 0.67).round(), isDark);
-      return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 84);
+      return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 88);
     } catch (e, stack) {
       debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
@@ -1469,7 +1489,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           rawRgba,
           w,
           h,
-          quality: 82,
+          quality: 86,
           hud: hudData,
           roadLabels: osmNavRoadLabels,
           isDark: isDark,
@@ -1482,9 +1502,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Pure-Dart fallback if non-iOS
       _drawStandbyVehiclePuck(frame, vx, vy, isDark);
       final maxBytes = _maxJpegFrameBytes;
-      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 82));
+      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 86));
       if (jpg.length > maxBytes) {
-        jpg = Uint8List.fromList(img.encodeJpg(frame, quality: maxBytes > 20000 ? 60 : 42));
+        for (final q in const [78, 70, 62]) {
+          jpg = Uint8List.fromList(img.encodeJpg(frame, quality: q));
+          if (jpg.length <= maxBytes) break;
+        }
       }
       return jpg;
     } catch (e) {

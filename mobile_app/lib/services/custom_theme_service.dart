@@ -20,6 +20,8 @@ class CustomThemeService extends ChangeNotifier {
       'esp_active_man2_custom_theme_id';
   static const String _prefsCustomStaticBgKey = 'esp32_custom_bg_path';
   static const String _prefsEspCustomStaticBgKey = 'esp32_custom_esp_bg_path';
+  static const String _prefsMan2DefaultBgKey = 'esp32_man2_default_bg_path';
+  static const String _prefsEspMan2DefaultBgKey = 'esp32_man2_default_esp_bg_path';
   static const int maxEspBgBytes = 24000;
   static const MethodChannel _channel =
       MethodChannel('com.ysiduc.esp32_nav/location');
@@ -33,6 +35,8 @@ class CustomThemeService extends ChangeNotifier {
   String? _activeMan2CustomThemeId;
   String? _customStaticBgPath;
   String? _espCustomStaticBgPath;
+  String? _man2DefaultBgPath;
+  String? _espMan2DefaultBgPath;
   bool _loaded = false;
   bool _isImporting = false;
   String? _lastError;
@@ -50,6 +54,8 @@ class CustomThemeService extends ChangeNotifier {
   String? get activeMan2CustomThemeId => _activeMan2CustomThemeId;
   String? get customStaticBgPath => _customStaticBgPath;
   String? get espCustomStaticBgPath => _espCustomStaticBgPath;
+  String? get man2DefaultBgPath => _man2DefaultBgPath;
+  String? get espMan2DefaultBgPath => _espMan2DefaultBgPath;
   bool get isImporting => _isImporting;
   String? get lastError => _lastError;
 
@@ -89,6 +95,14 @@ class CustomThemeService extends ChangeNotifier {
       final espStatic = prefs.getString(_prefsEspCustomStaticBgKey);
       if (espStatic != null && espStatic.isNotEmpty && File(espStatic).existsSync()) {
         _espCustomStaticBgPath = espStatic;
+      }
+      final man2Sim = prefs.getString(_prefsMan2DefaultBgKey);
+      if (man2Sim != null && man2Sim.isNotEmpty && File(man2Sim).existsSync()) {
+        _man2DefaultBgPath = man2Sim;
+      }
+      final man2Esp = prefs.getString(_prefsEspMan2DefaultBgKey);
+      if (man2Esp != null && man2Esp.isNotEmpty && File(man2Esp).existsSync()) {
+        _espMan2DefaultBgPath = man2Esp;
       }
 
       final rawList = prefs.getString(_prefsThemesKey);
@@ -1061,11 +1075,50 @@ class CustomThemeService extends ChangeNotifier {
     );
   }
 
-  _PreparedImages _prepareThemeImages(
+  /// Resizes & stores a custom gallery photo for Màn 2 default left map slot (144x224).
+  Future<({String simPath, Uint8List espJpeg})> saveMan2DefaultBackground(
+    Uint8List rawBytes,
+  ) async {
+    await ensureLoaded();
+    final rootDir = await _resolveThemeRootDir();
+    final dual = _cropAndEncodeDualJpeg(
+      rawBytes,
+      simW: 288,
+      simH: 448,
+      espW: 144,
+      espH: 224,
+      fallbackBgHex: '#0B111A',
+      maxEspBytes: 18000,
+    );
+    final simPath = '${rootDir.path}/man2_default_sim.jpg';
+    final espPath = '${rootDir.path}/man2_default_esp.jpg';
+    await File(simPath).writeAsBytes(dual.simJpeg, flush: true);
+    await File(espPath).writeAsBytes(dual.espJpeg, flush: true);
+
+    _man2DefaultBgPath = simPath;
+    _espMan2DefaultBgPath = espPath;
+    _man2BuiltInIndex = 0;
+    _activeMan2CustomThemeId = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsMan2DefaultBgKey, simPath);
+    await prefs.setString(_prefsEspMan2DefaultBgKey, espPath);
+    await prefs.setInt(_prefsMan2IdxKey, 0);
+    await prefs.remove(_prefsActiveMan2CustomKey);
+    notifyListeners();
+    return (simPath: simPath, espJpeg: dual.espJpeg);
+  }
+
+  /// Crops, resizes, and encodes paired simulator + ESP32 JPEGs at the requested aspect ratio.
+  static ({Uint8List simJpeg, Uint8List espJpeg, img.Image espImage})
+      _cropAndEncodeDualJpeg(
     Uint8List? rawBytes, {
+    required int simW,
+    required int simH,
+    required int espW,
+    required int espH,
     required String fallbackBgHex,
-    required int songSampleX,
-    required int songSampleY,
+    int maxEspBytes = maxEspBgBytes,
   }) {
     img.Image? decoded;
     if (rawBytes != null && rawBytes.isNotEmpty) {
@@ -1077,7 +1130,7 @@ class CustomThemeService extends ChangeNotifier {
         fallbackBgHex,
         const Color(0xFF0B111A),
       );
-      decoded = img.Image(width: 320, height: 240);
+      decoded = img.Image(width: espW, height: espH);
       img.fill(
         decoded,
         color: img.ColorRgb8(
@@ -1088,58 +1141,75 @@ class CustomThemeService extends ChangeNotifier {
       );
     }
 
-    // Center-crop to exact 4:3 ratio
     final srcW = decoded.width;
     final srcH = decoded.height;
-    const targetRatio = 320.0 / 240.0;
+    final targetRatio = espW / espH;
     final srcRatio = srcW / srcH;
 
     img.Image cropped;
     if ((srcRatio - targetRatio).abs() < 0.01) {
       cropped = decoded;
     } else if (srcRatio > targetRatio) {
-      final cropW = (srcH * targetRatio).round();
+      final cropW = (srcH * targetRatio).round().clamp(1, srcW);
       final offsetX = ((srcW - cropW) / 2).round().clamp(0, srcW - 1);
       cropped = img.copyCrop(decoded, x: offsetX, y: 0, width: cropW, height: srcH);
     } else {
-      final cropH = (srcW / targetRatio).round();
+      final cropH = (srcW / targetRatio).round().clamp(1, srcH);
       final offsetY = ((srcH - cropH) / 2).round().clamp(0, srcH - 1);
       cropped = img.copyCrop(decoded, x: 0, y: offsetY, width: srcW, height: cropH);
     }
 
     final simImg = img.copyResize(
       cropped,
-      width: 640,
-      height: 480,
+      width: simW,
+      height: simH,
       interpolation: img.Interpolation.linear,
     );
-    final simJpeg = Uint8List.fromList(img.encodeJpg(simImg, quality: 88));
+    final simJpeg = Uint8List.fromList(img.encodeJpg(simImg, quality: 90));
 
     final espImg = img.copyResize(
       cropped,
-      width: 320,
-      height: 240,
+      width: espW,
+      height: espH,
       interpolation: img.Interpolation.linear,
+    );
+
+    Uint8List espJpeg = Uint8List(0);
+    for (final q in [86, 78, 70, 62, 52, 42]) {
+      espJpeg = Uint8List.fromList(img.encodeJpg(espImg, quality: q));
+      if (espJpeg.length <= maxEspBytes) break;
+    }
+
+    return (simJpeg: simJpeg, espJpeg: espJpeg, espImage: espImg);
+  }
+
+  _PreparedImages _prepareThemeImages(
+    Uint8List? rawBytes, {
+    required String fallbackBgHex,
+    required int songSampleX,
+    required int songSampleY,
+  }) {
+    final dual = _cropAndEncodeDualJpeg(
+      rawBytes,
+      simW: 640,
+      simH: 480,
+      espW: 320,
+      espH: 240,
+      fallbackBgHex: fallbackBgHex,
     );
 
     // Sample pixel around song area so ESP32 marquee box background stays seamless
     final sx = songSampleX.clamp(0, 319);
     final sy = (songSampleY + 6).clamp(0, 239);
-    final px = espImg.getPixel(sx, sy);
+    final px = dual.espImage.getPixel(sx, sy);
     final sampledSongBgHex =
         '#${px.r.toInt().toRadixString(16).padLeft(2, '0')}'
         '${px.g.toInt().toRadixString(16).padLeft(2, '0')}'
         '${px.b.toInt().toRadixString(16).padLeft(2, '0')}';
 
-    Uint8List espJpeg = Uint8List(0);
-    for (final q in [82, 72, 62, 52, 42, 32]) {
-      espJpeg = Uint8List.fromList(img.encodeJpg(espImg, quality: q));
-      if (espJpeg.length <= maxEspBgBytes) break;
-    }
-
     return _PreparedImages(
-      simJpeg: simJpeg,
-      espJpeg: espJpeg,
+      simJpeg: dual.simJpeg,
+      espJpeg: dual.espJpeg,
       sampledSongBgHex: sampledSongBgHex.toUpperCase(),
     );
   }

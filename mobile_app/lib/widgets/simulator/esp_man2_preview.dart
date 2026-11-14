@@ -19,6 +19,7 @@ class EspMan2Preview extends StatelessWidget {
   final DateTime currentTime;
   final int man2BuiltInStyle;
   final ImportedCustomTheme? man2CustomTheme;
+  final String? man2DefaultBgPath;
 
   const EspMan2Preview({
     super.key,
@@ -30,6 +31,7 @@ class EspMan2Preview extends StatelessWidget {
     required this.currentTime,
     this.man2BuiltInStyle = 0,
     this.man2CustomTheme,
+    this.man2DefaultBgPath,
   });
 
   static const List<String> _vnDays = [
@@ -268,8 +270,10 @@ class EspMan2Preview extends StatelessWidget {
     final clockStr =
         '${currentTime.hour.toString().padLeft(2, '0')}:${currentTime.minute.toString().padLeft(2, '0')}';
 
-    // When actively navigating and ESP stream has full-frame JPEG, show full-screen live map
-    if (navManager.isNavigating && streamService.latestJpegBytes != null) {
+    // When actively navigating AND Wi-Fi stream is active, show full-screen live map
+    final bool hasWifiStream =
+        bleService.isWifiConnected && streamService.latestJpegBytes != null;
+    if (navManager.isNavigating && hasWifiStream) {
       return FittedBox(
         fit: BoxFit.contain,
         child: SizedBox(
@@ -288,6 +292,10 @@ class EspMan2Preview extends StatelessWidget {
     final hasCustomBg = spec.bgImagePath != null &&
         spec.bgImagePath!.isNotEmpty &&
         File(spec.bgImagePath!).existsSync();
+    final hasMan2DefaultPhoto = man2CustomTheme == null &&
+        man2DefaultBgPath != null &&
+        man2DefaultBgPath!.isNotEmpty &&
+        File(man2DefaultBgPath!).existsSync();
 
     return FittedBox(
       fit: BoxFit.contain,
@@ -307,7 +315,7 @@ class EspMan2Preview extends StatelessWidget {
                   ),
                 ),
 
-              // Minimap panel
+              // Minimap panel (or offline-WiFi Nav HUD when navigating without Wi-Fi)
               Positioned(
                 left: spec.mapRect.left,
                 top: spec.mapRect.top,
@@ -322,19 +330,29 @@ class EspMan2Preview extends StatelessWidget {
                   child: ClipRRect(
                     borderRadius:
                         BorderRadius.circular((spec.mapRadius - 1).clamp(0, 24)),
-                    child: streamService.latestJpegBytes != null
-                        ? Image.memory(
-                            streamService.latestJpegBytes!,
-                            fit: BoxFit.cover,
-                            gaplessPlayback: true,
-                          )
-                        : CustomPaint(
-                            painter: _StandbyGridPainter(
-                              zoom: streamService.minimapZoom,
-                              mapStyle: streamService.streamMapStyle,
-                              accentColor: spec.mapBorder,
-                            ),
-                          ),
+                    child: navManager.isNavigating
+                        ? _buildOfflineNavLeftPanel(spec)
+                        : (hasWifiStream ||
+                                (!hasMan2DefaultPhoto &&
+                                    streamService.latestJpegBytes != null))
+                            ? Image.memory(
+                                streamService.latestJpegBytes!,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                              )
+                            : hasMan2DefaultPhoto
+                                ? Image.file(
+                                    File(man2DefaultBgPath!),
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                  )
+                                : CustomPaint(
+                                    painter: _StandbyGridPainter(
+                                      zoom: streamService.minimapZoom,
+                                      mapStyle: streamService.streamMapStyle,
+                                      accentColor: spec.mapBorder,
+                                    ),
+                                  ),
                   ),
                 ),
               ),
@@ -463,6 +481,157 @@ class EspMan2Preview extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  static IconData _maneuverIconForCode(int turnCode) {
+    if (turnCode == 5 || turnCode == 6 || turnCode == 7) {
+      return Icons.turn_left_rounded;
+    }
+    if (turnCode == 1 || turnCode == 2 || turnCode == 3) {
+      return Icons.turn_right_rounded;
+    }
+    if (turnCode == 4) return Icons.u_turn_left_rounded;
+    if (turnCode == 8) return Icons.roundabout_left_rounded;
+    if (turnCode == 9) return Icons.flag_rounded;
+    return Icons.straight_rounded;
+  }
+
+  Widget _buildOfflineNavLeftPanel(_Man2RenderSpec spec) {
+    final step = navManager.upcomingStep ?? navManager.currentStep;
+    final turnCode = step?.turnCode ?? 0;
+    final distM = navManager.distanceToNextManeuver;
+    final distStr = distM >= 1000
+        ? '${(distM / 1000.0).toStringAsFixed(1)}km'
+        : '${distM.round()}m';
+    final totM = navManager.remainingTotalDistance;
+    final totStr = totM >= 1000
+        ? 'Còn ${(totM / 1000.0).toStringAsFixed(1)} km'
+        : 'Còn ${totM.round()}m';
+    final etaMin = navManager.remainingEtaMinutes.clamp(1, 999);
+    final arr = currentTime.add(Duration(minutes: etaMin));
+    final arrStr =
+        '${arr.hour.toString().padLeft(2, '0')}:${arr.minute.toString().padLeft(2, '0')}';
+    final etaStr = etaMin >= 60
+        ? '${etaMin ~/ 60}g${(etaMin % 60).toString().padLeft(2, '0')}p - $arrStr'
+        : '$etaMin ph - $arrStr';
+    final streetRaw = step?.streetName.isNotEmpty == true
+        ? step!.streetName
+        : navManager.currentStreetName;
+    final street = streetRaw.isNotEmpty ? streetRaw : 'Đi thẳng';
+
+    return Container(
+      color: const Color(0xFF090F1A),
+      padding: const EdgeInsets.all(6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E141E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: spec.mapBorder, width: 1.2),
+                ),
+                child: Icon(
+                  _maneuverIconForCode(turnCode),
+                  color: spec.mapBorder,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      distStr,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        height: 1.05,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${navManager.currentSpeedKmh.round()} km/h',
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: Color(0xFF38BDF8),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Divider(height: 12, color: spec.panelBorder, thickness: 1),
+          Text(
+            'HƯỚNG ĐI',
+            style: TextStyle(
+              color: spec.dateColor,
+              fontSize: 8.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Expanded(
+            child: Text(
+              street,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFFFEF08A),
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                height: 1.25,
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF111A2A),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: spec.panelBorder),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  totStr,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  etaStr,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF4ADE80),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

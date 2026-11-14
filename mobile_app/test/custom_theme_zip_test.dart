@@ -222,4 +222,30 @@ class CustomNeonWidget {
       'Đường Láng',
     );
   });
+
+  test('saveMan2DefaultBackground saves 288x448 sim & <=18KB 144x224 esp JPEG and persists', () async {
+    final service = CustomThemeService(overrideStorageDir: tempDir);
+    await service.selectMan2BuiltIn(1);
+    final res = await service.saveMan2DefaultBackground(
+      _makeSolidPng(width: 900, height: 1200, r: 30, g: 165, b: 120),
+    );
+
+    expect(service.man2BuiltInIndex, 0);
+    expect(service.man2DefaultBgPath, res.simPath);
+    expect(service.espMan2DefaultBgPath, isNotNull);
+    expect(await File(res.simPath).exists(), isTrue);
+    expect(res.espJpeg.length, lessThanOrEqualTo(18000));
+
+    final decodedSim = img.decodeJpg(await File(res.simPath).readAsBytes())!;
+    final decodedEsp = img.decodeJpg(res.espJpeg)!;
+    expect(decodedSim.width, 288);
+    expect(decodedSim.height, 448);
+    expect(decodedEsp.width, 144);
+    expect(decodedEsp.height, 224);
+
+    final reloaded = CustomThemeService(overrideStorageDir: tempDir);
+    await reloaded.ensureLoaded();
+    expect(reloaded.man2DefaultBgPath, res.simPath);
+    expect(reloaded.man2BuiltInIndex, 0);
+  });
 }

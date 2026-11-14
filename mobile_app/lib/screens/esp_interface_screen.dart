@@ -243,8 +243,15 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     }
   }
 
-  Future<void> _pickDefaultWaitImage() async {
-    final customThemes = context.read<CustomThemeService>();
+  Future<void> _pickAndSaveScreenImage({
+    required int previewScreenIndex,
+    required Future<({String simPath, Uint8List espJpeg})> Function(
+      Uint8List rawBytes,
+    ) saveLocal,
+    required Future<bool> Function(Uint8List espJpeg) uploadBle,
+    required String espSuccessMsg,
+    required String localSuccessMsg,
+  }) async {
     final ble = context.read<BleService>();
     try {
       final picker = ImagePicker();
@@ -253,24 +260,22 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
 
       final rawBytes = await picked.readAsBytes();
       setState(() {
-        _previewScreen = 0;
+        _previewScreen = previewScreenIndex;
         _isUploadingZipToEsp = true;
       });
 
-      final saved = await customThemes.saveDefaultStaticBackground(rawBytes);
+      final saved = await saveLocal(rawBytes);
       if (ble.isConnected) {
-        await ble.setPreviewScreenMode(1);
-        final ok = await ble.sendDefaultWallpaperToEsp32(saved.espJpeg);
+        await ble.setPreviewScreenMode(previewScreenIndex + 1);
+        final ok = await uploadBle(saved.espJpeg);
         if (mounted) {
           _showSnack(
-            ok
-                ? 'Đã đổi ảnh nền Màn Chờ Mặc Định sang ESP32!'
-                : 'Đã đổi ảnh trên app, chưa gửi được sang ESP32',
+            ok ? espSuccessMsg : 'Đã đổi ảnh trên app, chưa gửi được sang ESP32',
             isError: !ok,
           );
         }
       } else if (mounted) {
-        _showSnack('Đã cập nhật ảnh nền Màn Chờ Mặc Định!');
+        _showSnack(localSuccessMsg);
       }
     } catch (e) {
       if (mounted) {
@@ -279,6 +284,30 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
     } finally {
       if (mounted) setState(() => _isUploadingZipToEsp = false);
     }
+  }
+
+  Future<void> _pickDefaultWaitImage() {
+    final customThemes = context.read<CustomThemeService>();
+    final ble = context.read<BleService>();
+    return _pickAndSaveScreenImage(
+      previewScreenIndex: 0,
+      saveLocal: customThemes.saveDefaultStaticBackground,
+      uploadBle: ble.sendDefaultWallpaperToEsp32,
+      espSuccessMsg: 'Đã đổi ảnh nền Màn Chờ Mặc Định sang ESP32!',
+      localSuccessMsg: 'Đã cập nhật ảnh nền Màn Chờ Mặc Định!',
+    );
+  }
+
+  Future<void> _pickMan2DefaultImage() {
+    final customThemes = context.read<CustomThemeService>();
+    final ble = context.read<BleService>();
+    return _pickAndSaveScreenImage(
+      previewScreenIndex: 1,
+      saveLocal: customThemes.saveMan2DefaultBackground,
+      uploadBle: ble.sendMan2DefaultImageToEsp32,
+      espSuccessMsg: 'Đã gửi ảnh hiển thị Màn 2 sang ESP32!',
+      localSuccessMsg: 'Đã lưu ảnh thay map chờ Màn 2!',
+    );
   }
 
   Future<void> _selectCustomTheme(ImportedCustomTheme theme) async {
@@ -782,6 +811,7 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
                     currentTime: _currentTime,
                     man2BuiltInStyle: customThemes.man2BuiltInIndex,
                     man2CustomTheme: customThemes.activeMan2CustomTheme,
+                    man2DefaultBgPath: customThemes.man2DefaultBgPath,
                   ),
                 if (brightnessDim > 0.02)
                   IgnorePointer(
@@ -1066,30 +1096,9 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
                   isSelected: isSelected,
                   onTap: () => _selectBuiltInTheme(index),
                   trailingAction: isDefaultWaybar
-                      ? Tooltip(
-                          message: 'Thêm / đổi ảnh nền từ thư viện',
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(14),
-                            onTap: busy ? null : _pickDefaultWaitImage,
-                            child: Container(
-                              width: 26,
-                              height: 26,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF007AFF)
-                                    .withValues(alpha: 0.14),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: const Color(0xFF007AFF)
-                                      .withValues(alpha: 0.4),
-                                ),
-                              ),
-                              child: const Icon(
-                                Icons.add_rounded,
-                                size: 17,
-                                color: Color(0xFF007AFF),
-                              ),
-                            ),
-                          ),
+                      ? _buildCirclePlusButton(
+                          tooltip: 'Thêm / đổi ảnh nền từ thư viện',
+                          onTap: busy ? null : _pickDefaultWaitImage,
                         )
                       : null,
                 );
@@ -1110,14 +1119,25 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
                 final preset = _man2Presets[index];
                 final isSelected = !customThemes.isMan2CustomThemeActive &&
                     customThemes.man2BuiltInIndex == preset.styleIndex;
+                final isDefaultMan2 = preset.styleIndex == 0;
+                final hasMan2Photo =
+                    isDefaultMan2 && customThemes.man2DefaultBgPath != null;
 
                 return _buildPresetTile(
                   title: preset.name,
-                  subtitle: preset.subtitle,
+                  subtitle: hasMan2Photo
+                      ? 'Đã chọn ảnh thay map chờ'
+                      : preset.subtitle,
                   accent: preset.accent,
                   icon: preset.icon,
                   isSelected: isSelected,
                   onTap: () => _selectMan2BuiltInTheme(preset.styleIndex),
+                  trailingAction: isDefaultMan2
+                      ? _buildCirclePlusButton(
+                          tooltip: 'Thêm / đổi ảnh thay map khi chưa có Wi-Fi',
+                          onTap: busy ? null : _pickMan2DefaultImage,
+                        )
+                      : null,
                 );
               },
             ),
@@ -1227,6 +1247,35 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildCirclePlusButton({
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 26,
+          height: 26,
+          decoration: BoxDecoration(
+            color: const Color(0xFF007AFF).withValues(alpha: 0.14),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: const Color(0xFF007AFF).withValues(alpha: 0.4),
+            ),
+          ),
+          child: const Icon(
+            Icons.add_rounded,
+            size: 17,
+            color: Color(0xFF007AFF),
+          ),
+        ),
       ),
     );
   }

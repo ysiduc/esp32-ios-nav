@@ -30,6 +30,8 @@ class NavigationManager extends ChangeNotifier {
   LatLng? _rawGpsLocation;
   LatLng? _targetLocation;
   double _gpsAccuracy = 12.0;
+  double _lastLiveAccuracyM = 999.0;
+  DateTime? _lastAccurateFixTime;
   double _currentSpeedKmh = 0.0;
   double _currentHeading = 0.0;
   double _targetHeading = 0.0;
@@ -101,6 +103,9 @@ class NavigationManager extends ChangeNotifier {
   PhoneMediaService? get mediaService => _mediaService;
   int get currentStepIndex => _currentStepIndex;
   LatLng? get currentLocation => _currentLocation;
+  LatLng? get rawGpsLocation => _rawGpsLocation;
+  double get gpsAccuracy => _gpsAccuracy;
+  double get lastLiveAccuracyM => _lastLiveAccuracyM;
   double get currentSpeedKmh => _currentSpeedKmh;
   double get currentHeading => _currentHeading;
   double get effectiveHeading {
@@ -363,6 +368,57 @@ class NavigationManager extends ChangeNotifier {
     });
   }
 
+  @visibleForTesting
+  static double computeAdaptiveSnapLimitMeters(double gpsAccuracyM) =>
+      math.max(24.0, (gpsAccuracyM * 1.15).clamp(22.0, 38.0));
+
+  @visibleForTesting
+  static bool isAcceptableLastKnownPosition({
+    required double accuracyMeters,
+    required Duration age,
+  }) {
+    if (accuracyMeters < 0 || accuracyMeters > 65.0) return false;
+    return age <= const Duration(seconds: 60);
+  }
+
+  @visibleForTesting
+  static bool isReliableLiveGpsFix({
+    required double incomingAccuracyM,
+    required double recentAccuracyM,
+    required int msSinceLastAccurateFix,
+  }) {
+    if (incomingAccuracyM < 0 || incomingAccuracyM > 150.0) return false;
+    if (recentAccuracyM <= 100.0 && incomingAccuracyM > 100.0) return false;
+    if (recentAccuracyM <= 25.0 &&
+        msSinceLastAccurateFix >= 0 &&
+        msSinceLastAccurateFix <= 8000 &&
+        incomingAccuracyM > 55.0) {
+      return false;
+    }
+    return true;
+  }
+
+  @visibleForTesting
+  static LatLng resolveNextIdleLocation({
+    required LatLng? currentLocation,
+    required bool hasInitialLiveGpsFix,
+    required LatLng incomingLocation,
+    required double incomingAccuracyM,
+    required double previousAccuracyM,
+    required double speedKmh,
+  }) {
+    if (!hasInitialLiveGpsFix || currentLocation == null) {
+      return incomingLocation;
+    }
+    final double distM = const Distance().as(LengthUnit.Meter, currentLocation, incomingLocation);
+    final bool significantlySharper =
+        incomingAccuracyM > 0 && incomingAccuracyM < previousAccuracyM - 5.0;
+    if (distM > 15.0 || significantlySharper || speedKmh >= 5.0) {
+      return incomingLocation;
+    }
+    return _lerpLatLng(currentLocation, incomingLocation, 0.75);
+  }
+
   LocationSettings _buildLocationSettings({
     LocationAccuracy accuracy = LocationAccuracy.bestForNavigation,
     int distanceFilter = 0,
@@ -370,7 +426,8 @@ class NavigationManager extends ChangeNotifier {
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       return AppleSettings(
         accuracy: accuracy,
-        activityType: ActivityType.automotiveNavigation,
+        // otherNavigation tránh CoreLocation tự bẻ/ghim vị trí vào trục đường ô tô gây lệch lớn khi đứng yên hoặc đi ngõ nhỏ
+        activityType: ActivityType.otherNavigation,
         distanceFilter: distanceFilter,
         pauseLocationUpdatesAutomatically: false,
         showBackgroundLocationIndicator: true,
@@ -392,27 +449,25 @@ class NavigationManager extends ChangeNotifier {
 
       if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         final lastPos = await Geolocator.getLastKnownPosition();
-        if (lastPos != null) {
-          _currentLocation = LatLng(lastPos.latitude, lastPos.longitude);
-          _rawGpsLocation = _currentLocation;
-          onLocationChanged?.call(_currentLocation!, effectiveHeading);
-          notifyListeners();
+        if (lastPos != null && !_hasInitialLiveGpsFix) {
+          final age = DateTime.now().difference(lastPos.timestamp);
+          if (isAcceptableLastKnownPosition(
+            accuracyMeters: lastPos.accuracy,
+            age: age,
+          )) {
+            _currentLocation = LatLng(lastPos.latitude, lastPos.longitude);
+            _rawGpsLocation = _currentLocation;
+            onLocationChanged?.call(_currentLocation!, effectiveHeading);
+            notifyListeners();
+          }
         }
 
         _startContinuousGpsStream();
 
-        // Lấy ngay vị trí thực tế mới nhất khi mở app để bản đồ căn giữa chính xác tức thì
+        // Lấy ngay vị trí thực tế chuẩn xác nhất khi mở app để bản đồ căn giữa chính xác tức thì
         Geolocator.getCurrentPosition(
-          locationSettings: _buildLocationSettings(accuracy: LocationAccuracy.high),
-        ).then((pos) {
-          if (_isSimulating) return;
-          final liveLoc = LatLng(pos.latitude, pos.longitude);
-          _rawGpsLocation = liveLoc;
-          _currentLocation = liveLoc;
-          _hasInitialLiveGpsFix = true;
-          onLocationChanged?.call(liveLoc, effectiveHeading);
-          notifyListeners();
-        }).catchError((_) {});
+          locationSettings: _buildLocationSettings(accuracy: LocationAccuracy.bestForNavigation),
+        ).then((pos) => _ingestLiveGpsPosition(pos, isSingleShot: true)).catchError((_) {});
       }
     } catch (_) {
       // Default fallback (Hanoi)
@@ -427,49 +482,80 @@ class NavigationManager extends ChangeNotifier {
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 0,
     );
-    _positionStream = Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
-      if (_isSimulating) return;
-      final rawLoc = LatLng(pos.latitude, pos.longitude);
-      _rawGpsLocation = rawLoc;
-      if (pos.accuracy > 0) {
-        _gpsAccuracy = pos.accuracy.clamp(3.0, 65.0);
-      }
-      final rawSpdKmh = (pos.speed >= 0 ? pos.speed * 3.6 : 0.0).clamp(0.0, 160.0);
-      // Lọc thông thấp (EMA) cho vận tốc để tốc độ không bị nhảy bậc
-      final spdKmh = rawSpdKmh < 1.5
-          ? (_currentSpeedKmh * 0.35 < 1.0 ? 0.0 : _currentSpeedKmh * 0.35)
-          : (_currentSpeedKmh == 0.0 ? rawSpdKmh : (_currentSpeedKmh * 0.35 + rawSpdKmh * 0.65));
-      final hdg = pos.heading >= 0 ? pos.heading : _currentHeading;
-      _lastGpsFixTime = DateTime.now();
+    _positionStream = Geolocator.getPositionStream(locationSettings: settings)
+        .listen((pos) => _ingestLiveGpsPosition(pos));
+  }
 
-      if (_isNavigating) {
-        _hasInitialLiveGpsFix = true;
-        _updateUserPosition(rawLoc, spdKmh, hdg);
-      } else {
-        final bool isFirstLiveFix = !_hasInitialLiveGpsFix || _currentLocation == null;
-        if (isFirstLiveFix) {
-          _hasInitialLiveGpsFix = true;
-          _currentLocation = rawLoc;
-        } else {
-          // Lọc mượt vị trí khi chưa dẫn đường để chấm xanh không nhảy giật cục
-          _currentLocation = _lerpLatLng(_currentLocation!, rawLoc, 0.55);
-        }
-        _currentSpeedKmh = spdKmh;
-        if (pos.heading >= 0 && spdKmh >= 2.0) {
-          _currentHeading = pos.heading;
-          _smoothedHeading = _hasHeadingLock
-              ? _lerpAngleDeg(_smoothedHeading, pos.heading, 0.45)
-              : pos.heading;
-          _hasHeadingLock = true;
-        }
-        onLocationChanged?.call(_currentLocation!, effectiveHeading);
-        final now = DateTime.now();
-        if (isFirstLiveFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
-          _lastUiNotifyTime = now;
-          notifyListeners();
-        }
+  void _ingestLiveGpsPosition(Position pos, {bool isSingleShot = false}) {
+    if (_isSimulating) return;
+    final now = DateTime.now();
+    final double acc = pos.accuracy;
+    final int msSinceAcc = _lastAccurateFixTime == null
+        ? 999999
+        : now.difference(_lastAccurateFixTime!).inMilliseconds;
+    if (!isReliableLiveGpsFix(
+      incomingAccuracyM: acc,
+      recentAccuracyM: _lastLiveAccuracyM,
+      msSinceLastAccurateFix: msSinceAcc,
+    )) {
+      return;
+    }
+    if (isSingleShot &&
+        _hasInitialLiveGpsFix &&
+        _lastAccurateFixTime != null &&
+        acc > _lastLiveAccuracyM + 3.0) {
+      return;
+    }
+
+    final double prevAcc = _lastLiveAccuracyM;
+    final double effectiveAcc = acc > 0 ? acc : prevAcc;
+    if (acc > 0) {
+      _lastLiveAccuracyM = acc;
+      _gpsAccuracy = acc.clamp(3.0, 65.0);
+      if (acc <= 25.0) {
+        _lastAccurateFixTime = now;
       }
-    });
+    }
+
+    final rawLoc = LatLng(pos.latitude, pos.longitude);
+    _rawGpsLocation = rawLoc;
+    final rawSpdKmh = (pos.speed >= 0 ? pos.speed * 3.6 : 0.0).clamp(0.0, 160.0);
+    // Dừng về 0 ngay khi đứng yên để dead-reckoning không đẩy vị trí vượt quá ngã tư
+    final spdKmh = rawSpdKmh < 1.5
+        ? 0.0
+        : (_currentSpeedKmh == 0.0 ? rawSpdKmh : (_currentSpeedKmh * 0.35 + rawSpdKmh * 0.65));
+    final hdg = pos.heading >= 0 ? pos.heading : _currentHeading;
+    _lastGpsFixTime = now;
+
+    if (_isNavigating) {
+      _hasInitialLiveGpsFix = true;
+      _updateUserPosition(rawLoc, spdKmh, hdg);
+      return;
+    }
+
+    final bool isFirstLiveFix = !_hasInitialLiveGpsFix || _currentLocation == null;
+    _currentLocation = resolveNextIdleLocation(
+      currentLocation: _currentLocation,
+      hasInitialLiveGpsFix: _hasInitialLiveGpsFix,
+      incomingLocation: rawLoc,
+      incomingAccuracyM: effectiveAcc,
+      previousAccuracyM: prevAcc,
+      speedKmh: spdKmh,
+    );
+    _hasInitialLiveGpsFix = true;
+    _currentSpeedKmh = spdKmh;
+    if (pos.heading >= 0 && spdKmh >= 2.0) {
+      _currentHeading = pos.heading;
+      _smoothedHeading = _hasHeadingLock
+          ? _lerpAngleDeg(_smoothedHeading, pos.heading, 0.45)
+          : pos.heading;
+      _hasHeadingLock = true;
+    }
+    onLocationChanged?.call(_currentLocation!, effectiveHeading);
+    if (isFirstLiveFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
+      _lastUiNotifyTime = now;
+      notifyListeners();
+    }
   }
 
   /// Nội suy góc ngắn nhất (0..360 độ) có giới hạn tốc độ xoay tối đa mỗi frame để cua góc mượt mà không giật
@@ -666,8 +752,8 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
-    // Nếu khoảng cách ở đoạn phía trước vẫn lớn (> 32m), quét lại toàn bộ tuyến đường
-    if (bestRawDist > 32.0 && startSearch > 0) {
+    // Nếu khoảng cách ở đoạn phía trước vẫn lớn (> 20m), quét lại toàn bộ tuyến đường để tránh ghim nhầm đoạn song song
+    if (bestRawDist > 20.0 && startSearch > 0) {
       for (int i = 0; i < startSearch; i++) {
         final proj = _projectPointOnSegment(rawLocation, pts[i], pts[i + 1]);
         if (proj.distanceMeters < bestRawDist) {
@@ -735,11 +821,18 @@ class NavigationManager extends ChangeNotifier {
 
       final now = DateTime.now();
       final msSinceGps = now.difference(_lastGpsFixTime).inMilliseconds;
-      final double snapLimit = math.max(28.0, (_gpsAccuracy * 1.2).clamp(26.0, 44.0));
+      final double snapLimit = computeAdaptiveSnapLimitMeters(_gpsAccuracy);
       final bool isOnRoute = _minSegmentDistance <= snapLimit;
 
-      // 1. Dead-Reckoning: Dự đoán vị trí tiến lên dọc theo lộ trình dựa trên vận tốc thực tế giữa 2 nhịp GPS (tối đa 1.25s)
-      if (isOnRoute && _currentSpeedKmh >= 2.5 && msSinceGps < 1250 && _targetLocation != null) {
+      // 1. Dead-Reckoning: Dự đoán vị trí tiến lên dọc theo lộ trình dựa trên vận tốc thực tế (< 1.0s & giới hạn <= 12m khỏi GPS thô)
+      final double leadFromRawM = (_rawGpsLocation != null && _targetLocation != null)
+          ? const Distance().as(LengthUnit.Meter, _rawGpsLocation!, _targetLocation!)
+          : 0.0;
+      if (isOnRoute &&
+          _currentSpeedKmh >= 2.5 &&
+          msSinceGps < 1000 &&
+          _targetLocation != null &&
+          leadFromRawM < 12.0) {
         final double stepMeters = (_currentSpeedKmh / 3.6) * 0.033 * 0.85;
         final adv = _advanceAlongPolyline(pts, _closestPointIndex, _targetLocation!, stepMeters);
         _targetLocation = adv.point;
@@ -757,10 +850,10 @@ class NavigationManager extends ChangeNotifier {
       // 2. Làm mượt vị trí hiển thị (_currentLocation -> _targetLocation)
       if (_targetLocation != null) {
         final distDelta = const Distance().as(LengthUnit.Meter, _currentLocation!, _targetLocation!);
-        if (distDelta > 80.0) {
+        if (distDelta > 45.0) {
           _currentLocation = _targetLocation;
         } else if (distDelta > 0.05) {
-          final blended = _lerpLatLng(_currentLocation!, _targetLocation!, 0.25);
+          final blended = _lerpLatLng(_currentLocation!, _targetLocation!, 0.32);
           if (isOnRoute) {
             final proj = _projectPointOnSegment(
               blended,
@@ -1050,7 +1143,7 @@ class NavigationManager extends ChangeNotifier {
     }
 
     final pts = _activeRoute!.polylinePoints;
-    final double snapLimit = math.max(28.0, (_gpsAccuracy * 1.2).clamp(26.0, 44.0));
+    final double snapLimit = computeAdaptiveSnapLimitMeters(_gpsAccuracy);
 
     // 1. Map-Matching (Snap vị trí xe vào vạch dẫn đường với ngưỡng thích ứng theo sai số GPS)
     if (!_isSimulating && pts.length >= 2) {

@@ -1432,7 +1432,7 @@ class Osm3dRenderer {
               oy + r.minY * sz > wMaxY + 16) {
             continue;
           }
-          if (baseR >= 1.4) {
+          if (baseR >= 1.1) {
             _strokeNormalizedPolyline(
               buf32,
               width,
@@ -1442,7 +1442,7 @@ class Osm3dRenderer {
               oy,
               sz,
               camera,
-              baseR + 1.05,
+              baseR + 1.25,
               casingColor,
             );
           }
@@ -2251,34 +2251,34 @@ class _OsmPalette {
     }
   }
 
-  // Google Maps 3D Daylight Navigation Palette (translucent sage-slate buildings & pale mint blocks)
+  // Crisp Daylight 3D Palette tuned for 16-bit RGB565 ST7789 displays
   static final _OsmPalette light = _OsmPalette(
-    skyTop: _c(134, 190, 232),          // #86BEE8 atmospheric horizon sky
-    skyHorizon: _c(222, 236, 245),      // #DEECF5 soft mist transition
-    ground: _c(236, 239, 239),          // #ECEFEF neutral Google canvas
-    landuse: _c(215, 236, 224),         // #D7ECE0 pale mint urban block
-    park: _c(188, 230, 189),            // #BCE6BD park mint
-    water: _c(154, 208, 245),           // #9AD0F5 azure water
-    gridLine: _c(220, 226, 228),
-    roadCasingMinor: _c(210, 217, 224),
-    roadCasingMajor: _c(196, 206, 216),
-    roadCasingHighway: _c(219, 178, 84),
+    skyTop: _c(118, 182, 232),          // crisp horizon sky
+    skyHorizon: _c(216, 234, 246),      // mist transition
+    ground: _c(232, 237, 241),          // cool neutral canvas
+    landuse: _c(209, 234, 218),         // distinct mint urban block
+    park: _c(172, 224, 178),            // crisp park green
+    water: _c(126, 194, 242),           // rich azure water
+    gridLine: _c(204, 214, 222),
+    roadCasingMinor: _c(176, 188, 202),
+    roadCasingMajor: _c(142, 160, 182),
+    roadCasingHighway: _c(206, 148, 36),
     roadService: _c(255, 255, 255),
     roadMinor: _c(255, 255, 255),
-    roadTertiary: _c(244, 247, 250),
-    roadSecondary: _c(228, 235, 242),   // clean ice-gray main avenue
-    roadPrimary: _c(252, 235, 168),     // soft pale gold
-    roadTrunk: _c(252, 219, 128),       // amber trunk highway
-    roofStandard: _c(206, 216, 218, 138),
-    roofTall: _c(192, 206, 214, 152),
-    outlineStandard: _c(136, 150, 154, 182),
-    outlineTall: _c(114, 132, 146, 196),
-    wallSunStd: _c(184, 196, 198, 148),
-    wallMidStd: _c(158, 172, 176, 162),
-    wallShadowStd: _c(134, 148, 154, 174),
-    wallSunTall: _c(168, 184, 196, 158),
-    wallMidTall: _c(140, 158, 172, 172),
-    wallShadowTall: _c(114, 132, 148, 184),
+    roadTertiary: _c(255, 255, 255),
+    roadSecondary: _c(255, 248, 214),   // high-contrast boulevard
+    roadPrimary: _c(255, 224, 130),     // bold gold primary arterial
+    roadTrunk: _c(255, 198, 72),        // amber trunk highway
+    roofStandard: _c(212, 222, 228, 178),
+    roofTall: _c(196, 210, 222, 192),
+    outlineStandard: _c(98, 114, 128, 218),
+    outlineTall: _c(74, 92, 114, 232),
+    wallSunStd: _c(184, 198, 208, 182),
+    wallMidStd: _c(152, 168, 180, 196),
+    wallShadowStd: _c(124, 140, 156, 208),
+    wallSunTall: _c(166, 184, 202, 192),
+    wallMidTall: _c(134, 154, 174, 206),
+    wallShadowTall: _c(106, 124, 146, 218),
   );
 
   // Night Translucent 3D Slate Palette

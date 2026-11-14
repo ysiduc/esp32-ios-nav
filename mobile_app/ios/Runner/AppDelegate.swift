@@ -369,11 +369,11 @@ import UniformTypeIdentifiers
     isDark: Bool
   ) {
     let textColor = isDark
-      ? UIColor(red: 0.90, green: 0.94, blue: 0.98, alpha: 1.0)
-      : UIColor(red: 0.16, green: 0.20, blue: 0.24, alpha: 1.0)
+      ? UIColor(red: 0.96, green: 0.98, blue: 1.0, alpha: 1.0)
+      : UIColor(red: 0.08, green: 0.11, blue: 0.16, alpha: 1.0)
     let haloColor = isDark
-      ? UIColor(red: 0.08, green: 0.11, blue: 0.17, alpha: 0.92)
-      : UIColor(white: 1.0, alpha: 0.94)
+      ? UIColor(red: 0.06, green: 0.09, blue: 0.14, alpha: 0.96)
+      : UIColor(white: 1.0, alpha: 0.98)
 
     for item in labels {
       guard let rawText = item["text"] as? String, !rawText.isEmpty,
@@ -384,8 +384,8 @@ import UniformTypeIdentifiers
       let angleDeg = (item["angleDeg"] as? NSNumber)?.doubleValue ?? 0.0
       let tier = (item["tier"] as? NSNumber)?.intValue ?? 1
       let text = rawText.precomposedStringWithCanonicalMapping as NSString
-      let fontSize: CGFloat = tier >= 3 ? 8.5 : 7.5
-      let weight: UIFont.Weight = tier >= 3 ? .semibold : .medium
+      let fontSize: CGFloat = tier >= 3 ? 10.0 : 8.8
+      let weight: UIFont.Weight = tier >= 3 ? .bold : .semibold
       let font = UIFont.systemFont(ofSize: fontSize, weight: weight)
 
       let haloAttrs: [NSAttributedString.Key: Any] = [
@@ -1029,7 +1029,7 @@ class MapStreamer {
       }
 
       let image = snapshot.image
-      let jpegData = image.jpegData(compressionQuality: 0.40)
+      let jpegData = image.jpegData(compressionQuality: 0.80)
       completion(jpegData)
     }
   }

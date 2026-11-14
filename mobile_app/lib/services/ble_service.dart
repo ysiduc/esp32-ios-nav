@@ -231,8 +231,10 @@ class BleService extends ChangeNotifier {
   }
 
 
-  void _initBle() {
+  Future<void> _initBle() async {
     try {
+      final isSupported = await FlutterBluePlus.isSupported;
+      if (!isSupported) return;
       _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
         _addLog('Bluetooth Adapter State: $state', isTx: false);
         if (state == BluetoothAdapterState.on) {
@@ -966,25 +968,49 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// Uploads a custom JPEG wallpaper (/bg_wait.jpg) for Màn 1 default Waybar theme (index 0).
-  Future<bool> sendDefaultWallpaperToEsp32(Uint8List bgJpegBytes) async {
+  Future<bool> _uploadWallpaperAndSelect({
+    required int magic2,
+    required Uint8List bgJpegBytes,
+    required Map<String, dynamic> selectCmd,
+    required String logPrefix,
+  }) async {
     if (!_isConnected || _writeCharacteristic == null || bgJpegBytes.isEmpty) {
       return false;
     }
     try {
-      final ok = await _uploadSpiffsChunked(0xBC, bgJpegBytes);
+      final ok = await _uploadSpiffsChunked(magic2, bgJpegBytes);
       if (!ok) return false;
       await Future.delayed(const Duration(milliseconds: 40));
-      await sendRawJson(jsonEncode({'type': 'THEME_SELECT', 'theme': 0}));
+      await sendRawJson(jsonEncode(selectCmd));
       _addLog(
-        'Đã cập nhật ảnh nền Màn 1 (${bgJpegBytes.length ~/ 1024} KB)',
+        '$logPrefix (${bgJpegBytes.length ~/ 1024} KB)',
         isTx: true,
       );
       return true;
     } catch (e) {
-      _addLog('Lỗi gửi ảnh nền Màn 1: $e', isError: true);
+      _addLog('Lỗi gửi $logPrefix: $e', isError: true);
       return false;
     }
+  }
+
+  /// Uploads a custom JPEG wallpaper (/bg_wait.jpg) for Màn 1 default Waybar theme (index 0).
+  Future<bool> sendDefaultWallpaperToEsp32(Uint8List bgJpegBytes) {
+    return _uploadWallpaperAndSelect(
+      magic2: 0xBC,
+      bgJpegBytes: bgJpegBytes,
+      selectCmd: const {'type': 'THEME_SELECT', 'theme': 0},
+      logPrefix: 'Đã cập nhật ảnh nền Màn 1',
+    );
+  }
+
+  /// Uploads a custom JPEG photo (/bg_map.jpg) for Màn 2 default idle slot (when Wi-Fi isn't streaming).
+  Future<bool> sendMan2DefaultImageToEsp32(Uint8List mapJpegBytes) {
+    return _uploadWallpaperAndSelect(
+      magic2: 0xBD,
+      bgJpegBytes: mapJpegBytes,
+      selectCmd: const {'type': 'SET_MAN2_STYLE', 'theme': 0},
+      logPrefix: 'Đã cập nhật ảnh thay map Màn 2',
+    );
   }
 
   /// Uploads a Màn 1 ZIP theme's background image & JSON spec and activates style 250.

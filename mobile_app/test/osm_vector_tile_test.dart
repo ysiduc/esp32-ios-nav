@@ -401,24 +401,24 @@ void main() {
       );
 
       final lightColors = lightBuf.toSet();
-      final lightGround = _abgr(236, 239, 239);
-      expect(lightColors.contains(lightGround), isTrue); // Google 3D ground
-      expect(lightColors.contains(_abgr(252, 235, 168)), isTrue); // primary road
-      expect(lightColors.contains(_abgr(188, 230, 189)), isTrue); // park mint
-      expect(lightColors.contains(_abgr(154, 208, 245)), isTrue); // azure water
+      final lightGround = _abgr(232, 237, 241);
+      expect(lightColors.contains(lightGround), isTrue); // Crisp RGB565 daylight ground
+      expect(lightColors.contains(_abgr(255, 224, 130)), isTrue); // primary road
+      expect(lightColors.contains(_abgr(172, 224, 178)), isTrue); // park mint
+      expect(lightColors.contains(_abgr(126, 194, 242)), isTrue); // azure water
 
       // Translucent standard & tall roofs blended cleanly over light ground
-      expect(lightColors.contains(_blendAbgr(lightGround, 206, 216, 218, 138)), isTrue);
-      expect(lightColors.contains(_blendAbgr(lightGround, 192, 206, 214, 152)), isTrue);
+      expect(lightColors.contains(_blendAbgr(lightGround, 212, 222, 228, 178)), isTrue);
+      expect(lightColors.contains(_blendAbgr(lightGround, 196, 210, 222, 192)), isTrue);
 
       // At least one translucent 3D shaded wall pixel blended over light ground
       final lightWallColors = {
-        _blendAbgr(lightGround, 184, 196, 198, 148),
-        _blendAbgr(lightGround, 158, 172, 176, 162),
-        _blendAbgr(lightGround, 134, 148, 154, 174),
-        _blendAbgr(lightGround, 168, 184, 196, 158),
-        _blendAbgr(lightGround, 140, 158, 172, 172),
-        _blendAbgr(lightGround, 114, 132, 148, 184),
+        _blendAbgr(lightGround, 184, 198, 208, 182),
+        _blendAbgr(lightGround, 152, 168, 180, 196),
+        _blendAbgr(lightGround, 124, 140, 156, 208),
+        _blendAbgr(lightGround, 166, 184, 202, 192),
+        _blendAbgr(lightGround, 134, 154, 174, 206),
+        _blendAbgr(lightGround, 106, 124, 146, 218),
       };
       expect(lightColors.intersection(lightWallColors).isNotEmpty, isTrue);
 

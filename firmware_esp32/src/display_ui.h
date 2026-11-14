@@ -19,6 +19,11 @@ extern U8g2_for_TFT_eSPI u8f;
 extern TFT_eSPI tft;
 extern TFT_eSprite marqueeSpr;
 extern U8g2_for_TFT_eSPI u8f_marquee;
+extern bool g_clipMapOnly;
+extern int16_t g_clipX;
+extern int16_t g_clipY;
+extern int16_t g_clipW;
+extern int16_t g_clipH;
 #endif
 
 #include "icons.h"
@@ -403,8 +408,17 @@ private:
   char _lastDrawnArtist[64] = "";
   bool _lastDrawnBleState = false;
 
-  // Minimap cached state
+  // Minimap & offline nav cached state
   bool _minimapDrawn = false;
+  bool _lastStreamingActive = false;
+  bool _m2NavFrameDrawn = false;
+  uint8_t _lastM2NavTurn = 255;
+  uint16_t _lastM2NavDist = 0xFFFF;
+  uint16_t _lastM2NavTotDist = 0xFFFF;
+  uint8_t _lastM2NavSpeed = 255;
+  uint8_t _lastM2NavEta = 255;
+  char _lastM2NavStreet[64] = "";
+  char _lastM2NavArrival[16] = "";
 
   // Marquee (thả trôi) state
   struct Marquee { char text[160]; int textW; int off; unsigned long last; unsigned long pauseUntil; };
@@ -891,7 +905,16 @@ public:
       _needFullRedraw = true;
     }
 
-    // Check if state or watchface style changed
+    // Check if state, watchface style, or Wi-Fi stream state transitioned cleanly
+    bool streamChanged = (isStreamingActive != _lastStreamingActive);
+    if ((_currentState == STATE_NAVIGATION && streamChanged) ||
+        (_currentState == STATE_APP_IDLE_MAP && !isStreamingActive && streamChanged)) {
+      _lastStreamingActive = isStreamingActive;
+      _needFullRedraw = true;
+    } else if (streamChanged && _currentState == STATE_APP_IDLE_MAP) {
+      _lastStreamingActive = isStreamingActive;
+    }
+
     if (_currentState != _lastState || _watchfaceStyle != _lastWatchfaceStyle) {
       _needFullRedraw = true;
     }
@@ -902,22 +925,24 @@ public:
     } else if (_currentState == STATE_APP_IDLE_MAP) {
       _renderAppIdleMap();
     } else { // STATE_NAVIGATION
-      if (!isStreamingActive) {
-        _renderNavigationHudFallback();
+      if (isStreamingActive) {
+        if (_needFullRedraw) {
+          _wbForce = true;
+          _needFullRedraw = false;
+          _lastState = _currentState;
+        }
+        // Waybar at y: 0..24 is visible during full-screen streamed Màn 3
+        _updateWaybar(_wbForce);
+        _wbForce = false;
+      } else {
+        // No Wi-Fi stream: remain on Màn 2 split layout (all Nav HUD left, clock/music/notif right)
+        _renderMan2OfflineNavigation();
       }
-      if (isStreamingActive && _needFullRedraw) {
-        _wbForce = true;
-        _needFullRedraw = false;
-        _lastState = _currentState;
-      }
-      // Waybar at y: 0..24 is ALWAYS visible and updated, never hidden by popup
-      _updateWaybar(_wbForce);
-      _wbForce = false;
     }
 
     // Draw popup if active
     if (isPopupActive()) {
-      if (_currentState == STATE_NAVIGATION) {
+      if (_currentState == STATE_NAVIGATION && isStreamingActive) {
         if (_navPopupDirty) {
           _drawNavPopupCard();
           _navPopupDirty = false;
@@ -1993,55 +2018,46 @@ private:
   }
 
   // =========================================================================
-  // MÀN 2: APP IDLE MAP (No Waybar, Minimap Left + Media & Clock Right, Flicker-Free)
+  // MÀN 2: APP IDLE MAP & OFFLINE-WIFI SPLIT NAVIGATION (No Waybar)
   // =========================================================================
-  void _renderAppIdleMap() {
-    Man2Layout l = _activeMan2Layout();
-    bool musicRedraw = false;
-    int cardCenterX = l.cardX + l.cardW / 2;
-
-    if (_needFullRedraw) {
-      tft.fillScreen(l.screenBg);
-      if (l.hasBgJpg && SPIFFS.exists("/custom_man2_bg.jpg")) {
-        File f = SPIFFS.open("/custom_man2_bg.jpg", "r");
-        if (f) {
-          size_t fSize = f.size();
-          f.close();
-          if (fSize > 200) {
-            TJpgDec.drawFsJpg(0, 0, "/custom_man2_bg.jpg");
-          }
+  void _prepareMan2Chrome(const Man2Layout& l, bool& musicRedraw) {
+    if (!_needFullRedraw) return;
+    tft.fillScreen(l.screenBg);
+    if (l.hasBgJpg && SPIFFS.exists("/custom_man2_bg.jpg")) {
+      File f = SPIFFS.open("/custom_man2_bg.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 200) {
+          TJpgDec.drawFsJpg(0, 0, "/custom_man2_bg.jpg");
         }
       }
-      _lastState = _currentState;
-      _needFullRedraw = false;
-      _lastDrawnHour = 255;
-      _lastDrawnMin = 255;
-      _lastDrawnSec = 255;
-      _lastDrawnDay = 255;
-      _lastDrawnBat = 255;
-      _lastDrawnSong[0] = '\0';
-      _lastIdleElapsed = 0xFFFF;
-      _mqIdle.text[0] = '\0';
-      _notifDirty = true;
-      musicRedraw = true;
-
-      _renderStandbyVectorMapAt(l.mapX, l.mapY, l.mapW, l.mapH, l.mapR, l.mapBorder, l.musicBg);
-
-      if (l.drawPanelCard && l.cardW > 0) {
-        tft.fillRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBg);
-        tft.drawRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBorder);
-      }
-
-      if (l.songVisible) {
-        tft.fillRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBg);
-        tft.drawRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBorder);
-      }
-
-      if (l.notifVisible) {
-        _drawNotifBoxAt(l.notifX, l.notifY, l.notifW, l.notifH, l.notifBg, l.notifBorder, l.notifTitleColor, l.notifMsgColor);
-      }
     }
+    _lastState = _currentState;
+    _needFullRedraw = false;
+    _lastDrawnHour = 255;
+    _lastDrawnMin = 255;
+    _lastDrawnSec = 255;
+    _lastDrawnDay = 255;
+    _lastDrawnBat = 255;
+    _lastDrawnSong[0] = '\0';
+    _lastIdleElapsed = 0xFFFF;
+    _mqIdle.text[0] = '\0';
+    _notifDirty = true;
+    _m2NavFrameDrawn = false;
+    musicRedraw = true;
 
+    if (l.drawPanelCard && l.cardW > 0) {
+      tft.fillRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBg);
+      tft.drawRoundRect(l.cardX, l.cardY, l.cardW, l.cardH, l.cardR, l.cardBorder);
+    }
+    if (l.songVisible) {
+      tft.fillRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBg);
+      tft.drawRoundRect(l.musicX, l.musicY, l.musicW, l.musicH, 8, l.musicBorder);
+    }
+  }
+
+  void _updateMan2SideWidgets(const Man2Layout& l, bool musicRedraw) {
     if (l.clockVisible && (_clockHour != _lastDrawnHour || _clockMin != _lastDrawnMin)) {
       _lastDrawnHour = _clockHour;
       _lastDrawnMin = _clockMin;
@@ -2113,16 +2129,158 @@ private:
       _notifDirty = false;
       _drawNotifBoxAt(l.notifX, l.notifY, l.notifW, l.notifH, l.notifBg, l.notifBorder, l.notifTitleColor, l.notifMsgColor);
     }
-    (void)cardCenterX;
+  }
+
+  void _renderAppIdleMap() {
+    Man2Layout l = _activeMan2Layout();
+    bool musicRedraw = false;
+    bool fullInit = _needFullRedraw;
+    _prepareMan2Chrome(l, musicRedraw);
+    if (fullInit) {
+      _renderStandbyVectorMapAt(l.mapX, l.mapY, l.mapW, l.mapH, l.mapR, l.mapBorder, l.musicBg);
+    }
+    _updateMan2SideWidgets(l, musicRedraw);
+  }
+
+  void _renderMan2OfflineNavigation() {
+    Man2Layout l = _activeMan2Layout();
+    bool musicRedraw = false;
+    _prepareMan2Chrome(l, musicRedraw);
+    _renderMan2NavLeftHud(l);
+    _updateMan2SideWidgets(l, musicRedraw);
+  }
+
+  void _renderMan2NavLeftHud(const Man2Layout& l) {
+    int16_t mx = l.mapX, my = l.mapY, mw = l.mapW, mh = l.mapH, br = l.mapR;
+    uint16_t cNavBg = tft.color565(9, 15, 26);
+    uint16_t cSubBg = tft.color565(17, 26, 42);
+    uint16_t cAccent = l.mapBorder;
+
+    bool fullPanel = !_m2NavFrameDrawn;
+    if (fullPanel) {
+      _m2NavFrameDrawn = true;
+      _lastM2NavTurn = 255;
+      _lastM2NavDist = 0xFFFF;
+      _lastM2NavTotDist = 0xFFFF;
+      _lastM2NavSpeed = 255;
+      _lastM2NavEta = 255;
+      _lastM2NavStreet[0] = '\0';
+      _lastM2NavArrival[0] = '\0';
+      tft.fillRoundRect(mx, my, mw, mh, br, cNavBg);
+      tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, cAccent);
+      tft.drawFastHLine(mx + 6, my + 63, mw - 12, l.cardBorder);
+      tft.fillRoundRect(mx + 6, my + 162, mw - 12, mh - 168, 8, cSubBg);
+      tft.drawRoundRect(mx + 6, my + 162, mw - 12, mh - 168, 8, l.cardBorder);
+    }
+
+    if (_navData.turnCode != _lastM2NavTurn) {
+      _lastM2NavTurn = _navData.turnCode;
+      _drawManeuverArrow(mx + 6, my + 6, _navData.turnCode);
+    }
+
+    if (_navData.distMeters != _lastM2NavDist) {
+      _lastM2NavDist = _navData.distMeters;
+      char distStr[16];
+      if (_navData.distMeters >= 1000) {
+        snprintf(distStr, sizeof(distStr), "%.1fkm", _navData.distMeters / 1000.0);
+      } else {
+        snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
+      }
+      int16_t rx = mx + 62;
+      int16_t rw = max(32, (int)mw - 68);
+      tft.fillRect(rx, my + 8, rw, 26, cNavBg);
+      tft.setTextColor(TFT_WHITE, cNavBg);
+      tft.setTextPadding(rw);
+      tft.drawString(distStr, rx, my + 10, (strlen(distStr) <= 5) ? 4 : 2);
+      tft.setTextPadding(0);
+    }
+
+    if (_navData.speedKmh != _lastM2NavSpeed) {
+      _lastM2NavSpeed = _navData.speedKmh;
+      char spdStr[16];
+      snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
+      int16_t rx = mx + 62;
+      int16_t rw = max(32, (int)mw - 68);
+      tft.fillRect(rx, my + 37, rw, 20, cNavBg);
+      tft.setTextColor(tft.color565(56, 189, 248), cNavBg);
+      tft.setTextPadding(rw);
+      tft.drawString(spdStr, rx, my + 39, 2);
+      tft.setTextPadding(0);
+    }
+
+    const char* streetSrc = (_navData.streetName[0] != '\0') ? _navData.streetName : "Đi thẳng";
+    if (fullPanel || strncmp(streetSrc, _lastM2NavStreet, sizeof(_lastM2NavStreet)) != 0) {
+      strncpy(_lastM2NavStreet, streetSrc, sizeof(_lastM2NavStreet) - 1);
+      _lastM2NavStreet[sizeof(_lastM2NavStreet) - 1] = '\0';
+      tft.fillRect(mx + 4, my + 66, mw - 8, 92, cNavBg);
+      _drawUtf8String("HƯỚNG ĐI", mx + 8, my + 68, l.dateColor, cNavBg);
+      _drawWrappedUtf8String(_lastM2NavStreet, mx + 8, my + 88, mw - 16, 3,
+                             tft.color565(254, 240, 138), cNavBg, 19);
+    }
+
+    bool etaDirty = fullPanel ||
+                    _navData.totalDistMeters != _lastM2NavTotDist ||
+                    _navData.etaMinutes != _lastM2NavEta ||
+                    strncmp(_navData.arrivalTime, _lastM2NavArrival, sizeof(_lastM2NavArrival)) != 0;
+    if (etaDirty) {
+      _lastM2NavTotDist = _navData.totalDistMeters;
+      _lastM2NavEta = _navData.etaMinutes;
+      strncpy(_lastM2NavArrival, _navData.arrivalTime, sizeof(_lastM2NavArrival) - 1);
+      _lastM2NavArrival[sizeof(_lastM2NavArrival) - 1] = '\0';
+
+      int16_t bx = mx + 8, by = my + 165, bw = mw - 16, bh = mh - 174;
+      tft.fillRect(bx, by, bw, bh, cSubBg);
+
+      char totStr[24];
+      if (_navData.totalDistMeters >= 1000) {
+        snprintf(totStr, sizeof(totStr), "Còn %.1f km", _navData.totalDistMeters / 1000.0);
+      } else {
+        snprintf(totStr, sizeof(totStr), "Còn %dm", _navData.totalDistMeters);
+      }
+      int cx = mx + mw / 2;
+      _drawCentreUtf8String(totStr, cx, by + 5, TFT_WHITE, cSubBg);
+
+      char etaStr[28];
+      if (_navData.etaMinutes >= 60) {
+        snprintf(etaStr, sizeof(etaStr), "%dg%02dp - %s",
+                 _navData.etaMinutes / 60, _navData.etaMinutes % 60, _lastM2NavArrival);
+      } else {
+        snprintf(etaStr, sizeof(etaStr), "%d ph - %s", _navData.etaMinutes, _lastM2NavArrival);
+      }
+      _drawCentreUtf8String(etaStr, cx, by + 27, tft.color565(74, 222, 128), cSubBg);
+    }
   }
 
   void _renderStandbyVectorMapAt(int16_t mx, int16_t my, int16_t mw, int16_t mh, int16_t br, uint16_t borderCol, uint16_t cMapBg) {
+    tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, borderCol);
+    if (_idleMapStyle != 250 && SPIFFS.exists("/bg_map.jpg")) {
+      File f = SPIFFS.open("/bg_map.jpg", "r");
+      if (f) {
+        size_t fSize = f.size();
+        f.close();
+        if (fSize > 200) {
+          g_clipX = mx; g_clipY = my; g_clipW = mw; g_clipH = mh;
+          g_clipMapOnly = true;
+          tft.setViewport(mx, my, mw, mh, false);
+          tft.fillRect(0, 0, mw, mh, cMapBg);
+          uint16_t jw = 0, jh = 0;
+          TJpgDec.getFsJpgSize(&jw, &jh, "/bg_map.jpg");
+          int16_t drawX = (jw > 0) ? (mx - ((int16_t)jw - mw) / 2) : mx;
+          int16_t drawY = (jh > 0) ? (my - ((int16_t)jh - mh) / 2) : my;
+          TJpgDec.drawFsJpg(drawX, drawY, "/bg_map.jpg");
+          tft.resetViewport();
+          g_clipMapOnly = false;
+          tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, borderCol);
+          return;
+        }
+      }
+    }
+
     uint16_t cRadarRing   = tft.color565(20, 32, 48);
     uint16_t cAsphaltBed  = tft.color565(28, 38, 54);
     uint16_t cRoadBorder  = tft.color565(55, 75, 100);
     uint16_t cRouteActive = borderCol;
 
-    tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, borderCol);
     tft.setViewport(mx, my, mw, mh, false);
     tft.fillRect(0, 0, mw, mh, cMapBg);
 
@@ -2197,67 +2355,6 @@ private:
       tft.fillRect(cx - 2, cy - 6, 5, 20, TFT_CYAN);
       tft.fillTriangle(cx, cy - 14, cx - 10, cy - 5, cx + 10, cy - 5, TFT_CYAN);
     }
-  }
-
-  // =========================================================================
-  // MÀN 3 FALLBACK HUD (When WebSocket stream is not yet transmitting)
-  // =========================================================================
-  void _renderNavigationHudFallback() {
-    if (_needFullRedraw) {
-      tft.fillScreen(TFT_BLACK);
-      _wbForce = true;
-      tft.fillRoundRect(4, 28, 148, 206, 12, tft.color565(11, 17, 26));
-      tft.drawRoundRect(4, 28, 148, 206, 12, TFT_CYAN);
-      tft.fillRoundRect(158, 28, 158, 206, 12, tft.color565(19, 27, 38));
-      tft.drawRoundRect(158, 28, 158, 206, 12, tft.color565(32, 45, 61));
-      _needFullRedraw = false;
-      _lastState = _currentState;
-
-      // Draw vector radar/road grid in left map box
-      const int cx = 78;
-      const int cy = 152;
-      uint16_t cRadarRing = tft.color565(20, 32, 48);
-      tft.drawCircle(cx, cy, 38, cRadarRing);
-      tft.drawCircle(cx, cy, 68, cRadarRing);
-      _drawThickLine(cx, 226, cx, 36, tft.color565(28, 38, 54), 10);
-      _drawThickLine(10, cy, 146, cy, tft.color565(28, 38, 54), 10);
-
-      // Vehicle Puck
-      tft.drawCircle(cx, cy, 10, tft.color565(0, 50, 80));
-      tft.fillCircle(cx, cy, 6, TFT_CYAN);
-      tft.drawCircle(cx, cy, 6, TFT_WHITE);
-      tft.fillTriangle(cx, cy - 8, cx - 4, cy - 1, cx + 4, cy - 1, TFT_WHITE);
-
-      // Draw Maneuver Arrow
-      _drawManeuverArrow(52, 44, _navData.turnCode);
-    }
-
-    // Distance
-    tft.setTextColor(TFT_WHITE, tft.color565(19, 27, 38));
-    char distStr[16];
-    if (_navData.distMeters >= 1000) {
-      snprintf(distStr, sizeof(distStr), "%.1f km", _navData.distMeters / 1000.0);
-    } else {
-      snprintf(distStr, sizeof(distStr), "%dm", _navData.distMeters);
-    }
-    tft.setTextPadding(120);
-    tft.drawString(distStr, 172, 40, 4);
-
-    // Speed
-    char spdStr[16];
-    snprintf(spdStr, sizeof(spdStr), "%d km/h", _navData.speedKmh);
-    tft.setTextColor(TFT_CYAN, tft.color565(19, 27, 38));
-    tft.drawString(spdStr, 172, 70, 2);
-    tft.setTextPadding(0);
-
-    // Street Name
-    tft.fillRoundRect(164, 100, 146, 38, 8, tft.color565(11, 17, 26));
-    _drawCentreUtf8String(_navData.streetName, 237, 110, TFT_YELLOW, tft.color565(11, 17, 26));
-
-    // ETA
-    char etaStr[16];
-    snprintf(etaStr, sizeof(etaStr), "%d ph - %s", _navData.etaMinutes, _navData.arrivalTime);
-    _drawCentreUtf8String(etaStr, 237, 160, TFT_GREEN, tft.color565(19, 27, 38));
   }
 
   // Cắt chuỗi UTF-8 cho vừa chiều rộng maxW (px). Trả về số byte giữ lại.

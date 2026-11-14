@@ -50,6 +50,10 @@ class MapScreenState extends State<MapScreen> {
   bool _mapReady = false;
   bool _styleLoaded = false;
   bool _hasCenteredOnInitialUserLocation = false;
+  double _lastCenteredAccuracyM = 999.0;
+  LatLng? _lastCenteredLocation;
+  bool _userInteractedBeforeGpsSettle = false;
+  final DateTime _initialCenterDeadline = DateTime.now().add(const Duration(seconds: 20));
   bool _isNorthUpLocked = false;
   bool _isCameraMoveInFlight = false;
   DateTime _cameraLockUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -231,7 +235,6 @@ class MapScreenState extends State<MapScreen> {
   /// Đưa camera về vị trí hiện tại của người dùng ngay khi bản đồ & GPS sẵn sàng
   void _tryCenterOnInitialUserLocation({bool animate = true}) {
     if (!mounted ||
-        _hasCenteredOnInitialUserLocation ||
         _mapController == null ||
         !_mapReady ||
         !_styleLoaded ||
@@ -244,9 +247,25 @@ class MapScreenState extends State<MapScreen> {
     final loc = navManager.currentLocation;
     if (loc == null) return;
 
+    final double incomingAccuracy = navManager.lastLiveAccuracyM;
+    if (_hasCenteredOnInitialUserLocation) {
+      if (_userInteractedBeforeGpsSettle || DateTime.now().isAfter(_initialCenterDeadline)) {
+        return;
+      }
+      final prevLoc = _lastCenteredLocation;
+      final double movedDist =
+          prevLoc == null ? 999.0 : const Distance().as(LengthUnit.Meter, prevLoc, loc);
+      final bool accuracyImproved = _lastCenteredAccuracyM > 30.0 && incomingAccuracy <= 25.0;
+      if (!accuracyImproved && movedDist <= 25.0) {
+        return;
+      }
+    }
+
     _userPosition = loc;
     if (navManager.hasInitialLiveGpsFix) {
       _hasCenteredOnInitialUserLocation = true;
+      _lastCenteredAccuracyM = incomingAccuracy;
+      _lastCenteredLocation = loc;
     }
 
     final update = ml.CameraUpdate.newCameraPosition(
@@ -983,14 +1002,14 @@ class MapScreenState extends State<MapScreen> {
             },
             onPointerMove: (ev) {
               final downPos = _mapPointerDownPos;
-              if (isDriving &&
-                  _isAutoCentering &&
-                  downPos != null &&
-                  (ev.position - downPos).distance > 12.0) {
-                _mapPointerDownPos = null;
-                setState(() {
-                  _isAutoCentering = false;
-                });
+              if (downPos != null && (ev.position - downPos).distance > 12.0) {
+                _userInteractedBeforeGpsSettle = true;
+                if (isDriving && _isAutoCentering) {
+                  _mapPointerDownPos = null;
+                  setState(() {
+                    _isAutoCentering = false;
+                  });
+                }
               }
             },
             onPointerUp: (_) => _mapPointerDownPos = null,
