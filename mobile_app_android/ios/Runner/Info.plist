@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>ysiducnaga</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>ysiducnaga</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+
+	<!-- Quyen Thu vien anh & Camera de tai anh len ESP32 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Ung dung can truy cap thu vien anh de ban co the chon anh tuy chinh cai lam hinh nen man hinh ESP32</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Ung dung can Camera de ban chup anh truc tiep lam hinh nen man hinh ESP32</string>
+
+	<!-- Quyen Bluetooth ket noi ESP32 -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Ung dung can Bluetooth de ket noi va truyen du lieu chi duong den man hinh ESP32</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Ung dung can Bluetooth de ket noi voi thiet bi ESP32</string>
+
+	<!-- Quyen doc thong tin bai hat dang phat tu iPhone -->
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Ung dung can doc thong tin bai hat dang phat tren dien thoai de hien thi len man hinh ESP32</string>
+
+	<!-- Quyen Vi tri GPS -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Ung dung can vi tri de ve lo trinh ban do va dieu huong chi duong</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Ung dung can vi tri lien tuc de tiep tuc cap nhat huong re sang ESP32 ngay ca khi tat man hinh</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Ung dung can vi tri lien tuc de dieu huong trong che do nen</string>
+
+	<!-- Quyen Ket noi Mang Cuc bo & HTTP Khong Ma hoa (Wi-Fi ESP32 192.168.4.1) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ung dung can ket noi mang cuc bo de stream anh JPEG 20 FPS sang man hinh ESP32 qua Wi-Fi</string>
+
+	<!-- Background Modes -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>bluetooth-central</string>
+		<string>audio</string>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+</dict>
+</plist>

@@ -65,9 +65,16 @@ class BleService extends ChangeNotifier {
   String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
   String? _wifiIp;
   int _wifiPort = 8081;
+  String _wifiMode = 'AP'; // 'AP' = ESP32 SoftAP, 'STA' = Phone Personal Hotspot
+  String? _espStaIp;
+  String? _wifiGatewayIp;
   String _customBleName = 'ysiducnaga';
   String _wifiSsid = 'ysiducnaga';
   String _wifiPass = '12345678';
+  bool _hotspotModeEnabled = false;
+  String _hotspotSsid = '';
+  String _hotspotPass = '';
+  bool _pendingConfigPushOnConnect = false;
   String? _lastConnectedDeviceId;
   int _brightnessPct = 100;
 
@@ -85,8 +92,16 @@ class BleService extends ChangeNotifier {
   String get wifiStatus => _wifiStatus;
   String? get wifiIp => _wifiIp;
   int get wifiPort => _wifiPort;
+  String get wifiMode => _wifiMode;
+  String? get espStaIp => _espStaIp;
+  String? get wifiGatewayIp => _wifiGatewayIp;
   String get wifiSsid => _wifiSsid;
   String get wifiPass => _wifiPass;
+  bool get hotspotModeEnabled => _hotspotModeEnabled;
+  String get hotspotSsid => _hotspotSsid;
+  String get hotspotPass => _hotspotPass;
+  bool get espStaConnectedToHotspot =>
+      _wifiMode == 'STA' && _espStaIp != null && _espStaIp!.isNotEmpty;
   bool get isWifiConnected => _wifiStatus == 'connected' && _wifiIp != null && _wifiIp!.isNotEmpty;
 
   int _lastKnownBattery = 85;
@@ -131,6 +146,10 @@ class BleService extends ChangeNotifier {
       final savedBle = prefs.getString('esp_custom_ble_name');
       final savedSsid = prefs.getString('esp_wifi_ssid');
       final savedPass = prefs.getString('esp_wifi_pass');
+      final savedHotspotMode = prefs.getBool('esp_hotspot_mode');
+      final savedHotspotSsid = prefs.getString('esp_hotspot_ssid');
+      final savedHotspotPass = prefs.getString('esp_hotspot_pass');
+      final savedPendingSync = prefs.getBool('esp_pending_cfg_sync');
       final savedId = prefs.getString('esp_last_ble_id');
       final savedBrightness = prefs.getInt('esp_brightness_pct');
       if (savedBle != null && savedBle.trim().isNotEmpty) {
@@ -142,6 +161,19 @@ class BleService extends ChangeNotifier {
       if (savedPass != null && savedPass.length >= 8) {
         _wifiPass = savedPass;
       }
+      if (savedHotspotMode != null) {
+        _hotspotModeEnabled = savedHotspotMode;
+        _wifiMode = savedHotspotMode ? 'STA' : 'AP';
+      }
+      if (savedHotspotSsid != null) {
+        _hotspotSsid = savedHotspotSsid.trim();
+      }
+      if (savedHotspotPass != null) {
+        _hotspotPass = savedHotspotPass;
+      }
+      if (savedPendingSync != null) {
+        _pendingConfigPushOnConnect = savedPendingSync;
+      }
       if (savedId != null && savedId.isNotEmpty) {
         _lastConnectedDeviceId = savedId;
       }
@@ -152,7 +184,16 @@ class BleService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _saveDeviceConfigPrefs({String? bleName, String? ssid, String? pass, String? lastId}) async {
+  Future<void> _saveDeviceConfigPrefs({
+    String? bleName,
+    String? ssid,
+    String? pass,
+    String? lastId,
+    bool? hotspotMode,
+    String? hotspotSsid,
+    String? hotspotPass,
+    bool? pendingCfgSync,
+  }) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (bleName != null && bleName.trim().isNotEmpty) {
@@ -163,6 +204,18 @@ class BleService extends ChangeNotifier {
       }
       if (pass != null && pass.length >= 8) {
         await prefs.setString('esp_wifi_pass', pass);
+      }
+      if (hotspotMode != null) {
+        await prefs.setBool('esp_hotspot_mode', hotspotMode);
+      }
+      if (hotspotSsid != null) {
+        await prefs.setString('esp_hotspot_ssid', hotspotSsid.trim());
+      }
+      if (hotspotPass != null) {
+        await prefs.setString('esp_hotspot_pass', hotspotPass);
+      }
+      if (pendingCfgSync != null) {
+        await prefs.setBool('esp_pending_cfg_sync', pendingCfgSync);
       }
       if (lastId != null && lastId.isNotEmpty) {
         await prefs.setString('esp_last_ble_id', lastId);
@@ -543,7 +596,18 @@ class BleService extends ChangeNotifier {
           await sendRawJson(handshake);
           _addLog('Đã gửi gói tin kích hoạt Navigation sang ESP32 (Pin: $bat%)', isTx: true);
           await Future.delayed(const Duration(milliseconds: 120));
-          await requestDeviceConfig();
+          if (_pendingConfigPushOnConnect) {
+            await sendDeviceConfig(
+              bleName: _customBleName,
+              ssid: _wifiSsid,
+              pass: _wifiPass,
+              hotspotMode: _hotspotModeEnabled,
+              hotspotSsid: _hotspotSsid,
+              hotspotPass: _hotspotPass,
+            );
+          } else {
+            await requestDeviceConfig();
+          }
         } catch (e) {
           _addLog('Lỗi gửi APP_CONNECT: $e', isError: true);
         }
@@ -805,78 +869,183 @@ class BleService extends ChangeNotifier {
     _writeCharacteristic = null;
     _wifiStatus = 'disconnected';
     _wifiIp = null;
+    _espStaIp = null;
+    _wifiGatewayIp = null;
     _disableBackgroundKeepAlive();
     _addLog('Đã ngắt kết nối BLE', isTx: false);
     notifyListeners();
   }
 
   /// Handle incoming BLE Notification from ESP32
+  @visibleForTesting
+  void handleIncomingBleMessageForTest(String msg) => _handleIncomingBleMessage(msg);
+
   void _handleIncomingBleMessage(String msg) {
     try {
       final json = jsonDecode(msg) as Map<String, dynamic>;
       final type = json['type'] as String? ?? '';
       if (type == 'WIFI_STATUS') {
-        _wifiStatus = json['status'] as String? ?? 'disconnected';
-        _wifiIp = json['ip'] as String?;
-        _wifiPort = (json['port'] as num?)?.toInt() ?? 8081;
-        _addLog('ESP32 WiFi: $_wifiStatus (IP: $_wifiIp:$_wifiPort)', isTx: false);
+        final mode = (json['mode'] as String?)?.trim().toUpperCase();
+        final status = json['status'] as String? ?? 'disconnected';
+        final ip = (json['ip'] as String?)?.trim();
+        final gw = (json['gw'] as String?)?.trim();
+        final port = (json['port'] as num?)?.toInt() ?? 8081;
+        if (mode == 'STA') {
+          _wifiMode = 'STA';
+          if (gw != null && gw.isNotEmpty) _wifiGatewayIp = gw;
+          if (status == 'connected' && ip != null && ip.isNotEmpty) {
+            _espStaIp = ip;
+            _wifiPort = port;
+          } else {
+            _espStaIp = null;
+          }
+          _addLog('ESP32 Hotspot STA: $status (ESP IP: ${_espStaIp ?? "-"}, GW: ${_wifiGatewayIp ?? "-"})', isTx: false);
+        } else {
+          _wifiMode = 'AP';
+          _espStaIp = null;
+          _wifiGatewayIp = null;
+          _addLog('ESP32 SoftAP WiFi: $status (${ip ?? "192.168.4.1"}:$port)', isTx: false);
+        }
         notifyListeners();
       } else if (type == 'DEVICE_CONFIG' || type == 'DEVICE_CONFIG_ACK') {
-        final bleName = (json['bleName'] as String?)?.trim();
+        final bleName = ((json['bleName'] ?? json['ble_name']) as String?)?.trim();
         final ssid = (json['ssid'] as String?)?.trim();
         final pass = json['pass'] as String?;
-        if (bleName != null && bleName.isNotEmpty) {
-          _customBleName = bleName;
+        final mode = (json['mode'] as String?)?.trim().toUpperCase();
+        final ip = (json['ip'] as String?)?.trim();
+        final rawHotspotMode = json['hotspot_mode'];
+        final bool? hsMode = rawHotspotMode is bool
+            ? rawHotspotMode
+            : (rawHotspotMode is num ? rawHotspotMode != 0 : null);
+        final staSsid = (json['sta_ssid'] as String?)?.trim();
+        final staPass = json['sta_pass'] as String?;
+
+        if (!_pendingConfigPushOnConnect) {
+          if (bleName != null && bleName.isNotEmpty) {
+            _customBleName = bleName;
+          }
+          if (ssid != null && ssid.isNotEmpty) {
+            _wifiSsid = ssid;
+          }
+          if (pass != null && pass.length >= 8) {
+            _wifiPass = pass;
+          }
+          if (hsMode != null) {
+            _hotspotModeEnabled = hsMode;
+            _wifiMode = hsMode ? 'STA' : 'AP';
+          }
+          if (staSsid != null) {
+            _hotspotSsid = staSsid;
+          }
+          if (staPass != null) {
+            _hotspotPass = staPass;
+          }
+          _saveDeviceConfigPrefs(
+            bleName: bleName,
+            ssid: ssid,
+            pass: pass,
+            hotspotMode: hsMode,
+            hotspotSsid: staSsid,
+            hotspotPass: staPass,
+          );
         }
-        if (ssid != null && ssid.isNotEmpty) {
-          _wifiSsid = ssid;
+        if (mode == 'STA' && ip != null && ip.isNotEmpty) {
+          _wifiMode = 'STA';
+          _espStaIp = ip;
+        } else if (mode == 'AP') {
+          _wifiMode = 'AP';
+          _espStaIp = null;
         }
-        if (pass != null && pass.length >= 8) {
-          _wifiPass = pass;
-        }
-        _saveDeviceConfigPrefs(bleName: bleName, ssid: ssid, pass: pass);
-        _addLog('Đồng bộ cấu hình ESP32: BT="$_customBleName", WiFi="$_wifiSsid"', isTx: false);
+        _addLog('Đồng bộ cấu hình ESP32: BT="$_customBleName", Mode=$_wifiMode', isTx: false);
         notifyListeners();
       }
     } catch (_) {}
   }
 
-  /// Query current BLE name and Wi-Fi SoftAP credentials from ESP32 NVS
+  /// Query current BLE name and Wi-Fi SoftAP / Hotspot credentials from ESP32 NVS
   Future<bool> requestDeviceConfig() async {
     if (!_isConnected || _writeCharacteristic == null) return false;
     return await sendRawString(jsonEncode({'type': 'DEVICE_QUERY'}));
   }
 
-  /// Update ESP32 Bluetooth device name and/or SoftAP Wi-Fi SSID & password.
+  /// Update ESP32 Bluetooth name, SoftAP Wi-Fi credentials, and Personal Hotspot STA mode/credentials.
   /// Persists locally even before ESP32 applies & reboots if BLE name changed.
   Future<bool> sendDeviceConfig({
     String? bleName,
     String? ssid,
     String? pass,
+    bool? hotspotMode,
+    String? hotspotSsid,
+    String? hotspotPass,
   }) async {
     final cleanBle = bleName?.trim();
     final cleanSsid = ssid?.trim();
     final cleanPass = pass?.trim();
+    final cleanStaSsid = hotspotSsid?.trim();
+    final cleanStaPass = hotspotPass;
 
     if (cleanBle != null && cleanBle.isNotEmpty) _customBleName = cleanBle;
     if (cleanSsid != null && cleanSsid.isNotEmpty) _wifiSsid = cleanSsid;
     if (cleanPass != null && cleanPass.length >= 8) _wifiPass = cleanPass;
-    await _saveDeviceConfigPrefs(bleName: cleanBle, ssid: cleanSsid, pass: cleanPass);
+    if (cleanStaSsid != null) _hotspotSsid = cleanStaSsid;
+    if (cleanStaPass != null && (cleanStaPass.isEmpty || cleanStaPass.length >= 8)) {
+      _hotspotPass = cleanStaPass;
+    }
+    if (hotspotMode != null) {
+      _hotspotModeEnabled = hotspotMode;
+      _wifiMode = hotspotMode ? 'STA' : 'AP';
+      if (!hotspotMode) {
+        _espStaIp = null;
+        _wifiGatewayIp = null;
+      }
+    }
+
+    final isOffline = !_isConnected || _writeCharacteristic == null;
+    _pendingConfigPushOnConnect = isOffline;
+    await _saveDeviceConfigPrefs(
+      bleName: cleanBle,
+      ssid: cleanSsid,
+      pass: cleanPass,
+      hotspotMode: hotspotMode,
+      hotspotSsid: cleanStaSsid,
+      hotspotPass: cleanStaPass,
+      pendingCfgSync: _pendingConfigPushOnConnect,
+    );
     notifyListeners();
 
-    if (!_isConnected || _writeCharacteristic == null) {
-      _addLog('Chưa kết nối BLE với ESP32 (đã lưu cấu hình cục bộ)', isError: true);
+    if (isOffline) {
+      _addLog('Chưa kết nối BLE với ESP32 (đã lưu cấu hình chờ đồng bộ)', isError: true);
       return false;
     }
 
     final payloadMap = <String, dynamic>{'type': 'DEVICE_CONFIG'};
-    if (cleanBle != null && cleanBle.isNotEmpty) payloadMap['bleName'] = cleanBle;
+    if (cleanBle != null && cleanBle.isNotEmpty) {
+      payloadMap['bleName'] = cleanBle;
+      payloadMap['ble_name'] = cleanBle;
+    }
     if (cleanSsid != null && cleanSsid.isNotEmpty) payloadMap['ssid'] = cleanSsid;
     if (cleanPass != null && cleanPass.length >= 8) payloadMap['pass'] = cleanPass;
+    payloadMap['hotspot_mode'] = _hotspotModeEnabled ? 1 : 0;
+    payloadMap['sta_ssid'] = _hotspotSsid;
+    payloadMap['sta_pass'] = _hotspotPass;
 
     final payload = jsonEncode(payloadMap);
-    _addLog('Gửi cấu hình ESP32 (BT: ${cleanBle ?? '-'}, WiFi: ${cleanSsid ?? '-'})', isTx: true);
+    _pendingConfigPushOnConnect = false;
+    await _saveDeviceConfigPrefs(pendingCfgSync: false);
+    _addLog(
+      'Gửi cấu hình ESP32 (${_hotspotModeEnabled ? "Hotspot: $_hotspotSsid" : "SoftAP: $_wifiSsid"})',
+      isTx: true,
+    );
     return await sendRawString(payload);
+  }
+
+  /// Toggles whether ESP32 joins Phone Personal Hotspot (true) or hosts SoftAP (false).
+  Future<bool> setHotspotMode(bool enabled) {
+    return sendDeviceConfig(
+      hotspotMode: enabled,
+      hotspotSsid: _hotspotSsid,
+      hotspotPass: _hotspotPass,
+    );
   }
 
   /// Send Wi-Fi SSID & Password to ESP32 over BLE

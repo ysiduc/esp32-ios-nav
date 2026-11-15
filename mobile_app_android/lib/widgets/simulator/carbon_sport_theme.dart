@@ -1,0 +1,186 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../../config/simulator_presets.dart';
+import 'marquee_text.dart';
+
+/// GIAO DIỆN 1: SUNFLOWER BENTO (Căn chỉnh pixel-perfect: tên bài hát nhỏ 2px dời xuống 3px, thông báo thả trôi)
+class CarbonSportTheme extends StatelessWidget {
+  final DateTime currentTime;
+  final SimulatorMockData mockData;
+
+  const CarbonSportTheme({
+    super.key,
+    required this.currentTime,
+    this.mockData = SimulatorMockData.defaultPreset,
+  });
+
+  String _formatDateVietnamese(DateTime dt) {
+    const days = [
+      'THỨ HAI',
+      'THỨ BA',
+      'THỨ TƯ',
+      'THỨ NĂM',
+      'THỨ SÁU',
+      'THỨ BẢY',
+      'CHỦ NHẬT'
+    ];
+    final dayName = days[dt.weekday - 1];
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    return '$dayName, $d/$m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hStr = currentTime.hour.toString().padLeft(2, '0');
+    final mStr = currentTime.minute.toString().padLeft(2, '0');
+    final dateStr = _formatDateVietnamese(currentTime);
+
+    return SizedBox(
+      width: 320,
+      height: 240,
+      child: Stack(
+        children: [
+          // Lớp dưới: Ảnh nền 320x240 phẳng 2D
+          Positioned.fill(
+            child: Image.asset(
+              'assets/themes/theme_1_bg.png',
+              width: 320,
+              height: 240,
+              fit: BoxFit.cover,
+            ),
+          ),
+
+          // --- Ô Đồng hồ (Góc trên trái: ô x: 12..160, y: 12..104, chỉ hiện HH:mm) ---
+          Positioned(
+            left: 20,
+            top: 22,
+            child: Text(
+              '$hStr:$mStr',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 38,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFFFACC15),
+                letterSpacing: -1,
+                height: 1.0,
+              ),
+            ),
+          ),
+
+          // Thứ & Ngày (bên dưới giờ)
+          Positioned(
+            left: 22,
+            top: 70,
+            child: Text(
+              dateStr,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+
+          // --- Ô Tin nhắn (Khung dọc bên phải: x: 176..304, y: 15..184) ---
+          // Tiêu đề "TIN NHẮN MỚI" (ngay sau icon bong bóng chat ở x: 185, y: 23)
+          Positioned(
+            left: 204,
+            top: 23,
+            child: Text(
+              'TIN NHẮN MỚI',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFFFB923C),
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
+
+          // Tên người gửi (cố định, không thả trôi)
+          Positioned(
+            left: 184,
+            top: 48,
+            width: 110,
+            child: Text(
+              mockData.sender,
+              style: GoogleFonts.plusJakartaSans(
+                color: const Color(0xFFFACC15),
+                fontWeight: FontWeight.w700,
+                fontSize: 11.0,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          // Nội dung tin nhắn (xuống dòng đến hết ô, không cần trôi)
+          Positioned(
+            left: 184,
+            top: 66,
+            width: 110,
+            height: 64,
+            child: Text(
+              mockData.message,
+              style: GoogleFonts.plusJakartaSans(
+                color: Colors.white,
+                fontSize: 10.0,
+                fontWeight: FontWeight.w500,
+                height: 1.25,
+              ),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+
+          // --- Thanh Nhạc (Dưới đáy: nhỏ lại 2px, dời xuống 3px: top: 201) ---
+          Positioned(
+            left: 60,
+            top: 201,
+            child: MarqueeText(
+              text: mockData.fullSongTitle,
+              width: 175,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 9.0, // Nhỏ lại 2px (từ 11px xuống 9px)
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFFFEF08A),
+              ),
+            ),
+          ),
+
+          // Cột thời gian hiện tại / tổng thời gian (chỉ hiện khi có tiến trình bài hát)
+          if (mockData.durationSec > 0)
+            Positioned(
+              right: 20,
+              top: 201,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    mockData.elapsedStr,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFFFB923C),
+                      height: 1.1,
+                    ),
+                  ),
+                  Text(
+                    mockData.durationStr,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      height: 1.1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}

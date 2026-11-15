@@ -1,0 +1,114 @@
+{
+  "screen": 1,
+  "name": "Sunset Horizon Màn 1",
+  "subtitle": "Mẫu ZIP Màn chờ 320x240",
+  "accentColor": "#F59E0B",
+  "bgColor": "#120C18",
+  "showWaybar": false,
+  "showPanel": true,
+  "boxes": [
+    {
+      "x": 10,
+      "y": 12,
+      "w": 152,
+      "h": 170,
+      "r": 12,
+      "fill": "#1A1328",
+      "border": "#F59E0B"
+    },
+    {
+      "x": 170,
+      "y": 12,
+      "w": 140,
+      "h": 170,
+      "r": 12,
+      "fill": "#1A1328",
+      "border": "#4C1D95"
+    },
+    {
+      "x": 10,
+      "y": 190,
+      "w": 300,
+      "h": 40,
+      "r": 10,
+      "fill": "#160F24",
+      "border": "#7C3AED"
+    }
+  ],
+  "labels": [
+    {
+      "text": "HOÀNG HÔN",
+      "x": 20,
+      "y": 22,
+      "maxW": 120,
+      "fontSize": 9,
+      "color": "#FBBF24",
+      "center": false,
+      "visible": true
+    },
+    {
+      "text": "THÔNG BÁO",
+      "x": 180,
+      "y": 22,
+      "maxW": 118,
+      "fontSize": 9,
+      "color": "#C084FC",
+      "center": false,
+      "visible": true
+    }
+  ],
+  "clock": {
+    "visible": true,
+    "x": 20,
+    "y": 44,
+    "fontSize": 40,
+    "font": "sans",
+    "color": "#FEF3C7",
+    "center": false
+  },
+  "date": {
+    "visible": true,
+    "x": 20,
+    "y": 104,
+    "fontSize": 11,
+    "color": "#FDBA74",
+    "format": "vn_short",
+    "center": false
+  },
+  "song": {
+    "visible": true,
+    "x": 20,
+    "y": 203,
+    "w": 206,
+    "fontSize": 11,
+    "color": "#FDE047",
+    "bgColor": "#160F24"
+  },
+  "duration": {
+    "visible": true,
+    "mode": "ratio",
+    "x": 232,
+    "y": 205,
+    "fontSize": 10,
+    "color": "#F59E0B",
+    "secondaryColor": "#DDD6FE"
+  },
+  "notifTitle": {
+    "visible": true,
+    "x": 180,
+    "y": 44,
+    "maxW": 120,
+    "fontSize": 11,
+    "color": "#FBBF24"
+  },
+  "notifMsg": {
+    "visible": true,
+    "x": 180,
+    "y": 64,
+    "maxW": 120,
+    "maxLines": 4,
+    "lineHeight": 16,
+    "fontSize": 10,
+    "color": "#F3E8FF"
+  }
+}

@@ -63,6 +63,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   // WebSocket Server for iPhone Hotspot Master (IP 172.20.10.1:8080)
   HttpServer? _wsServer;
+  // Reverse TCP Server for ESP32 STA Hotspot fallback (port 8082)
+  ServerSocket? _reverseTcpServer;
   final Set<WebSocket> _wsClients = {};
   bool get isWebSocketConnected => _wsClients.isNotEmpty;
   int get wsClientCount => _wsClients.length;
@@ -172,20 +174,48 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _lastBleConnected = false;
 
+  bool _lastHotspotMode = false;
+  String? _lastKnownStaIp;
+
   void _handleBleConnectionChange() {
     final nowConnected = bleService.isConnected;
     if (_lastBleConnected && !nowConnected) {
       broadcastTelemetry('{"type":"APP_DISCONNECT"}');
     }
     _lastBleConnected = nowConnected;
+
+    final nowHotspotMode = bleService.hotspotModeEnabled;
+    final nowStaIp = bleService.espStaIp;
+    final bool modeChanged = nowHotspotMode != _lastHotspotMode;
+    final bool staIpChanged =
+        nowStaIp != null && nowStaIp.isNotEmpty && nowStaIp != _lastKnownStaIp;
+
+    _lastHotspotMode = nowHotspotMode;
+    _lastKnownStaIp = nowStaIp;
+
+    if (modeChanged || (staIpChanged && _activeTcpTargetIp != nowStaIp)) {
+      if (_tcpApSocket != null) {
+        _closeTcpApSocket(_tcpApSocket!, notifyIfEmpty: true);
+      }
+      if (_apSocket != null) {
+        try {
+          _apSocket!.close();
+        } catch (_) {}
+        _apSocket = null;
+      }
+      scheduleMicrotask(_tryConnectEspAp);
+    }
   }
 
   EspStreamService({required this.bleService, this.navManager}) {
     WidgetsBinding.instance.addObserver(this);
     _lastBleConnected = bleService.isConnected;
+    _lastHotspotMode = bleService.hotspotModeEnabled;
+    _lastKnownStaIp = bleService.espStaIp;
     bleService.addListener(_handleBleConnectionChange);
     _loadSavedMapPrefs();
     _startWebSocketServer();
+    _startReverseTcpServer();
     _startEspApConnector();
   }
 
@@ -199,8 +229,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       _wsServer!.listen((HttpRequest request) async {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           try {
+            final remoteIp = request.connectionInfo?.remoteAddress.address;
             final socket = await WebSocketTransformer.upgrade(request);
-            _registerWsClient(socket);
+            _registerWsClient(socket, remoteIp: remoteIp);
           } catch (e) {
             debugPrint('[WebSocket Upgrade Error] $e');
           }
@@ -223,12 +254,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   // ───────────────────────────────────────────────────────────────────────
   static const String espApIp = '192.168.4.1';
   static const int espApTcpPort = 8081;
+  static const int espHotspotReverseTcpPort = 8082;
   static const String espApWsUrl = 'ws://192.168.4.1:8080';
   Timer? _apConnectTimer;
   Timer? _apKeepaliveTimer;
   Timer? _apConnectTimeoutTimer;
   ConnectionTask<Socket>? _apConnectTask;
   Socket? _tcpApSocket;
+  String? _activeTcpTargetIp;
   StreamSubscription<Uint8List>? _tcpApSub;
   bool _tcpApReadyForNextFrame = true;
   DateTime _lastTcpSendTime = DateTime.fromMillisecondsSinceEpoch(0);
@@ -242,6 +275,50 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tryConnectEspAp();
   }
 
+  /// Listen for inbound TCP stream connections from ESP32 in Hotspot STA mode (port 8082).
+  Future<void> _startReverseTcpServer() async {
+    if (_reverseTcpServer != null || _isDisposed) return;
+    try {
+      _reverseTcpServer = await ServerSocket.bind(
+        InternetAddress.anyIPv4,
+        espHotspotReverseTcpPort,
+        shared: true,
+      );
+      debugPrint('[Reverse TCP Server] Listening on 0.0.0.0:$espHotspotReverseTcpPort');
+      _reverseTcpServer!.listen(
+        (Socket client) {
+          if (_isDisposed) {
+            client.destroy();
+            return;
+          }
+          // Firmware only dials :8082 when its own stream client is disconnected,
+          // so any lingering socket here is stale and can be replaced cleanly.
+          if (_tcpApSocket != null) {
+            _closeTcpApSocket(_tcpApSocket!, notifyIfEmpty: false);
+          }
+          if (_apSocket != null) {
+            try {
+              _apSocket!.close();
+            } catch (_) {}
+            _apSocket = null;
+          }
+          final peerIp = client.remoteAddress.address;
+          _attachTcpBinarySocket(
+            client,
+            displayIp: peerIp,
+            displayPort: espHotspotReverseTcpPort,
+            isReverseClient: true,
+          );
+        },
+        onError: (e) {
+          debugPrint('[Reverse TCP Server Error] $e');
+        },
+      );
+    } catch (e) {
+      debugPrint('[Reverse TCP Server Bind Error] $e');
+    }
+  }
+
   void _closeTcpApSocket(Socket target, {bool notifyIfEmpty = true}) {
     if (!identical(_tcpApSocket, target)) return;
     _apKeepaliveTimer?.cancel();
@@ -249,6 +326,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tcpApSub?.cancel();
     _tcpApSub = null;
     _tcpApSocket = null;
+    _activeTcpTargetIp = null;
     try {
       target.destroy();
     } catch (_) {}
@@ -258,11 +336,72 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     if (!_isDisposed) notifyListeners();
   }
 
+  void _attachTcpBinarySocket(
+    Socket sock, {
+    required String displayIp,
+    required int displayPort,
+    bool isReverseClient = false,
+  }) {
+    sock.setOption(SocketOption.tcpNoDelay, true);
+    _tcpApSocket = sock;
+    _activeTcpTargetIp = displayIp;
+    _tcpApReadyForNextFrame = true;
+    _lastTcpSendTime = DateTime.now();
+    _consecutiveWifiErrors = 0;
+    bleService.setHotspotConnected(displayIp, displayPort);
+    bleService.logInfo(
+      isReverseClient
+          ? 'ESP32 đã kết nối Hotspot TCP ($displayIp:$displayPort)'
+          : 'Đã kết nối Wi-Fi TCP tốc độ cao ($displayIp:$displayPort)',
+    );
+
+    _tcpApSub?.cancel();
+    _tcpApSub = sock.listen(
+      (chunk) {
+        for (final b in chunk) {
+          if (b == 0x4B) {
+            _tcpApReadyForNextFrame = true;
+            if (!_isDisposed && _isStreaming && !_isCapturing) {
+              scheduleMicrotask(_renderAndStreamHeadlessFrame);
+            }
+            break;
+          }
+        }
+      },
+      onDone: () => _closeTcpApSocket(sock, notifyIfEmpty: true),
+      onError: (_) => _closeTcpApSocket(sock, notifyIfEmpty: true),
+      cancelOnError: true,
+    );
+
+    _apKeepaliveTimer?.cancel();
+    _apKeepaliveTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      final s = _tcpApSocket;
+      if (s == null) return;
+      if (DateTime.now().difference(_lastTcpSendTime).inMilliseconds >= 3500) {
+        try {
+          s.add(const [0xAA, 0xDD]);
+          _lastTcpSendTime = DateTime.now();
+        } catch (_) {
+          _closeTcpApSocket(s, notifyIfEmpty: true);
+        }
+      }
+    });
+
+    if (_latestJpegBytes != null) {
+      _sendPacketOverTcpAp(sock, _latestJpegBytes!);
+    }
+    notifyListeners();
+  }
+
   Future<void> _tryConnectEspAp() async {
     if (_isDisposed || _tcpApSocket != null || _apSocket != null || _apConnecting) return;
+    final bool useHotspot = bleService.hotspotModeEnabled || bleService.espStaConnectedToHotspot;
+    final String? targetIp = useHotspot ? bleService.espStaIp : espApIp;
+    if (targetIp == null || targetIp.isEmpty) return;
+
     _apConnecting = true;
     try {
-      final task = await Socket.startConnect(espApIp, espApTcpPort);
+      final task = await Socket.startConnect(targetIp, espApTcpPort);
       if (_isDisposed) {
         task.cancel();
         return;
@@ -282,64 +421,22 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         sock.destroy();
         return;
       }
-      sock.setOption(SocketOption.tcpNoDelay, true);
-      _tcpApSocket = sock;
-      _tcpApReadyForNextFrame = true;
-      _lastTcpSendTime = DateTime.now();
-      _consecutiveWifiErrors = 0;
-      bleService.setHotspotConnected(espApIp, espApTcpPort);
-      bleService.logInfo('Đã kết nối Wi-Fi TCP tốc độ cao ($espApIp:$espApTcpPort)');
-
-      _tcpApSub?.cancel();
-      _tcpApSub = sock.listen(
-        (chunk) {
-          for (final b in chunk) {
-            if (b == 0x4B) {
-              _tcpApReadyForNextFrame = true;
-              if (!_isDisposed && _isStreaming && !_isCapturing) {
-                scheduleMicrotask(_renderAndStreamHeadlessFrame);
-              }
-              break;
-            }
-          }
-        },
-        onDone: () => _closeTcpApSocket(sock, notifyIfEmpty: true),
-        onError: (_) => _closeTcpApSocket(sock, notifyIfEmpty: true),
-        cancelOnError: true,
-      );
-
-      _apKeepaliveTimer?.cancel();
-      _apKeepaliveTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-        final s = _tcpApSocket;
-        if (s == null) return;
-        if (DateTime.now().difference(_lastTcpSendTime).inMilliseconds >= 3500) {
-          try {
-            s.add(const [0xAA, 0xDD]);
-            _lastTcpSendTime = DateTime.now();
-          } catch (_) {
-            _closeTcpApSocket(s, notifyIfEmpty: true);
-          }
-        }
-      });
-
-      if (_latestJpegBytes != null) {
-        _sendPacketOverTcpAp(sock, _latestJpegBytes!);
-      }
-      notifyListeners();
+      _attachTcpBinarySocket(sock, displayIp: targetIp, displayPort: espApTcpPort);
     } on SocketException catch (e) {
       final msg = e.message.toLowerCase();
       final osCode = e.osError?.errorCode ?? 0;
       final bool isRefused = osCode == 61 || osCode == 111 || msg.contains('refused');
       if (isRefused) {
+        final wsUrl = 'ws://$targetIp:8080';
         try {
-          final ws = await WebSocket.connect(espApWsUrl).timeout(const Duration(milliseconds: 1200));
+          final ws = await WebSocket.connect(wsUrl).timeout(const Duration(milliseconds: 1200));
           _apSocket = ws;
-          _registerWsClient(ws);
-          bleService.logInfo('Đã kết nối Wi-Fi WS dự phòng ($espApWsUrl)');
+          _registerWsClient(ws, remoteIp: targetIp);
+          bleService.logInfo('Đã kết nối Wi-Fi WS dự phòng ($wsUrl)');
         } catch (_) {}
       }
     } catch (_) {
-      // Chưa kết nối vào Wi-Fi SoftAP của ESP32 -> thử lại mỗi 2s
+      // Chưa kết nối được Wi-Fi ESP32 -> thử lại mỗi 2s
     } finally {
       _apConnectTimeoutTimer?.cancel();
       _apConnectTimeoutTimer = null;
@@ -348,11 +445,19 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Register a WebSocket peer (either iPhone-hosted server client or ESP32 SoftAP connection)
-  void _registerWsClient(WebSocket socket) {
+  /// Register a WebSocket peer (either iPhone-hosted server client or ESP32 connection)
+  void _registerWsClient(WebSocket socket, {String? remoteIp}) {
     _wsClients.add(socket);
     _wsReadyForNextFrame = true;
-    final ip = identical(socket, _apSocket) ? '192.168.4.1' : '172.20.10.1';
+    final ip = (remoteIp != null && remoteIp.isNotEmpty)
+        ? remoteIp
+        : (identical(socket, _apSocket)
+            ? (_lastKnownStaIp?.isNotEmpty == true ? _lastKnownStaIp! : espApIp)
+            : (bleService.espStaIp?.isNotEmpty == true
+                ? bleService.espStaIp!
+                : (bleService.wifiGatewayIp?.isNotEmpty == true
+                    ? bleService.wifiGatewayIp!
+                    : '172.20.10.1')));
     bleService.setHotspotConnected(ip, 8080);
     if (_latestJpegBytes != null) {
       try {
@@ -393,6 +498,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       bleService.removeListener(_handleBleConnectionChange);
       bleService = newBle;
       _lastBleConnected = bleService.isConnected;
+      _lastHotspotMode = bleService.hotspotModeEnabled;
+      _lastKnownStaIp = bleService.espStaIp;
       bleService.addListener(_handleBleConnectionChange);
     }
     navManager = newNav;
@@ -466,6 +573,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _apSocket = null;
     _wsServer?.close(force: true);
     _wsServer = null;
+    _reverseTcpServer?.close();
+    _reverseTcpServer = null;
     _pauseTimer?.cancel();
     _tileCache.forEach((_, img) => img.dispose());
     _tileCache.clear();

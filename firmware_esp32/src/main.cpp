@@ -23,7 +23,8 @@ static uint8_t wsClientNum = 255;
 static bool wsConnected = false;
 static volatile bool tcpConnected = false;
 static volatile bool tcpNeedDrawAck = false;
-static volatile bool needSoftApRestart = false;
+static volatile bool needWifiModeApply = false;
+static volatile bool pendingWifiStatusNotify = false;
 static volatile bool pendingBleRestart = false;
 static unsigned long pendingBleRestartAt = 0;
 
@@ -31,11 +32,53 @@ static Preferences prefs;
 static String bleName = "ysiducnaga";
 static String wifiSsid = "ysiducnaga";
 static String wifiPass = "12345678";
+static bool hotspotMode = false; // false = ESP32 SoftAP, true = STA client (Phone Hotspot)
+static String staSsid = "";
+static String staPass = "";
+
+static String sanitizeCfgString(String s) {
+  s.replace("\"", "");
+  s.replace("\\", "");
+  return s;
+}
+
+static String buildDeviceConfigJson(bool restarting) {
+  bool isSta = (hotspotMode && staSsid.length() > 0);
+  bool staReady = isSta && (WiFi.status() == WL_CONNECTED);
+  String ipStr = isSta ? (staReady ? WiFi.localIP().toString() : "") : "192.168.4.1";
+  return "{\"type\":\"DEVICE_CONFIG\",\"ble_name\":\"" + sanitizeCfgString(bleName) +
+         "\",\"ssid\":\"" + sanitizeCfgString(wifiSsid) +
+         "\",\"pass\":\"" + sanitizeCfgString(wifiPass) +
+         "\",\"hotspot_mode\":" + String(hotspotMode ? 1 : 0) +
+         ",\"sta_ssid\":\"" + sanitizeCfgString(staSsid) +
+         "\",\"sta_pass\":\"" + sanitizeCfgString(staPass) +
+         "\",\"mode\":\"" + String(isSta ? "STA" : "AP") +
+         "\",\"ip\":\"" + ipStr +
+         "\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) +
+         ",\"restarting\":" + String(restarting ? 1 : 0) + "}";
+}
+
+static String buildWifiStatusJson() {
+  bool isSta = (hotspotMode && staSsid.length() > 0);
+  bool staReady = isSta && (WiFi.status() == WL_CONNECTED);
+  String stStr = isSta ? (staReady ? "connected" : "connecting") : "connected";
+  String ipStr = isSta ? (staReady ? WiFi.localIP().toString() : "") : "192.168.4.1";
+  String gwStr = staReady ? WiFi.gatewayIP().toString() : "";
+  String activeSsid = isSta ? staSsid : wifiSsid;
+  return "{\"type\":\"WIFI_STATUS\",\"status\":\"" + stStr +
+         "\",\"mode\":\"" + String(isSta ? "STA" : "AP") +
+         "\",\"ip\":\"" + ipStr +
+         "\",\"gw\":\"" + gwStr +
+         "\",\"ws\":" + String((wsConnected || tcpConnected) ? 1 : 0) +
+         ",\"port\":8081,\"hotspot\":\"" + sanitizeCfgString(activeSsid) + "\"}";
+}
 
 // Start SoftAP WITHOUT offering a default gateway/DNS via DHCP, so iOS immediately sees
 // "no Internet on this Wi-Fi" and keeps using cellular data without Wi-Fi Assist disconnects.
 static void startSoftAp() {
+  WiFi.disconnect(true);
   WiFi.softAPdisconnect(true);
+  delay(40);
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(0, 0, 0, 0), IPAddress(255, 255, 255, 0));
   WiFi.softAP(wifiSsid.c_str(), wifiPass.c_str(), 1, 0, 4);
@@ -47,6 +90,34 @@ static void startSoftAp() {
   tcpip_adapter_dhcps_option(TCPIP_ADAPTER_OP_SET, TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS, &offerRouter, sizeof(offerRouter));
   tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
   Serial.printf("[WiFi AP] SSID '%s' (no GW, local-only), IP %s\n", wifiSsid.c_str(), WiFi.softAPIP().toString().c_str());
+}
+
+// Join Phone Personal Hotspot / external Wi-Fi in STA mode so phone keeps 4G/5G SIM Internet
+static void startStaHotspot() {
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(false);
+  delay(40);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(true); // MUST BE TRUE for WiFi + NimBLE coexistence
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  if (staPass.length() == 0) {
+    WiFi.begin(staSsid.c_str());
+  } else {
+    WiFi.begin(staSsid.c_str(), staPass.c_str());
+  }
+  Serial.printf("[WiFi STA] Joining Personal Hotspot SSID='%s' passLen=%d\n", staSsid.c_str(), staPass.length());
+}
+
+static void applyActiveWifiMode() {
+  if (hotspotMode && staSsid.length() > 0) {
+    startStaHotspot();
+  } else {
+    if (hotspotMode && staSsid.length() == 0) {
+      Serial.println("[WiFi STA] Empty Hotspot SSID -> staying in SoftAP mode");
+    }
+    startSoftAp();
+  }
 }
 
 // Triple-Buffered Lock-Free Pipeline (Zero Tearing, Zero Malloc) for 28-30 FPS JPEG Stream
@@ -292,8 +363,12 @@ void processJsonPacket(const char* jsonStr) {
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
       delay(10);
-      String cfgResp = "{\"type\":\"DEVICE_CONFIG\",\"ble_name\":\"" + bleName + "\",\"ssid\":\"" + wifiSsid + "\",\"pass\":\"" + wifiPass + "\",\"ip\":\"192.168.4.1\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) + "}";
+      String cfgResp = buildDeviceConfigJson(false);
       pNavChar->setValue(cfgResp.c_str());
+      pNavChar->notify();
+      delay(10);
+      String stResp = buildWifiStatusJson();
+      pNavChar->setValue(stResp.c_str());
       pNavChar->notify();
     }
     Serial.println("[BLE] Received APP_CONNECT handshake. Switched to Navigation screen.");
@@ -328,14 +403,12 @@ void processJsonPacket(const char* jsonStr) {
     }
     display.forceRedraw();
     return;
-  } else if (typeStr == "DEVICE_CONFIG" || typeStr == "BLE_CONFIG" || typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY" || typeStr == "DEVICE_QUERY") {
+  } else if (typeStr == "DEVICE_CONFIG" || typeStr == "BLE_CONFIG" || typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY" || typeStr == "DEVICE_QUERY" || typeStr == "SET_HOTSPOT_MODE") {
     bool wifiChanged = false;
     bool bleChanged = false;
 
     if (doc["ssid"].is<const char*>()) {
-      String newSsid = String(doc["ssid"].as<const char*>());
-      newSsid.replace("\"", "");
-      newSsid.replace("\\", "");
+      String newSsid = sanitizeCfgString(String(doc["ssid"].as<const char*>()));
       newSsid.trim();
       if (newSsid.length() >= 1 && newSsid.length() <= 31 && newSsid != wifiSsid) {
         wifiSsid = newSsid;
@@ -343,18 +416,45 @@ void processJsonPacket(const char* jsonStr) {
       }
     }
     if (doc["pass"].is<const char*>()) {
-      String newPass = String(doc["pass"].as<const char*>());
-      newPass.replace("\"", "");
-      newPass.replace("\\", "");
+      String newPass = sanitizeCfgString(String(doc["pass"].as<const char*>()));
       if (newPass.length() >= 8 && newPass.length() <= 63 && newPass != wifiPass) {
         wifiPass = newPass;
         wifiChanged = true;
       }
     }
-    if (doc["ble_name"].is<const char*>()) {
-      String newBle = String(doc["ble_name"].as<const char*>());
-      newBle.replace("\"", "");
-      newBle.replace("\\", "");
+    if (doc["sta_ssid"].is<const char*>()) {
+      String newStaSsid = sanitizeCfgString(String(doc["sta_ssid"].as<const char*>()));
+      newStaSsid.trim();
+      if (newStaSsid.length() <= 31 && newStaSsid != staSsid) {
+        staSsid = newStaSsid;
+        wifiChanged = true;
+      }
+    }
+    if (doc["sta_pass"].is<const char*>()) {
+      String newStaPass = sanitizeCfgString(String(doc["sta_pass"].as<const char*>()));
+      if ((newStaPass.length() == 0 || newStaPass.length() >= 8) && newStaPass.length() <= 63 && newStaPass != staPass) {
+        staPass = newStaPass;
+        wifiChanged = true;
+      }
+    }
+    if (!doc["hotspot_mode"].isNull()) {
+      bool reqHotspot = doc["hotspot_mode"].is<bool>()
+          ? doc["hotspot_mode"].as<bool>()
+          : (doc["hotspot_mode"].as<int>() != 0);
+      if (reqHotspot && staSsid.length() == 0) {
+        reqHotspot = false;
+      }
+      if (reqHotspot != hotspotMode) {
+        hotspotMode = reqHotspot;
+        wifiChanged = true;
+      }
+    }
+
+    const char* rawBlePtr = doc["ble_name"].is<const char*>()
+        ? doc["ble_name"].as<const char*>()
+        : (doc["bleName"].is<const char*>() ? doc["bleName"].as<const char*>() : nullptr);
+    if (rawBlePtr != nullptr) {
+      String newBle = sanitizeCfgString(String(rawBlePtr));
       newBle.trim();
       if (newBle.length() >= 1 && newBle.length() <= 24 && newBle != bleName) {
         bleName = newBle;
@@ -366,9 +466,13 @@ void processJsonPacket(const char* jsonStr) {
       prefs.begin("nav_wifi", false);
       prefs.putString("ap_ssid", wifiSsid);
       prefs.putString("ap_pass", wifiPass);
+      prefs.putBool("hotspot_mode", hotspotMode);
+      prefs.putString("sta_ssid", staSsid);
+      prefs.putString("sta_pass", staPass);
       prefs.end();
-      Serial.printf("[WiFi AP] Saved new AP SSID='%s' passLen=%d -> restarting SoftAP\n", wifiSsid.c_str(), wifiPass.length());
-      needSoftApRestart = true;
+      Serial.printf("[WiFi] Saved config (mode=%s, ap='%s', sta='%s') -> applying\n",
+                    hotspotMode ? "STA" : "AP", wifiSsid.c_str(), staSsid.c_str());
+      needWifiModeApply = true;
     }
     if (bleChanged) {
       prefs.begin("nav_cfg", false);
@@ -380,11 +484,11 @@ void processJsonPacket(const char* jsonStr) {
     }
 
     if (pNavChar != nullptr && bleConnected) {
-      String cfgResp = "{\"type\":\"DEVICE_CONFIG\",\"ble_name\":\"" + bleName + "\",\"ssid\":\"" + wifiSsid + "\",\"pass\":\"" + wifiPass + "\",\"ip\":\"192.168.4.1\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) + ",\"restarting\":" + String(bleChanged ? 1 : 0) + "}";
+      String cfgResp = buildDeviceConfigJson(bleChanged);
       pNavChar->setValue(cfgResp.c_str());
       pNavChar->notify();
       delay(10);
-      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"mode\":\"AP\",\"ip\":\"192.168.4.1\",\"ws\":" + String((wsConnected || tcpConnected) ? 1 : 0) + ",\"port\":8081,\"hotspot\":\"" + wifiSsid + "\"}";
+      String resp = buildWifiStatusJson();
       pNavChar->setValue(resp.c_str());
       pNavChar->notify();
     }
@@ -641,16 +745,81 @@ static void tcpStreamTask(void* param) {
   uint16_t pktLen = 0;
   size_t rxPos = 0;
   int8_t writerSlot = -1;
+  bool staWasConnected = false;
+  unsigned long staConnectedAt = 0;
+  unsigned long lastReverseDialAt = 0;
+  unsigned long lastStaRetryAt = 0;
 
   for (;;) {
-    if (needSoftApRestart) {
-      needSoftApRestart = false;
+    if (needWifiModeApply) {
+      needWifiModeApply = false;
       if (tcpStreamClient) tcpStreamClient.stop();
       tcpConnected = false;
       rxState = 0;
       rxPos = 0;
-      startSoftAp();
+      staWasConnected = false;
+      staConnectedAt = 0;
+      lastReverseDialAt = 0;
+      lastStaRetryAt = millis();
+      applyActiveWifiMode();
       tcpStreamServer.begin();
+      pendingWifiStatusNotify = true;
+    }
+
+    if (hotspotMode && staSsid.length() > 0) {
+      wl_status_t st = WiFi.status();
+      if (st == WL_CONNECTED) {
+        if (!staWasConnected) {
+          staWasConnected = true;
+          staConnectedAt = millis();
+          lastReverseDialAt = millis();
+          tcpStreamServer.begin();
+          pendingWifiStatusNotify = true;
+          Serial.printf("[WiFi STA] Connected! ESP IP=%s Gateway=%s\n",
+                        WiFi.localIP().toString().c_str(),
+                        WiFi.gatewayIP().toString().c_str());
+        } else if (!tcpConnected && !wsConnected &&
+                   !tcpStreamServer.hasClient() &&
+                   (millis() - staConnectedAt >= 2800) &&
+                   (millis() - lastReverseDialAt >= 3000)) {
+          lastReverseDialAt = millis();
+          IPAddress gw = WiFi.gatewayIP();
+          if (gw != IPAddress(0, 0, 0, 0)) {
+            WiFiClient revClient;
+            if (revClient.connect(gw, 8082, 450)) {
+              if (tcpStreamClient) tcpStreamClient.stop();
+              tcpStreamClient = revClient;
+              tcpStreamClient.setNoDelay(true);
+              tcpConnected = true;
+              rxState = 0;
+              rxPos = 0;
+              const uint8_t ack = 'K';
+              tcpStreamClient.write(&ack, 1);
+              Serial.printf("[TCP 8082] Reverse stream connected to Phone Hotspot %s:8082\n",
+                            gw.toString().c_str());
+            }
+          }
+        }
+      } else {
+        if (staWasConnected) {
+          staWasConnected = false;
+          staConnectedAt = 0;
+          if (tcpStreamClient) tcpStreamClient.stop();
+          tcpConnected = false;
+          rxState = 0;
+          rxPos = 0;
+          pendingWifiStatusNotify = true;
+          Serial.println("[WiFi STA] Hotspot connection lost, retrying...");
+        }
+        if (millis() - lastStaRetryAt >= 9000) {
+          lastStaRetryAt = millis();
+          if (staPass.length() == 0) {
+            WiFi.begin(staSsid.c_str());
+          } else {
+            WiFi.begin(staSsid.c_str(), staPass.c_str());
+          }
+        }
+      }
     }
 
     if (tcpStreamServer.hasClient()) {
@@ -790,10 +959,15 @@ void setup() {
   prefs.begin("nav_wifi", false);
   wifiSsid = prefs.getString("ap_ssid", "ysiducnaga");
   wifiPass = prefs.getString("ap_pass", "12345678");
+  hotspotMode = prefs.getBool("hotspot_mode", false);
+  staSsid = prefs.getString("sta_ssid", "");
+  staPass = prefs.getString("sta_pass", "");
   prefs.end();
   if (wifiSsid.length() == 0) wifiSsid = "ysiducnaga";
   if (wifiPass.length() < 8) wifiPass = "12345678";
-  Serial.printf("[NVS] BLE='%s' | SoftAP SSID='%s'\n", bleName.c_str(), wifiSsid.c_str());
+  if (hotspotMode && staSsid.length() == 0) hotspotMode = false;
+  Serial.printf("[NVS] BLE='%s' | mode=%s | AP='%s' | STA='%s'\n",
+                bleName.c_str(), hotspotMode ? "STA" : "AP", wifiSsid.c_str(), staSsid.c_str());
 
   // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
   #if defined(DISPLAY_TFT_ST7789)
@@ -878,8 +1052,8 @@ void setup() {
   pAdvertising->setScanResponse(true);
   pAdvertising->start();
 
-  // 3. Start ESP32 SoftAP (no Internet) + Non-Blocking TCP Stream (8081) + WebSocket fallback (8080)
-  startSoftAp();
+  // 3. Start active Wi-Fi mode (SoftAP or STA Personal Hotspot) + Non-Blocking TCP Stream (8081) + WebSocket fallback (8080)
+  applyActiveWifiMode();
   tcpStreamServer.begin();
   xTaskCreatePinnedToCore(tcpStreamTask, "tcpStreamTask", 4096, nullptr, 2, nullptr, 1);
 
@@ -887,8 +1061,8 @@ void setup() {
   webSocketServer.onEvent(webSocketEvent);
   webSocketServer.disableHeartbeat();
 
-  Serial.printf("[BLE & WiFi AP] '%s' ready: join Wi-Fi '%s' (pass '%s') on TCP 8081 / WS 8080!\n",
-                bleName.c_str(), wifiSsid.c_str(), wifiPass.c_str());
+  Serial.printf("[BLE & WiFi] '%s' ready (%s mode) on TCP 8081 / WS 8080!\n",
+                bleName.c_str(), hotspotMode ? "Hotspot STA" : "SoftAP");
 }
 
 void loop() {
@@ -898,6 +1072,16 @@ void loop() {
     Serial.println("[BLE] Rebooting to apply new Bluetooth name...");
     delay(50);
     ESP.restart();
+  }
+
+  // Safely push deferred Wi-Fi mode/IP change notifications from main loop thread
+  if (pendingWifiStatusNotify) {
+    pendingWifiStatusNotify = false;
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = buildWifiStatusJson();
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
   }
 
   // Handle any JSON control packet received on TCP 8081 safely on main loop thread

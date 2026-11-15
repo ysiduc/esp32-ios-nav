@@ -1,0 +1,100 @@
+{
+  "screen": 2,
+  "name": "Emerald Cockpit Màn 2",
+  "subtitle": "Mẫu ZIP Minimap chờ 320x240",
+  "accentColor": "#10B981",
+  "bgColor": "#050D0E",
+  "showWaybar": false,
+  "showPanel": true,
+  "panel": {
+    "x": 158,
+    "y": 6,
+    "w": 158,
+    "h": 228,
+    "r": 12,
+    "fill": "#0A191B",
+    "border": "#10B981"
+  },
+  "minimap": {
+    "x": 6,
+    "y": 8,
+    "w": 144,
+    "h": 224,
+    "r": 10,
+    "border": "#34D399"
+  },
+  "notif": {
+    "visible": true,
+    "x": 164,
+    "y": 124,
+    "w": 146,
+    "h": 106,
+    "r": 8,
+    "fill": "#061214",
+    "border": "#115E59",
+    "titleColor": "#34D399",
+    "msgColor": "#E2E8F0"
+  },
+  "boxes": [],
+  "labels": [],
+  "clock": {
+    "visible": true,
+    "x": 237,
+    "y": 14,
+    "fontSize": 28,
+    "font": "sans",
+    "color": "#ECFDF5",
+    "center": true
+  },
+  "date": {
+    "visible": true,
+    "x": 237,
+    "y": 46,
+    "fontSize": 10,
+    "color": "#6EE7B7",
+    "format": "vn_short",
+    "center": true
+  },
+  "song": {
+    "visible": true,
+    "x": 20,
+    "y": 198,
+    "w": 196,
+    "fontSize": 11,
+    "color": "#FDE68A",
+    "bgColor": "#061214",
+    "boxX": 164,
+    "boxY": 80,
+    "boxW": 146,
+    "boxH": 40,
+    "border": "#059669",
+    "durColor": "#34D399"
+  },
+  "duration": {
+    "visible": true,
+    "mode": "ratio",
+    "x": 228,
+    "y": 198,
+    "fontSize": 10,
+    "color": "#FB923C",
+    "secondaryColor": "#FFFFFF"
+  },
+  "notifTitle": {
+    "visible": true,
+    "x": 180,
+    "y": 44,
+    "maxW": 120,
+    "fontSize": 11,
+    "color": "#FACC15"
+  },
+  "notifMsg": {
+    "visible": true,
+    "x": 180,
+    "y": 64,
+    "maxW": 120,
+    "maxLines": 4,
+    "lineHeight": 15,
+    "fontSize": 10,
+    "color": "#FFFFFF"
+  }
+}

@@ -1,0 +1,742 @@
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <NimBLEDevice.h>
+#include <WiFi.h>
+#include <WiFiServer.h>
+#include <WiFiClient.h>
+#include <WebSocketsServer.h>
+#include <esp_wifi.h>
+#include <tcpip_adapter.h>
+#include <Preferences.h>
+#include "display_ui.h"
+#include "ancs_service.h"
+#include "cts_service.h"
+#include "ams_service.h"
+
+// ESP32 SoftAP (no Internet) + WebSocket server 192.168.4.1:8080 - iPhone joins this Wi-Fi and connects as client
+static WebSocketsServer webSocketServer(8080);
+static uint8_t wsClientNum = 255;
+static bool wsConnected = false;
+static Preferences prefs;
+static String wifiSsid = "ESP32-NAV";
+static String wifiPass = "12345678";
+
+// Start SoftAP WITHOUT offering a default gateway/DNS via DHCP, so iOS immediately sees
+// "no Internet on this Wi-Fi" and keeps using cellular data (no slow captive-portal detection).
+static void startSoftAp() {
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+  WiFi.softAP(wifiSsid.c_str(), wifiPass.c_str(), 6, 0, 2);
+  WiFi.setSleep(true); // MUST BE TRUE for WiFi + BLE coexistence
+
+  tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
+  uint8_t offerRouter = 0; // 0 = do NOT offer router (default gateway) option
+  tcpip_adapter_dhcps_option(TCPIP_ADAPTER_OP_SET, TCPIP_ADAPTER_ROUTER_SOLICITATION_ADDRESS, &offerRouter, sizeof(offerRouter));
+  tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
+  Serial.printf("[WiFi AP] SSID '%s' (no Internet), IP %s\n", wifiSsid.c_str(), WiFi.softAPIP().toString().c_str());
+}
+
+
+
+// Ping-Pong Double Buffering for Smooth 20 FPS JPEG Stream without Race Conditions
+static uint8_t bleRxBuf[32768];
+static uint8_t renderBufA[32768];
+static uint8_t renderBufB[32768];
+static volatile uint8_t* activeRenderBuf = renderBufA;
+static volatile size_t activeRenderBufLen = 0;
+static volatile bool newFrameAvailable = false;
+static volatile unsigned long lastFrameTime = 0;
+
+static uint8_t currentBleFrameId = 255;
+static size_t bleJpegBytesReceived = 0;
+
+// UUIDs for Custom Navigation Service
+static NimBLEUUID navServiceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
+static NimBLEUUID navCharUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
+
+#if defined(DISPLAY_OLED_SSD1306)
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 22, /* data=*/ 21);
+#elif defined(DISPLAY_TFT_ST7789)
+TFT_eSPI tft = TFT_eSPI();
+U8g2_for_TFT_eSPI u8f;
+TFT_eSprite marqueeSpr = TFT_eSprite(&tft);
+U8g2_for_TFT_eSPI u8f_marquee;
+#include <TJpg_Decoder.h>
+bool g_clipMapOnly = false;
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (y >= tft.height() || x >= tft.width()) return 1;
+  if (g_clipMapOnly && x >= 154) return 1;
+  tft.pushImage(x, y, w, h, bitmap);
+  return 1;
+}
+#endif
+
+DisplayManager display;
+NimBLEServer* pServer = nullptr;
+NimBLECharacteristic* pNavChar = nullptr;
+
+// Navigation & Telemetry State
+volatile bool bleConnected = false;
+volatile uint8_t curTurn = 6; // Turn Left
+volatile uint16_t curDist = 209;
+volatile uint16_t curTotalDist = 300;
+volatile uint8_t curSpeed = 0;
+volatile uint8_t curEta = 1;
+volatile int curHeading = 0;
+String curStreet = "CAU SONG LU";
+String curArrival = "18:26";
+String curClock = "18:25";
+uint8_t curBattery = 89;
+
+// ANCS / Notification State
+String popupTitle = "";
+String popupMsg = "";
+String popupType = "NONE";
+unsigned long popupExpire = 0;
+
+// State machine for strictly sequential Apple GATT discovery (CTS -> AMS -> ANCS)
+enum AppleDiscState {
+  APPLE_DISC_IDLE = 0,
+  APPLE_DISC_START_CTS,
+  APPLE_DISC_WAIT_CTS,
+  APPLE_DISC_START_AMS,
+  APPLE_DISC_WAIT_AMS,
+  APPLE_DISC_START_ANCS,
+  APPLE_DISC_WAIT_ANCS,
+  APPLE_DISC_COMPLETE
+};
+
+static AppleDiscState appleDiscState = APPLE_DISC_IDLE;
+static unsigned long appleDiscTimer = 0;
+static uint16_t bleConnectedHandle = 0;
+static unsigned long bleConnectedTime = 0;
+
+// GAP event handler to monitor connection lifecycle and clean up bonds
+static int combinedGapHandler(ble_gap_event *event, void *arg) {
+  if (event->type == BLE_GAP_EVENT_ENC_CHANGE) {
+    Serial.printf("[BLE] Link encrypted (status=%d, conn_handle=%d)\n",
+                  event->enc_change.status, event->enc_change.conn_handle);
+    if (event->enc_change.status != 0) {
+      NimBLEDevice::deleteBond(event->enc_change.conn_handle);
+      Serial.printf("[BLE] Link encryption failed (status=%d). Stale bond cleared.\n",
+                    event->enc_change.status);
+    }
+  }
+  if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
+    Serial.printf("[BLE] Repeat pairing request from conn_handle=%d. Resetting bond and retrying...\n",
+                  event->repeat_pairing.conn_handle);
+    NimBLEDevice::deleteBond(event->repeat_pairing.conn_handle);
+    return BLE_GAP_REPEAT_PAIRING_RETRY;
+  }
+  if (event->type == BLE_GAP_EVENT_DISCONNECT) {
+    Serial.printf("[BLE] Disconnected event! reason=0x%04x (HCI 0x%02x)\n",
+                  event->disconnect.reason, event->disconnect.reason - 0x200);
+  }
+  return 0;
+}
+
+// =========================================================================
+// 1. BLE Server Callbacks
+// =========================================================================
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
+    bleConnected = true;
+    display.setBleConnected(true);
+    Serial.printf("[BLE] iPhone connected! conn_handle=%d\n", desc->conn_handle);
+
+    bleConnectedHandle = desc->conn_handle;
+    bleConnectedTime = millis();
+
+    // Request Apple-compliant connection parameters (20ms - 40ms interval, 6000ms supervision timeout)
+    pServer->updateConnParams(desc->conn_handle, 16, 32, 0, 600);
+
+    // Stop advertising while connected to eliminate 2.4GHz RF collisions with Wi-Fi & BLE link
+    NimBLEDevice::stopAdvertising();
+
+    appleDiscState = APPLE_DISC_IDLE;
+  }
+
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) {
+    Serial.printf("[BLE] Authentication complete! enc=%d, bond=%d\n",
+                  desc->sec_state.encrypted, desc->sec_state.bonded);
+  }
+
+  void onDisconnect(NimBLEServer* pServer) {
+    bleConnected = false;
+    bleConnectedHandle = 0;
+    appleDiscState = APPLE_DISC_IDLE;
+    display.setBleConnected(false);
+    display.setAppConnected(false);
+    Serial.println("[BLE] Disconnected. Restarting advertising...");
+    NimBLEDevice::startAdvertising();
+  }
+};
+
+// =========================================================================
+// 2. Custom Navigation Characteristic Callback (Receives 20 FPS JPEG & JSON)
+// =========================================================================
+static uint8_t expectedBleChunkIdx = 0;
+
+// Unified JSON Packet Processing for both BLE and WiFi TCP
+void processJsonPacket(const char* jsonStr) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) return;
+
+  String typeStr = String(doc["type"] | "");
+  if (typeStr == "APP_CONNECT") {
+    display.setAppConnected(true);
+    if (doc["clock"].is<const char*>()) {
+      curClock = String(doc["clock"].as<const char*>());
+      display.updateClock(curClock.c_str());
+    }
+    if (!doc["bat"].isNull()) {
+      int b = doc["bat"].as<int>();
+      if (b >= 0 && b <= 100) {
+        curBattery = (uint8_t)b;
+        display.updateBattery(curBattery);
+        prefs.begin("nav_state", false);
+        prefs.putUChar("bat", curBattery);
+        prefs.end();
+        Serial.printf("[JSON] APP_CONNECT: Battery updated to %d%%\n", curBattery);
+      }
+    }
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"APP_CONNECT_ACK\",\"status\":\"connected\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+    Serial.println("[BLE] Received APP_CONNECT handshake. Switched to Navigation screen.");
+    return;
+  } else if (typeStr == "APP_DISCONNECT") {
+    display.setAppConnected(false);
+    Serial.println("[BLE] Received APP_DISCONNECT. Returned to Standby screen.");
+    return;
+  } else if (typeStr == "PING") {
+    if (doc["clock"].is<const char*>()) {
+      curClock = String(doc["clock"].as<const char*>());
+      display.updateClock(curClock.c_str());
+    }
+    if (!doc["bat"].isNull()) {
+      int b = doc["bat"].as<int>();
+      if (b >= 0 && b <= 100) {
+        curBattery = (uint8_t)b;
+        display.updateBattery(curBattery);
+        prefs.begin("nav_state", false);
+        prefs.putUChar("bat", curBattery);
+        prefs.end();
+      }
+    }
+    return;
+  } else if (typeStr == "DEL_BG") {
+    String target = String(doc["target"] | "all");
+    if (target == "wait" || target == "all") {
+      if (SPIFFS.exists("/bg_wait.jpg")) SPIFFS.remove("/bg_wait.jpg");
+    }
+    if (target == "map" || target == "all") {
+      if (SPIFFS.exists("/bg_map.jpg")) SPIFFS.remove("/bg_map.jpg");
+    }
+    display.forceRedraw();
+    return;
+  } else if (typeStr == "WIFI_CONFIG" || typeStr == "WIFI_QUERY") {
+    if (doc["ssid"].is<const char*>() && doc["pass"].is<const char*>()) {
+      String newSsid = String(doc["ssid"].as<const char*>());
+      String newPass = String(doc["pass"].as<const char*>());
+      if (newSsid.length() > 0 && newPass.length() >= 8) {
+        wifiSsid = newSsid;
+        wifiPass = newPass;
+        prefs.begin("nav_wifi", false);
+        prefs.putString("ap_ssid", wifiSsid);
+        prefs.putString("ap_pass", wifiPass);
+        prefs.end();
+        Serial.printf("[WiFi AP] Saved new AP SSID: '%s' - restarting SoftAP\n", wifiSsid.c_str());
+        startSoftAp();
+      }
+    }
+    if (pNavChar != nullptr && bleConnected) {
+      String resp = "{\"type\":\"WIFI_STATUS\",\"status\":\"connected\",\"mode\":\"AP\",\"ip\":\"192.168.4.1\",\"ws\":" + String(wsConnected ? 1 : 0) + ",\"port\":8080,\"hotspot\":\"" + wifiSsid + "\"}";
+      pNavChar->setValue(resp.c_str());
+      pNavChar->notify();
+    }
+    return;
+
+  } else if (typeStr == "CALL") {
+
+    const char* name = doc["title"] | "Cuoc goi den";
+    const char* msg = doc["msg"] | "Cuoc goi den tu iPhone";
+    // If ANCS already set a caller name from iOS native system, do NOT overwrite with generic "Cuoc goi den"
+    if (display.isCallActive() && strcmp(display.getCallerName(), "Cuoc goi den") != 0 && strcmp(name, "Cuoc goi den") == 0) {
+      return;
+    }
+    popupTitle = name;
+    popupMsg = msg;
+    popupType = "CALL";
+    popupExpire = millis() + 10000;
+    display.showCallAlert(name, popupMsg.c_str());
+    return;
+  } else if (typeStr == "SMS") {
+    const char* sender = doc["title"] | "Tin nhan";
+    const char* content = doc["msg"] | "Thong bao moi";
+    popupTitle = sender;
+    popupMsg = content;
+    popupType = "SMS";
+    popupExpire = millis() + 8000;
+    display.showSmsAlert(sender, content);
+    return;
+  } else if (typeStr == "CALL_END") {
+    popupType = "NONE";
+    popupExpire = 0;
+    display.dismissAlert();
+    return;
+  } else if (typeStr == "CALL_ACTIVE") {
+    const char* name = doc["title"] | "Dang nghe may";
+    popupTitle = name;
+    popupType = "CALL_ACTIVE";
+    popupExpire = millis() + 5000;
+    display.showCallAlert(name, "Dang nghe may");
+    return;
+  }
+
+  curTurn = doc["turn"] | curTurn;
+  curDist = doc["dist"] | curDist;
+  curTotalDist = doc["tot_dist"] | doc["tot"] | curTotalDist;
+  curSpeed = doc["speed"] | curSpeed;
+  curEta = doc["eta"] | curEta;
+  if (doc["street"].is<const char*>()) curStreet = String((const char*)doc["street"]);
+  if (doc["arrival"].is<const char*>()) {
+    curArrival = String((const char*)doc["arrival"]);
+  } else if (doc["arr"].is<const char*>()) {
+    curArrival = String((const char*)doc["arr"]);
+  }
+  if (doc["clock"].is<const char*>()) curClock = String((const char*)doc["clock"]);
+  if (!doc["bat"].isNull()) {
+    int b = doc["bat"].as<int>();
+    if (b >= 0 && b <= 100) {
+      curBattery = (uint8_t)b;
+      display.updateBattery(curBattery);
+      prefs.begin("nav_state", false);
+      prefs.putUChar("bat", curBattery);
+      prefs.end();
+    }
+  }
+  if (doc["head"].is<int>()) curHeading = doc["head"];
+
+  // Dynamically calculate curArrival if not explicitly provided or if still default
+  if (curArrival == "18:26" || curArrival.length() == 0) {
+    int ch = 0, cm = 0;
+    if (sscanf(curClock.c_str(), "%d:%d", &ch, &cm) == 2) {
+      int totalMin = ch * 60 + cm + curEta;
+      int arrH = (totalMin / 60) % 24;
+      int arrM = totalMin % 60;
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%02d:%02d", arrH, arrM);
+      curArrival = String(buf);
+    }
+  }
+
+  RoutePoint parsedPts[32];
+  uint8_t parsedPtCount = 0;
+  if (doc["pts"].is<JsonArray>()) {
+    JsonArray arr = doc["pts"].as<JsonArray>();
+    for (JsonVariant v : arr) {
+      if (parsedPtCount >= 32) break;
+      if (v.is<JsonArray>() && v.size() >= 2) {
+        parsedPts[parsedPtCount].dx = v[0].as<int8_t>();
+        parsedPts[parsedPtCount].dy = v[1].as<int8_t>();
+        parsedPtCount++;
+      }
+    }
+  }
+
+  bool isNav = (doc["nav"] | 0) == 1;
+  display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curHeading);
+
+  if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
+    String curSong = String(doc["song"] | "");
+    String curArtist = String(doc["artist"] | "");
+    if (curSong.length() > 0 && curSong != "CHUA PHAT NHAC") {
+      display.setSongInfo(curSong.c_str(), curArtist.c_str());
+    }
+  }
+}
+
+// WebSocket Server Event Handler (iPhone connects to ESP32 SoftAP)
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      if (num == wsClientNum) {
+        wsConnected = false;
+        wsClientNum = 255;
+      }
+      Serial.printf("[WebSocket] iPhone #%u disconnected\n", num);
+      break;
+    case WStype_CONNECTED:
+      wsClientNum = num;
+      wsConnected = true;
+      Serial.printf("[WebSocket] iPhone #%u connected to ESP32 SoftAP\n", num);
+      break;
+    case WStype_TEXT:
+      if (length > 0) {
+        processJsonPacket((const char*)payload);
+      }
+      break;
+    case WStype_BIN:
+      if (length > 100 && payload[0] == 0xFF && payload[1] == 0xD8) {
+        uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+        if (length <= sizeof(renderBufA)) {
+          memcpy(nextBuf, payload, length);
+          activeRenderBuf = nextBuf;
+          activeRenderBufLen = length;
+          newFrameAvailable = true;
+        }
+      }
+      break;
+    case WStype_ERROR:
+      Serial.printf("[WebSocket] Error occurred, len=%d\n", length);
+      break;
+    default:
+      break;
+  }
+}
+
+class NavCharCallbacks : public NimBLECharacteristicCallbacks {
+
+  void onWrite(NimBLECharacteristic* pCharacteristic) {
+    std::string value = pCharacteristic->getValue();
+    if (value.length() == 0) return;
+
+    // 1. Check for Binary Chunked JPEG Packet:
+    // Magic 0xAA 0xBB: Live streaming JPEG frame (RAM)
+    // Magic 0xAA 0xBC: Uploading custom background for Bluetooth pairing screen (/bg_wait.jpg)
+    // Magic 0xAA 0xBD: Uploading custom background for map waiting/idle screen (/bg_map.jpg)
+    if (value.length() >= 5 && (uint8_t)value[0] == 0xAA) {
+      uint8_t magic2 = (uint8_t)value[1];
+      if (magic2 == 0xBB) {
+        uint8_t frameId = (uint8_t)value[2];
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
+
+        if (chunkIdx == 0) {
+          currentBleFrameId = frameId;
+          expectedBleChunkIdx = 0;
+          bleJpegBytesReceived = 0;
+        }
+
+        if (frameId == currentBleFrameId && chunkIdx == expectedBleChunkIdx) {
+          size_t payloadLen = value.length() - 5;
+          if (bleJpegBytesReceived + payloadLen < sizeof(bleRxBuf)) {
+            memcpy(bleRxBuf + bleJpegBytesReceived, value.data() + 5, payloadLen);
+            bleJpegBytesReceived += payloadLen;
+            expectedBleChunkIdx++;
+          }
+
+          if (chunkIdx == totalChunks - 1 && bleJpegBytesReceived > 100) {
+            // Check JPEG Start-of-Image magic bytes (0xFF, 0xD8)
+            if (bleRxBuf[0] == 0xFF && bleRxBuf[1] == 0xD8) {
+              uint8_t* nextBuf = (activeRenderBuf == renderBufA) ? renderBufB : renderBufA;
+              memcpy(nextBuf, bleRxBuf, bleJpegBytesReceived);
+              activeRenderBuf = nextBuf;
+              activeRenderBufLen = bleJpegBytesReceived;
+              newFrameAvailable = true;
+            }
+          }
+        }
+        return;
+      } else if (magic2 == 0xBC || magic2 == 0xBD) {
+        uint8_t totalChunks = (uint8_t)value[3];
+        uint8_t chunkIdx = (uint8_t)value[4];
+        size_t payloadLen = value.length() - 5;
+        const char* targetPath = (magic2 == 0xBC) ? "/bg_wait.jpg" : "/bg_map.jpg";
+
+        static File bgUploadFile;
+        if (chunkIdx == 0) {
+          if (SPIFFS.exists(targetPath)) SPIFFS.remove(targetPath);
+          bgUploadFile = SPIFFS.open(targetPath, FILE_WRITE);
+          Serial.printf("[SPIFFS] Started uploading %s (%d chunks)\n", targetPath, totalChunks);
+        }
+
+        if (bgUploadFile) {
+          bgUploadFile.write((const uint8_t*)value.data() + 5, payloadLen);
+        }
+
+        if (chunkIdx == totalChunks - 1) {
+          if (bgUploadFile) {
+            bgUploadFile.flush();
+            bgUploadFile.close();
+            Serial.printf("[SPIFFS] Finished uploading %s! Saved to flash.\n", targetPath);
+          }
+          display.forceRedraw();
+        }
+        return;
+      }
+    }
+
+    // 2. JSON Notification or Navigation Telemetry
+    processJsonPacket(value.c_str());
+  }
+};
+
+// =========================================================================
+// Setup & Loop
+// =========================================================================
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("\n=== ESP32-S3 SMART NAVIGATOR (YSIDUC ST7789 20 FPS) ===");
+
+  // 0. Mount SPIFFS Filesystem for Custom Background Images
+  if (!SPIFFS.begin(true)) {
+    Serial.println("[SPIFFS] Mount failed, formatted partition.");
+  } else {
+    Serial.println("[SPIFFS] Filesystem mounted successfully.");
+  }
+
+  // Load saved Hotspot credentials from Preferences NVS
+  prefs.begin("nav_wifi", false);
+  wifiSsid = prefs.getString("ap_ssid", "ESP32-NAV");
+  wifiPass = prefs.getString("ap_pass", "12345678");
+  prefs.end();
+  Serial.printf("[NVS] Loaded SoftAP SSID: '%s'\n", wifiSsid.c_str());
+
+  // 1. Initialize TJpgDec BEFORE display.init() so any background JPEG drawn during init has a valid callback
+  #if defined(DISPLAY_TFT_ST7789)
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(tft_output);
+  #endif
+
+  // 2. Start Display (safe to render SPIFFS JPEGs)
+  display.init();
+
+  // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
+  NimBLEDevice::init("ESP32-S3 Navi");
+  NimBLEDevice::setMTU(517);
+
+  // Disable BLE Security Auth to prevent iOS CoreOS bluetoothd from initiating 30s SMP timeout
+  NimBLEDevice::setSecurityAuth(false, false, false);
+  NimBLEDevice::setCustomGapHandler(combinedGapHandler);
+
+  // Restore last known battery level and clock from flash storage
+  prefs.begin("nav_state", true);
+  uint8_t savedBat = prefs.getUChar("bat", 0);
+  uint8_t savedH = prefs.getUChar("clk_h", 255);
+  uint8_t savedM = prefs.getUChar("clk_m", 255);
+  prefs.end();
+  if (savedBat > 0 && savedBat <= 100) {
+    curBattery = savedBat;
+  } else {
+    curBattery = 85;
+  }
+  display.updateBattery(curBattery);
+
+  if (savedH < 24 && savedM < 60) {
+    display.setTime(savedH, savedM, 0);
+    Serial.printf("[NVS] Restored clock from flash: %02d:%02d\n", savedH, savedM);
+  }
+
+  pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
+
+  NimBLEService* pNavService = pServer->createService(navServiceUUID);
+  pNavChar = pNavService->createCharacteristic(
+    navCharUUID,
+    NIMBLE_PROPERTY::READ |
+    NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+    NIMBLE_PROPERTY::NOTIFY
+  );
+  pNavChar->setCallbacks(new NavCharCallbacks());
+  pNavService->start();
+
+  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+
+  // Primary Advertisement Data: "ESP32-S3 Navi" + Service 0xFFE0
+  NimBLEAdvertisementData advData;
+  advData.setFlags(0x06); // General Discoverable + BR/EDR not supported
+  advData.setName("ESP32-S3 Navi");
+  advData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
+  pAdvertising->setAdvertisementData(advData);
+
+  NimBLEAdvertisementData scanResponseData;
+  scanResponseData.setName("ESP32-S3 Navi");
+  pAdvertising->setScanResponseData(scanResponseData);
+
+  pAdvertising->setMinInterval(16); // 10ms fast advertising
+  pAdvertising->setMaxInterval(32); // 20ms
+  pAdvertising->setScanResponse(true);
+  pAdvertising->start();
+
+  // 3. Start ESP32 SoftAP (no Internet) + WebSocket server on 192.168.4.1:8080
+  startSoftAp();
+  webSocketServer.begin();
+  webSocketServer.onEvent(webSocketEvent);
+  webSocketServer.enableHeartbeat(15000, 3000, 2);
+
+  Serial.printf("[BLE & WiFi AP] ESP32-S3 Navi ready: join Wi-Fi '%s' (pass '%s') + AMS & ANCS!\n", wifiSsid.c_str(), wifiPass.c_str());
+}
+
+void loop() {
+  // 0. Serve iPhone WebSocket client on SoftAP
+  webSocketServer.loop();
+
+
+  // 1. Decode & push new JPEG Map Frame safely on the Main thread
+  if (newFrameAvailable) {
+    newFrameAvailable = false;
+    lastFrameTime = millis();
+    #if defined(DISPLAY_TFT_ST7789)
+    // Render live map when app is connected via BLE or Hotspot WebSocket and no Call/SMS popup is active
+    if (activeRenderBufLen > 100 && (display.isAppConnected() || wsConnected) && !display.isPopupActive()) {
+      uint16_t jpgW = 0, jpgH = 0;
+      TJpgDec.getJpgSize(&jpgW, &jpgH, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      if (jpgW >= 300) {
+        display.setFullScreenStream(true);
+        g_clipMapOnly = false;
+        tft.resetViewport();
+        TJpgDec.drawJpg(0, 0, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+      } else if (jpgW > 0) {
+        display.setFullScreenStream(false);
+        g_clipMapOnly = true;
+        tft.setViewport(6, 26, 144, 208, false);
+        TJpgDec.drawJpg(6, 26, (uint8_t*)activeRenderBuf, activeRenderBufLen);
+        tft.resetViewport();
+        g_clipMapOnly = false;
+      }
+    }
+    #endif
+
+    // Send ACK back to iPhone Hotspot WebSocket server so iPhone sends the NEXT frame with 0ms queue delay!
+    if (wsConnected && wsClientNum != 255) {
+      webSocketServer.sendTXT(wsClientNum, "K");
+    }
+  }
+
+  // 2. Update HUD and status UI
+  bool isStreaming = (millis() - lastFrameTime < 4000);
+  display.update(isStreaming);
+
+  // 3. Strictly Sequential Apple GATT Discovery State Machine (CTS -> AMS -> ANCS)
+  if (bleConnected && bleConnectedHandle != 0) {
+    switch (appleDiscState) {
+      case APPLE_DISC_START_CTS:
+        if (millis() >= appleDiscTimer) {
+          if (AppleCurrentTimeService::isSubscribed) {
+            appleDiscState = APPLE_DISC_START_AMS;
+            appleDiscTimer = millis() + 100;
+          } else {
+            Serial.println("[BLE State] Step 1/3: Starting CTS (Time) discovery...");
+            appleDiscState = APPLE_DISC_WAIT_CTS;
+            appleDiscTimer = millis() + 4000;
+            AppleCurrentTimeService::startDiscovery(bleConnectedHandle);
+          }
+        }
+        break;
+
+      case APPLE_DISC_WAIT_CTS:
+        if (!AppleCurrentTimeService::isDiscovering) {
+          Serial.println("[BLE State] CTS completed. Step 2/3: Advancing to AMS...");
+          appleDiscState = APPLE_DISC_START_AMS;
+          appleDiscTimer = millis() + 100;
+        } else if (millis() >= appleDiscTimer) {
+          Serial.println("[BLE State] CTS timed out. Step 2/3: Advancing to AMS...");
+          AppleCurrentTimeService::isDiscovering = false;
+          appleDiscState = APPLE_DISC_START_AMS;
+          appleDiscTimer = millis() + 100;
+        }
+        break;
+
+      case APPLE_DISC_START_AMS:
+        if (millis() >= appleDiscTimer) {
+          if (AppleMediaService::isSubscribed) {
+            appleDiscState = APPLE_DISC_START_ANCS;
+            appleDiscTimer = millis() + 100;
+          } else {
+            Serial.println("[BLE State] Step 2/3: Starting AMS (Music Title) discovery...");
+            appleDiscState = APPLE_DISC_WAIT_AMS;
+            appleDiscTimer = millis() + 4000;
+            AppleMediaService::startDiscovery(bleConnectedHandle);
+          }
+        }
+        break;
+
+      case APPLE_DISC_WAIT_AMS:
+        if (!AppleMediaService::isDiscovering) {
+          Serial.println("[BLE State] AMS completed. Step 3/3: Advancing to ANCS...");
+          appleDiscState = APPLE_DISC_START_ANCS;
+          appleDiscTimer = millis() + 100;
+        } else if (millis() >= appleDiscTimer) {
+          Serial.println("[BLE State] AMS timed out. Step 3/3: Advancing to ANCS...");
+          AppleMediaService::isDiscovering = false;
+          appleDiscState = APPLE_DISC_START_ANCS;
+          appleDiscTimer = millis() + 100;
+        }
+        break;
+
+      case APPLE_DISC_START_ANCS:
+        if (millis() >= appleDiscTimer) {
+          if (AppleNotificationService::isSubscribed) {
+            appleDiscState = APPLE_DISC_COMPLETE;
+          } else {
+            Serial.println("[BLE State] Step 3/3: Starting ANCS (Notifications) discovery...");
+            appleDiscState = APPLE_DISC_WAIT_ANCS;
+            appleDiscTimer = millis() + 6000; // 6s allows user time to tap Allow Notifications on iPhone
+            AppleNotificationService::startDiscovery(bleConnectedHandle);
+          }
+        }
+        break;
+
+      case APPLE_DISC_WAIT_ANCS:
+        if (!AppleNotificationService::isDiscovering) {
+          Serial.println("[BLE State] ANCS completed! All Apple services active & configured.");
+          appleDiscState = APPLE_DISC_COMPLETE;
+        } else if (millis() >= appleDiscTimer) {
+          Serial.println("[BLE State] ANCS timed out. Finalizing discovery.");
+          AppleNotificationService::isDiscovering = false;
+          appleDiscState = APPLE_DISC_COMPLETE;
+        }
+        break;
+
+      case APPLE_DISC_COMPLETE:
+      case APPLE_DISC_IDLE:
+      default:
+        break;
+    }
+
+    // 5. Periodic Apple Time sync check (once every 60s when connected & subscribed)
+    AppleCurrentTimeService::checkPeriodic();
+  }
+
+  // 5. Periodic real-time clock check from SNTP
+  static unsigned long lastClockCheck = 0;
+  if (millis() - lastClockCheck > 1000) {
+    lastClockCheck = millis();
+    time_t now = time(nullptr);
+    if (now > 100000) {
+      struct tm* t = localtime(&now);
+      if (t && t->tm_year > 120) {
+        char clkBuf[16];
+        snprintf(clkBuf, sizeof(clkBuf), "%02d:%02d", t->tm_hour, t->tm_min);
+        if (curClock != clkBuf) {
+          curClock = clkBuf;
+          display.updateClock(clkBuf);
+        }
+      }
+    }
+  }
+
+  // 6. Save clock to NVS on minute change so it persists across power cycles
+  static uint8_t lastSavedH = 255;
+  static uint8_t lastSavedM = 255;
+  uint8_t curH = 0, curM = 0;
+  display.getClock(curH, curM);
+  if (curH != lastSavedH || curM != lastSavedM) {
+    lastSavedH = curH;
+    lastSavedM = curM;
+    prefs.begin("nav_state", false);
+    prefs.putUChar("clk_h", curH);
+    prefs.putUChar("clk_m", curM);
+    prefs.end();
+  }
+
+  delay(1);
+}

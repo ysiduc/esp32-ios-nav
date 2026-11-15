@@ -519,6 +519,38 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
 
   Widget _buildDeviceConfigCard(BleService bleService) {
     final isWifi = bleService.isWifiConnected;
+    final useHotspot = bleService.hotspotModeEnabled;
+    final staJoined = bleService.espStaConnectedToHotspot;
+    final hotspotName = bleService.hotspotSsid.trim();
+
+    final String subtitleText;
+    if (isWifi) {
+      subtitleText =
+          '${bleService.wifiIp}:${bleService.wifiPort} • Stream 30 FPS${useHotspot ? ' (Hotspot)' : ''}';
+    } else if (useHotspot) {
+      subtitleText = staJoined
+          ? 'ESP32 IP: ${bleService.espStaIp} • Chờ stream bản đồ'
+          : 'BT: ${bleService.customBleName} • Hotspot: ${hotspotName.isNotEmpty ? hotspotName : 'Chưa nhập tên'}';
+    } else {
+      subtitleText = 'Bluetooth: ${bleService.customBleName} • Wi-Fi: ${bleService.wifiSsid}';
+    }
+
+    final String statusHint;
+    if (isWifi) {
+      statusHint = 'Đang truyền bản đồ HD qua Wi-Fi ổn định (${bleService.wifiIp}:${bleService.wifiPort}).';
+    } else if (useHotspot) {
+      if (hotspotName.isEmpty) {
+        statusHint = 'Bấm "Cài đặt" để nhập Tên Wi-Fi cá nhân và Mật khẩu Hotspot trên iPhone.';
+      } else if (staJoined) {
+        statusHint = 'ESP32 đã vào Wi-Fi "$hotspotName" (${bleService.espStaIp}). Đang mở luồng stream...';
+      } else {
+        statusHint =
+            'Bật Điểm phát sóng cá nhân "$hotspotName" trên iPhone; ESP32 sẽ tự kết nối để nhận bản đồ và bạn vẫn dùng mạng SIM.';
+      }
+    } else {
+      statusHint =
+          'Vào Wi-Fi "${bleService.wifiSsid}" (Mật khẩu: ${bleService.wifiPass}) trên iPhone để truyền bản đồ 30 FPS.';
+    }
 
     return Container(
       width: double.infinity,
@@ -551,7 +583,9 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   color: (isWifi ? _successGreen : _primaryBlue).withAlpha(22),
                 ),
                 child: Icon(
-                  isWifi ? Icons.wifi_tethering_rounded : Icons.wifi_rounded,
+                  isWifi
+                      ? Icons.wifi_tethering_rounded
+                      : (useHotspot ? Icons.cell_wifi_rounded : Icons.wifi_rounded),
                   color: isWifi ? _successGreen : _primaryBlue,
                   size: 21,
                 ),
@@ -562,7 +596,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isWifi ? 'Wi-Fi Stream ESP32: Đã kết nối' : 'Tên Bluetooth & Wi-Fi ESP32',
+                      isWifi ? 'Wi-Fi Stream ESP32: Đã kết nối' : 'Cài đặt Bluetooth & Wi-Fi ESP32',
                       style: TextStyle(
                         color: isWifi ? const Color(0xFF1E8E3E) : _textPrimary,
                         fontSize: 14,
@@ -571,9 +605,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      isWifi
-                          ? '${bleService.wifiIp}:${bleService.wifiPort} • Stream 30 FPS sắc nét'
-                          : 'Bluetooth: ${bleService.customBleName} • Wi-Fi: ${bleService.wifiSsid}',
+                      subtitleText,
                       style: const TextStyle(color: _textSecondary, fontSize: 11.5),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -590,10 +622,61 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
                 icon: const Icon(Icons.edit_rounded, size: 15),
-                label: const Text('Đổi tên', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                label: const Text('Cài đặt', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                 onPressed: () => _showDeviceConfigSheet(context, bleService),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: useHotspot ? _primaryBlue.withAlpha(14) : _bgColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: useHotspot ? _primaryBlue.withAlpha(70) : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.wifi_tethering_rounded,
+                  color: useHotspot ? _primaryBlue : _textSecondary,
+                  size: 19,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Hotspot cá nhân',
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        useHotspot
+                            ? (hotspotName.isNotEmpty
+                                ? 'Bật: ESP32 vào "$hotspotName" (giữ mạng SIM)'
+                                : 'Chưa nhập tên Wi-Fi cá nhân')
+                            : 'Tắt: ESP32 tự phát Wi-Fi "${bleService.wifiSsid}"',
+                        style: const TextStyle(color: _textSecondary, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Switch.adaptive(
+                  value: useHotspot,
+                  activeTrackColor: _successGreen,
+                  onChanged: (enabled) => _onHotspotSwitchToggled(context, bleService, enabled),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           Container(
@@ -605,16 +688,18 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             child: Row(
               children: [
                 Icon(
-                  isWifi ? Icons.check_circle_rounded : Icons.wifi_lock_rounded,
-                  color: isWifi ? const Color(0xFF1E8E3E) : _textSecondary,
+                  isWifi
+                      ? Icons.check_circle_rounded
+                      : (useHotspot && staJoined ? Icons.sensors_rounded : Icons.wifi_lock_rounded),
+                  color: isWifi
+                      ? const Color(0xFF1E8E3E)
+                      : (useHotspot && staJoined ? _primaryBlue : _textSecondary),
                   size: 15,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    isWifi
-                        ? 'Đang truyền bản đồ HD qua Wi-Fi ổn định (${bleService.wifiIp}:${bleService.wifiPort}).'
-                        : 'Vào Wi-Fi "${bleService.wifiSsid}" (Mật khẩu: ${bleService.wifiPass}) trên iPhone để truyền bản đồ 30 FPS.',
+                    statusHint,
                     style: TextStyle(
                       color: isWifi ? const Color(0xFF1E8E3E) : const Color(0xFF3A3A3C),
                       fontSize: 11.5,
@@ -630,11 +715,46 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
     );
   }
 
-  void _showDeviceConfigSheet(BuildContext context, BleService bleService) {
+  Future<void> _onHotspotSwitchToggled(
+    BuildContext context,
+    BleService bleService,
+    bool enabled,
+  ) async {
+    final ssid = bleService.hotspotSsid.trim();
+    final pass = bleService.hotspotPass;
+    if (enabled && (ssid.isEmpty || (pass.isNotEmpty && pass.length < 8))) {
+      _showDeviceConfigSheet(context, bleService, initialHotspotEnabled: true);
+      return;
+    }
+    final sent = await bleService.setHotspotMode(enabled);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          sent
+              ? (enabled
+                  ? 'Đã chuyển ESP32 sang kết nối Hotspot "$ssid".'
+                  : 'Đã chuyển ESP32 về phát Wi-Fi "${bleService.wifiSsid}".')
+              : 'Đã lưu chế độ ${enabled ? "Hotspot cá nhân" : "ESP32 phát Wi-Fi"}. Kết nối BLE để đồng bộ ESP32.',
+        ),
+        backgroundColor: sent ? _successGreen : _warningAmber,
+      ),
+    );
+  }
+
+  void _showDeviceConfigSheet(
+    BuildContext context,
+    BleService bleService, {
+    bool? initialHotspotEnabled,
+  }) {
     final bleNameController = TextEditingController(text: bleService.customBleName);
     final ssidController = TextEditingController(text: bleService.wifiSsid);
     final passController = TextEditingController(text: bleService.wifiPass);
+    final hotspotSsidController = TextEditingController(text: bleService.hotspotSsid);
+    final hotspotPassController = TextEditingController(text: bleService.hotspotPass);
+    bool useHotspot = initialHotspotEnabled ?? bleService.hotspotModeEnabled;
     bool obscurePass = false;
+    bool obscureHotspotPass = false;
     bool isSaving = false;
     String? validationError;
 
@@ -714,35 +834,82 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                     maxLength: 28,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _buildConfigInput(
                     controller: passController,
-                    obscureText: obscurePass,
+                    label: 'Mật khẩu Wi-Fi ESP32 (tối thiểu 8 ký tự)',
+                    hint: 'Tối thiểu 8 ký tự WPA2',
+                    icon: Icons.lock_outline_rounded,
                     maxLength: 32,
-                    style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
-                    decoration: InputDecoration(
-                      labelText: 'Mật khẩu Wi-Fi ESP32 (tối thiểu 8 ký tự)',
-                      labelStyle: const TextStyle(color: _textSecondary, fontSize: 13),
-                      prefixIcon: const Icon(Icons.lock_outline_rounded, color: _primaryBlue, size: 20),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscurePass ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                          color: _textSecondary,
-                          size: 20,
+                    obscureText: obscurePass,
+                    onToggleObscure: () => setModalState(() => obscurePass = !obscurePass),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: useHotspot ? _primaryBlue.withAlpha(10) : const Color(0xFFF9F9FB),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: useHotspot ? _primaryBlue.withAlpha(90) : _borderColor,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.wifi_tethering_rounded,
+                              color: useHotspot ? _primaryBlue : _textSecondary,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Hotspot cá nhân (giữ mạng SIM)',
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Bật: ESP32 vào Wi-Fi dưới đây • Tắt: ESP32 phát Wi-Fi',
+                                    style: TextStyle(color: _textSecondary, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch.adaptive(
+                              value: useHotspot,
+                              activeTrackColor: _successGreen,
+                              onChanged: (val) => setModalState(() => useHotspot = val),
+                            ),
+                          ],
                         ),
-                        onPressed: () => setModalState(() => obscurePass = !obscurePass),
-                      ),
-                      counterText: '',
-                      filled: true,
-                      fillColor: _bgColor,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: _primaryBlue, width: 1.5),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        const SizedBox(height: 10),
+                        _buildConfigInput(
+                          controller: hotspotSsidController,
+                          label: 'Tên Wi-Fi / Hotspot cá nhân',
+                          hint: 'Tên điểm phát sóng của điện thoại',
+                          icon: Icons.phonelink_ring_rounded,
+                          maxLength: 32,
+                        ),
+                        const SizedBox(height: 10),
+                        _buildConfigInput(
+                          controller: hotspotPassController,
+                          label: 'Mật khẩu Wi-Fi cá nhân (tối thiểu 8 ký tự)',
+                          hint: 'Để trống nếu Wi-Fi không mật khẩu',
+                          icon: Icons.vpn_key_outlined,
+                          maxLength: 63,
+                          obscureText: obscureHotspotPass,
+                          onToggleObscure: () =>
+                              setModalState(() => obscureHotspotPass = !obscureHotspotPass),
+                        ),
+                      ],
                     ),
                   ),
                   if (validationError != null) ...[
@@ -771,8 +938,10 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                         Expanded(
                           child: Text(
                             bleService.isConnected
-                                ? 'Wi-Fi mới áp dụng ngay lập tức. Nếu đổi tên Bluetooth, ESP32 sẽ tự khởi động lại sau 1 giây để phát tên mới.'
-                                : 'Chưa kết nối BLE với ESP32. Nhớ kết nối ESP32 trước khi áp dụng cài đặt xuống phần cứng.',
+                                ? (useHotspot
+                                    ? 'Hãy bật Hotspot cá nhân trước khi lưu để ESP32 kết nối ngay. Bạn vẫn dùng được mạng 4G/5G SIM để tải bản đồ.'
+                                    : 'Wi-Fi mới áp dụng ngay lập tức. Nếu đổi tên Bluetooth, ESP32 sẽ tự khởi động lại sau 1 giây để phát tên mới.')
+                                : 'Chưa kết nối BLE với ESP32. Cài đặt sẽ được lưu và tự đồng bộ khi kết nối lại BLE.',
                             style: const TextStyle(color: Color(0xFF3A3A3C), fontSize: 12, height: 1.38),
                           ),
                         ),
@@ -807,12 +976,26 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                               final newBle = bleNameController.text.trim();
                               final newSsid = ssidController.text.trim();
                               final newPass = passController.text;
+                              final newHotspotSsid = hotspotSsidController.text.trim();
+                              final newHotspotPass = hotspotPassController.text;
                               if (newBle.isEmpty || newSsid.isEmpty) {
-                                setModalState(() => validationError = 'Tên Bluetooth và tên Wi-Fi không được để trống.');
+                                setModalState(() =>
+                                    validationError = 'Tên Bluetooth và tên Wi-Fi ESP32 không được để trống.');
                                 return;
                               }
                               if (newPass.length < 8) {
-                                setModalState(() => validationError = 'Mật khẩu Wi-Fi cần ít nhất 8 ký tự theo chuẩn WPA2.');
+                                setModalState(() =>
+                                    validationError = 'Mật khẩu Wi-Fi ESP32 cần ít nhất 8 ký tự theo chuẩn WPA2.');
+                                return;
+                              }
+                              if (useHotspot && newHotspotSsid.isEmpty) {
+                                setModalState(() =>
+                                    validationError = 'Vui lòng nhập Tên Wi-Fi / Hotspot cá nhân khi bật chế độ Hotspot.');
+                                return;
+                              }
+                              if (newHotspotPass.isNotEmpty && newHotspotPass.length < 8) {
+                                setModalState(() => validationError =
+                                    'Mật khẩu Wi-Fi cá nhân phải để trống (Wi-Fi mở) hoặc ít nhất 8 ký tự.');
                                 return;
                               }
                               setModalState(() {
@@ -823,6 +1006,9 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                                 bleName: newBle,
                                 ssid: newSsid,
                                 pass: newPass,
+                                hotspotMode: useHotspot,
+                                hotspotSsid: newHotspotSsid,
+                                hotspotPass: newHotspotPass,
                               );
                               if (ctx.mounted) {
                                 Navigator.pop(ctx);
@@ -832,7 +1018,9 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                                   SnackBar(
                                     content: Text(
                                       sent
-                                          ? 'Đã cập nhật BT "$newBle" & Wi-Fi "$newSsid" sang ESP32!'
+                                          ? (useHotspot
+                                              ? 'Đã gửi cấu hình & bật Hotspot "$newHotspotSsid" sang ESP32!'
+                                              : 'Đã cập nhật BT "$newBle" & Wi-Fi "$newSsid" sang ESP32!')
                                           : 'Đã lưu cấu hình trên app. Hãy kết nối BLE để đồng bộ xuống ESP32.',
                                     ),
                                     backgroundColor: sent ? _successGreen : _warningAmber,
@@ -848,7 +1036,13 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
           },
         );
       },
-    );
+    ).whenComplete(() {
+      bleNameController.dispose();
+      ssidController.dispose();
+      passController.dispose();
+      hotspotSsidController.dispose();
+      hotspotPassController.dispose();
+    });
   }
 
   Widget _buildConfigInput({
@@ -857,9 +1051,12 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
     required String hint,
     required IconData icon,
     int maxLength = 28,
+    bool obscureText = false,
+    VoidCallback? onToggleObscure,
   }) {
     return TextField(
       controller: controller,
+      obscureText: obscureText,
       maxLength: maxLength,
       style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
@@ -868,6 +1065,16 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
         labelStyle: const TextStyle(color: _textSecondary, fontSize: 13),
         hintStyle: const TextStyle(color: Color(0xFFC7C7CC), fontSize: 13),
         prefixIcon: Icon(icon, color: _primaryBlue, size: 20),
+        suffixIcon: onToggleObscure == null
+            ? null
+            : IconButton(
+                icon: Icon(
+                  obscureText ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  color: _textSecondary,
+                  size: 20,
+                ),
+                onPressed: onToggleObscure,
+              ),
         counterText: '',
         filled: true,
         fillColor: _bgColor,
