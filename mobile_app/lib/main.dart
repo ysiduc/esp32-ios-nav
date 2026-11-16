@@ -61,7 +61,7 @@ class Esp32NavApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        title: 'ysiducnaga',
+        title: 'Hoa hướng dương',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           brightness: Brightness.dark,

@@ -659,6 +659,104 @@ void main() {
         'Đi vào lối ra vào Đường Láng',
       );
     });
+
+    test('secondary deferred hint does not override primary bitmap turn arrow', () {
+      final snap = GoogleMapsRelayService.parseNotificationPayload({
+        'title': 'Trong 120 m',
+        'text': 'Nguyễn Trãi',
+        'texts': ['Trong 120 m', 'Nguyễn Trãi', 'Sau đó rẽ trái'],
+        'subText': '12 phút · 4,2 km',
+        'bitmapTurnCode': 2,
+      });
+      expect(snap, isNotNull);
+      expect(snap!.turnCode, 2);
+      expect(snap.streetName, 'Nguyễn Trãi');
+    });
+
+    test('Hotspot TCP helpers normalize IPv4-mapped addresses and detect ACK stalls', () {
+      expect(EspStreamService.normalizeIpAddress('::ffff:192.168.43.12'), '192.168.43.12');
+      expect(EspStreamService.normalizeIpAddress(' 192.168.4.1 '), '192.168.4.1');
+      expect(EspStreamService.normalizeIpAddress(''), isNull);
+
+      final t0 = DateTime(2026, 11, 16, 20, 0, 0);
+      expect(
+        EspStreamService.isTcpAckTimedOut(awaitingAckSince: null, now: t0),
+        isFalse,
+      );
+      expect(
+        EspStreamService.isTcpAckTimedOut(
+          awaitingAckSince: t0,
+          now: t0.add(const Duration(milliseconds: 5900)),
+          timeoutMs: 6500,
+        ),
+        isFalse,
+      );
+      expect(
+        EspStreamService.isTcpAckTimedOut(
+          awaitingAckSince: t0,
+          now: t0.add(const Duration(milliseconds: 6600)),
+          timeoutMs: 6500,
+        ),
+        isTrue,
+      );
+
+      expect(EspStreamService.selectTcpConnectTimeoutMs(hotspotMode: true), 2400);
+      expect(EspStreamService.selectTcpConnectTimeoutMs(hotspotMode: false), 1100);
+      expect(EspStreamService.selectTcpInFlightTimeoutMs(hotspotMode: true), 2400);
+      expect(EspStreamService.selectTcpInFlightTimeoutMs(hotspotMode: false), 650);
+
+      final ble = _RecordingBleService();
+      expect(ble.espReportedTcpConnected, isNull);
+      ble.handleIncomingBleMessageForTest(jsonEncode({
+        'type': 'DEVICE_CONFIG',
+        'ble_name': 'ysiducnaga',
+        'hotspot_mode': 1,
+        'mode': 'STA',
+        'ip': '10.240.139.12',
+        'tcp': 1,
+      }));
+      expect(ble.espReportedTcpConnected, isTrue);
+      expect(ble.espStaIp, '10.240.139.12');
+
+      expect(
+        EspStreamService.computeRemainingTcpInFlight(
+          currentInFlight: 2,
+          rxChunk: const [0x4B],
+        ),
+        1,
+      );
+      expect(
+        EspStreamService.computeRemainingTcpInFlight(
+          currentInFlight: 2,
+          rxChunk: const [0x4B, 0x4B, 0x4B],
+        ),
+        0,
+      );
+      expect(
+        EspStreamService.canSendNextTcpFrame(
+          inFlight: 1,
+          elapsedSinceLastSendMs: 18,
+          staleAckTimeoutMs: 2400,
+        ),
+        isTrue,
+      );
+      expect(
+        EspStreamService.canSendNextTcpFrame(
+          inFlight: 2,
+          elapsedSinceLastSendMs: 300,
+          staleAckTimeoutMs: 2400,
+        ),
+        isFalse,
+      );
+      expect(
+        EspStreamService.canSendNextTcpFrame(
+          inFlight: 2,
+          elapsedSinceLastSendMs: 2450,
+          staleAckTimeoutMs: 2400,
+        ),
+        isTrue,
+      );
+    });
   });
 }
 

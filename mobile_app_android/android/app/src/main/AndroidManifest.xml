@@ -42,7 +42,7 @@
         android:required="false" />
 
     <application
-        android:label="ESP32 Nav"
+        android:label="Hoa hướng dương"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -68,13 +68,19 @@
         <!-- Notification & Media Session Listener for syncing Calls, Zalo, SMS, Messenger & Music to ESP32 -->
         <service
             android:name=".EspNotificationListenerService"
-            android:label="ESP32 Nav Thông báo &amp; Nhạc"
+            android:label="Hoa hướng dương Thông báo &amp; Nhạc"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- Foreground Service keeping Wi-Fi map stream & BLE nav alive during Google Maps / screen off -->
+        <service
+            android:name=".NavForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location|connectedDevice" />
 
         <meta-data
             android:name="flutterEmbedding"

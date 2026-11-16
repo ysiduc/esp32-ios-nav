@@ -61,15 +61,15 @@ class BleService extends ChangeNotifier {
   Timer? _wifiProbeTimer;
   DateTime _lastTxTime = DateTime.now();
 
-  // ESP32 WiFi SoftAP & Bluetooth Configuration State (Default: ysiducnaga / 192.168.4.1:8081)
+  // ESP32 WiFi SoftAP & Bluetooth Configuration State (Default: Hoa hướng dương / 192.168.4.1:8081)
   String _wifiStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
   String? _wifiIp;
   int _wifiPort = 8081;
   String _wifiMode = 'AP'; // 'AP' = ESP32 SoftAP, 'STA' = Phone Personal Hotspot
   String? _espStaIp;
   String? _wifiGatewayIp;
-  String _customBleName = 'ysiducnaga';
-  String _wifiSsid = 'ysiducnaga';
+  String _customBleName = 'Hoa hướng dương';
+  String _wifiSsid = 'Hoa hướng dương';
   String _wifiPass = '12345678';
   bool _hotspotModeEnabled = false;
   String _hotspotSsid = '';
@@ -153,10 +153,12 @@ class BleService extends ChangeNotifier {
       final savedId = prefs.getString('esp_last_ble_id');
       final savedBrightness = prefs.getInt('esp_brightness_pct');
       if (savedBle != null && savedBle.trim().isNotEmpty) {
-        _customBleName = savedBle.trim();
+        final v = savedBle.trim();
+        _customBleName = v == 'ysiducnaga' ? 'Hoa hướng dương' : v;
       }
       if (savedSsid != null && savedSsid.trim().isNotEmpty) {
-        _wifiSsid = savedSsid.trim();
+        final v = savedSsid.trim();
+        _wifiSsid = v == 'ysiducnaga' ? 'Hoa hướng dương' : v;
       }
       if (savedPass != null && savedPass.length >= 8) {
         _wifiPass = savedPass;
@@ -328,7 +330,9 @@ class BleService extends ChangeNotifier {
       for (final d in allKnown.values) {
         final pName = d.platformName;
         final lower = pName.toLowerCase();
-        final isEsp = lower.contains('ysiducnaga') ||
+        final isEsp = lower.contains('hoa hướng dương') ||
+            lower.contains('hoa huong duong') ||
+            lower.contains('ysiducnaga') ||
             lower.contains('ysiduc') ||
             lower.contains('esp32') ||
             lower.contains('nav') ||
@@ -457,6 +461,8 @@ class BleService extends ChangeNotifier {
     if (sysList.isNotEmpty) {
       final preferred = sysList.firstWhere(
         (d) => (_lastConnectedDeviceId != null && d.remoteId.str == _lastConnectedDeviceId) ||
+               d.platformName.toLowerCase().contains('hoa hướng dương') ||
+               d.platformName.toLowerCase().contains('hoa huong duong') ||
                d.platformName.toLowerCase().contains('ysiducnaga') ||
                d.platformName.toLowerCase().contains('ysiduc') ||
                (customLower.isNotEmpty && d.platformName.toLowerCase().contains(customLower)),
@@ -499,6 +505,8 @@ class BleService extends ChangeNotifier {
           }
 
           if ((_lastConnectedDeviceId != null && r.device.remoteId.str == _lastConnectedDeviceId) ||
+              lower.contains('hoa hướng dương') ||
+              lower.contains('hoa huong duong') ||
               lower.contains('ysiducnaga') ||
               lower.contains('ysiduc') ||
               lower.contains('esp32') ||
@@ -539,7 +547,7 @@ class BleService extends ChangeNotifier {
     if (_isConnecting) return false;
 
     _isConnecting = true;
-    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'ysiducnaga');
+    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'Hoa hướng dương');
     notifyListeners();
     _addLog('Đang kết nối tới: $_connectedDeviceName...', isTx: false);
 

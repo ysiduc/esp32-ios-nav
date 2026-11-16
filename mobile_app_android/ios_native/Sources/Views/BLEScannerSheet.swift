@@ -74,7 +74,7 @@ public struct BLEScannerSheet: View {
                                     .foregroundColor(.cyan)
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(connected.name ?? "ESP32 Navi")
+                                    Text(connected.name ?? "Hoa hướng dương")
                                         .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(.white)
 

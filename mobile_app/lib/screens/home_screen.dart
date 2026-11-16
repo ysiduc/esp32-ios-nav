@@ -137,7 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'ysiducnaga',
+                              'Hoa hướng dương',
                               style: TextStyle(
                                 color: Color(0xFF1C1C1E),
                                 fontSize: 20,
@@ -189,8 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 isBle
-                                    ? (bleService.connectedDeviceName ?? 'ysiducnaga')
-                                    : (isBusy ? 'Đang tìm ysiducnaga...' : 'Chưa kết nối ysiducnaga'),
+                                    ? (bleService.connectedDeviceName ?? 'Hoa hướng dương')
+                                    : (isBusy ? 'Đang tìm Hoa hướng dương...' : 'Chưa kết nối Hoa hướng dương'),
                                 style: TextStyle(
                                   color: isBle ? const Color(0xFF1C1C1E) : const Color(0xFF3A3A3C),
                                   fontSize: 13,
@@ -351,7 +351,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 18),
-                  _buildSectionHeader('THIẾT BỊ MÀN HÌNH (YSIDUCNAGA)'),
+                  _buildSectionHeader('THIẾT BỊ MÀN HÌNH (HOA HƯỚNG DƯƠNG)'),
                   Container(
                     decoration: _iosGroupCardDecoration(),
                     child: Column(
@@ -359,7 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         _buildIosMenuTile(
                           icon: Icons.bluetooth_searching_rounded,
                           iconBg: const Color(0xFF007AFF),
-                          title: 'Kết nối ysiducnaga',
+                          title: 'Kết nối Hoa hướng dương',
                           subtitle: 'Quét Bluetooth BLE, ghép đôi thông báo & Wi-Fi',
                           isSelected: _currentIndex == 1,
                           statusDotColor: isBle ? const Color(0xFF34C759) : null,

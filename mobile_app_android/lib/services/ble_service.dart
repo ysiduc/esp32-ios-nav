@@ -73,8 +73,11 @@ class BleService extends ChangeNotifier {
   String _wifiMode = 'AP'; // 'AP' = ESP32 SoftAP, 'STA' = Phone Personal Hotspot
   String? _espStaIp;
   String? _wifiGatewayIp;
-  String _customBleName = 'ysiducnaga';
-  String _wifiSsid = 'ysiducnaga';
+  bool? _espReportedTcpConnected;
+  DateTime _lastHotspotRecoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _hotspotRecoveryInFlight = false;
+  String _customBleName = 'Hoa hướng dương';
+  String _wifiSsid = 'Hoa hướng dương';
   String _wifiPass = '12345678';
   bool _hotspotModeEnabled = false;
   String _hotspotSsid = '';
@@ -103,6 +106,8 @@ class BleService extends ChangeNotifier {
   String get wifiMode => _wifiMode;
   String? get espStaIp => _espStaIp;
   String? get wifiGatewayIp => _wifiGatewayIp;
+  bool? get espReportedTcpConnected => _espReportedTcpConnected;
+  bool get isHotspotRecoveryInFlight => _hotspotRecoveryInFlight;
   String get wifiSsid => _wifiSsid;
   String get wifiPass => _wifiPass;
   bool get hotspotModeEnabled => _hotspotModeEnabled;
@@ -265,10 +270,12 @@ class BleService extends ChangeNotifier {
       final savedId = prefs.getString('esp_last_ble_id');
       final savedBrightness = prefs.getInt('esp_brightness_pct');
       if (savedBle != null && savedBle.trim().isNotEmpty) {
-        _customBleName = savedBle.trim();
+        final v = savedBle.trim();
+        _customBleName = v == 'ysiducnaga' ? 'Hoa hướng dương' : v;
       }
       if (savedSsid != null && savedSsid.trim().isNotEmpty) {
-        _wifiSsid = savedSsid.trim();
+        final v = savedSsid.trim();
+        _wifiSsid = v == 'ysiducnaga' ? 'Hoa hướng dương' : v;
       }
       if (savedPass != null && savedPass.length >= 8) {
         _wifiPass = savedPass;
@@ -452,7 +459,9 @@ class BleService extends ChangeNotifier {
       for (final d in allKnown.values) {
         final pName = d.platformName;
         final lower = pName.toLowerCase();
-        final isEsp = lower.contains('ysiducnaga') ||
+        final isEsp = lower.contains('hoa hướng dương') ||
+            lower.contains('hoa huong duong') ||
+            lower.contains('ysiducnaga') ||
             lower.contains('ysiduc') ||
             lower.contains('esp32') ||
             lower.contains('nav') ||
@@ -523,7 +532,7 @@ class BleService extends ChangeNotifier {
     required String advName,
     required String platformName,
     required List<String> serviceUuids,
-    String customBleName = 'ysiducnaga',
+    String customBleName = 'Hoa hướng dương',
     String? lastConnectedDeviceId,
   }) {
     final advLower = advName.toLowerCase();
@@ -531,9 +540,13 @@ class BleService extends ChangeNotifier {
     final customLower = customBleName.trim().toLowerCase();
     final hasNavUuid = serviceUuids.any((u) => u.toUpperCase().contains('FFE0'));
     return (lastConnectedDeviceId != null && remoteId == lastConnectedDeviceId) ||
+        advLower.contains('hoa hướng dương') ||
+        advLower.contains('hoa huong duong') ||
         advLower.contains('ysiducnaga') ||
         advLower.contains('ysiduc') ||
         advLower.contains('esp32') ||
+        platLower.contains('hoa hướng dương') ||
+        platLower.contains('hoa huong duong') ||
         platLower.contains('ysiducnaga') ||
         platLower.contains('ysiduc') ||
         platLower.contains('esp32') ||
@@ -671,7 +684,7 @@ class BleService extends ChangeNotifier {
               ? r.advertisementData.advName
               : (r.device.platformName.isNotEmpty
                   ? r.device.platformName
-                  : (hasNavUuid ? 'ESP32 Nav ($shortId)' : 'Thiết bị BLE ($shortId)'));
+                  : (hasNavUuid ? 'Hoa hướng dương ($shortId)' : 'Thiết bị BLE ($shortId)'));
 
           if (_isEspCandidateResult(r)) {
             _espMatchedIds.add(idStr);
@@ -727,7 +740,7 @@ class BleService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Kết nối nhanh 1 chạm tới thiết bị ysiducnaga (hoặc ESP32 đã ghép nối)
+  /// Kết nối nhanh 1 chạm tới thiết bị Hoa hướng dương (hoặc ESP32 đã ghép nối)
   Future<bool> quickConnectToYsiducnaga() async {
     if (_isConnected) return true;
     if (_isConnecting) return false;
@@ -744,6 +757,8 @@ class BleService extends ChangeNotifier {
     if (sysList.isNotEmpty) {
       final preferred = sysList.firstWhere(
         (d) => (_lastConnectedDeviceId != null && d.remoteId.str == _lastConnectedDeviceId) ||
+               d.platformName.toLowerCase().contains('hoa hướng dương') ||
+               d.platformName.toLowerCase().contains('hoa huong duong') ||
                d.platformName.toLowerCase().contains('ysiducnaga') ||
                d.platformName.toLowerCase().contains('ysiduc') ||
                (customLower.isNotEmpty && d.platformName.toLowerCase().contains(customLower)),
@@ -837,7 +852,7 @@ class BleService extends ChangeNotifier {
     if (_isConnecting) return false;
 
     _isConnecting = true;
-    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'ysiducnaga');
+    _connectedDeviceName = displayName ?? (device.platformName.isNotEmpty ? device.platformName : 'Hoa hướng dương');
     notifyListeners();
     _addLog('Đang kết nối tới: $_connectedDeviceName...', isTx: false);
 
@@ -989,7 +1004,7 @@ class BleService extends ChangeNotifier {
   void _enableBackgroundKeepAlive() {
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('startBackgroundNavigation');
+        _locationChannel.invokeMethod('startBackgroundNavigation', {'source': 'ble'});
       } catch (_) {}
     }
   }
@@ -997,7 +1012,7 @@ class BleService extends ChangeNotifier {
   void _disableBackgroundKeepAlive() {
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('stopBackgroundNavigation');
+        _locationChannel.invokeMethod('stopBackgroundNavigation', {'source': 'ble'});
       } catch (_) {}
     }
   }
@@ -1254,6 +1269,12 @@ class BleService extends ChangeNotifier {
             hotspotPass: staPass,
           );
         }
+        final rawTcp = json['tcp'];
+        if (rawTcp is bool) {
+          _espReportedTcpConnected = rawTcp;
+        } else if (rawTcp is num) {
+          _espReportedTcpConnected = rawTcp != 0;
+        }
         if (mode == 'STA' && ip != null && ip.isNotEmpty) {
           _wifiMode = 'STA';
           _espStaIp = ip;
@@ -1261,7 +1282,11 @@ class BleService extends ChangeNotifier {
           _wifiMode = 'AP';
           _espStaIp = null;
         }
-        _addLog('Đồng bộ cấu hình ESP32: BT="$_customBleName", Mode=$_wifiMode', isTx: false);
+        _addLog(
+          'Đồng bộ cấu hình ESP32: BT="$_customBleName", Mode=$_wifiMode'
+          '${_espReportedTcpConnected != null ? ", TCP=${_espReportedTcpConnected! ? 1 : 0}" : ""}',
+          isTx: false,
+        );
         notifyListeners();
       }
     } catch (_) {}
@@ -1271,6 +1296,37 @@ class BleService extends ChangeNotifier {
   Future<bool> requestDeviceConfig() async {
     if (!_isConnected || _writeCharacteristic == null) return false;
     return await sendRawString(jsonEncode({'type': 'DEVICE_QUERY'}));
+  }
+
+  /// Self-heals a deadlocked half-open TCP socket on ESP32 in Hotspot STA mode when Phone lost
+  /// TCP and cannot reach ESP32:8081 due to carrier/Hotspot routing while ESP32 still believes tcp=1.
+  Future<bool> recoverHotspotWifiLink() async {
+    if (!_isConnected || _writeCharacteristic == null) return false;
+    if (_hotspotSsid.trim().isEmpty) return false;
+    if (_hotspotRecoveryInFlight) return false;
+    final now = DateTime.now();
+    if (now.difference(_lastHotspotRecoveryAt).inSeconds < 25) return false;
+
+    _hotspotRecoveryInFlight = true;
+    _lastHotspotRecoveryAt = now;
+    try {
+      _addLog('Làm mới kết nối Hotspot Wi-Fi ESP32 do kẹt socket cũ...', isTx: true);
+      await sendRawString(jsonEncode({
+        'type': 'SET_HOTSPOT_MODE',
+        'hotspot_mode': 0,
+      }));
+      await Future.delayed(const Duration(milliseconds: 350));
+      if (!_isConnected || _writeCharacteristic == null) return false;
+      final ok = await sendRawString(jsonEncode({
+        'type': 'SET_HOTSPOT_MODE',
+        'hotspot_mode': 1,
+        'sta_ssid': _hotspotSsid,
+        'sta_pass': _hotspotPass,
+      }));
+      return ok;
+    } finally {
+      _hotspotRecoveryInFlight = false;
+    }
   }
 
   /// Update ESP32 Bluetooth name, SoftAP Wi-Fi credentials, and Personal Hotspot STA mode/credentials.

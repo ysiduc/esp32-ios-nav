@@ -341,7 +341,7 @@ class NavigationManager extends ChangeNotifier {
       );
     } else {
       speakVoicePrompt(
-        'Hệ thống dẫn đường ysiducnaga đã sẵn sàng. Sau 150 mét, rẽ phải vào đường chính.',
+        'Hệ thống dẫn đường Hoa hướng dương đã sẵn sàng. Sau 150 mét, rẽ phải vào đường chính.',
         force: true,
       );
     }

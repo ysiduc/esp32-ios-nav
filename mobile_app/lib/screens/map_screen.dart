@@ -1534,7 +1534,7 @@ class MapScreenState extends State<MapScreen> {
             SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Đang kết nối nhanh tới ysiducnaga...',
+                'Đang kết nối nhanh tới Hoa hướng dương...',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
               ),
             ),
@@ -1560,7 +1560,7 @@ class MapScreenState extends State<MapScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Đã kết nối ${bleService.connectedDeviceName ?? "ysiducnaga"} thành công!',
+                  'Đã kết nối ${bleService.connectedDeviceName ?? "Hoa hướng dương"} thành công!',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -1640,8 +1640,8 @@ class MapScreenState extends State<MapScreen> {
                             children: [
                               Text(
                                 isConn
-                                    ? (bleService.connectedDeviceName ?? 'ysiducnaga')
-                                    : 'Chưa kết nối ysiducnaga',
+                                    ? (bleService.connectedDeviceName ?? 'Hoa hướng dương')
+                                    : 'Chưa kết nối Hoa hướng dương',
                                 style: const TextStyle(
                                   color: Color(0xFF1C1C1E),
                                   fontSize: 16,
@@ -1654,7 +1654,7 @@ class MapScreenState extends State<MapScreen> {
                                     ? (isWifi
                                         ? 'Đã kết nối BLE + Wi-Fi Stream (${bleService.wifiIp})'
                                         : 'Đã kết nối Bluetooth BLE • Sẵn sàng dẫn đường')
-                                    : 'Bật nguồn màn hình ESP32 (ysiducnaga) để kết nối nhanh',
+                                    : 'Bật nguồn màn hình Hoa hướng dương để kết nối nhanh',
                                 style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12.5),
                               ),
                             ],

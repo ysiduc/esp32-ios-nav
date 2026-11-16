@@ -74,7 +74,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Kết nối ysiducnaga',
+                'Kết nối Hoa hướng dương',
                 style: TextStyle(
                   color: _textPrimary,
                   fontWeight: FontWeight.w700,
@@ -821,7 +821,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   _buildConfigInput(
                     controller: bleNameController,
                     label: 'Tên Bluetooth ESP32',
-                    hint: 'Ví dụ: ysiducnaga',
+                    hint: 'Ví dụ: Hoa hướng dương',
                     icon: Icons.bluetooth_rounded,
                     maxLength: 20,
                   ),
@@ -829,7 +829,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   _buildConfigInput(
                     controller: ssidController,
                     label: 'Tên Wi-Fi phát từ ESP32 (SSID)',
-                    hint: 'Ví dụ: ysiducnaga',
+                    hint: 'Ví dụ: Hoa hướng dương',
                     icon: Icons.wifi_rounded,
                     maxLength: 28,
                   ),

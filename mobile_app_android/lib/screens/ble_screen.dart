@@ -92,7 +92,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Kết nối ysiducnaga',
+                'Kết nối Hoa hướng dương',
                 style: TextStyle(
                   color: _textPrimary,
                   fontWeight: FontWeight.w700,
@@ -293,7 +293,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                               child: Text(
                                 granted
                                     ? 'Đã bật đồng bộ Cuộc gọi, Zalo, Messenger, SMS & Nhạc (Spotify/YouTube Music) sang ESP32.'
-                                    : 'Cấp quyền "Truy cập thông báo" cho ESP32 Nav để tự động đẩy Cuộc gọi, Zalo, SMS & tên bài hát sang ESP32.',
+                                    : 'Cấp quyền "Truy cập thông báo" cho Hoa hướng dương để tự động đẩy Cuộc gọi, Zalo, SMS & tên bài hát sang ESP32.',
                                 style: const TextStyle(color: Color(0xFF3A3A3C), fontSize: 11.5, height: 1.38),
                               ),
                             ),
@@ -965,7 +965,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   _buildConfigInput(
                     controller: bleNameController,
                     label: 'Tên Bluetooth ESP32',
-                    hint: 'Ví dụ: ysiducnaga',
+                    hint: 'Ví dụ: Hoa hướng dương',
                     icon: Icons.bluetooth_rounded,
                     maxLength: 20,
                   ),
@@ -973,7 +973,7 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
                   _buildConfigInput(
                     controller: ssidController,
                     label: 'Tên Wi-Fi phát từ ESP32 (SSID)',
-                    hint: 'Ví dụ: ysiducnaga',
+                    hint: 'Ví dụ: Hoa hướng dương',
                     icon: Icons.wifi_rounded,
                     maxLength: 28,
                   ),

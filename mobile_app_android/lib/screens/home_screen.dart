@@ -18,11 +18,109 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<MapScreenState> _mapKey = GlobalKey<MapScreenState>();
   final SavedPlacesService _savedPlacesService = SavedPlacesService();
   int _currentIndex = 0;
+  ({
+    bool usingVietnamese,
+    bool hasOfflineVietnamese,
+    bool hasNetworkVietnamese,
+    String engine,
+    String voiceLocale,
+    String diagnostic,
+  })? _ttsStatus;
+  bool _loggedTtsDiag = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshTtsStatus());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Refresh status shortly after resuming (e.g., returning from TTS voice download)
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) _refreshTtsStatus();
+      });
+    }
+  }
+
+  Future<void> _refreshTtsStatus({bool promptDialogIfMissing = false}) async {
+    if (!mounted) return;
+    final navManager = context.read<NavigationManager>();
+    final bleService = context.read<BleService>();
+    final st = await navManager.getTtsVoiceStatus();
+    if (!mounted || st == null) return;
+    setState(() => _ttsStatus = st);
+    if (!_loggedTtsDiag && st.diagnostic.isNotEmpty) {
+      _loggedTtsDiag = true;
+      bleService.logInfo('TTS: ${st.diagnostic}');
+    }
+    if (promptDialogIfMissing && !st.usingVietnamese) {
+      _showMissingVietnameseTtsDialog(navManager, st);
+    }
+  }
+
+  void _showMissingVietnameseTtsDialog(
+    NavigationManager navManager,
+    ({
+      bool usingVietnamese,
+      bool hasOfflineVietnamese,
+      bool hasNetworkVietnamese,
+      String engine,
+      String voiceLocale,
+      String diagnostic,
+    }) st,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text(
+          'Thiếu gói giọng Tiếng Việt (TTS)',
+          style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.w700, fontSize: 16.5),
+        ),
+        content: Text(
+          'Máy đang dùng bộ đọc "${st.engine.isEmpty ? "mặc định" : st.engine}" '
+          '(ngôn ngữ hiện tại: ${st.voiceLocale.isEmpty ? "chưa có vi-VN" : st.voiceLocale}), '
+          'nên chữ Tiếng Việt bị đọc bằng giọng tiếng Anh.\n\n'
+          'Hãy bấm "Tải giọng Tiếng Việt" để cài gói Tiếng Việt từ Google TTS (hoặc mở Cài đặt TTS để chuyển bộ đọc sang Dịch vụ giọng nói của Google).',
+          style: const TextStyle(color: Color(0xFF3A3A3C), fontSize: 13.5, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              navManager.openSystemTtsSettings();
+            },
+            child: const Text('Cài đặt TTS'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF007AFF),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              navManager.openVietnameseTtsInstaller();
+            },
+            child: const Text('Tải giọng Tiếng Việt'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _switchToMap() {
     setState(() => _currentIndex = 0);
@@ -49,7 +147,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final screens = [
       MapScreen(
         key: _mapKey,
-        onOpenMenu: () => _scaffoldKey.currentState?.openDrawer(),
+        onOpenMenu: () {
+          _refreshTtsStatus();
+          _scaffoldKey.currentState?.openDrawer();
+        },
       ),
       BleScreen(
         onBackToMap: _switchToMap,
@@ -63,6 +164,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       key: _scaffoldKey,
       drawerEnableOpenDragGesture: _currentIndex == 0 && !navManager.isNavigating,
+      onDrawerChanged: (isOpened) {
+        if (isOpened) _refreshTtsStatus();
+      },
       drawer: _buildIosAppDrawer(context, bleService, navManager),
       body: IndexedStack(
         index: _currentIndex,
@@ -137,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'ysiducnaga',
+                              'Hoa hướng dương',
                               style: TextStyle(
                                 color: Color(0xFF1C1C1E),
                                 fontSize: 20,
@@ -189,8 +293,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 isBle
-                                    ? (bleService.connectedDeviceName ?? 'ysiducnaga')
-                                    : (isBusy ? 'Đang tìm ysiducnaga...' : 'Chưa kết nối ysiducnaga'),
+                                    ? (bleService.connectedDeviceName ?? 'Hoa hướng dương')
+                                    : (isBusy ? 'Đang tìm Hoa hướng dương...' : 'Chưa kết nối Hoa hướng dương'),
                                 style: TextStyle(
                                   color: isBle ? const Color(0xFF1C1C1E) : const Color(0xFF3A3A3C),
                                   fontSize: 13,
@@ -320,16 +424,57 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                     const SizedBox(height: 2),
                                     GestureDetector(
-                                      onTap: () => navManager.testVoiceGuidance(),
-                                      child: const Text(
-                                        'Giọng đọc Tiếng Việt • Bấm để nghe thử 🔊',
+                                      onTap: () {
+                                        navManager.testVoiceGuidance();
+                                        _refreshTtsStatus(promptDialogIfMissing: true);
+                                      },
+                                      child: Text(
+                                        _ttsStatus == null
+                                            ? 'Giọng đọc Tiếng Việt • Bấm để nghe thử 🔊'
+                                            : (_ttsStatus!.hasOfflineVietnamese
+                                                ? 'Tiếng Việt offline (${_ttsStatus!.voiceLocale.isEmpty ? "vi-VN" : _ttsStatus!.voiceLocale}) • Nghe thử 🔊'
+                                                : (_ttsStatus!.usingVietnamese
+                                                    ? 'Tiếng Việt online (${_ttsStatus!.engine}) • Nghe thử 🔊'
+                                                    : 'Thiếu gói giọng Tiếng Việt (${_ttsStatus!.engine.isEmpty ? "chưa cài" : _ttsStatus!.engine}) • Nghe thử 🔊')),
                                         style: TextStyle(
-                                          color: Color(0xFF007AFF),
+                                          color: (_ttsStatus != null && !_ttsStatus!.usingVietnamese)
+                                              ? const Color(0xFFFF3B30)
+                                              : (_ttsStatus != null && !_ttsStatus!.hasOfflineVietnamese
+                                                  ? const Color(0xFFFF9500)
+                                                  : const Color(0xFF007AFF)),
                                           fontSize: 11.5,
                                           fontWeight: FontWeight.w500,
                                         ),
                                       ),
                                     ),
+                                    if (_ttsStatus != null && !_ttsStatus!.hasOfflineVietnamese) ...[
+                                      const SizedBox(height: 6),
+                                      GestureDetector(
+                                        onTap: () {
+                                          navManager.openVietnameseTtsInstaller();
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFFF9500).withValues(alpha: 0.14),
+                                            borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(
+                                              color: const Color(0xFFFF9500).withValues(alpha: 0.45),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _ttsStatus!.usingVietnamese
+                                                ? 'Tải gói giọng Việt offline ⬇'
+                                                : 'Cài đặt giọng Tiếng Việt ngay ⬇',
+                                            style: const TextStyle(
+                                              color: Color(0xFFB25000),
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -341,6 +486,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   if (val) {
                                     navManager.testVoiceGuidance();
                                   }
+                                  _refreshTtsStatus(promptDialogIfMissing: val);
                                 },
                               ),
                             ],
@@ -351,7 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
 
                   const SizedBox(height: 18),
-                  _buildSectionHeader('THIẾT BỊ MÀN HÌNH (YSIDUCNAGA)'),
+                  _buildSectionHeader('THIẾT BỊ MÀN HÌNH (HOA HƯỚNG DƯƠNG)'),
                   Container(
                     decoration: _iosGroupCardDecoration(),
                     child: Column(
@@ -359,7 +505,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         _buildIosMenuTile(
                           icon: Icons.bluetooth_searching_rounded,
                           iconBg: const Color(0xFF007AFF),
-                          title: 'Kết nối ysiducnaga',
+                          title: 'Kết nối Hoa hướng dương',
                           subtitle: 'Quét Bluetooth BLE, ghép đôi thông báo & Wi-Fi',
                           isSelected: _currentIndex == 1,
                           statusDotColor: isBle ? const Color(0xFF34C759) : null,

@@ -945,7 +945,7 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
       songTitle: mediaService.hasMedia ? mediaService.songTitle : 'Nhac tat',
       songArtist: mediaService.hasMedia && mediaService.songArtist.isNotEmpty
           ? mediaService.songArtist
-          : 'ysiducnaga',
+          : 'Hoa hướng dương',
       elapsedSec: mediaService.hasMedia ? mediaService.elapsedTime.round() : 0,
       durationSec: mediaService.hasMedia ? mediaService.duration.round() : 0,
       batteryLevel: bleService.lastKnownBattery,

@@ -116,6 +116,15 @@ void main() {
       expect(
         BleService.matchesEspDeviceIdentity(
           remoteId: 'AA:BB:CC:DD:EE:FF',
+          advName: 'Hoa hướng dương',
+          platformName: '',
+          serviceUuids: const [],
+        ),
+        isTrue,
+      );
+      expect(
+        BleService.matchesEspDeviceIdentity(
+          remoteId: 'AA:BB:CC:DD:EE:FF',
           advName: 'ysiducnaga',
           platformName: '',
           serviceUuids: const [],

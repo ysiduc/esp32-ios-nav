@@ -1597,21 +1597,54 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   bool _promptedViTtsInstall = false;
 
-  Future<void> _warnIfMissingOfflineVietnameseTts(NavigationManager navManager) async {
-    if (_promptedViTtsInstall || !navManager.isVoiceEnabled) return;
+  Future<void> _warnIfMissingOfflineVietnameseTts(
+    NavigationManager navManager, {
+    bool forcePrompt = false,
+  }) async {
+    if ((!forcePrompt && _promptedViTtsInstall) || !navManager.isVoiceEnabled) return;
     final status = await navManager.getTtsVoiceStatus();
     if (!mounted || status == null) return;
     if (status.hasOfflineVietnamese) return;
     _promptedViTtsInstall = true;
 
+    final engineHint = status.engine.isNotEmpty ? ' (${status.engine})' : '';
+    if (!status.usingVietnamese) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Chưa có giọng đọc Tiếng Việt'),
+          content: Text(
+            'Bộ đọc mặc định$engineHint chưa tải gói giọng Tiếng Việt (vi-VN), '
+            'nên ứng dụng tạm tắt giọng đọc để tránh đọc sai ngôn ngữ khác.\n\n'
+            'Hãy bấm "Tải giọng Việt" (~15 MB) hoặc chọn Speech Services by Google trong Cài đặt TTS.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                unawaited(navManager.openSystemTtsSettings());
+              },
+              child: const Text('Cài đặt TTS'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                unawaited(navManager.openVietnameseTtsInstaller());
+              },
+              child: const Text('Tải giọng Việt'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 6),
-        content: Text(
-          status.usingVietnamese
-              ? 'Máy chưa tải gói giọng Việt offline (có thể đọc tiếng Anh khi dùng Wi-Fi ESP32).'
-              : 'Chưa phát hiện gói giọng nói Tiếng Việt trên máy.',
+        duration: const Duration(seconds: 7),
+        content: const Text(
+          'Máy chỉ có giọng Việt online (khi dùng Wi-Fi ESP32 nên tải gói offline ~15MB).',
         ),
         action: SnackBarAction(
           label: 'Tải giọng Việt',
@@ -1882,7 +1915,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.w700, fontSize: 17),
           ),
           content: const Text(
-            'App cần quyền Truy cập thông báo ("ESP32 Nav Thông báo & Nhạc") để đọc hướng rẽ, khoảng cách, ETA từ app Google Maps, vẽ lên bản đồ Màn 3 hoặc gửi qua BLE sang ESP32.',
+            'App cần quyền Truy cập thông báo ("Hoa hướng dương Thông báo & Nhạc") để đọc hướng rẽ, khoảng cách, ETA từ app Google Maps, vẽ lên bản đồ Màn 3 hoặc gửi qua BLE sang ESP32.',
             style: TextStyle(color: Color(0xFF3A3A3C), fontSize: 13.5, height: 1.4),
           ),
           actions: [
@@ -1923,6 +1956,12 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         ),
       ),
     );
+    final navManager = Provider.of<NavigationManager>(context, listen: false);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        unawaited(_warnIfMissingOfflineVietnameseTts(navManager));
+      }
+    });
   }
 
   /// Nút Kết nối nhanh Bluetooth ysiducnaga (thay thế nút hình la bàn cũ)
@@ -2018,7 +2057,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Đang kết nối nhanh tới ysiducnaga...',
+                'Đang kết nối nhanh tới Hoa hướng dương...',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
               ),
             ),
@@ -2044,7 +2083,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Đã kết nối ${bleService.connectedDeviceName ?? "ysiducnaga"} thành công!',
+                  'Đã kết nối ${bleService.connectedDeviceName ?? "Hoa hướng dương"} thành công!',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -2124,8 +2163,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             children: [
                               Text(
                                 isConn
-                                    ? (bleService.connectedDeviceName ?? 'ysiducnaga')
-                                    : 'Chưa kết nối ysiducnaga',
+                                    ? (bleService.connectedDeviceName ?? 'Hoa hướng dương')
+                                    : 'Chưa kết nối Hoa hướng dương',
                                 style: const TextStyle(
                                   color: Color(0xFF1C1C1E),
                                   fontSize: 16,
@@ -2138,7 +2177,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                     ? (isWifi
                                         ? 'Đã kết nối BLE + Wi-Fi Stream (${bleService.wifiIp})'
                                         : 'Đã kết nối Bluetooth BLE • Sẵn sàng dẫn đường')
-                                    : 'Bật nguồn màn hình ESP32 (ysiducnaga) để kết nối nhanh',
+                                    : 'Bật nguồn màn hình Hoa hướng dương để kết nối nhanh',
                                 style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12.5),
                               ),
                             ],

@@ -467,9 +467,22 @@ class GoogleMapsRelayService extends ChangeNotifier {
         ? streetParts.join(' · ')
         : (navLines.isNotEmpty ? navLines.first : '');
 
-    // 4. Determine turnCode from explicit text instructions first, then fallback to bitmap classifier
-    final combinedForTurn = navLines.join(' ');
-    int turnCode = _classifyTurnFromText(combinedForTurn);
+    // 4. Determine turnCode from primary instruction lines (ignoring deferred "Sau đó / Then" hints),
+    //    then fallback cleanly to the notification turn bitmap classifier.
+    final primaryTurnLines = navLines
+        .where((l) => !RegExp(
+              r'^(?:sau đó|tiếp theo|then|after that)(?:\s|$|[,.:;·•\-])',
+              caseSensitive: false,
+            ).hasMatch(l))
+        .toList();
+    int turnCode = -1;
+    for (final line in primaryTurnLines) {
+      final candidate = _classifyTurnFromText(line);
+      if (candidate >= 0) {
+        turnCode = candidate;
+        break;
+      }
+    }
     if (turnCode < 0) {
       turnCode = (bitmapTurnCode >= 0 && bitmapTurnCode <= 9) ? bitmapTurnCode : 0;
     }

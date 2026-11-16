@@ -707,18 +707,43 @@ class NavigationManager extends ChangeNotifier {
         streetName: step.streetName,
       );
 
+  bool _loggedMissingViTts = false;
+  String? _lastMissingTtsDiagnostic;
+  String? get lastMissingTtsDiagnostic => _lastMissingTtsDiagnostic;
+
   void speakVoicePrompt(String text, {bool force = false}) {
     if ((!_isVoiceEnabled && !force) || text.trim().isEmpty) return;
     final localized = localizeInstructionToVietnamese(text.trim());
     if (Platform.isIOS || Platform.isAndroid) {
-      try {
-        _locationChannel.invokeMethod('speakGuidance', {'text': localized});
-      } catch (_) {}
+      unawaited(_invokeSpeakGuidance(localized));
     }
   }
 
-  Future<({bool usingVietnamese, bool hasOfflineVietnamese, String voiceLocale})?>
-      getTtsVoiceStatus() async {
+  Future<void> _invokeSpeakGuidance(String localized) async {
+    try {
+      final res = await _locationChannel.invokeMethod<dynamic>('speakGuidance', {'text': localized});
+      if (res is Map && res['missingVietnamese'] == true) {
+        final diag = (res['diagnostic'] as String?) ?? '';
+        _lastMissingTtsDiagnostic = diag;
+        if (!_loggedMissingViTts) {
+          _loggedMissingViTts = true;
+          bleService.logInfo(
+            '⚠️ Máy chưa có giọng Tiếng Việt ($diag). Đã chặn đọc sai ngôn ngữ — hãy tải gói vi-VN.',
+          );
+        }
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<({
+    bool usingVietnamese,
+    bool hasOfflineVietnamese,
+    bool hasNetworkVietnamese,
+    String engine,
+    String voiceLocale,
+    String diagnostic,
+  })?> getTtsVoiceStatus() async {
     if (kIsWeb || !Platform.isAndroid) return null;
     try {
       final raw = await _locationChannel.invokeMethod<dynamic>('getTtsStatus');
@@ -726,7 +751,10 @@ class NavigationManager extends ChangeNotifier {
         return (
           usingVietnamese: raw['usingVietnamese'] == true,
           hasOfflineVietnamese: raw['hasOfflineVietnamese'] == true,
+          hasNetworkVietnamese: raw['hasNetworkVietnamese'] == true,
+          engine: (raw['engine']?.toString() ?? ''),
           voiceLocale: (raw['voiceLocale']?.toString() ?? ''),
+          diagnostic: (raw['diagnostic']?.toString() ?? ''),
         );
       }
     } catch (_) {}
@@ -742,6 +770,15 @@ class NavigationManager extends ChangeNotifier {
     }
   }
 
+  Future<bool> openSystemTtsSettings() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      return await _locationChannel.invokeMethod<bool>('openTtsSettings') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void testVoiceGuidance() {
     if (_isNavigating && currentStep != null) {
       final dist = _distanceToNextManeuver.round();
@@ -752,7 +789,7 @@ class NavigationManager extends ChangeNotifier {
       );
     } else {
       speakVoicePrompt(
-        'Hệ thống dẫn đường ysiducnaga đã sẵn sàng. Sau 150 mét, rẽ phải vào đường chính.',
+        'Hệ thống dẫn đường Hoa hướng dương đã sẵn sàng. Sau 150 mét, rẽ phải vào đường chính.',
         force: true,
       );
     }
@@ -856,7 +893,7 @@ class NavigationManager extends ChangeNotifier {
         forceLocationManager: forceLocationManager || _useForceLocationManagerFallback,
         foregroundNotificationConfig: allowForeground
             ? const ForegroundNotificationConfig(
-                notificationTitle: 'ESP32 Nav đang dẫn đường',
+                notificationTitle: 'Hoa hướng dương đang dẫn đường',
                 notificationText: 'Đang truyền lộ trình & bản đồ sang ESP32',
                 enableWakeLock: true,
               )
@@ -1437,7 +1474,7 @@ class NavigationManager extends ChangeNotifier {
   void _enableBackgroundNavigation() {
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('startBackgroundNavigation');
+        _locationChannel.invokeMethod('startBackgroundNavigation', {'source': 'nav'});
       } catch (_) {}
     }
   }
@@ -1445,7 +1482,7 @@ class NavigationManager extends ChangeNotifier {
   void _disableBackgroundNavigation() {
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('stopBackgroundNavigation');
+        _locationChannel.invokeMethod('stopBackgroundNavigation', {'source': 'nav'});
       } catch (_) {}
     }
   }

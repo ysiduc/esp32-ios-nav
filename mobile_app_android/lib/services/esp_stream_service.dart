@@ -190,17 +190,21 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _lastBleConnected = nowConnected;
 
     final nowHotspotMode = bleService.hotspotModeEnabled;
-    final nowStaIp = bleService.espStaIp;
+    final nowStaIp = normalizeIpAddress(bleService.espStaIp);
     final bool modeChanged = nowHotspotMode != _lastHotspotMode;
-    final bool staIpChanged =
-        nowStaIp != null && nowStaIp.isNotEmpty && nowStaIp != _lastKnownStaIp;
+    final String? normalizedActiveIp = normalizeIpAddress(_activeTcpTargetIp);
+    final bool staIpChanged = nowStaIp != null &&
+        nowStaIp.isNotEmpty &&
+        nowStaIp != _lastKnownStaIp;
 
     _lastHotspotMode = nowHotspotMode;
     _lastKnownStaIp = nowStaIp;
 
-    if (modeChanged || (staIpChanged && _activeTcpTargetIp != nowStaIp)) {
+    final bool activeDiffersFromSta =
+        normalizedActiveIp != null && normalizedActiveIp != nowStaIp;
+    if (modeChanged || (staIpChanged && activeDiffersFromSta)) {
       if (_tcpApSocket != null) {
-        _closeTcpApSocket(_tcpApSocket!, notifyIfEmpty: true);
+        _closeTcpApSocket(_tcpApSocket!, notifyIfEmpty: true, scheduleReconnect: true);
       }
       if (_apSocket != null) {
         try {
@@ -208,6 +212,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
         _apSocket = null;
       }
+      scheduleMicrotask(_tryConnectEspAp);
+    } else if (_tcpApSocket == null && nowStaIp != null && nowStaIp.isNotEmpty) {
       scheduleMicrotask(_tryConnectEspAp);
     }
   }
@@ -263,16 +269,186 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   static const String espApWsUrl = 'ws://192.168.4.1:8080';
   Timer? _apConnectTimer;
   Timer? _apKeepaliveTimer;
+  Timer? _apReconnectTimer;
   Timer? _apConnectTimeoutTimer;
   ConnectionTask<Socket>? _apConnectTask;
   Socket? _tcpApSocket;
   String? _activeTcpTargetIp;
+  String? _lastHotspotPeerIp;
   StreamSubscription<Uint8List>? _tcpApSub;
-  bool _tcpApReadyForNextFrame = true;
+  static const int maxTcpInFlightFrames = 2;
+  int _tcpInFlightFrames = 0;
   DateTime _lastTcpSendTime = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime? _awaitingTcpAckSince;
+  img.Image? _reusableCpuFrame;
+
+  /// Decrements in-flight frame counter for each ESP32 'K' (0x4B) ACK byte received.
+  @visibleForTesting
+  static int computeRemainingTcpInFlight({
+    required int currentInFlight,
+    required List<int> rxChunk,
+    int maxInFlight = maxTcpInFlightFrames,
+  }) {
+    int acks = 0;
+    for (final b in rxChunk) {
+      if (b == 0x4B) acks++;
+    }
+    return (currentInFlight - acks).clamp(0, maxInFlight);
+  }
+
+  /// Returns whether another TCP JPEG frame may be dispatched under bounded pipelining.
+  @visibleForTesting
+  static bool canSendNextTcpFrame({
+    required int inFlight,
+    required int elapsedSinceLastSendMs,
+    required int staleAckTimeoutMs,
+    int maxInFlight = maxTcpInFlightFrames,
+  }) {
+    if (inFlight < maxInFlight) return true;
+    return elapsedSinceLastSendMs >= staleAckTimeoutMs;
+  }
+
+  img.Image _acquireReusableCpuFrame(int w, int h) {
+    final existing = _reusableCpuFrame;
+    if (existing != null &&
+        existing.width == w &&
+        existing.height == h &&
+        existing.numChannels == 4) {
+      return existing;
+    }
+    final created = img.Image(width: w, height: h, numChannels: 4);
+    _reusableCpuFrame = created;
+    return created;
+  }
+
+  static Uint8List _frameRawRgbaView(img.Image frame, int w, int h) {
+    final expectedBytes = w * h * 4;
+    if (frame.buffer.lengthInBytes >= expectedBytes) {
+      return frame.buffer.asUint8List(0, expectedBytes);
+    }
+    return frame.toUint8List();
+  }
+  DateTime? _tcpDisconnectedAt;
+  DateTime _lastWifiQueryOnDropAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastReverseRebindAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _lastDialErrorLogged = false;
   WebSocket? _apSocket;
   bool _apConnecting = false;
   bool _isDisposed = false;
+
+  /// Normalizes IPv4-mapped IPv6 addresses (e.g. `::ffff:192.168.43.12`) to plain IPv4.
+  @visibleForTesting
+  static String? normalizeIpAddress(String? raw) {
+    if (raw == null) return null;
+    var clean = raw.trim();
+    if (clean.isEmpty) return null;
+    if (clean.toLowerCase().startsWith('::ffff:')) {
+      clean = clean.substring(7);
+    }
+    return clean.isEmpty ? null : clean;
+  }
+
+  /// Returns true when a sent TCP frame/keepalive has gone without a 'K' ACK past [timeoutMs].
+  @visibleForTesting
+  static bool isTcpAckTimedOut({
+    required DateTime? awaitingAckSince,
+    required DateTime now,
+    int timeoutMs = 6500,
+  }) {
+    if (awaitingAckSince == null) return false;
+    return now.difference(awaitingAckSince).inMilliseconds >= timeoutMs;
+  }
+
+  /// Hotspot STA shares a single ESP32 radio with BLE and uses Wi-Fi modem sleep, so wait longer
+  /// for 'K' ACKs before pushing another large JPEG to prevent OS TCP send-buffer congestion.
+  @visibleForTesting
+  static int selectTcpInFlightTimeoutMs({required bool hotspotMode}) =>
+      hotspotMode ? 2400 : 650;
+
+  @visibleForTesting
+  static int selectTcpConnectTimeoutMs({required bool hotspotMode}) =>
+      hotspotMode ? 2400 : 1100;
+
+  /// Picks a local IPv4 address likely on the same Hotspot interface as [targetIp]
+  /// (exact /24 first, then /16, then named tethering/hotspot interfaces).
+  @visibleForTesting
+  static InternetAddress? pickMatchingSubnetAddress(
+    List<NetworkInterface> interfaces,
+    String targetIp,
+  ) {
+    final normalized = normalizeIpAddress(targetIp);
+    if (normalized == null) return null;
+    final parts = normalized.split('.');
+    if (parts.length != 4) return null;
+    final prefix24 = '${parts[0]}.${parts[1]}.${parts[2]}.';
+    final prefix16 = '${parts[0]}.${parts[1]}.';
+
+    for (final iface in interfaces) {
+      for (final addr in iface.addresses) {
+        if (addr.type == InternetAddressType.IPv4 && addr.address.startsWith(prefix24)) {
+          return addr;
+        }
+      }
+    }
+    for (final iface in interfaces) {
+      for (final addr in iface.addresses) {
+        if (addr.type == InternetAddressType.IPv4 && addr.address.startsWith(prefix16)) {
+          return addr;
+        }
+      }
+    }
+    for (final iface in interfaces) {
+      final n = iface.name.toLowerCase();
+      final looksHotspot = n.contains('ap') ||
+          n.contains('swlan') ||
+          n.contains('wlan') ||
+          n.contains('tether') ||
+          n.contains('rndis');
+      if (!looksHotspot) continue;
+      for (final addr in iface.addresses) {
+        if (addr.type == InternetAddressType.IPv4 &&
+            !addr.isLoopback &&
+            (addr.address.startsWith('10.') || addr.address.startsWith('192.168.'))) {
+          return addr;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<InternetAddress?> _findHotspotLocalBindAddress(String targetIp) async {
+    try {
+      final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      return pickMatchingSubnetAddress(ifaces, targetIp);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _ensureServersListening() {
+    if (_isDisposed) return;
+    if (_wsServer == null) {
+      unawaited(_startWebSocketServer());
+    }
+    if (_reverseTcpServer == null) {
+      unawaited(_startReverseTcpServer());
+    }
+  }
+
+  Future<void> _rebindReverseTcpServerIfStale() async {
+    if (_isDisposed) return;
+    final now = DateTime.now();
+    if (now.difference(_lastReverseRebindAt).inSeconds < 12) return;
+    _lastReverseRebindAt = now;
+    final old = _reverseTcpServer;
+    _reverseTcpServer = null;
+    if (old != null) {
+      try {
+        await old.close();
+      } catch (_) {}
+    }
+    await _startReverseTcpServer();
+  }
 
   void _startEspApConnector() {
     _apConnectTimer?.cancel();
@@ -284,18 +460,32 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _startReverseTcpServer() async {
     if (_reverseTcpServer != null || _isDisposed) return;
     try {
-      _reverseTcpServer = await ServerSocket.bind(
+      final server = await ServerSocket.bind(
         InternetAddress.anyIPv4,
         espHotspotReverseTcpPort,
         shared: true,
       );
+      if (_isDisposed) {
+        await server.close();
+        return;
+      }
+      _reverseTcpServer = server;
       debugPrint('[Reverse TCP Server] Listening on 0.0.0.0:$espHotspotReverseTcpPort');
-      _reverseTcpServer!.listen(
+      server.listen(
         (Socket client) {
           if (_isDisposed) {
             client.destroy();
             return;
           }
+          // Cancel any competing outbound :8081 dial before attaching the reverse socket
+          // so a late-completing outbound SYN doesn't knock this connection off ESP32.
+          _apConnectTimeoutTimer?.cancel();
+          _apConnectTimeoutTimer = null;
+          try {
+            _apConnectTask?.cancel();
+          } catch (_) {}
+          _apConnectTask = null;
+
           // Firmware only dials :8082 when its own stream client is disconnected,
           // so any lingering socket here is stale and can be replaced cleanly.
           if (_tcpApSocket != null) {
@@ -307,7 +497,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
             } catch (_) {}
             _apSocket = null;
           }
-          final peerIp = client.remoteAddress.address;
+          final peerIp = normalizeIpAddress(client.remoteAddress.address) ??
+              client.remoteAddress.address;
           _attachTcpBinarySocket(
             client,
             displayIp: peerIp,
@@ -317,14 +508,28 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         },
         onError: (e) {
           debugPrint('[Reverse TCP Server Error] $e');
+          if (identical(_reverseTcpServer, server)) {
+            _reverseTcpServer = null;
+          }
+        },
+        onDone: () {
+          if (identical(_reverseTcpServer, server)) {
+            _reverseTcpServer = null;
+          }
         },
       );
     } catch (e) {
       debugPrint('[Reverse TCP Server Bind Error] $e');
+      _reverseTcpServer = null;
     }
   }
 
-  void _closeTcpApSocket(Socket target, {bool notifyIfEmpty = true}) {
+  void _closeTcpApSocket(
+    Socket target, {
+    bool notifyIfEmpty = true,
+    bool scheduleReconnect = false,
+    String? reason,
+  }) {
     if (!identical(_tcpApSocket, target)) return;
     _apKeepaliveTimer?.cancel();
     _apKeepaliveTimer = null;
@@ -332,11 +537,34 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tcpApSub = null;
     _tcpApSocket = null;
     _activeTcpTargetIp = null;
+    _tcpInFlightFrames = 0;
+    _awaitingTcpAckSince = null;
+    if (scheduleReconnect) {
+      _tcpDisconnectedAt ??= DateTime.now();
+    }
+    if (reason != null && reason.isNotEmpty) {
+      bleService.logInfo('Wi-Fi stream đóng ($reason)');
+    }
     try {
       target.destroy();
     } catch (_) {}
     if (!_isDisposed && notifyIfEmpty && _wsClients.isEmpty) {
       bleService.setHotspotDisconnected();
+    }
+    if (!_isDisposed && scheduleReconnect && !_suppressStreamForBleNav) {
+      final now = DateTime.now();
+      if (bleService.isConnected &&
+          now.difference(_lastWifiQueryOnDropAt).inSeconds >= 4) {
+        _lastWifiQueryOnDropAt = now;
+        unawaited(bleService.requestDeviceConfig());
+      }
+      _apReconnectTimer?.cancel();
+      _apReconnectTimer = Timer(const Duration(milliseconds: 250), () {
+        _apReconnectTimer = null;
+        if (!_isDisposed && _tcpApSocket == null) {
+          unawaited(_tryConnectEspAp());
+        }
+      });
     }
     if (!_isDisposed) notifyListeners();
   }
@@ -347,47 +575,70 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     required int displayPort,
     bool isReverseClient = false,
   }) {
-    sock.setOption(SocketOption.tcpNoDelay, true);
+    try {
+      sock.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
+    final normalizedDisplay = normalizeIpAddress(displayIp) ?? displayIp;
+    if (isReverseClient || normalizedDisplay != espApIp) {
+      _lastHotspotPeerIp = normalizedDisplay;
+    }
     _tcpApSocket = sock;
-    _activeTcpTargetIp = displayIp;
-    _tcpApReadyForNextFrame = true;
+    _activeTcpTargetIp = normalizedDisplay;
+    _tcpInFlightFrames = 0;
     _lastTcpSendTime = DateTime.now();
+    _awaitingTcpAckSince = null;
+    _tcpDisconnectedAt = null;
+    _lastDialErrorLogged = false;
     _consecutiveWifiErrors = 0;
-    bleService.setHotspotConnected(displayIp, displayPort);
+    bleService.setHotspotConnected(normalizedDisplay, displayPort);
     bleService.logInfo(
       isReverseClient
-          ? 'ESP32 đã kết nối Hotspot TCP ($displayIp:$displayPort)'
-          : 'Đã kết nối Wi-Fi TCP tốc độ cao ($displayIp:$displayPort)',
+          ? 'ESP32 đã kết nối Hotspot TCP ($normalizedDisplay:$displayPort)'
+          : 'Đã kết nối Wi-Fi TCP tốc độ cao ($normalizedDisplay:$displayPort)',
+    );
+
+    unawaited(
+      sock.done.then(
+        (_) => _closeTcpApSocket(sock, notifyIfEmpty: true, scheduleReconnect: true, reason: 'sock.done'),
+        onError: (e) => _closeTcpApSocket(sock, notifyIfEmpty: true, scheduleReconnect: true, reason: 'sock.done err: $e'),
+      ),
     );
 
     _tcpApSub?.cancel();
     _tcpApSub = sock.listen(
       (chunk) {
-        for (final b in chunk) {
-          if (b == 0x4B) {
-            _tcpApReadyForNextFrame = true;
-            if (!_isDisposed && _isStreaming && !_isCapturing) {
-              scheduleMicrotask(_renderAndStreamHeadlessFrame);
-            }
-            break;
-          }
+        final receivedAck = chunk.contains(0x4B);
+        _tcpInFlightFrames = computeRemainingTcpInFlight(
+          currentInFlight: _tcpInFlightFrames,
+          rxChunk: chunk,
+        );
+        _awaitingTcpAckSince = _tcpInFlightFrames > 0 ? DateTime.now() : null;
+        if (receivedAck && !_isDisposed && _isStreaming && !_isCapturing) {
+          scheduleMicrotask(_renderAndStreamHeadlessFrame);
         }
       },
-      onDone: () => _closeTcpApSocket(sock, notifyIfEmpty: true),
-      onError: (_) => _closeTcpApSocket(sock, notifyIfEmpty: true),
+      onDone: () => _closeTcpApSocket(sock, notifyIfEmpty: true, scheduleReconnect: true, reason: 'peer closed (EOF)'),
+      onError: (e) => _closeTcpApSocket(sock, notifyIfEmpty: true, scheduleReconnect: true, reason: 'rx err: $e'),
       cancelOnError: true,
     );
 
     _apKeepaliveTimer?.cancel();
-    _apKeepaliveTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    _apKeepaliveTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
       final s = _tcpApSocket;
-      if (s == null) return;
-      if (DateTime.now().difference(_lastTcpSendTime).inMilliseconds >= 3500) {
+      if (s == null || !identical(s, sock)) return;
+      final now = DateTime.now();
+      if (isTcpAckTimedOut(awaitingAckSince: _awaitingTcpAckSince, now: now, timeoutMs: 6500)) {
+        bleService.logInfo('Wi-Fi stream mất phản hồi -> tự kết nối lại...');
+        _closeTcpApSocket(s, notifyIfEmpty: true, scheduleReconnect: true, reason: 'ACK timeout 6.5s');
+        return;
+      }
+      if (now.difference(_lastTcpSendTime).inMilliseconds >= 2000) {
         try {
+          _awaitingTcpAckSince ??= now;
           s.add(const [0xAA, 0xDD]);
-          _lastTcpSendTime = DateTime.now();
-        } catch (_) {
-          _closeTcpApSocket(s, notifyIfEmpty: true);
+          _lastTcpSendTime = now;
+        } catch (e) {
+          _closeTcpApSocket(s, notifyIfEmpty: true, scheduleReconnect: true, reason: 'keepalive tx err: $e');
         }
       }
     });
@@ -398,67 +649,142 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  Future<Socket> _dialTcpWithTimeout(
+    String host,
+    int port, {
+    required int timeoutMs,
+    InternetAddress? sourceAddress,
+  }) async {
+    final task = await Socket.startConnect(
+      host,
+      port,
+      sourceAddress: sourceAddress,
+    );
+    if (_isDisposed || _tcpApSocket != null) {
+      unawaited(task.socket.then((s) => s.destroy(), onError: (_) {}));
+      task.cancel();
+      throw const SocketException('Aborted before connect completed');
+    }
+    _apConnectTask = task;
+    _apConnectTimeoutTimer?.cancel();
+    _apConnectTimeoutTimer = Timer(Duration(milliseconds: timeoutMs), () {
+      try {
+        task.cancel();
+      } catch (_) {}
+    });
+    return task.socket;
+  }
+
+  bool get _isHotspotTransportActive =>
+      bleService.hotspotModeEnabled ||
+      bleService.espStaConnectedToHotspot ||
+      (_lastHotspotPeerIp != null && _lastHotspotPeerIp != espApIp);
+
   Future<void> _tryConnectEspAp() async {
+    _ensureServersListening();
     if (_isDisposed || _tcpApSocket != null || _apSocket != null || _apConnecting) return;
-    final bool useHotspot = bleService.hotspotModeEnabled || bleService.espStaConnectedToHotspot;
-    final String? targetIp = useHotspot ? bleService.espStaIp : espApIp;
+
+    final bool useHotspot = _isHotspotTransportActive;
+    final String? targetIp =
+        normalizeIpAddress(bleService.espStaIp) ?? (useHotspot ? _lastHotspotPeerIp : espApIp);
+
+    // If disconnected in Hotspot mode for several seconds, proactively refresh :8082 listener
+    // and break any confirmed ESP32 half-open zombie socket (where ESP32 still reports tcp=1).
+    final disconnectedAt = _tcpDisconnectedAt;
+    if (useHotspot && disconnectedAt != null) {
+      final elapsedDropSec = DateTime.now().difference(disconnectedAt).inSeconds;
+      if (elapsedDropSec >= 5) {
+        unawaited(_rebindReverseTcpServerIfStale());
+      }
+      if (elapsedDropSec >= 6 &&
+          bleService.isConnected &&
+          bleService.hotspotSsid.isNotEmpty &&
+          (bleService.espReportedTcpConnected == true || elapsedDropSec >= 10)) {
+        unawaited(bleService.recoverHotspotWifiLink());
+      }
+    }
+
     if (targetIp == null || targetIp.isEmpty) return;
 
     _apConnecting = true;
+    final connectTimeoutMs = selectTcpConnectTimeoutMs(hotspotMode: useHotspot);
     try {
       Socket? rawSock;
-      try {
-        final task = await Socket.startConnect(targetIp, espApTcpPort);
-        if (_isDisposed) {
-          unawaited(task.socket.then((s) => s.destroy(), onError: (_) {}));
-          task.cancel();
-          return;
-        }
-        _apConnectTask = task;
-        _apConnectTimeoutTimer?.cancel();
-        _apConnectTimeoutTimer = Timer(const Duration(milliseconds: 900), () {
+      if (Platform.isAndroid && useHotspot) {
+        // In Hotspot mode (10.x / 192.168.x), bind the Hotspot local interface IP first so we
+        // don't waste 2.4s hanging on 4G cellular routing, then fall back to default route.
+        final localBindIp = await _findHotspotLocalBindAddress(targetIp);
+        if (localBindIp != null && !_isDisposed && _tcpApSocket == null) {
           try {
-            task.cancel();
-          } catch (_) {}
-        });
-        rawSock = await task.socket;
-      } on SocketException {
-        _apConnectTimeoutTimer?.cancel();
-        _apConnectTimeoutTimer = null;
-        _apConnectTask = null;
-        if (!Platform.isAndroid || useHotspot || _isDisposed) rethrow;
-        // On Android 10+, when 4G/5G Mobile Data stays active alongside no-internet ESP32 SoftAP,
-        // connect via native Wi-Fi Network.socketFactory loopback relay so 4G tiles still work too.
-        final relayPort = await _locationChannel.invokeMethod<int>('openWifiApTcpRelay', {
-          'host': espApIp,
-          'port': espApTcpPort,
-        });
-        if (relayPort == null || relayPort <= 0 || _isDisposed) {
-          rethrow;
+            rawSock = await _dialTcpWithTimeout(
+              targetIp,
+              espApTcpPort,
+              timeoutMs: 1600,
+              sourceAddress: localBindIp,
+            );
+          } catch (_) {
+            _apConnectTimeoutTimer?.cancel();
+            _apConnectTimeoutTimer = null;
+            _apConnectTask = null;
+          }
         }
-        rawSock = await Socket.connect(
-          InternetAddress.loopbackIPv4,
-          relayPort,
-          timeout: const Duration(milliseconds: 900),
-        );
+        if (rawSock == null && !_isDisposed && _tcpApSocket == null) {
+          rawSock = await _dialTcpWithTimeout(
+            targetIp,
+            espApTcpPort,
+            timeoutMs: 1600,
+          );
+        }
+      } else {
+        try {
+          rawSock = await _dialTcpWithTimeout(
+            targetIp,
+            espApTcpPort,
+            timeoutMs: connectTimeoutMs,
+          );
+        } on SocketException {
+          _apConnectTimeoutTimer?.cancel();
+          _apConnectTimeoutTimer = null;
+          _apConnectTask = null;
+          if (!Platform.isAndroid || useHotspot || _isDisposed || _tcpApSocket != null) rethrow;
+          // On Android 10+, when 4G/5G Mobile Data stays active alongside no-internet ESP32 SoftAP,
+          // connect via native Wi-Fi Network.socketFactory loopback relay so 4G tiles still work too.
+          final relayPort = await _locationChannel.invokeMethod<int>('openWifiApTcpRelay', {
+            'host': espApIp,
+            'port': espApTcpPort,
+          });
+          if (relayPort == null || relayPort <= 0 || _isDisposed || _tcpApSocket != null) {
+            rethrow;
+          }
+          rawSock = await Socket.connect(
+            InternetAddress.loopbackIPv4,
+            relayPort,
+            timeout: Duration(milliseconds: connectTimeoutMs),
+          );
+        }
       }
       _apConnectTimeoutTimer?.cancel();
       _apConnectTimeoutTimer = null;
       _apConnectTask = null;
       final sock = rawSock;
-      if (_isDisposed) {
-        sock.destroy();
+      if (sock == null || _isDisposed || _tcpApSocket != null) {
+        sock?.destroy();
         return;
       }
       _attachTcpBinarySocket(sock, displayIp: targetIp, displayPort: espApTcpPort);
     } on SocketException catch (e) {
-      final msg = e.message.toLowerCase();
-      final osCode = e.osError?.errorCode ?? 0;
-      final bool isRefused = osCode == 61 || osCode == 111 || msg.contains('refused');
-      if (isRefused) {
+      if (useHotspot && !_lastDialErrorLogged) {
+        _lastDialErrorLogged = true;
+        bleService.logInfo('Thử nối Hotspot TCP $targetIp:8081 thất bại ($e), chờ ESP32 nối :8082...');
+      }
+      if (_tcpApSocket == null && !_isDisposed) {
         final wsUrl = 'ws://$targetIp:8080';
         try {
-          final ws = await WebSocket.connect(wsUrl).timeout(const Duration(milliseconds: 1200));
+          final ws = await WebSocket.connect(wsUrl).timeout(const Duration(milliseconds: 1400));
+          if (_isDisposed || _tcpApSocket != null) {
+            unawaited(ws.close());
+            return;
+          }
           _apSocket = ws;
           _registerWsClient(ws, remoteIp: targetIp);
           bleService.logInfo('Đã kết nối Wi-Fi WS dự phòng ($wsUrl)');
@@ -539,7 +865,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void _enableBackgroundKeepAlive() {
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('startBackgroundNavigation');
+        _locationChannel.invokeMethod('startBackgroundNavigation', {'source': 'stream'});
       } catch (_) {}
     }
   }
@@ -550,7 +876,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         !(navManager?.isExternalBleNavMode ?? false) &&
         !_suppressStreamForBleNav) {
       try {
-        _locationChannel.invokeMethod('stopBackgroundNavigation');
+        _locationChannel.invokeMethod('stopBackgroundNavigation', {'source': 'stream'});
       } catch (_) {}
     }
   }
@@ -559,6 +885,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _isForeground = true;
+      _ensureServersListening();
       _tryConnectEspAp();
       if (_isStreaming && !_suppressStreamForBleNav) {
         _startTimer();
@@ -593,6 +920,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _wsClients.clear();
     _isDisposed = true;
     _apConnectTimer?.cancel();
+    _apReconnectTimer?.cancel();
+    _apReconnectTimer = null;
     _apConnectTimeoutTimer?.cancel();
     _apConnectTimeoutTimer = null;
     try {
@@ -706,10 +1035,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: full 25-30 FPS. In background during Google Maps / active nav: fluid 20 FPS (closed-loop ACK prevents lag)
+    // In foreground: full 25-30 FPS. In background during Google Maps / active nav or live TCP: smooth 20-25 FPS.
     final bool activeBgNav =
         (navManager?.isAnyNavActive ?? false) || (navManager?.isExternalBleNavMode ?? false);
-    final effectiveFps = _isForeground ? _targetFps : (activeBgNav ? 20 : 10);
+    final effectiveFps = _isForeground
+        ? _targetFps
+        : (activeBgNav ? 25 : (_tcpApSocket != null ? 20 : 12));
     final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
@@ -985,12 +1316,18 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    // Strict 1-in-flight closed-loop flow control: wait up to 650ms for ST7789 draw-complete ACK ('K')
-    // so stale frames NEVER pile up in the OS TCP send buffer!
+    // Bounded 2-frame pipelined flow control: overlaps phone encode/TX with ESP32 SPI draw
+    // so Wi-Fi never stalls between RTT/modem-sleep windows while keeping queue depth <= 1 frame.
+    final staleAckTimeoutMs = selectTcpInFlightTimeoutMs(
+      hotspotMode: _isHotspotTransportActive,
+    );
     if (bleService.isConnected &&
         _tcpApSocket != null &&
-        !_tcpApReadyForNextFrame &&
-        DateTime.now().difference(_lastTcpSendTime).inMilliseconds < 650) {
+        !canSendNextTcpFrame(
+          inFlight: _tcpInFlightFrames,
+          elapsedSinceLastSendMs: DateTime.now().difference(_lastTcpSendTime).inMilliseconds,
+          staleAckTimeoutMs: staleAckTimeoutMs,
+        )) {
       return;
     }
     if (bleService.isConnected &&
@@ -1056,7 +1393,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
           if (byteData != null) {
             final rawBytes = byteData.buffer.asUint8List();
-            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 86 : 88);
+            jpegBytes = await _compressRgbaToJpeg(rawBytes, w, h, quality: isNav ? 72 : 74);
           }
         } catch (_) {}
       }
@@ -1433,7 +1770,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           anchorY: anchorY,
           headingDeg: headingDeg,
         );
-        final frame = img.Image(width: w, height: h, numChannels: 4);
+        final frame = _acquireReusableCpuFrame(w, h);
         _osm3dRenderer.renderFrame(
           buf32: frame.buffer.asUint32List(),
           width: w,
@@ -1482,10 +1819,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           minTier: 2,
         );
         return await _compressRgbaToJpeg(
-          frame.toUint8List(),
+          _frameRawRgbaView(frame, w, h),
           w,
           h,
-          quality: 88,
+          quality: 74,
           roadLabels: _serializeRoadLabels(labels),
           isDark: isDark,
         );
@@ -1588,10 +1925,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      // Rotate patch by -headingDeg so ahead is UP
+      // Rotate patch by -headingDeg so ahead is UP (linear interpolation avoids slow cubic CPU stalls)
       img.Image rotatedPatch = patch;
       if (headingDeg.abs() > 0.5) {
-        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.cubic);
+        rotatedPatch = img.copyRotate(patch, angle: -headingDeg, interpolation: img.Interpolation.linear);
       }
 
       // Crop to 144x208 with vehicle anchor at (w/2, h*0.67) = (72, 140)
@@ -1609,7 +1946,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       );
 
       _drawStandbyVehiclePuck(frame, (w / 2.0).round(), (h * 0.67).round(), isDark);
-      return await _compressRgbaToJpeg(frame.toUint8List(), w, h, quality: 88);
+      return await _compressRgbaToJpeg(_frameRawRgbaView(frame, w, h), w, h, quality: 74);
     } catch (e, stack) {
       debugPrint('[_renderCpuMapFrame Error] $e\n$stack');
       return null;
@@ -1666,7 +2003,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       final double cosT = math.cos(th);
       final double sinT = math.sin(th);
 
-      final frame = img.Image(width: w, height: h, numChannels: 4);
+      final frame = _acquireReusableCpuFrame(w, h);
       final Uint32List buf32 = frame.buffer.asUint32List();
       List<Map<String, dynamic>>? osmNavRoadLabels;
 
@@ -1850,12 +2187,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       );
 
       if (Platform.isIOS || Platform.isAndroid) {
-        final rawRgba = frame.toUint8List();
+        final rawRgba = _frameRawRgbaView(frame, w, h);
         final nativeJpg = await _compressRgbaToJpeg(
           rawRgba,
           w,
           h,
-          quality: 86,
+          quality: 72,
           hud: hudData,
           roadLabels: osmNavRoadLabels,
           isDark: isDark,
@@ -1868,9 +2205,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       // Pure-Dart fallback if non-iOS
       _drawStandbyVehiclePuck(frame, vx, vy, isDark);
       final maxBytes = _maxJpegFrameBytes;
-      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 86));
+      var jpg = Uint8List.fromList(img.encodeJpg(frame, quality: 72));
       if (jpg.length > maxBytes) {
-        for (final q in const [78, 70, 62]) {
+        for (final q in const [66, 60, 54]) {
           jpg = Uint8List.fromList(img.encodeJpg(frame, quality: q));
           if (jpg.length <= maxBytes) break;
         }
@@ -1891,27 +2228,39 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     packet[3] = len & 0xFF;
     packet.setRange(4, 4 + len, jpegBytes);
     try {
-      _tcpApReadyForNextFrame = false;
-      _lastTcpSendTime = DateTime.now();
+      final now = DateTime.now();
+      _tcpInFlightFrames = (_tcpInFlightFrames + 1).clamp(1, maxTcpInFlightFrames);
+      _lastTcpSendTime = now;
+      _awaitingTcpAckSince ??= now;
       sock.add(packet);
       _consecutiveWifiErrors = 0;
       if (_frameCount % 50 == 0) {
         bleService.logInfo('TX [SoftAP TCP] Frame #$_frameCount ($_frameSizeKb KB, ${_actualFps.toStringAsFixed(1)} FPS)');
       }
-    } catch (_) {
-      _closeTcpApSocket(sock, notifyIfEmpty: true);
+    } catch (e) {
+      _closeTcpApSocket(sock, notifyIfEmpty: true, scheduleReconnect: true, reason: 'tx err: $e');
     }
   }
 
   void _dispatchTransmission(Uint8List jpegBytes) {
     final now = DateTime.now();
 
-    // 1. Primary SoftAP Raw TCP Stream (192.168.4.1:8081) -> Strict zero-backlog pacing via post-draw 'K' ACK
+    // 1. Primary Raw TCP Stream (SoftAP 8081 or Hotspot 8081/8082) -> Bounded 2-frame pipeline via 'K' ACK
     final tcpSock = _tcpApSocket;
     if (tcpSock != null) {
       final elapsed = now.difference(_lastTcpSendTime).inMilliseconds;
-      if (!_tcpApReadyForNextFrame && elapsed < 650) {
+      final staleAckTimeoutMs = selectTcpInFlightTimeoutMs(
+        hotspotMode: _isHotspotTransportActive,
+      );
+      if (!canSendNextTcpFrame(
+        inFlight: _tcpInFlightFrames,
+        elapsedSinceLastSendMs: elapsed,
+        staleAckTimeoutMs: staleAckTimeoutMs,
+      )) {
         return;
+      }
+      if (_tcpInFlightFrames >= maxTcpInFlightFrames && elapsed >= staleAckTimeoutMs) {
+        _tcpInFlightFrames = 0;
       }
       if (elapsed < 16) {
         return;
@@ -1977,9 +2326,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           pkt.setRange(4, 4 + len, payload);
           tcpSock.add(pkt);
           _lastTcpSendTime = DateTime.now();
+          _awaitingTcpAckSince ??= _lastTcpSendTime;
         }
-      } catch (_) {
-        _closeTcpApSocket(tcpSock, notifyIfEmpty: true);
+      } catch (e) {
+        _closeTcpApSocket(
+          tcpSock,
+          notifyIfEmpty: true,
+          scheduleReconnect: true,
+          reason: 'telemetry tx err: $e',
+        );
       }
     }
     if (_wsClients.isEmpty) return;

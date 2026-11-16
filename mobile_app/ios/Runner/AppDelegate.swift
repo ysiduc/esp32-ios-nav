@@ -1061,8 +1061,13 @@ final class NavigationSpeechSynthesizer: NSObject, AVSpeechSynthesizerDelegate {
         self.synthesizer.stopSpeaking(at: .immediate)
       }
 
+      guard let viVoice = AVSpeechSynthesisVoice(language: "vi-VN")
+        ?? AVSpeechSynthesisVoice.speechVoices().first(where: { $0.language.lowercased().hasPrefix("vi") }) else {
+        // Never fall back to en-US, which reads Vietnamese phonetically in English.
+        return
+      }
       let utterance = AVSpeechUtterance(string: trimmed)
-      utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN") ?? AVSpeechSynthesisVoice(language: "en-US")
+      utterance.voice = viVoice
       utterance.rate = 0.51
       utterance.pitchMultiplier = 1.0
       utterance.volume = 1.0

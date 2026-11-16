@@ -22,15 +22,15 @@ static WiFiClient tcpStreamClient;
 static uint8_t wsClientNum = 255;
 static bool wsConnected = false;
 static volatile bool tcpConnected = false;
-static volatile bool tcpNeedDrawAck = false;
+static volatile uint8_t tcpPendingAcks = 0;
 static volatile bool needWifiModeApply = false;
 static volatile bool pendingWifiStatusNotify = false;
 static volatile bool pendingBleRestart = false;
 static unsigned long pendingBleRestartAt = 0;
 
 static Preferences prefs;
-static String bleName = "ysiducnaga";
-static String wifiSsid = "ysiducnaga";
+static String bleName = "Hoa hướng dương";
+static String wifiSsid = "Hoa hướng dương";
 static String wifiPass = "12345678";
 static bool hotspotMode = false; // false = ESP32 SoftAP, true = STA client (Phone Hotspot)
 static String staSsid = "";
@@ -150,11 +150,40 @@ static int8_t acquireFreeWriterSlot() {
   return slot;
 }
 
-static void publishCompleteFrameFromWriter(int8_t writerSlot, size_t len) {
+static bool publishCompleteFrameFromWriter(int8_t writerSlot, size_t len) {
   portENTER_CRITICAL(&frameMux);
+  const bool overwroteUnread = (latestReadySlot >= 0);
   framePoolLen[writerSlot] = len;
   latestReadySlot = writerSlot;
   portEXIT_CRITICAL(&frameMux);
+  return overwroteUnread;
+}
+
+static void enqueueTcpAck() {
+  portENTER_CRITICAL(&frameMux);
+  if (tcpPendingAcks < 8) {
+    tcpPendingAcks++;
+  }
+  portEXIT_CRITICAL(&frameMux);
+}
+
+static void resetTcpAcks() {
+  portENTER_CRITICAL(&frameMux);
+  tcpPendingAcks = 0;
+  portEXIT_CRITICAL(&frameMux);
+}
+
+static void flushPendingTcpAcks() {
+  uint8_t count = 0;
+  portENTER_CRITICAL(&frameMux);
+  count = tcpPendingAcks;
+  tcpPendingAcks = 0;
+  portEXIT_CRITICAL(&frameMux);
+  if (count == 0) return;
+  uint8_t acks[8];
+  const uint8_t n = (count > 8) ? 8 : count;
+  memset(acks, 'K', n);
+  tcpStreamClient.write(acks, n);
 }
 
 static uint8_t currentBleFrameId = 255;
@@ -456,7 +485,7 @@ void processJsonPacket(const char* jsonStr) {
     if (rawBlePtr != nullptr) {
       String newBle = sanitizeCfgString(String(rawBlePtr));
       newBle.trim();
-      if (newBle.length() >= 1 && newBle.length() <= 24 && newBle != bleName) {
+      if (newBle.length() >= 1 && newBle.length() <= 25 && newBle != bleName) {
         bleName = newBle;
         bleChanged = true;
       }
@@ -755,6 +784,7 @@ static void tcpStreamTask(void* param) {
       needWifiModeApply = false;
       if (tcpStreamClient) tcpStreamClient.stop();
       tcpConnected = false;
+      resetTcpAcks();
       rxState = 0;
       rxPos = 0;
       staWasConnected = false;
@@ -790,6 +820,7 @@ static void tcpStreamTask(void* param) {
               if (tcpStreamClient) tcpStreamClient.stop();
               tcpStreamClient = revClient;
               tcpStreamClient.setNoDelay(true);
+              resetTcpAcks();
               tcpConnected = true;
               rxState = 0;
               rxPos = 0;
@@ -806,6 +837,7 @@ static void tcpStreamTask(void* param) {
           staConnectedAt = 0;
           if (tcpStreamClient) tcpStreamClient.stop();
           tcpConnected = false;
+      resetTcpAcks();
           rxState = 0;
           rxPos = 0;
           pendingWifiStatusNotify = true;
@@ -828,6 +860,7 @@ static void tcpStreamTask(void* param) {
         if (tcpStreamClient) tcpStreamClient.stop();
         tcpStreamClient = incoming;
         tcpStreamClient.setNoDelay(true);
+        resetTcpAcks();
         tcpConnected = true;
         rxState = 0;
         rxPos = 0;
@@ -840,17 +873,14 @@ static void tcpStreamTask(void* param) {
     if (tcpStreamClient && !tcpStreamClient.connected()) {
       tcpStreamClient.stop();
       tcpConnected = false;
+      resetTcpAcks();
       rxState = 0;
       rxPos = 0;
       Serial.println("[TCP 8081] iPhone disconnected");
     }
 
     if (tcpStreamClient && tcpStreamClient.connected()) {
-      if (tcpNeedDrawAck) {
-        tcpNeedDrawAck = false;
-        const uint8_t ack = 'K';
-        tcpStreamClient.write(&ack, 1);
-      }
+      flushPendingTcpAcks();
 
       int loops = 0;
       while (tcpStreamClient.available() > 0 && loops++ < 256) {
@@ -907,9 +937,12 @@ static void tcpStreamTask(void* param) {
           if (rxPos >= pktLen) {
             if (pktType == 0xBB) {
               if (pktLen > 100 && framePool[writerSlot][0] == 0xFF && framePool[writerSlot][1] == 0xD8) {
-                publishCompleteFrameFromWriter(writerSlot, pktLen);
+                if (publishCompleteFrameFromWriter(writerSlot, pktLen)) {
+                  // Superseded an un-drawn queued frame; release 1 credit immediately for 2-frame pipelining.
+                  enqueueTcpAck();
+                }
               } else {
-                tcpNeedDrawAck = true;
+                enqueueTcpAck();
               }
             } else if (pktType == 0xCC) {
               tcpJsonBuf[pktLen] = '\0';
@@ -924,11 +957,7 @@ static void tcpStreamTask(void* param) {
         }
       }
 
-      if (tcpNeedDrawAck) {
-        tcpNeedDrawAck = false;
-        const uint8_t ack = 'K';
-        tcpStreamClient.write(&ack, 1);
-      }
+      flushPendingTcpAcks();
     }
 
     vTaskDelay(pdMS_TO_TICKS(1));
@@ -952,18 +981,18 @@ void setup() {
 
   // Load saved Bluetooth & SoftAP Hotspot credentials from Preferences NVS
   prefs.begin("nav_cfg", true);
-  bleName = prefs.getString("ble_name", "ysiducnaga");
+  bleName = prefs.getString("ble_name", "Hoa hướng dương");
   prefs.end();
-  if (bleName.length() == 0) bleName = "ysiducnaga";
+  if (bleName.length() == 0 || bleName == "ysiducnaga") bleName = "Hoa hướng dương";
 
   prefs.begin("nav_wifi", false);
-  wifiSsid = prefs.getString("ap_ssid", "ysiducnaga");
+  wifiSsid = prefs.getString("ap_ssid", "Hoa hướng dương");
   wifiPass = prefs.getString("ap_pass", "12345678");
   hotspotMode = prefs.getBool("hotspot_mode", false);
   staSsid = prefs.getString("sta_ssid", "");
   staPass = prefs.getString("sta_pass", "");
   prefs.end();
-  if (wifiSsid.length() == 0) wifiSsid = "ysiducnaga";
+  if (wifiSsid.length() == 0 || wifiSsid == "ysiducnaga") wifiSsid = "Hoa hướng dương";
   if (wifiPass.length() < 8) wifiPass = "12345678";
   if (hotspotMode && staSsid.length() == 0) hotspotMode = false;
   Serial.printf("[NVS] BLE='%s' | mode=%s | AP='%s' | STA='%s'\n",
@@ -1039,9 +1068,8 @@ void setup() {
   pAdvertising->setAdvertisementData(advData);
 
   // 2. Scan Response Data (Max 31 bytes):
-  // Complete Local Name: "ysiducnaga" (12 bytes)
-  // Custom Nav Service: 0xFFE0 (4 bytes)
-  // Total = 16 bytes <= 31 bytes!
+  // Complete Local Name: "Hoa hướng dương" (20 UTF-8 bytes + 2B header = 22B)
+  // Custom Nav Service: 0xFFE0 (4 bytes) -> Total = 26 bytes <= 31 bytes!
   NimBLEAdvertisementData scanResponseData;
   scanResponseData.setName(bleName.c_str());
   scanResponseData.setCompleteServices(NimBLEUUID((uint16_t)0xFFE0));
@@ -1107,6 +1135,10 @@ void loop() {
     readingSlot = slotToDraw;
     frameLen = framePoolLen[slotToDraw];
     latestReadySlot = -1;
+    // Release TCP pipeline credit as soon as decode/SPI draw begins so the next frame prepares in parallel.
+    if (tcpConnected && tcpPendingAcks < 8) {
+      tcpPendingAcks++;
+    }
   }
   portEXIT_CRITICAL(&frameMux);
 
@@ -1148,10 +1180,6 @@ void loop() {
     }
     #endif
 
-    // Signal iPhone AFTER physical ST7789 draw completes so TCP never queues stale frames
-    if (tcpConnected) {
-      tcpNeedDrawAck = true;
-    }
     if (wsConnected && wsClientNum != 255) {
       webSocketServer.sendTXT(wsClientNum, "K");
     }

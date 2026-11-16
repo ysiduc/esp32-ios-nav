@@ -145,6 +145,7 @@ class MainActivity : FlutterActivity() {
 
     val mainHandler = Handler(Looper.getMainLooper())
     private val imageExecutor = Executors.newFixedThreadPool(2)
+    private val boldSansTypeface: Typeface by lazy { Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     var locationChannel: MethodChannel? = null
@@ -155,17 +156,23 @@ class MainActivity : FlutterActivity() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private val activeBgLockSources = HashSet<String>()
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var ttsUsingVietnamese = false
     private var ttsHasOfflineVietnamese = false
+    private var ttsHasNetworkVietnamese = false
     private var ttsEngineIndex = 0
     private var ttsCurrentEnginePkg: String? = null
     private var ttsBestEnginePkg: String? = null
     private var ttsBestEngineScore: Int = -1
+    private var ttsSelectedViVoice: android.speech.tts.Voice? = null
     private var ttsProbeQueue: MutableList<String?> = mutableListOf()
     private var pendingTtsUtterance: String? = null
+    private var ttsLastUtteranceText: String? = null
+    private var ttsLastUtteranceRetried = false
+    private var ttsRefreshScheduled = false
     private val ttsPreferredEngines = listOf<String?>("com.google.android.tts", null)
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -244,10 +251,28 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         currentActivity = this
         EspNotificationListenerService.instance?.refreshMediaSessionsInternal(pushUpdate = true)
+        // If user just returned from downloading Vietnamese TTS data or switching default engine, re-probe once.
+        if (!ttsHasOfflineVietnamese) {
+            mainHandler.post {
+                val active = tts
+                if (active != null && ttsReady) {
+                    val refreshed = scoreAndConfigureVietnameseTts(active)
+                    if (refreshed >= 3) {
+                        ttsUsingVietnamese = true
+                        ttsHasOfflineVietnamese = true
+                        ttsHasNetworkVietnamese = false
+                    } else if (!ttsUsingVietnamese) {
+                        initTextToSpeech(0)
+                    }
+                } else if (!ttsRefreshScheduled) {
+                    initTextToSpeech(0)
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
-        stopBackgroundLocks()
+        stopBackgroundLocks("all")
         unregisterReceivers()
         unregisterTelephonyListener()
         try {
@@ -269,21 +294,24 @@ class MainActivity : FlutterActivity() {
         locationChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startBackgroundNavigation" -> {
-                    startBackgroundLocks()
+                    val args = call.arguments as? Map<*, *>
+                    val source = (args?.get("source") as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "default"
+                    startBackgroundLocks(source)
                     result.success(true)
                 }
                 "stopBackgroundNavigation" -> {
-                    stopBackgroundLocks()
+                    val args = call.arguments as? Map<*, *>
+                    val source = (args?.get("source") as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "default"
+                    stopBackgroundLocks(source)
                     result.success(true)
                 }
                 "speakGuidance" -> {
                     val args = call.arguments as? Map<*, *>
                     val text = (args?.get("text") as? String)?.trim() ?: ""
                     if (text.isNotEmpty()) {
-                        speakVietnameseGuidance(text)
-                        result.success(true)
+                        result.success(speakVietnameseGuidance(text))
                     } else {
-                        result.success(false)
+                        result.success(mapOf("ok" to false, "empty" to true))
                     }
                 }
                 "stopGuidance" -> {
@@ -294,18 +322,31 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getTtsStatus" -> {
+                    val active = tts
+                    if (active != null && ttsReady && !ttsHasOfflineVietnamese) {
+                        val refreshed = scoreAndConfigureVietnameseTts(active)
+                        ttsUsingVietnamese = refreshed >= 1
+                        ttsHasOfflineVietnamese = refreshed >= 3
+                        ttsHasNetworkVietnamese = refreshed == 2
+                    }
                     result.success(
                         mapOf(
                             "ready" to ttsReady,
                             "usingVietnamese" to ttsUsingVietnamese,
                             "hasOfflineVietnamese" to ttsHasOfflineVietnamese,
+                            "hasNetworkVietnamese" to ttsHasNetworkVietnamese,
                             "engine" to (ttsCurrentEnginePkg ?: ""),
-                            "voiceLocale" to (tts?.voice?.locale?.toLanguageTag() ?: "")
+                            "voiceLocale" to (tts?.voice?.locale?.toLanguageTag() ?: ""),
+                            "voiceName" to (tts?.voice?.name ?: ""),
+                            "diagnostic" to buildTtsDiagnosticString(active)
                         )
                     )
                 }
                 "installVietnameseTtsData" -> {
                     result.success(launchInstallVietnameseTtsData())
+                }
+                "openTtsSettings" -> {
+                    result.success(launchSystemTtsSettings())
                 }
                 "getBatteryLevel" -> {
                     result.success(readPhoneBatteryPercent())
@@ -949,7 +990,8 @@ class MainActivity : FlutterActivity() {
     // BACKGROUND WAKELOCK & WIFILOCK FOR SCREEN-OFF ESP32 STREAMING
     // =========================================================================
     @Suppress("DEPRECATION")
-    private fun startBackgroundLocks() {
+    private fun startBackgroundLocks(source: String = "default") {
+        activeBgLockSources.add(source)
         try {
             if (wakeLock == null) {
                 val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -978,9 +1020,20 @@ class MainActivity : FlutterActivity() {
                 wifiLock?.acquire()
             }
         } catch (_: Throwable) {}
+
+        NavForegroundService.start(applicationContext)
     }
 
-    private fun stopBackgroundLocks() {
+    private fun stopBackgroundLocks(source: String = "default") {
+        if (source == "all") {
+            activeBgLockSources.clear()
+        } else {
+            activeBgLockSources.remove(source)
+            if (activeBgLockSources.isNotEmpty()) {
+                return
+            }
+        }
+        NavForegroundService.stop(applicationContext)
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
@@ -996,71 +1049,115 @@ class MainActivity : FlutterActivity() {
     // =========================================================================
     // VIETNAMESE TEXT-TO-SPEECH VOICE GUIDANCE
     // =========================================================================
-    private fun scoreAndConfigureVietnameseTts(engine: TextToSpeech?): Int {
+    private fun isVietnameseLocale(locale: Locale?): Boolean {
+        if (locale == null) return false
+        val lang = locale.language.lowercase(Locale.ROOT)
+        if (lang == "vi" || lang == "vie") return true
+        val tag = try {
+            locale.toLanguageTag().lowercase(Locale.ROOT)
+        } catch (_: Throwable) {
+            locale.toString().lowercase(Locale.ROOT)
+        }
+        return tag == "vi" ||
+            tag == "vie" ||
+            tag.startsWith("vi-") ||
+            tag.startsWith("vi_") ||
+            tag.startsWith("vie-")
+    }
+
+    private fun scoreAndConfigureVietnameseTts(engine: TextToSpeech?, preferOfflineOnly: Boolean = false): Int {
         if (engine == null) return 0
-        var bestScore = 0
-        var chosenVoice: android.speech.tts.Voice? = null
-        var chosenLocale: Locale = Locale("vi", "VN")
+        if (engine === tts) {
+            ttsSelectedViVoice = null
+        }
+        val defaultViLocale = Locale.forLanguageTag("vi-VN")
 
         val voices = try {
             engine.voices
         } catch (_: Throwable) {
             null
         }
-        val viVoices = voices
-            ?.filter { it.locale?.language?.equals("vi", ignoreCase = true) == true }
+        val installedViVoices = voices
+            ?.filter { v ->
+                isVietnameseLocale(v.locale) &&
+                    v.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true &&
+                    !v.name.contains("not_installed", ignoreCase = true) &&
+                    (!preferOfflineOnly || (!v.isNetworkConnectionRequired && !v.name.contains("network", ignoreCase = true)))
+            }
             ?.sortedWith(
                 compareBy<android.speech.tts.Voice> {
-                    if (it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true) 1 else 0
-                }.thenBy {
-                    if (it.isNetworkConnectionRequired) 1 else 0
+                    if (it.isNetworkConnectionRequired || it.name.contains("network", ignoreCase = true)) 1 else 0
                 }.thenBy {
                     if (it.locale?.country.equals("VN", ignoreCase = true)) 0 else 1
                 }
             )
 
-        val topVoice = viVoices?.firstOrNull()
-        if (topVoice != null) {
-            val notInstalled = topVoice.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true
-            bestScore = when {
-                !notInstalled && !topVoice.isNetworkConnectionRequired -> 3
-                !notInstalled -> 2
-                else -> 1
-            }
-            chosenVoice = topVoice
-            chosenLocale = topVoice.locale ?: Locale("vi", "VN")
+        // First pick an actually installed Vietnamese voice and apply language BEFORE explicit voice,
+        // because AOSP TextToSpeech.setLanguage resets explicit voice selection.
+        for (candidateVoice in installedViVoices.orEmpty()) {
+            val isNetworkOnly = candidateVoice.isNetworkConnectionRequired ||
+                candidateVoice.name.contains("network", ignoreCase = true)
+            val voiceLocale = candidateVoice.locale ?: defaultViLocale
+            try {
+                engine.language = voiceLocale
+            } catch (_: Throwable) {}
+            try {
+                val res = engine.setVoice(candidateVoice)
+                val activeVoice = engine.voice
+                if (res == TextToSpeech.SUCCESS &&
+                    (activeVoice == null || isVietnameseLocale(activeVoice.locale))) {
+                    if (engine === tts) {
+                        ttsSelectedViVoice = candidateVoice
+                    }
+                    return if (!isNetworkOnly) 3 else 2
+                }
+            } catch (_: Throwable) {}
         }
 
-        val candidates = listOf(chosenLocale, Locale("vi", "VN"), Locale("vi")).distinct()
+        // If engine.voices is populated and none of the installed voices are Vietnamese,
+        // do NOT trust isLanguageAvailable() — Android often returns LANG_AVAILABLE for
+        // unloaded/English fallback engines and would pronounce Vietnamese as foreign gibberish.
+        if (!voices.isNullOrEmpty()) {
+            return 0
+        }
+
+        val candidates = listOf(defaultViLocale, Locale("vi")).distinct()
         for (loc in candidates) {
             try {
                 val avail = engine.isLanguageAvailable(loc)
                 if (avail >= TextToSpeech.LANG_AVAILABLE) {
                     val res = engine.setLanguage(loc)
                     if (res >= TextToSpeech.LANG_AVAILABLE) {
-                        if (chosenVoice != null) {
-                            try {
-                                engine.voice = chosenVoice
-                            } catch (_: Throwable) {}
+                        val activeVoiceLocale = engine.voice?.locale
+                        if (activeVoiceLocale == null || isVietnameseLocale(activeVoiceLocale)) {
+                            return 1
                         }
-                        if (bestScore == 0) {
-                            bestScore = 1
-                        }
-                        return bestScore
                     }
                 }
             } catch (_: Throwable) {}
         }
-
-        // Still allow score 1 if voice list clearly carries vi-VN even when OEM setLanguage quirks occur
-        if (chosenVoice != null) {
-            try {
-                engine.voice = chosenVoice
-                engine.setLanguage(chosenLocale)
-                return maxOf(bestScore, 1)
-            } catch (_: Throwable) {}
-        }
         return 0
+    }
+
+    private var ttsGoogleInitSucceeded = false
+
+    private fun buildTtsDiagnosticString(engine: TextToSpeech?): String {
+        val pkg = ttsCurrentEnginePkg?.ifEmpty { null } ?: engine?.defaultEngine ?: "none"
+        val voice = try { engine?.voice } catch (_: Throwable) { null }
+        val availVi = try { engine?.isLanguageAvailable(Locale.forLanguageTag("vi-VN")) } catch (_: Throwable) { -99 }
+        val viSummary = try {
+            engine?.voices
+                ?.filter { isVietnameseLocale(it.locale) }
+                ?.joinToString(",") { v ->
+                    val notInst = v.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true
+                    val net = v.isNetworkConnectionRequired
+                    "${v.name}[${if (notInst) "missing" else if (net) "net" else "local"}]"
+                } ?: ""
+        } catch (_: Throwable) { "" }
+        val enginesList = try {
+            engine?.engines?.joinToString(",") { it.name } ?: ""
+        } catch (_: Throwable) { "" }
+        return "pkg=$pkg, availVi=$availVi, active=${voice?.name ?: "-"}(${voice?.locale?.toLanguageTag() ?: "-"}), vi=[$viSummary], all=[$enginesList]"
     }
 
     private fun initTextToSpeech(engineAttemptIndex: Int = 0) {
@@ -1068,12 +1165,14 @@ class MainActivity : FlutterActivity() {
             if (engineAttemptIndex == 0) {
                 ttsBestEnginePkg = null
                 ttsBestEngineScore = -1
+                ttsGoogleInitSucceeded = false
                 ttsProbeQueue = ttsPreferredEngines.toMutableList()
             }
             ttsEngineIndex = engineAttemptIndex
             ttsReady = false
             ttsUsingVietnamese = false
             ttsHasOfflineVietnamese = false
+            ttsHasNetworkVietnamese = false
             try {
                 tts?.shutdown()
             } catch (_: Throwable) {}
@@ -1081,11 +1180,14 @@ class MainActivity : FlutterActivity() {
             val enginePkg = ttsProbeQueue.getOrNull(engineAttemptIndex)
             lateinit var listener: TextToSpeech.OnInitListener
             listener = TextToSpeech.OnInitListener { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    // Add any extra system TTS engines discovered at runtime to probe queue
+                val currentTts = tts
+                if (status == TextToSpeech.SUCCESS && currentTts != null) {
+                    if (enginePkg == "com.google.android.tts") {
+                        ttsGoogleInitSucceeded = true
+                    }
                     if (engineAttemptIndex == 0) {
                         val installed = try {
-                            tts?.engines?.mapNotNull { it.name } ?: emptyList()
+                            currentTts.engines?.mapNotNull { it.name } ?: emptyList()
                         } catch (_: Throwable) {
                             emptyList()
                         }
@@ -1096,41 +1198,70 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
-                    val score = scoreAndConfigureVietnameseTts(tts)
-                    if (score > ttsBestEngineScore) {
-                        ttsBestEngineScore = score
-                        ttsBestEnginePkg = enginePkg ?: tts?.defaultEngine
-                    }
+                    fun evaluateCurrentEngine(allowWaitRetry: Boolean) {
+                        val activeTts = tts
+                        if (activeTts == null || activeTts !== currentTts) return
+                        val score = scoreAndConfigureVietnameseTts(activeTts)
+                        val voicesEmpty = try { activeTts.voices.isNullOrEmpty() } catch (_: Throwable) { true }
+                        // Google TTS hydrates voices asynchronously right after onInit(SUCCESS):
+                        // wait briefly before tearing it down so we don't reject a valid engine prematurely.
+                        if (allowWaitRetry && score < 2 && (voicesEmpty || enginePkg == "com.google.android.tts")) {
+                            mainHandler.postDelayed({ evaluateCurrentEngine(allowWaitRetry = false) }, 350L)
+                            return
+                        }
 
-                    if (score >= 3) {
-                        // Offline installed Vietnamese voice found -> lock immediately!
-                        ttsCurrentEnginePkg = enginePkg ?: tts?.defaultEngine
-                        ttsUsingVietnamese = true
-                        ttsHasOfflineVietnamese = true
+                        val candidatePkg = enginePkg ?: activeTts.defaultEngine
+                        if (score > ttsBestEngineScore) {
+                            ttsBestEngineScore = score
+                            ttsBestEnginePkg = candidatePkg
+                        }
+
+                        if (score >= 3) {
+                            ttsCurrentEnginePkg = candidatePkg
+                            ttsUsingVietnamese = true
+                            ttsHasOfflineVietnamese = true
+                            ttsHasNetworkVietnamese = false
+                            finalizeTtsSetup()
+                            return
+                        }
+
+                        if (engineAttemptIndex + 1 < ttsProbeQueue.size) {
+                            mainHandler.post { initTextToSpeech(engineAttemptIndex + 1) }
+                            return
+                        }
+
+                        val winningPkg = ttsBestEnginePkg
+                        if (ttsBestEngineScore >= 1 && winningPkg != null && winningPkg != enginePkg) {
+                            mainHandler.post { lockBestVietnameseEngine(winningPkg) }
+                            return
+                        }
+
+                        // If no engine had vi-VN installed at probe time, still lock Google TTS over OEM English-only engines
+                        if (ttsBestEngineScore <= 0 && ttsGoogleInitSucceeded && enginePkg != "com.google.android.tts") {
+                            mainHandler.post { lockBestVietnameseEngine("com.google.android.tts") }
+                            return
+                        }
+
+                        ttsCurrentEnginePkg = candidatePkg
+                        ttsUsingVietnamese = score >= 1
+                        ttsHasOfflineVietnamese = score >= 3
+                        ttsHasNetworkVietnamese = score == 2
                         finalizeTtsSetup()
-                        return@OnInitListener
                     }
 
-                    if (engineAttemptIndex + 1 < ttsProbeQueue.size) {
-                        mainHandler.post { initTextToSpeech(engineAttemptIndex + 1) }
-                        return@OnInitListener
-                    }
-
-                    // Finished probing all engines: lock highest-scoring engine found (instead of stuck OEM English)
-                    val winningPkg = ttsBestEnginePkg
-                    if (ttsBestEngineScore >= 1 && winningPkg != null && winningPkg != enginePkg) {
-                        mainHandler.post { lockBestVietnameseEngine(winningPkg) }
-                        return@OnInitListener
-                    }
-
-                    ttsCurrentEnginePkg = enginePkg ?: tts?.defaultEngine
-                    ttsUsingVietnamese = score >= 1
-                    ttsHasOfflineVietnamese = score >= 3
-                    finalizeTtsSetup()
+                    evaluateCurrentEngine(allowWaitRetry = true)
                 } else if (engineAttemptIndex + 1 < ttsProbeQueue.size) {
                     mainHandler.post { initTextToSpeech(engineAttemptIndex + 1) }
                 } else if (ttsBestEngineScore >= 1 && ttsBestEnginePkg != null) {
                     mainHandler.post { lockBestVietnameseEngine(ttsBestEnginePkg!!) }
+                } else if (ttsGoogleInitSucceeded) {
+                    mainHandler.post { lockBestVietnameseEngine("com.google.android.tts") }
+                } else {
+                    ttsCurrentEnginePkg = enginePkg ?: ""
+                    ttsUsingVietnamese = false
+                    ttsHasOfflineVietnamese = false
+                    ttsHasNetworkVietnamese = false
+                    ttsReady = false
                 }
             }
 
@@ -1147,43 +1278,101 @@ class MainActivity : FlutterActivity() {
             try {
                 tts?.shutdown()
             } catch (_: Throwable) {}
-            tts = TextToSpeech(applicationContext, { status ->
+            lateinit var lockedInstance: TextToSpeech
+            lockedInstance = TextToSpeech(applicationContext, { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    val score = scoreAndConfigureVietnameseTts(tts)
-                    ttsCurrentEnginePkg = enginePkg
-                    ttsUsingVietnamese = score >= 1
-                    ttsHasOfflineVietnamese = score >= 3
-                    finalizeTtsSetup()
+                    mainHandler.postDelayed({
+                        val active = tts
+                        if (active == null || active !== lockedInstance) return@postDelayed
+                        val score = scoreAndConfigureVietnameseTts(active)
+                        ttsCurrentEnginePkg = enginePkg
+                        ttsUsingVietnamese = score >= 1
+                        ttsHasOfflineVietnamese = score >= 3
+                        ttsHasNetworkVietnamese = score == 2
+                        finalizeTtsSetup()
+                    }, 220L)
                 }
             }, enginePkg)
+            tts = lockedInstance
         } catch (_: Throwable) {}
     }
 
+    private fun launchSystemTtsSettings(): Boolean {
+        val candidates = listOf(
+            Intent("com.android.settings.TTS_SETTINGS").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+        for (intent in candidates) {
+            try {
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Throwable) {}
+        }
+        return false
+    }
+
     private fun launchInstallVietnameseTtsData(): Boolean {
-        return try {
-            val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
+        val candidates = listOf(
+            Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 setPackage("com.google.android.tts")
+            },
+            Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent("com.android.settings.TTS_SETTINGS").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.tts")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (intent.resolveActivity(packageManager) != null) {
-                startActivity(intent)
-                true
-            } else {
-                val generic = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        for (intent in candidates) {
+            try {
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return true
                 }
-                startActivity(generic)
-                true
-            }
-        } catch (_: Throwable) {
-            false
+            } catch (_: Throwable) {}
         }
+        return false
+    }
+
+    private fun refreshActiveTtsVoiceAsync(delayMs: Long) {
+        ttsRefreshScheduled = true
+        mainHandler.postDelayed({
+            ttsRefreshScheduled = false
+            val active = tts ?: return@postDelayed
+            if (!ttsReady) return@postDelayed
+            val score = scoreAndConfigureVietnameseTts(active)
+            if (score > 0 && (!ttsUsingVietnamese || score >= 3 && !ttsHasOfflineVietnamese)) {
+                ttsUsingVietnamese = true
+                ttsHasOfflineVietnamese = score >= 3
+                ttsHasNetworkVietnamese = score == 2
+            }
+        }, delayMs)
     }
 
     private fun finalizeTtsSetup() {
         ttsReady = true
         tts?.setSpeechRate(1.02f)
         tts?.setPitch(1.0f)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                tts?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+            } catch (_: Throwable) {}
+        }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) {
@@ -1191,9 +1380,27 @@ class MainActivity : FlutterActivity() {
             }
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
+                val retryText = ttsLastUtteranceText
+                if (!ttsLastUtteranceRetried && !retryText.isNullOrBlank()) {
+                    ttsLastUtteranceRetried = true
+                    mainHandler.post {
+                        val active = tts
+                        if (active != null && scoreAndConfigureVietnameseTts(active, preferOfflineOnly = true) >= 1) {
+                            speakVietnameseGuidance(retryText, isRetry = true)
+                            return@post
+                        }
+                        abandonAudioFocus()
+                    }
+                    return
+                }
                 abandonAudioFocus()
             }
         })
+        // Google TTS loads voices asynchronously shortly after onInit(SUCCESS)
+        if (!ttsHasOfflineVietnamese) {
+            refreshActiveTtsVoiceAsync(400L)
+            refreshActiveTtsVoiceAsync(1300L)
+        }
         val pending = pendingTtsUtterance
         pendingTtsUtterance = null
         if (!pending.isNullOrBlank()) {
@@ -1201,25 +1408,62 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun speakVietnameseGuidance(text: String) {
-        if (!ttsReady || tts == null) {
+    private fun speakVietnameseGuidance(text: String, isRetry: Boolean = false): Map<String, Any> {
+        val activeTts = tts
+        if (!ttsReady || activeTts == null) {
             pendingTtsUtterance = text
-            return
+            return mapOf("ok" to true, "queued" to true)
         }
         try {
-            if (!ttsUsingVietnamese || tts?.voice?.locale?.language?.equals("vi", ignoreCase = true) != true) {
-                val score = scoreAndConfigureVietnameseTts(tts)
-                if (score >= 1) {
-                    ttsUsingVietnamese = true
-                    ttsHasOfflineVietnamese = score >= 3
-                }
+            val lockedVoice = ttsSelectedViVoice
+            if (lockedVoice != null && activeTts.voice?.name != lockedVoice.name) {
+                try {
+                    activeTts.voice = lockedVoice
+                } catch (_: Throwable) {}
+            }
+            val currentVoiceLocale = activeTts.voice?.locale
+            if (!ttsUsingVietnamese || (currentVoiceLocale != null && !isVietnameseLocale(currentVoiceLocale))) {
+                val score = scoreAndConfigureVietnameseTts(activeTts)
+                ttsUsingVietnamese = score >= 1
+                ttsHasOfflineVietnamese = score >= 3
+                ttsHasNetworkVietnamese = score == 2
+            }
+            // Never allow non-Vietnamese (English/Chinese/OEM) TTS engines to mispronounce Vietnamese text.
+            if (!ttsUsingVietnamese) {
+                abandonAudioFocus()
+                return mapOf(
+                    "ok" to false,
+                    "missingVietnamese" to true,
+                    "usingVietnamese" to false,
+                    "engine" to (ttsCurrentEnginePkg ?: activeTts.defaultEngine ?: ""),
+                    "diagnostic" to buildTtsDiagnosticString(activeTts)
+                )
+            }
+            if (!isRetry) {
+                ttsLastUtteranceText = text
+                ttsLastUtteranceRetried = false
             }
             requestDuckingAudioFocus()
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+                if (activeTts.voice?.isNetworkConnectionRequired == true) {
+                    putString(TextToSpeech.Engine.KEY_FEATURE_NETWORK_SYNTHESIS, "true")
+                }
             }
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "esp32_nav_tts_${System.currentTimeMillis()}")
-        } catch (_: Throwable) {}
+            val rc = activeTts.speak(
+                text,
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                "esp32_nav_tts_${System.currentTimeMillis()}"
+            )
+            if (rc == TextToSpeech.ERROR) {
+                abandonAudioFocus()
+                return mapOf("ok" to false, "error" to "speak_error")
+            }
+            return mapOf("ok" to true, "usingVietnamese" to true)
+        } catch (t: Throwable) {
+            return mapOf("ok" to false, "error" to (t.message ?: "exception"))
+        }
     }
 
     private fun requestDuckingAudioFocus() {
@@ -1488,7 +1732,7 @@ class MainActivity : FlutterActivity() {
         }
 
         val haloPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            typeface = boldSansTypeface
             style = Paint.Style.STROKE
             strokeWidth = 3.2f
             strokeJoin = Paint.Join.ROUND
@@ -1496,7 +1740,7 @@ class MainActivity : FlutterActivity() {
             color = haloColor
         }
         val fillPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            typeface = boldSansTypeface
             style = Paint.Style.FILL
             color = fgColor
         }
