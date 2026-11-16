@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../config/goong_config.dart';
 import '../models/route_model.dart';
+import 'navigation_manager.dart';
 
 /// Dịch vụ Goong Map: Tìm kiếm địa điểm, Geocoding & Tính toán đường đi (Routing)
 class GoongService {
@@ -199,7 +200,7 @@ class GoongService {
       final url = Uri.parse(
         '${GoongConfig.directionUrl}?origin=${start.latitude},${start.longitude}'
         '&destination=${destination.latitude},${destination.longitude}'
-        '&vehicle=$vehicle&api_key=${GoongConfig.restApiKey}',
+        '&vehicle=$vehicle&language=vi&api_key=${GoongConfig.restApiKey}',
       );
 
       final res = await http.get(url).timeout(const Duration(seconds: 10));
@@ -226,7 +227,7 @@ class GoongService {
       int idx = 0;
       for (final s in rawSteps) {
         final htmlInstruction = s['html_instructions'] as String? ?? s['instruction'] as String? ?? '';
-        final cleanInstruction =
+        final strippedInstruction =
             htmlInstruction.replaceAll(RegExp(r'<[^>]*>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
         final stepDist = (s['distance']?['value'] as num?)?.toDouble() ?? 0.0;
         final stepDur = (s['duration']?['value'] as num?)?.toDouble() ?? 0.0;
@@ -237,11 +238,21 @@ class GoongService {
 
         final maneuver = s['maneuver'] as String? ?? 'turn-straight';
         final (mType, mMod) = _parseGoongManeuver(maneuver);
+        final rawStreet = (s['name'] as String? ?? '').trim();
+        final viInstruction = NavigationManager.localizeInstructionToVietnamese(
+          strippedInstruction,
+          maneuverType: mType,
+          maneuverModifier: mMod,
+          streetName: rawStreet,
+        );
+        final streetName = rawStreet.isNotEmpty
+            ? rawStreet
+            : _extractStreetNameFromViInstruction(viInstruction);
 
         steps.add(NavStep(
           stepIndex: idx++,
-          instruction: cleanInstruction.isNotEmpty ? cleanInstruction : 'Tiếp tục đi thẳng',
-          streetName: cleanInstruction,
+          instruction: viInstruction.isNotEmpty ? viInstruction : 'Tiếp tục đi thẳng',
+          streetName: streetName,
           distanceMeters: stepDist,
           durationSeconds: stepDur,
           coordinate: stepCoord,
@@ -263,6 +274,18 @@ class GoongService {
       debugPrint('[GoongService] calculateRoute error: $e');
       return null;
     }
+  }
+
+  static String _extractStreetNameFromViInstruction(String viInst) {
+    final m = RegExp(
+      r'(?:vào|theo|trên|về hướng|tại)\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(viInst);
+    if (m != null) {
+      final candidate = (m.group(1) ?? '').trim();
+      if (candidate.isNotEmpty) return candidate;
+    }
+    return viInst;
   }
 
   (String, String) _parseGoongManeuver(String maneuver) {

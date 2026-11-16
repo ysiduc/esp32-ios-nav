@@ -15,6 +15,7 @@ import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
 import 'navigation_manager.dart';
+import 'osm_road_guide_matcher.dart';
 import 'osm_vector_tile.dart';
 
 class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
@@ -29,6 +30,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   bool _isStreaming = false;
   bool _isCapturing = false;
   bool _isForeground = true;
+  bool _suppressStreamForBleNav = false;
+  bool _resumeStreamAfterBleNav = false;
+  bool get isBleOnlyNavMode => _suppressStreamForBleNav;
   int _targetFps = 30; // High-speed 30 FPS target for Raw TCP / double-buffered ESP32 Wi-Fi streaming
   double _actualFps = 28.0;
   int _frameSizeKb = 0;
@@ -57,6 +61,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   final Set<String> _pendingSuppFetches = {};
   final Osm3dRenderer _osm3dRenderer = Osm3dRenderer();
   String? _openFreeMapTileTemplate;
+  double? _smoothedRenderHeading;
 
   // Persistent TCP Socket for continuous screen-off background streaming (SoftAP mode)
   Socket? _persistentWifiSocket;
@@ -405,6 +410,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       try {
         final task = await Socket.startConnect(targetIp, espApTcpPort);
         if (_isDisposed) {
+          unawaited(task.socket.then((s) => s.destroy(), onError: (_) {}));
           task.cancel();
           return;
         }
@@ -539,7 +545,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _disableBackgroundKeepAlive() {
-    if ((Platform.isIOS || Platform.isAndroid) && !(navManager?.isNavigating ?? false)) {
+    if ((Platform.isIOS || Platform.isAndroid) &&
+        !(navManager?.isAnyNavActive ?? false) &&
+        !(navManager?.isExternalBleNavMode ?? false) &&
+        !_suppressStreamForBleNav) {
       try {
         _locationChannel.invokeMethod('stopBackgroundNavigation');
       } catch (_) {}
@@ -551,14 +560,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _isForeground = true;
       _tryConnectEspAp();
-      if (_isStreaming) {
+      if (_isStreaming && !_suppressStreamForBleNav) {
         _startTimer();
       }
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _isForeground = false;
       // When app is in background or screen is locked:
-      // Keep streaming continuously without dropping
-      if (_isStreaming) {
+      // Keep streaming continuously without dropping (unless BLE-only nav mode is active)
+      if (_isStreaming && !_suppressStreamForBleNav) {
         _enableBackgroundKeepAlive();
         _startTimer();
       } else {
@@ -570,6 +579,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _suppressStreamForBleNav = false;
     WidgetsBinding.instance.removeObserver(this);
     bleService.removeListener(_handleBleConnectionChange);
     stopStreaming();
@@ -630,8 +640,50 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// Toggles BLE-only navigation mode (stops Wi-Fi map streaming while external Google Maps BLE relay runs without stream).
+  void setBleOnlyNavMode(bool enabled) {
+    if (enabled == _suppressStreamForBleNav) return;
+    if (enabled) {
+      _resumeStreamAfterBleNav = _isStreaming || _resumeStreamAfterBleNav;
+      _suppressStreamForBleNav = true;
+      stopStreaming();
+      _enableBackgroundKeepAlive();
+    } else {
+      _suppressStreamForBleNav = false;
+      if (_resumeStreamAfterBleNav &&
+          (_isForeground || (navManager?.isAnyNavActive ?? false) || (navManager?.isExternalBleNavMode ?? false))) {
+        _resumeStreamAfterBleNav = false;
+        startStreaming();
+      } else {
+        _resumeStreamAfterBleNav = false;
+        _disableBackgroundKeepAlive();
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Ensures 20-30 FPS foreground / 10 FPS background map streaming stays active
+  /// when external guidance (e.g. Google Maps) streams Man 3 over Wi-Fi.
+  void ensureExternalNavStreamingActive() {
+    if (_suppressStreamForBleNav) return;
+    if (!_isStreaming) {
+      startStreaming();
+      return;
+    }
+    _enableBackgroundKeepAlive();
+    if (_streamTimer == null || !(_streamTimer!.isActive)) {
+      _startTimer();
+    }
+    scheduleMicrotask(_renderAndStreamHeadlessFrame);
+  }
+
   /// Start High-Speed Headless 20-30 FPS JPEG Streaming
   void startStreaming({GlobalKey? boundaryKey}) {
+    if (_suppressStreamForBleNav) {
+      _resumeStreamAfterBleNav = true;
+      stopStreaming();
+      return;
+    }
     stopStreaming();
     _isStreaming = true;
     _frameCount = 0;
@@ -640,7 +692,12 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _lastFpsUpdate = DateTime.now();
 
     _enableBackgroundKeepAlive();
-    if (_isForeground || bleService.isConnected || bleService.isWifiConnected || _wsClients.isNotEmpty || (navManager?.isNavigating ?? false)) {
+    if (_isForeground ||
+        bleService.isConnected ||
+        bleService.isWifiConnected ||
+        _wsClients.isNotEmpty ||
+        (navManager?.isAnyNavActive ?? false) ||
+        (navManager?.isExternalBleNavMode ?? false)) {
       _startTimer();
     }
 
@@ -649,8 +706,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _startTimer() {
     _streamTimer?.cancel();
-    // In foreground: full 25-30 FPS. In background (screen locked): responsive 10 FPS
-    final effectiveFps = _isForeground ? _targetFps : 10;
+    // In foreground: full 25-30 FPS. In background during Google Maps / active nav: fluid 20 FPS (closed-loop ACK prevents lag)
+    final bool activeBgNav =
+        (navManager?.isAnyNavActive ?? false) || (navManager?.isExternalBleNavMode ?? false);
+    final effectiveFps = _isForeground ? _targetFps : (activeBgNav ? 20 : 10);
     final intervalMs = (1000 / effectiveFps).round();
     _streamTimer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
       _renderAndStreamHeadlessFrame();
@@ -667,6 +726,190 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   @visibleForTesting
   int get debugMaxJpegFrameBytes => _maxJpegFrameBytes;
+
+  @visibleForTesting
+  bool get debugIsNavFrameMode => navManager?.isAnyNavActive ?? false;
+
+  @visibleForTesting
+  int get debugTargetRenderWidth => debugIsNavFrameMode ? 320 : 144;
+
+  @visibleForTesting
+  int get debugTargetRenderHeight => debugIsNavFrameMode ? 216 : 224;
+
+  @visibleForTesting
+  List<LatLng> get debugEffectiveRoutePoints =>
+      _resolveMapRoutePoints(navManager?.activeRoute);
+
+  @visibleForTesting
+  Map<String, dynamic> get debugCurrentNavHudSnapshot => _buildNavHudPayload(
+        vx: 226.0,
+        vy: 160.0,
+        isDark: _streamMapStyle.contains('dark'),
+      );
+
+  @visibleForTesting
+  ({double headingDeg, List<LatLng> pts, LatLng userPos, bool matchedRoad})
+      debugResolveExternalGuidedPose({
+    required LatLng userPos,
+    required int displayZoom,
+    required double rawHeadingDeg,
+    Iterable<OsmVectorTile>? tilesOverride,
+  }) =>
+          _resolveExternalGuidedPose(
+            userPos: userPos,
+            displayZoom: displayZoom,
+            rawHeadingDeg: rawHeadingDeg,
+            activeRoute: navManager?.activeRoute ?? navManager?.previewRoute,
+            tilesOverride: tilesOverride,
+          );
+
+  /// Stabilizes external camera heading & snaps Google Maps guide geometry onto loaded OSM roads.
+  ({double headingDeg, List<LatLng> pts, LatLng userPos, bool matchedRoad})
+      _resolveExternalGuidedPose({
+    required LatLng userPos,
+    required int displayZoom,
+    required double rawHeadingDeg,
+    required dynamic activeRoute,
+    Iterable<OsmVectorTile>? tilesOverride,
+  }) {
+    final nm = navManager;
+    if (nm != null && nm.isNavigating) {
+      _smoothedRenderHeading = rawHeadingDeg;
+      return (
+        headingDeg: rawHeadingDeg,
+        pts: _resolveMapRoutePoints(activeRoute),
+        userPos: userPos,
+        matchedRoad: false,
+      );
+    }
+
+    final tiles = tilesOverride ??
+        _collectVisibleOsmTiles(userPos, radius: displayZoom <= 14 ? 2 : 1);
+    final bool hasGpsLock = nm?.hasHeadingLock ?? false;
+    final bool isExtNav = nm?.isExternalNavTelemetryActive ?? false;
+
+    final match = OsmRoadGuideMatcher.matchAndTrace(
+      tiles: tiles,
+      userPos: userPos,
+      displayZoom: displayZoom,
+      rawHeadingDeg: rawHeadingDeg,
+      hasHeadingLock: hasGpsLock,
+      turnCode: isExtNav ? (nm?.effectiveTurnCode ?? 0) : 0,
+      distanceToTurnMeters:
+          isExtNav ? (nm?.effectiveDistanceToNextManeuver ?? 0.0) : 0.0,
+      currentStreetName: nm?.currentStreetName ?? '',
+      nextStreetName: isExtNav ? (nm?.effectiveNextStreetName ?? '') : '',
+    );
+
+    // Follow genuine movement bearing faithfully; only snap onto OSM street axis
+    // when stationary before first motion lock (or trivial <14 deg straight-lane align).
+    double targetHdg = rawHeadingDeg;
+    if (!hasGpsLock && match.matchedRoad && match.snappedHeadingDeg != null) {
+      targetHdg = match.snappedHeadingDeg!;
+    } else if (hasGpsLock &&
+        match.matchedRoad &&
+        match.snappedHeadingDeg != null &&
+        OsmRoadGuideMatcher.absAngleDiffDeg(match.snappedHeadingDeg!, rawHeadingDeg) <= 14.0) {
+      targetHdg = OsmRoadGuideMatcher.lerpAngleDeg(
+        rawHeadingDeg,
+        match.snappedHeadingDeg!,
+        0.35,
+        maxStepDeg: 180.0,
+      );
+    }
+
+    double stabilizedHdg;
+    final prev = _smoothedRenderHeading;
+    if (prev == null) {
+      stabilizedHdg = targetHdg;
+    } else {
+      final double speedKmh = nm?.currentSpeedKmh ?? 0.0;
+      final double diff = OsmRoadGuideMatcher.absAngleDiffDeg(prev, targetHdg);
+      if (speedKmh < 4.5 && diff < 2.5) {
+        stabilizedHdg = prev;
+      } else {
+        stabilizedHdg = OsmRoadGuideMatcher.lerpAngleDeg(
+          prev,
+          targetHdg,
+          0.45,
+          maxStepDeg: 24.0,
+        );
+      }
+    }
+    _smoothedRenderHeading = stabilizedHdg;
+
+    final LatLng effectivePos =
+        (!hasGpsLock && match.matchedRoad && match.snappedLocation != null)
+            ? match.snappedLocation!
+            : userPos;
+
+    final List<LatLng> pts =
+        isExtNav ? const <LatLng>[] : _resolveMapRoutePoints(activeRoute);
+
+    return (
+      headingDeg: stabilizedHdg,
+      pts: pts,
+      userPos: effectivePos,
+      matchedRoad: match.matchedRoad,
+    );
+  }
+
+  List<LatLng> _resolveMapRoutePoints(dynamic activeRoute) {
+    final eff = navManager?.effectiveRoutePolylinePoints;
+    if (eff != null && eff.length >= 2) return eff;
+    final route = activeRoute ?? navManager?.previewRoute;
+    if (route != null && route.polylinePoints is List<LatLng>) {
+      return route.polylinePoints as List<LatLng>;
+    }
+    return const <LatLng>[];
+  }
+
+  Map<String, dynamic> _buildNavHudPayload({
+    required double vx,
+    required double vy,
+    required bool isDark,
+    double? distOverride,
+  }) {
+    final double speedKmh = navManager?.currentSpeedKmh ?? 0.0;
+    final double distToTurn = distOverride ?? (navManager?.effectiveDistanceToNextManeuver ?? 200.0);
+    final double totalDistM = navManager?.effectiveRemainingTotalDistance ?? 0.0;
+    final int etaMin = (navManager?.effectiveRemainingEtaMinutes ?? 1).clamp(1, 999);
+    final String curRoad = navManager?.currentStreetName ?? 'Đường hiện tại';
+    final int turnCode = navManager?.effectiveTurnCode ?? 0;
+    final String nextStreetRaw = navManager?.effectiveNextStreetName ?? curRoad;
+    final String nextStreet = nextStreetRaw.trim().isNotEmpty ? nextStreetRaw.trim() : 'Đi thẳng';
+
+    final String distStr = distToTurn >= 1000
+        ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
+        : '${distToTurn.round()} m';
+    final String etaText = etaMin >= 60
+        ? '${etaMin ~/ 60} giờ ${etaMin % 60} phút'
+        : '$etaMin phút';
+    final arrTime = DateTime.now().add(Duration(minutes: etaMin));
+    final String arrStr = (navManager?.effectiveArrivalTime?.isNotEmpty ?? false)
+        ? navManager!.effectiveArrivalTime!
+        : '${arrTime.hour.toString().padLeft(2, '0')}:${arrTime.minute.toString().padLeft(2, '0')}';
+    final String totDistStr = totalDistM >= 10000
+        ? '${(totalDistM / 1000.0).round()} km'
+        : (totalDistM >= 1000
+            ? '${(totalDistM / 1000.0).toStringAsFixed(1)} km'
+            : '${totalDistM.round()} m');
+
+    return <String, dynamic>{
+      'vx': vx,
+      'vy': vy,
+      'curRoad': curRoad,
+      'nextStreet': nextStreet,
+      'distStr': distStr,
+      'turnCode': turnCode,
+      'speedStr': '${speedKmh.round()}',
+      'etaText': etaText,
+      'arrStr': arrStr,
+      'totDistStr': totDistStr,
+      'subText': '$arrStr • $totDistStr',
+      'isDark': isDark,
+    };
+  }
 
   @visibleForTesting
   Future<Uint8List?> debugCompressRgbaToJpeg(
@@ -734,7 +977,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _renderAndStreamHeadlessFrame() async {
     if (!_isStreaming || _isCapturing || _isSendingWifi) return;
 
-    if (!bleService.isConnected && !_isForeground) {
+    if (!bleService.isConnected &&
+        !bleService.isWifiConnected &&
+        _tcpApSocket == null &&
+        _wsClients.isEmpty &&
+        !_isForeground) {
       return;
     }
 
@@ -756,14 +1003,14 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _isCapturing = true;
 
     try {
-      final bool isNav = navManager?.isNavigating ?? false;
+      final bool isNav = navManager?.isAnyNavActive ?? false;
       final int w = isNav ? 320 : 144;
       final int h = isNav ? 216 : 224;
 
       final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
       final double heading = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute;
-      final distToTurn = navManager?.distanceToNextManeuver ?? 208.0;
+      final distToTurn = navManager?.effectiveDistanceToNextManeuver ?? 208.0;
       final speedKmh = navManager?.currentSpeedKmh ?? 0.0;
 
       // Pre-fetch surrounding tiles asynchronously at chosen minimap zoom
@@ -1151,20 +1398,28 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   /// Pure CPU Software Map Renderer (Runs 100% in CPU RAM without Metal GPU, perfect for background)
   Future<Uint8List?> _renderCpuMapFrame(int w, int h) async {
     try {
-      final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
-      final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
+      final rawUserPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
+      final double rawHeadingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute ?? navManager?.previewRoute;
       final int zoom = _minimapZoom;
       final isDark = _streamMapStyle.contains('dark');
+
+      final tiles = _collectVisibleOsmTiles(rawUserPos, radius: zoom <= 14 ? 2 : 1);
+      final pose = _resolveExternalGuidedPose(
+        userPos: rawUserPos,
+        displayZoom: zoom,
+        rawHeadingDeg: rawHeadingDeg,
+        activeRoute: activeRoute,
+        tilesOverride: tiles,
+      );
+      final userPos = pose.userPos;
+      final double headingDeg = pose.headingDeg;
+      final pts = pose.pts;
 
       final double n = math.pow(2.0, zoom).toDouble();
       final double latRad = userPos.latitude * (math.pi / 180.0);
       final double worldX = (userPos.longitude + 180.0) / 360.0 * n * 256.0;
       final double worldY = (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n * 256.0;
-
-      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
-          ? navManager!.remainingPolylinePoints
-          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
 
       if (_isOsm3dStyle) {
         final double anchorX = w / 2.0;
@@ -1178,7 +1433,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           anchorY: anchorY,
           headingDeg: headingDeg,
         );
-        final tiles = _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1);
         final frame = img.Image(width: w, height: h, numChannels: 4);
         _osm3dRenderer.renderFrame(
           buf32: frame.buffer.asUint32List(),
@@ -1224,7 +1478,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           camera: camera,
           skyHorizonPx: 12,
           avoidHudPills: false,
-          maxLabels: 4,
+          maxLabels: 1,
+          minTier: 2,
         );
         return await _compressRgbaToJpeg(
           frame.toUint8List(),
@@ -1380,15 +1635,23 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   /// Uses CPU CoreGraphics + CoreText on iOS so background ("treo app") looks 100% identical to foreground ("trong app")!
   Future<Uint8List?> _renderCpuNavigationFrame(int w, int h) async {
     try {
-      final userPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
-      final double headingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
+      final rawUserPos = navManager?.currentLocation ?? const LatLng(20.9832, 105.8425);
+      final double rawHeadingDeg = navManager?.effectiveHeading ?? navManager?.currentHeading ?? 0.0;
       final activeRoute = navManager?.activeRoute ?? navManager?.previewRoute;
-      final double speedKmh = navManager?.currentSpeedKmh ?? 0.0;
-      final double distToTurn = navManager?.distanceToNextManeuver ?? 200.0;
-      final double totalDistM = navManager?.remainingTotalDistance ?? 0.0;
-      final int etaMin = (navManager?.remainingEtaMinutes ?? 1).clamp(1, 999);
       final int zoom = _minimapZoom;
       final isDark = _streamMapStyle.contains('dark');
+
+      final tiles = _collectVisibleOsmTiles(rawUserPos, radius: zoom <= 14 ? 2 : 1);
+      final pose = _resolveExternalGuidedPose(
+        userPos: rawUserPos,
+        displayZoom: zoom,
+        rawHeadingDeg: rawHeadingDeg,
+        activeRoute: activeRoute,
+        tilesOverride: tiles,
+      );
+      final userPos = pose.userPos;
+      final double headingDeg = pose.headingDeg;
+      final pts = pose.pts;
 
       final double n = math.pow(2.0, zoom).toDouble();
       final double latRad = userPos.latitude * (math.pi / 180.0);
@@ -1405,9 +1668,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
       final frame = img.Image(width: w, height: h, numChannels: 4);
       final Uint32List buf32 = frame.buffer.asUint32List();
-      final pts = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
-          ? navManager!.remainingPolylinePoints
-          : (activeRoute?.polylinePoints ?? const <LatLng>[]);
       List<Map<String, dynamic>>? osmNavRoadLabels;
 
       if (_isOsm3dStyle) {
@@ -1418,7 +1678,6 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           anchorY: vy.toDouble(),
           headingDeg: headingDeg,
         );
-        final tiles = _collectVisibleOsmTiles(userPos, radius: zoom <= 14 ? 2 : 1);
         _osm3dRenderer.renderFrame(
           buf32: buf32,
           width: w,
@@ -1462,7 +1721,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           camera: camera,
           skyHorizonPx: 22,
           avoidHudPills: true,
-          maxLabels: 7,
+          maxLabels: 1,
+          targetStreetName: navManager?.effectiveNextStreetName,
+          strictTargetStreetOnly: true,
         );
         osmNavRoadLabels = _serializeRoadLabels(labels);
       } else {
@@ -1582,38 +1843,11 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
-      final String curRoad = navManager?.currentStreetName ?? 'Đường hiện tại';
-      final upcoming = navManager?.upcomingStep ?? navManager?.currentStep;
-      final int turnCode = upcoming?.turnCode ?? 0;
-      final String nextStreetRaw = upcoming?.streetName ?? curRoad;
-      final String nextStreet = NavigationManager.cleanStreetName(nextStreetRaw);
-      final String distStr = distToTurn >= 1000
-          ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
-          : '${distToTurn.round()} m';
-      final String etaText = etaMin >= 60
-          ? '${etaMin ~/ 60} giờ ${etaMin % 60} phút'
-          : '$etaMin phút';
-      final arrTime = DateTime.now().add(Duration(minutes: etaMin));
-      final String arrStr =
-          '${arrTime.hour.toString().padLeft(2, '0')}:${arrTime.minute.toString().padLeft(2, '0')}';
-      final String totDistStr = totalDistM >= 10000
-          ? '${(totalDistM / 1000.0).round()} km'
-          : (totalDistM >= 1000
-              ? '${(totalDistM / 1000.0).toStringAsFixed(1)} km'
-              : '${totalDistM.round()} m');
-
-      final hudData = <String, dynamic>{
-        'vx': vx.toDouble(),
-        'vy': vy.toDouble(),
-        'curRoad': curRoad,
-        'nextStreet': nextStreet.isNotEmpty ? nextStreet : 'Đi thẳng',
-        'distStr': distStr,
-        'turnCode': turnCode,
-        'speedStr': '${speedKmh.round()}',
-        'etaText': etaText,
-        'subText': '$arrStr • $totDistStr',
-        'isDark': isDark,
-      };
+      final hudData = _buildNavHudPayload(
+        vx: vx.toDouble(),
+        vy: vy.toDouble(),
+        isDark: isDark,
+      );
 
       if (Platform.isIOS || Platform.isAndroid) {
         final rawRgba = frame.toUint8List();
@@ -1806,13 +2040,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Asynchronously pre-fetch surrounding OSM Vector 3D or MapTiler / Goong raster tiles
   void _prefetchSurroundingTiles(LatLng pos, int zoom) {
-    if (_isOsm3dStyle) {
+    final bool fetchCenterOsmForSnap =
+        !_isOsm3dStyle && (navManager?.isExternalNavTelemetryActive ?? false);
+    if (_isOsm3dStyle || fetchCenterOsmForSnap) {
       const int vZoom = 15;
       const double n15 = 32768.0;
       final double latRad = pos.latitude * (math.pi / 180.0);
       final int cx15 = ((pos.longitude + 180.0) / 360.0 * n15).floor();
       final int cy15 = ((1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * n15).floor();
-      final int rad = zoom <= 14 ? 2 : 1;
+      final int rad = _isOsm3dStyle ? (zoom <= 14 ? 2 : 1) : 0;
 
       for (int dx = -rad; dx <= rad; dx++) {
         for (int dy = -rad; dy <= rad; dy++) {
@@ -1827,8 +2063,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
       }
-      _maybePrefetchSupplementalBuildings(pos, latRad);
-      return;
+      if (_isOsm3dStyle) {
+        _maybePrefetchSupplementalBuildings(pos, latRad);
+        return;
+      }
     }
 
     final double n = math.pow(2.0, zoom).toDouble();
@@ -1857,7 +2095,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _lastPrefetchPos = pos;
 
-    final int rad = (navManager?.isNavigating ?? false) ? 2 : 1;
+    final int rad = (navManager?.isAnyNavActive ?? false) ? 2 : 1;
     for (int dx = -rad; dx <= rad; dx++) {
       for (int dy = -rad; dy <= rad; dy++) {
         final tx = cx + dx;
@@ -2228,13 +2466,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    // Draw Route Polyline whenever an active route or preview route exists (trimmed behind vehicle when navigating)
-    final effectiveRoute = activeRoute ?? navManager?.previewRoute;
-    final points = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
-        ? navManager!.remainingPolylinePoints
-        : ((effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
-            ? effectiveRoute.polylinePoints
-            : <LatLng>[]);
+    // Draw Route Polyline whenever an active route, preview route, or external guidance guide exists
+    final points = _resolveMapRoutePoints(activeRoute);
 
     if (points.length >= 2) {
       final routePath = ui.Path();
@@ -2392,12 +2625,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     // Active Route Polyline in Vibrant iPhone Navigation Blue (#003EB3 casing + #0066FF core)
-    final effectiveRoute = activeRoute ?? navManager?.previewRoute;
-    final points = (navManager != null && navManager!.isNavigating && navManager!.remainingPolylinePoints.length >= 2)
-        ? navManager!.remainingPolylinePoints
-        : ((effectiveRoute != null && effectiveRoute.polylinePoints.isNotEmpty)
-            ? effectiveRoute.polylinePoints
-            : <LatLng>[]);
+    final points = _resolveMapRoutePoints(activeRoute);
 
     if (points.length >= 2) {
       final routePath = ui.Path();
@@ -2521,13 +2749,15 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     );
 
     // --- 4. TOP-LEFT ENLARGED BLACK MANEUVER CARD WITH CORAL-RED TOP BADGE ---
-    final upcoming = navManager?.upcomingStep ?? navManager?.currentStep;
-    final int turnCode = upcoming?.turnCode ?? 0;
-    final String nextStreetRaw = upcoming?.streetName ?? curRoad;
-    final String nextStreet = NavigationManager.cleanStreetName(nextStreetRaw);
-    final String distStr = distToTurn >= 1000
-        ? '${(distToTurn / 1000.0).toStringAsFixed(1)} km'
-        : '${distToTurn.round()} m';
+    final hudData = _buildNavHudPayload(
+      vx: cx,
+      vy: cy,
+      isDark: isDark,
+      distOverride: distToTurn,
+    );
+    final int turnCode = hudData['turnCode'] as int;
+    final String nextStreet = hudData['nextStreet'] as String;
+    final String distStr = hudData['distStr'] as String;
 
     // Pitch-black rounded rectangle (x: 4, y: 6, w: 138, h: 50)
     final blackCardRect = RRect.fromRectAndRadius(
@@ -2690,10 +2920,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     canvas.drawLine(const Offset(22.5, 184.5), const Offset(15.5, 191.5), xPaint);
 
     // Right Line 1: Remaining duration ("2 phút" or "1 giờ 28 phút")
-    final int etaMin = (navManager?.remainingEtaMinutes ?? 1).clamp(1, 999);
-    final String etaText = etaMin >= 60
-        ? '${etaMin ~/ 60} giờ ${etaMin % 60} phút'
-        : '$etaMin phút';
+    final String etaText = hudData['etaText'] as String;
     final etaTp = TextPainter(
       text: TextSpan(
         text: etaText,
@@ -2710,18 +2937,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     etaTp.paint(canvas, const Offset(36.0, 171.0));
 
     // Right Line 2: Arrival time • remaining distance ("11:34 • 1.2 km")
-    final arrTime = DateTime.now().add(Duration(minutes: etaMin));
-    final String arrStr =
-        '${arrTime.hour.toString().padLeft(2, '0')}:${arrTime.minute.toString().padLeft(2, '0')}';
-    final double totalDistM = navManager?.remainingTotalDistance ?? 0.0;
-    final String totDistStr = totalDistM >= 10000
-        ? '${(totalDistM / 1000.0).round()} km'
-        : (totalDistM >= 1000
-            ? '${(totalDistM / 1000.0).toStringAsFixed(1)} km'
-            : '${totalDistM.round()} m');
     final subTp = TextPainter(
       text: TextSpan(
-        text: '$arrStr • $totDistStr',
+        text: hudData['subText'] as String,
         style: const TextStyle(
           color: Color(0xFFE4E4E7),
           fontSize: 10.5,

@@ -1201,7 +1201,8 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           camera: camera,
           skyHorizonPx: 12,
           avoidHudPills: false,
-          maxLabels: 4,
+          maxLabels: 1,
+          minTier: 2,
         );
         return await _compressRgbaToJpeg(
           frame.toUint8List(),
@@ -1429,6 +1430,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           isDark: isDark,
           camera: camera,
         );
+        final String nextTurnStreetName = NavigationManager.cleanStreetName(
+          (navManager?.upcomingStep ?? navManager?.currentStep)?.streetName ?? '',
+        );
         final labels = _osm3dRenderer.collectVisibleRoadLabels(
           width: w,
           height: h,
@@ -1439,7 +1443,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
           camera: camera,
           skyHorizonPx: 22,
           avoidHudPills: true,
-          maxLabels: 7,
+          maxLabels: 1,
+          targetStreetName: nextTurnStreetName,
+          strictTargetStreetOnly: true,
         );
         osmNavRoadLabels = _serializeRoadLabels(labels);
       } else {

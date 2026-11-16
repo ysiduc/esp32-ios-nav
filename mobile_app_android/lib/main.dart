@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'services/ble_service.dart';
 import 'services/esp_stream_service.dart';
+import 'services/google_maps_relay_service.dart';
 import 'services/navigation_manager.dart';
 
 import 'services/phone_media_service.dart';
@@ -57,6 +58,32 @@ class Esp32NavApp extends StatelessWidget {
                 EspStreamService(bleService: bleService, navManager: navManager);
             service.updateReferences(bleService, navManager);
             return service;
+          },
+        ),
+        ChangeNotifierProxyProvider4<BleService, NavigationManager, EspStreamService,
+            PhoneMediaService, GoogleMapsRelayService>(
+          create: (ctx) => GoogleMapsRelayService(
+            bleService: Provider.of<BleService>(ctx, listen: false),
+            navManager: Provider.of<NavigationManager>(ctx, listen: false),
+            streamService: Provider.of<EspStreamService>(ctx, listen: false),
+            mediaService: Provider.of<PhoneMediaService>(ctx, listen: false),
+          ),
+          update: (ctx, bleService, navManager, streamService, mediaService, prev) {
+            if (prev == null) {
+              return GoogleMapsRelayService(
+                bleService: bleService,
+                navManager: navManager,
+                streamService: streamService,
+                mediaService: mediaService,
+              );
+            }
+            prev.updateReferences(
+              bleService: bleService,
+              navManager: navManager,
+              streamService: streamService,
+              mediaService: mediaService,
+            );
+            return prev;
           },
         ),
       ],

@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
@@ -14,6 +16,7 @@ import '../models/route_model.dart';
 import '../services/ble_service.dart';
 import '../services/esp_stream_service.dart';
 import '../services/google_maps_parser.dart';
+import '../services/google_maps_relay_service.dart';
 import '../services/goong_service.dart';
 import '../services/apple_maps_service.dart';
 import '../services/mapbox_directions_service.dart';
@@ -33,6 +36,19 @@ enum MapThemeMode {
 class MapScreen extends StatefulWidget {
   final VoidCallback? onOpenMenu;
   const MapScreen({super.key, this.onOpenMenu});
+
+  /// Converts MapLibre's `toScreenLocation` point to Flutter logical pixels (dp).
+  /// On Android (maplibre_gl 0.21.0), Projection.toScreenLocation returns physical pixels.
+  @visibleForTesting
+  static Offset screenPointToLogicalOffset(
+    double rawX,
+    double rawY, {
+    required double devicePixelRatio,
+    required bool isAndroid,
+  }) {
+    final scale = (isAndroid && devicePixelRatio > 0.0) ? devicePixelRatio : 1.0;
+    return Offset(rawX / scale, rawY / scale);
+  }
 
   @override
   State<MapScreen> createState() => MapScreenState();
@@ -60,6 +76,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Offset? _mapPointerDownPos;
   double _currentCameraBearing = 0.0;
   bool _isSyncingPuckPos = false;
+  bool _puckNeedsResync = false;
+  bool _pendingGmapsEnableAfterPerm = false;
   LatLng? _lastLineTrimPos;
   final GlobalKey _directionsSheetKey = GlobalKey();
   MapPlace? _queuedFinalDestination;
@@ -110,6 +128,15 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _cameraLockUntil = DateTime.now().add(Duration(milliseconds: milliseconds));
   }
 
+  Offset _screenPointToLogical(math.Point<num> pt) {
+    return MapScreen.screenPointToLogicalOffset(
+      pt.x.toDouble(),
+      pt.y.toDouble(),
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+      isAndroid: !kIsWeb && Platform.isAndroid,
+    );
+  }
+
   /// Dịch tâm camera về phía trước xe ~42m theo hướng di chuyển để xe nằm ở 1/3 dưới màn hình chuẩn Apple Maps
   LatLng _offsetCameraTarget(LatLng loc, double headingDeg, double offsetMeters) {
     final rad = headingDeg * (math.pi / 180.0);
@@ -148,6 +175,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _userPosition = loc;
         if (!navManager.isNavigating) {
           _tryCenterOnInitialUserLocation(animate: true);
+          final camBearing = _mapController?.cameraPosition?.bearing ?? _currentCameraBearing;
+          _syncPuckToCamera(loc, heading, camBearing);
           return;
         }
         if (navManager.isNavigating) {
@@ -186,6 +215,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               }
               final pt = await ctrl.toScreenLocation(ml.LatLng(loc.latitude, loc.longitude));
               if (!mounted) return;
+              final logicalPt = _screenPointToLogical(pt);
               final screenW = MediaQuery.of(context).size.width;
               final camBearing = (_isAutoCentering && !_isDrivingZoomOverview)
                   ? (_isNorthUpLocked ? 0.0 : heading)
@@ -195,8 +225,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   ? 0.0
                   : (heading - camBearing) * (math.pi / 180.0);
               final pos = (_isAutoCentering && !_isDrivingZoomOverview)
-                  ? Offset(screenW / 2.0, pt.y.toDouble())
-                  : Offset(pt.x.toDouble(), pt.y.toDouble());
+                  ? Offset(screenW / 2.0, logicalPt.dy)
+                  : logicalPt;
               _vehiclePuckNotifier.value = (
                 pos: pos,
                 rotationRad: rotRad,
@@ -294,6 +324,9 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _userPosition = navManager.currentLocation!;
     }
     _tryCenterOnInitialUserLocation(animate: false);
+    if (navManager.currentLocation != null || navManager.isNavigating) {
+      _syncPuckToCamera(_userPosition, navManager.effectiveHeading, _currentCameraBearing);
+    }
   }
 
   void _onMapCameraChanged() {
@@ -301,8 +334,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (camPos == null || !mounted) return;
     _currentCameraBearing = camPos.bearing;
     final navManager = Provider.of<NavigationManager>(context, listen: false);
-    if (!navManager.isNavigating) return;
-    if (!_isAutoCentering || _isDrivingZoomOverview) {
+    if (navManager.currentLocation == null && !navManager.isNavigating) return;
+    if (!navManager.isNavigating || !_isAutoCentering || _isDrivingZoomOverview) {
       final loc = navManager.currentLocation ?? _userPosition;
       _syncPuckToCamera(loc, navManager.effectiveHeading, camPos.bearing);
     }
@@ -310,16 +343,31 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   void _syncPuckToCamera(LatLng loc, double heading, double camBearing) {
     final ctrl = _mapController;
-    if (ctrl == null || !_mapReady || _isSyncingPuckPos) return;
+    if (ctrl == null || !_mapReady) return;
+    if (_isSyncingPuckPos) {
+      _puckNeedsResync = true;
+      return;
+    }
     _isSyncingPuckPos = true;
     ctrl.toScreenLocation(ml.LatLng(loc.latitude, loc.longitude)).then((pt) {
       if (!mounted) return;
+      final logicalPt = _screenPointToLogical(pt);
       _vehiclePuckNotifier.value = (
-        pos: Offset(pt.x.toDouble(), pt.y.toDouble()),
+        pos: logicalPt,
         rotationRad: (heading - camBearing) * (math.pi / 180.0),
       );
     }).catchError((_) {}).whenComplete(() {
       _isSyncingPuckPos = false;
+      if (_puckNeedsResync && mounted) {
+        _puckNeedsResync = false;
+        scheduleMicrotask(() {
+          if (!mounted) return;
+          final nav = Provider.of<NavigationManager>(context, listen: false);
+          final nextLoc = nav.currentLocation ?? _userPosition;
+          final bearing = _mapController?.cameraPosition?.bearing ?? _currentCameraBearing;
+          _syncPuckToCamera(nextLoc, nav.effectiveHeading, bearing);
+        });
+      }
     });
   }
 
@@ -558,6 +606,18 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           }
         });
       }
+      final gmapsRelay = Provider.of<GoogleMapsRelayService>(context, listen: false);
+      gmapsRelay.refreshNotificationAccessStatus().then((granted) async {
+        if (!mounted) return;
+        if (_pendingGmapsEnableAfterPerm) {
+          _pendingGmapsEnableAfterPerm = false;
+          if (granted) {
+            await gmapsRelay.setEnabled(true, checkPermission: false);
+          }
+        } else if (gmapsRelay.isEnabled) {
+          await gmapsRelay.scanActiveNotificationNow();
+        }
+      });
     }
   }
 
@@ -912,6 +972,10 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_routes.isEmpty) return;
     final chosenRoute = _routes[_selectedRouteIndex];
     final navManager = Provider.of<NavigationManager>(context, listen: false);
+    final gmapsRelay = Provider.of<GoogleMapsRelayService>(context, listen: false);
+    if (gmapsRelay.isEnabled) {
+      unawaited(gmapsRelay.setEnabled(false));
+    }
 
     _isAutoCentering = true;
     _isNorthUpLocked = false;
@@ -924,6 +988,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     } else {
       navManager.startNavigation(chosenRoute);
     }
+    unawaited(_warnIfMissingOfflineVietnameseTts(navManager));
 
     setState(() {
       _viewMode = 0;
@@ -932,7 +997,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final startPos = navManager.currentLocation ?? _userPosition;
     final startHeading = navManager.effectiveHeading;
     final camTarget = _offsetCameraTarget(startPos, startHeading, 26.0);
-    _mapController?.moveCamera(
+    _mapController
+        ?.moveCamera(
       ml.CameraUpdate.newCameraPosition(
         ml.CameraPosition(
           target: ml.LatLng(camTarget.latitude, camTarget.longitude),
@@ -941,7 +1007,12 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           bearing: startHeading,
         ),
       ),
-    );
+    )
+        .whenComplete(() {
+      if (mounted) {
+        _syncPuckToCamera(startPos, startHeading, startHeading);
+      }
+    });
     _updateRouteOnMap();
   }
 
@@ -1032,8 +1103,10 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final navManager = context.watch<NavigationManager>();
     final bleService = context.watch<BleService>();
+    final gmapsRelay = context.watch<GoogleMapsRelayService>();
     final isDriving = navManager.isNavigating;
     final userPos = navManager.currentLocation ?? _userPosition;
+    final showLocationArrow = isDriving || navManager.currentLocation != null;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F7),
@@ -1073,12 +1146,19 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 _tryCenterOnInitialUserLocation(animate: false);
                 _updateRouteOnMap();
                 _updateDestinationMarker();
+                if (navManager.currentLocation != null || isDriving) {
+                  _syncPuckToCamera(
+                    navManager.currentLocation ?? _userPosition,
+                    navManager.effectiveHeading,
+                    _mapController?.cameraPosition?.bearing ?? _currentCameraBearing,
+                  );
+                }
               },
               onMapClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
               onMapLongClick: (point, coord) => _onMapTapped(LatLng(coord.latitude, coord.longitude)),
               trackCameraPosition: true,
               compassEnabled: false,
-              myLocationEnabled: !isDriving,
+              myLocationEnabled: (kIsWeb || !Platform.isAndroid) && !isDriving,
               myLocationTrackingMode: ml.MyLocationTrackingMode.none,
               myLocationRenderMode: ml.MyLocationRenderMode.compass,
               rotateGesturesEnabled: true,
@@ -1089,12 +1169,15 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           ),
 
           // -----------------------------------------------------------
-          // 1b. Road-Snapped 60 FPS Apple Maps 3D Navigation Chevron Puck
+          // 1b. Road-Snapped 60 FPS Current Location / Navigation Chevron Arrow Puck
           // -----------------------------------------------------------
-          if (isDriving)
+          if (showLocationArrow)
             ValueListenableBuilder<({Offset pos, double rotationRad})?>(
               valueListenable: _vehiclePuckNotifier,
               builder: (context, puck, _) {
+                if (puck == null && !isDriving) {
+                  return const SizedBox.shrink();
+                }
                 final screenSize = MediaQuery.of(context).size;
                 final dx = puck?.pos.dx ?? (screenSize.width / 2.0);
                 final dy = puck?.pos.dy ?? (screenSize.height * 0.65);
@@ -1102,34 +1185,41 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 if (dx < -40 || dx > screenSize.width + 40 || dy < -40 || dy > screenSize.height + 40) {
                   return const SizedBox.shrink();
                 }
+                final double haloSize = isDriving ? 52.0 : 44.0;
+                final double shieldSize = isDriving ? 36.0 : 30.0;
+                final double iconSize = isDriving ? 24.0 : 20.0;
                 return Positioned(
-                  left: dx - 26,
-                  top: dy - 26,
+                  left: dx - (haloSize / 2.0),
+                  top: dy - (haloSize / 2.0),
                   child: IgnorePointer(
                     child: Transform.rotate(
                       angle: rot,
                       child: SizedBox(
-                        width: 52,
-                        height: 52,
+                        width: haloSize,
+                        height: haloSize,
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
                             // Outer soft radar halo
                             Container(
-                              width: 52,
-                              height: 52,
+                              width: haloSize,
+                              height: haloSize,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: const Color(0xFF007AFF).withAlpha(38),
+                                color: const Color(0xFF007AFF).withAlpha(42),
                               ),
                             ),
-                            // Crisp white Apple Maps navigation shield with drop shadow
+                            // Crisp white circular shield with directional blue arrow
                             Container(
-                              width: 36,
-                              height: 36,
+                              width: shieldSize,
+                              height: shieldSize,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: Colors.white,
+                                border: Border.all(
+                                  color: const Color(0xFF007AFF).withAlpha(45),
+                                  width: 1.2,
+                                ),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Colors.black.withAlpha(65),
@@ -1138,11 +1228,11 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                   ),
                                 ],
                               ),
-                              child: const Center(
+                              child: Center(
                                 child: Icon(
                                   Icons.navigation_rounded,
-                                  color: Color(0xFF007AFF),
-                                  size: 24,
+                                  color: const Color(0xFF007AFF),
+                                  size: iconSize,
                                 ),
                               ),
                             ),
@@ -1191,6 +1281,20 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             ),
 
           // -----------------------------------------------------------
+          // 3b. Active Google Maps BLE-Only Relay Status Banner (Top)
+          // -----------------------------------------------------------
+          if (!isDriving && gmapsRelay.isEnabled)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 58, 16, 0),
+                  child: _buildGoogleMapsRelayBanner(gmapsRelay, bleService),
+                ),
+              ),
+            ),
+
+          // -----------------------------------------------------------
           // 4. Right-side Floating Action Controls (Browse / Route Preview)
           // -----------------------------------------------------------
           if (!isDriving)
@@ -1204,6 +1308,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  _buildGoogleMapsRelayToggleButton(gmapsRelay, bleService),
+                  const SizedBox(height: 10),
                   _buildCircularGlassButton(
                     icon: Icons.layers_rounded,
                     tooltip: 'Đổi nền bản đồ',
@@ -1306,6 +1412,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                   navManager.setVoiceEnabled(nextState);
                                   if (nextState) {
                                     navManager.testVoiceGuidance();
+                                    unawaited(_warnIfMissingOfflineVietnameseTts(navManager));
                                   }
                                 },
                               ),
@@ -1484,6 +1591,336 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           ],
         ),
         child: Icon(icon, color: iconColor ?? Colors.black87, size: 22),
+      ),
+    );
+  }
+
+  bool _promptedViTtsInstall = false;
+
+  Future<void> _warnIfMissingOfflineVietnameseTts(NavigationManager navManager) async {
+    if (_promptedViTtsInstall || !navManager.isVoiceEnabled) return;
+    final status = await navManager.getTtsVoiceStatus();
+    if (!mounted || status == null) return;
+    if (status.hasOfflineVietnamese) return;
+    _promptedViTtsInstall = true;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        content: Text(
+          status.usingVietnamese
+              ? 'Máy chưa tải gói giọng Việt offline (có thể đọc tiếng Anh khi dùng Wi-Fi ESP32).'
+              : 'Chưa phát hiện gói giọng nói Tiếng Việt trên máy.',
+        ),
+        action: SnackBarAction(
+          label: 'Tải giọng Việt',
+          onPressed: () {
+            unawaited(navManager.openVietnameseTtsInstaller());
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoogleMapsRelayToggleButton(
+    GoogleMapsRelayService gmapsRelay,
+    BleService bleService,
+  ) {
+    final bool isOn = gmapsRelay.isEnabled;
+    final bool hasNav = gmapsRelay.hasActiveNav;
+
+    return Tooltip(
+      message: isOn
+          ? (gmapsRelay.streamMapEnabled
+              ? 'Tắt lấy dữ liệu Google Maps (đang stream Màn 3)'
+              : 'Tắt lấy dữ liệu Google Maps (chỉ BLE Màn 2)')
+          : 'Bật lấy dữ liệu Google Maps (vẽ & stream Màn 3 lên ESP32)',
+      child: GestureDetector(
+        onTap: () => _onGoogleMapsRelayToggled(gmapsRelay, bleService),
+        child: Container(
+          width: 46,
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isOn
+                ? const Color(0xFF0B6B5A).withValues(alpha: 0.96)
+                : Colors.white.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isOn
+                  ? const Color(0xFF34C759)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: isOn ? 1.8 : 1.0,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: isOn
+                    ? const Color(0xFF34C759).withValues(alpha: 0.28)
+                    : Colors.black.withValues(alpha: 0.12),
+                blurRadius: 12,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    Icons.assistant_navigation,
+                    color: isOn ? Colors.white : const Color(0xFF4285F4),
+                    size: 21,
+                  ),
+                  if (hasNav)
+                    Positioned(
+                      right: -3,
+                      top: -2,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF34C759),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.2),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: isOn
+                      ? const Color(0xFF34C759)
+                      : const Color(0xFFE5E5EA),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  isOn ? 'ON' : 'GM',
+                  style: TextStyle(
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
+                    color: isOn ? Colors.white : const Color(0xFF3A3A3C),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoogleMapsRelayBanner(
+    GoogleMapsRelayService gmapsRelay,
+    BleService bleService,
+  ) {
+    final snap = gmapsRelay.latestSnapshot;
+    final hasNav = gmapsRelay.hasActiveNav && snap != null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B6B5A).withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.24),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.16),
+            ),
+            child: Icon(
+              hasNav ? snap.icon : Icons.notifications_active_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  hasNav
+                      ? '${snap.formattedDistanceToTurn} • ${snap.streetName}'
+                      : (gmapsRelay.streamMapEnabled
+                          ? 'Google Maps -> Stream Màn 3'
+                          : 'Google Maps -> BLE (Màn 2)'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hasNav
+                      ? '${gmapsRelay.currentSpeedKmh} km/h • ${snap.etaMinutes} phút • ${snap.formattedTotalDistance}${gmapsRelay.streamMapEnabled ? " • Stream Màn 3" : " • BLE"}'
+                      : '${gmapsRelay.currentSpeedKmh} km/h • ${gmapsRelay.streamMapEnabled ? "Chờ dẫn đường (tự stream Màn 3)" : "Chờ dẫn đường (không stream)"}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => gmapsRelay.setStreamMapEnabled(!gmapsRelay.streamMapEnabled),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: gmapsRelay.streamMapEnabled
+                    ? const Color(0xFF007AFF)
+                    : const Color(0xFFFF9F0A),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                gmapsRelay.streamMapEnabled ? 'Stream' : 'Chỉ BLE',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => gmapsRelay.launchGoogleMaps(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Mở GM',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () => _onGoogleMapsRelayToggled(gmapsRelay, bleService),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF3B30),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Tắt',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _onGoogleMapsRelayToggled(
+    GoogleMapsRelayService gmapsRelay,
+    BleService bleService,
+  ) async {
+    HapticFeedback.selectionClick();
+    if (gmapsRelay.isEnabled) {
+      await gmapsRelay.setEnabled(false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+          content: Text('Đã tắt lấy dữ liệu Google Maps BLE.'),
+        ),
+      );
+      return;
+    }
+
+    final ok = await gmapsRelay.setEnabled(true);
+    if (!mounted) return;
+    if (!ok) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: const Text(
+            'Cấp quyền đọc thông báo Google Maps',
+            style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.w700, fontSize: 17),
+          ),
+          content: const Text(
+            'App cần quyền Truy cập thông báo ("ESP32 Nav Thông báo & Nhạc") để đọc hướng rẽ, khoảng cách, ETA từ app Google Maps, vẽ lên bản đồ Màn 3 hoặc gửi qua BLE sang ESP32.',
+            style: TextStyle(color: Color(0xFF3A3A3C), fontSize: 13.5, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Để sau'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF007AFF),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                _pendingGmapsEnableAfterPerm = true;
+                gmapsRelay.openNotificationAccessSettings();
+              },
+              child: const Text('Mở Cài đặt'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF0B6B5A),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        content: Text(
+          gmapsRelay.streamMapEnabled
+              ? 'Đã bật Google Maps -> vẽ & stream Màn 3 (tự fallback BLE Màn 2 nếu chưa nối Wi-Fi). Hãy mở Google Maps để dẫn đường!'
+              : (bleService.isConnected
+                  ? 'Đã bật Google Maps BLE (Màn 2 không stream). Hãy mở Google Maps để dẫn đường!'
+                  : 'Đã bật chế độ Google Maps BLE (không stream). Nhớ kết nối BLE với ESP32!'),
+        ),
       ),
     );
   }

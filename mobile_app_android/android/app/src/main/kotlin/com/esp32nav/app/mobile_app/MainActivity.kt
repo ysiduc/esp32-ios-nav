@@ -123,6 +123,24 @@ class MainActivity : FlutterActivity() {
                 } catch (_: Throwable) {}
             }
         }
+
+        fun onNativeGoogleMapsNav(data: Map<String, Any>) {
+            val act = currentActivity ?: return
+            act.mainHandler.post {
+                try {
+                    act.gmapsChannel?.invokeMethod("onGoogleMapsNavigation", data)
+                } catch (_: Throwable) {}
+            }
+        }
+
+        fun onNativeGoogleMapsNavEnded() {
+            val act = currentActivity ?: return
+            act.mainHandler.post {
+                try {
+                    act.gmapsChannel?.invokeMethod("onGoogleMapsNavEnded", null)
+                } catch (_: Throwable) {}
+            }
+        }
     }
 
     val mainHandler = Handler(Looper.getMainLooper())
@@ -132,6 +150,7 @@ class MainActivity : FlutterActivity() {
     var locationChannel: MethodChannel? = null
     var mediaChannel: MethodChannel? = null
     var callChannel: MethodChannel? = null
+    var gmapsChannel: MethodChannel? = null
     var appleMapsChannel: MethodChannel? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -139,6 +158,15 @@ class MainActivity : FlutterActivity() {
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var ttsUsingVietnamese = false
+    private var ttsHasOfflineVietnamese = false
+    private var ttsEngineIndex = 0
+    private var ttsCurrentEnginePkg: String? = null
+    private var ttsBestEnginePkg: String? = null
+    private var ttsBestEngineScore: Int = -1
+    private var ttsProbeQueue: MutableList<String?> = mutableListOf()
+    private var pendingTtsUtterance: String? = null
+    private val ttsPreferredEngines = listOf<String?>("com.google.android.tts", null)
     private var audioFocusRequest: AudioFocusRequest? = null
 
     private var pendingZipPickResult: MethodChannel.Result? = null
@@ -264,6 +292,20 @@ class MainActivity : FlutterActivity() {
                         abandonAudioFocus()
                     } catch (_: Throwable) {}
                     result.success(true)
+                }
+                "getTtsStatus" -> {
+                    result.success(
+                        mapOf(
+                            "ready" to ttsReady,
+                            "usingVietnamese" to ttsUsingVietnamese,
+                            "hasOfflineVietnamese" to ttsHasOfflineVietnamese,
+                            "engine" to (ttsCurrentEnginePkg ?: ""),
+                            "voiceLocale" to (tts?.voice?.locale?.toLanguageTag() ?: "")
+                        )
+                    )
+                }
+                "installVietnameseTtsData" -> {
+                    result.success(launchInstallVietnameseTtsData())
                 }
                 "getBatteryLevel" -> {
                     result.success(readPhoneBatteryPercent())
@@ -395,6 +437,39 @@ class MainActivity : FlutterActivity() {
             }
         }
         setupTelephonyListener()
+
+        // 3b. Dedicated Google Maps Notification Navigation Channel (maisonsmd/esp32-google-maps style)
+        gmapsChannel = MethodChannel(messenger, "com.ysiduc.esp32_nav/gmaps")
+        gmapsChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isNotificationListenerEnabled" -> result.success(isNotificationServiceEnabled())
+                "openNotificationListenerSettings" -> {
+                    openNotificationAccessSettings()
+                    result.success(true)
+                }
+                "scanGoogleMapsNotification" -> {
+                    result.success(EspNotificationListenerService.rescanGoogleMapsNotification())
+                }
+                "launchGoogleMaps" -> {
+                    val launched = try {
+                        val launchIntent = packageManager.getLaunchIntentForPackage(
+                            EspNotificationListenerService.GOOGLE_MAPS_PACKAGE
+                        )
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(launchIntent)
+                            true
+                        } else {
+                            false
+                        }
+                    } catch (_: Throwable) {
+                        false
+                    }
+                    result.success(launched)
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         // 4. Native Geocoding & Place Lookup Channel
         appleMapsChannel = MethodChannel(messenger, "com.ysiduc.esp32_nav/apple_maps")
@@ -621,7 +696,11 @@ class MainActivity : FlutterActivity() {
 
         val bestLast = candidates
             .filter { it.latitude != 0.0 || it.longitude != 0.0 }
-            .maxWithOrNull(compareBy<Location> { it.time }.thenBy { -it.accuracy })
+            .maxWithOrNull(
+                compareBy<Location> { it.time / 2500L }
+                    .thenBy { if (it.hasSpeed() && it.speed > 0f) 1 else 0 }
+                    .thenBy { -it.accuracy }
+            )
 
         val nowMs = System.currentTimeMillis()
         if (bestLast != null && (nowMs - bestLast.time) <= 20_000L && bestLast.accuracy in 0.1f..45f) {
@@ -917,38 +996,224 @@ class MainActivity : FlutterActivity() {
     // =========================================================================
     // VIETNAMESE TEXT-TO-SPEECH VOICE GUIDANCE
     // =========================================================================
-    private fun initTextToSpeech() {
-        try {
-            tts = TextToSpeech(applicationContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    val viLocale = Locale("vi", "VN")
-                    val res = tts?.setLanguage(viLocale)
-                    if (res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED) {
-                        ttsReady = true
-                    } else {
-                        tts?.language = Locale.getDefault()
-                        ttsReady = true
-                    }
-                    tts?.setSpeechRate(1.05f)
-                    tts?.setPitch(1.0f)
-                    tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {}
-                        override fun onDone(utteranceId: String?) {
-                            abandonAudioFocus()
-                        }
-                        @Deprecated("Deprecated in Java")
-                        override fun onError(utteranceId: String?) {
-                            abandonAudioFocus()
-                        }
-                    })
+    private fun scoreAndConfigureVietnameseTts(engine: TextToSpeech?): Int {
+        if (engine == null) return 0
+        var bestScore = 0
+        var chosenVoice: android.speech.tts.Voice? = null
+        var chosenLocale: Locale = Locale("vi", "VN")
+
+        val voices = try {
+            engine.voices
+        } catch (_: Throwable) {
+            null
+        }
+        val viVoices = voices
+            ?.filter { it.locale?.language?.equals("vi", ignoreCase = true) == true }
+            ?.sortedWith(
+                compareBy<android.speech.tts.Voice> {
+                    if (it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true) 1 else 0
+                }.thenBy {
+                    if (it.isNetworkConnectionRequired) 1 else 0
+                }.thenBy {
+                    if (it.locale?.country.equals("VN", ignoreCase = true)) 0 else 1
                 }
+            )
+
+        val topVoice = viVoices?.firstOrNull()
+        if (topVoice != null) {
+            val notInstalled = topVoice.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true
+            bestScore = when {
+                !notInstalled && !topVoice.isNetworkConnectionRequired -> 3
+                !notInstalled -> 2
+                else -> 1
+            }
+            chosenVoice = topVoice
+            chosenLocale = topVoice.locale ?: Locale("vi", "VN")
+        }
+
+        val candidates = listOf(chosenLocale, Locale("vi", "VN"), Locale("vi")).distinct()
+        for (loc in candidates) {
+            try {
+                val avail = engine.isLanguageAvailable(loc)
+                if (avail >= TextToSpeech.LANG_AVAILABLE) {
+                    val res = engine.setLanguage(loc)
+                    if (res >= TextToSpeech.LANG_AVAILABLE) {
+                        if (chosenVoice != null) {
+                            try {
+                                engine.voice = chosenVoice
+                            } catch (_: Throwable) {}
+                        }
+                        if (bestScore == 0) {
+                            bestScore = 1
+                        }
+                        return bestScore
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // Still allow score 1 if voice list clearly carries vi-VN even when OEM setLanguage quirks occur
+        if (chosenVoice != null) {
+            try {
+                engine.voice = chosenVoice
+                engine.setLanguage(chosenLocale)
+                return maxOf(bestScore, 1)
+            } catch (_: Throwable) {}
+        }
+        return 0
+    }
+
+    private fun initTextToSpeech(engineAttemptIndex: Int = 0) {
+        try {
+            if (engineAttemptIndex == 0) {
+                ttsBestEnginePkg = null
+                ttsBestEngineScore = -1
+                ttsProbeQueue = ttsPreferredEngines.toMutableList()
+            }
+            ttsEngineIndex = engineAttemptIndex
+            ttsReady = false
+            ttsUsingVietnamese = false
+            ttsHasOfflineVietnamese = false
+            try {
+                tts?.shutdown()
+            } catch (_: Throwable) {}
+
+            val enginePkg = ttsProbeQueue.getOrNull(engineAttemptIndex)
+            lateinit var listener: TextToSpeech.OnInitListener
+            listener = TextToSpeech.OnInitListener { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    // Add any extra system TTS engines discovered at runtime to probe queue
+                    if (engineAttemptIndex == 0) {
+                        val installed = try {
+                            tts?.engines?.mapNotNull { it.name } ?: emptyList()
+                        } catch (_: Throwable) {
+                            emptyList()
+                        }
+                        for (pkg in installed) {
+                            if (!ttsProbeQueue.contains(pkg)) {
+                                ttsProbeQueue.add(pkg)
+                            }
+                        }
+                    }
+
+                    val score = scoreAndConfigureVietnameseTts(tts)
+                    if (score > ttsBestEngineScore) {
+                        ttsBestEngineScore = score
+                        ttsBestEnginePkg = enginePkg ?: tts?.defaultEngine
+                    }
+
+                    if (score >= 3) {
+                        // Offline installed Vietnamese voice found -> lock immediately!
+                        ttsCurrentEnginePkg = enginePkg ?: tts?.defaultEngine
+                        ttsUsingVietnamese = true
+                        ttsHasOfflineVietnamese = true
+                        finalizeTtsSetup()
+                        return@OnInitListener
+                    }
+
+                    if (engineAttemptIndex + 1 < ttsProbeQueue.size) {
+                        mainHandler.post { initTextToSpeech(engineAttemptIndex + 1) }
+                        return@OnInitListener
+                    }
+
+                    // Finished probing all engines: lock highest-scoring engine found (instead of stuck OEM English)
+                    val winningPkg = ttsBestEnginePkg
+                    if (ttsBestEngineScore >= 1 && winningPkg != null && winningPkg != enginePkg) {
+                        mainHandler.post { lockBestVietnameseEngine(winningPkg) }
+                        return@OnInitListener
+                    }
+
+                    ttsCurrentEnginePkg = enginePkg ?: tts?.defaultEngine
+                    ttsUsingVietnamese = score >= 1
+                    ttsHasOfflineVietnamese = score >= 3
+                    finalizeTtsSetup()
+                } else if (engineAttemptIndex + 1 < ttsProbeQueue.size) {
+                    mainHandler.post { initTextToSpeech(engineAttemptIndex + 1) }
+                } else if (ttsBestEngineScore >= 1 && ttsBestEnginePkg != null) {
+                    mainHandler.post { lockBestVietnameseEngine(ttsBestEnginePkg!!) }
+                }
+            }
+
+            tts = if (enginePkg != null) {
+                TextToSpeech(applicationContext, listener, enginePkg)
+            } else {
+                TextToSpeech(applicationContext, listener)
             }
         } catch (_: Throwable) {}
     }
 
-    private fun speakVietnameseGuidance(text: String) {
-        if (!ttsReady || tts == null) return
+    private fun lockBestVietnameseEngine(enginePkg: String) {
         try {
+            try {
+                tts?.shutdown()
+            } catch (_: Throwable) {}
+            tts = TextToSpeech(applicationContext, { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val score = scoreAndConfigureVietnameseTts(tts)
+                    ttsCurrentEnginePkg = enginePkg
+                    ttsUsingVietnamese = score >= 1
+                    ttsHasOfflineVietnamese = score >= 3
+                    finalizeTtsSetup()
+                }
+            }, enginePkg)
+        } catch (_: Throwable) {}
+    }
+
+    private fun launchInstallVietnameseTtsData(): Boolean {
+        return try {
+            val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                setPackage("com.google.android.tts")
+            }
+            if (intent.resolveActivity(packageManager) != null) {
+                startActivity(intent)
+                true
+            } else {
+                val generic = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(generic)
+                true
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun finalizeTtsSetup() {
+        ttsReady = true
+        tts?.setSpeechRate(1.02f)
+        tts?.setPitch(1.0f)
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                abandonAudioFocus()
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                abandonAudioFocus()
+            }
+        })
+        val pending = pendingTtsUtterance
+        pendingTtsUtterance = null
+        if (!pending.isNullOrBlank()) {
+            speakVietnameseGuidance(pending)
+        }
+    }
+
+    private fun speakVietnameseGuidance(text: String) {
+        if (!ttsReady || tts == null) {
+            pendingTtsUtterance = text
+            return
+        }
+        try {
+            if (!ttsUsingVietnamese || tts?.voice?.locale?.language?.equals("vi", ignoreCase = true) != true) {
+                val score = scoreAndConfigureVietnameseTts(tts)
+                if (score >= 1) {
+                    ttsUsingVietnamese = true
+                    ttsHasOfflineVietnamese = score >= 3
+                }
+            }
             requestDuckingAudioFocus()
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
@@ -996,6 +1261,32 @@ class MainActivity : FlutterActivity() {
     // =========================================================================
     // NATIVE ANDROID GEOCODER FOR VIETNAMESE STREET NAMES
     // =========================================================================
+    private fun isAdministrativeOrCityName(raw: String): Boolean {
+        val lower = raw.trim().lowercase()
+        if (lower.isEmpty()) return true
+        if (lower.matches(Regex("^\\d+$")) || lower.contains("+")) return true
+        val cityTokens = setOf(
+            "hà nội", "ha noi", "hanoi", "thành phố hà nội", "tp hà nội", "tp. hà nội",
+            "hồ chí minh", "ho chi minh", "tp hcm", "tp.hcm", "sài gòn", "sai gon",
+            "đà nẵng", "da nang", "hải phòng", "hai phong", "cần thơ", "can tho",
+            "việt nam", "vietnam", "viet nam"
+        )
+        if (lower in cityTokens) return true
+        return lower.startsWith("quận ") ||
+            lower.startsWith("quan ") ||
+            lower.startsWith("phường ") ||
+            lower.startsWith("phuong ") ||
+            lower.startsWith("huyện ") ||
+            lower.startsWith("huyen ") ||
+            lower.startsWith("thị xã ") ||
+            lower.startsWith("thị trấn ") ||
+            lower.startsWith("xã ") ||
+            lower.startsWith("thành phố ") ||
+            lower.startsWith("tp ") ||
+            lower.startsWith("tp.") ||
+            lower.startsWith("tỉnh ")
+    }
+
     private fun reverseGeocodeStreetNative(lat: Double, lon: Double): String? {
         if (!Geocoder.isPresent()) return null
         return try {
@@ -1005,13 +1296,18 @@ class MainActivity : FlutterActivity() {
             if (list.isNullOrEmpty()) return null
             for (addr in list) {
                 val thoroughfare = addr.thoroughfare?.trim()
-                if (!thoroughfare.isNullOrEmpty() && !thoroughfare.matches(Regex("^\\d+$"))) {
+                if (!thoroughfare.isNullOrEmpty() && !isAdministrativeOrCityName(thoroughfare)) {
                     return thoroughfare
                 }
             }
             val firstLine = list[0].getAddressLine(0) ?: return null
             val parts = firstLine.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            if (parts.isNotEmpty()) parts[0] else null
+            for (part in parts) {
+                if (!isAdministrativeOrCityName(part)) {
+                    return part
+                }
+            }
+            null
         } catch (_: Throwable) {
             null
         }
@@ -1313,134 +1609,135 @@ class MainActivity : FlutterActivity() {
         val darkCardColor = Color.argb(238, 30, 31, 34)
         val borderGrayColor = Color.argb(46, 255, 255, 255)
 
-        // 3. Top-Left Maneuver Card + Coral Distance Pill
-        val topCardX = 6f
+        // 3. Top-Left Enlarged Black Maneuver Card + Coral-Red Badge Protruding Top-Left (matches iOS stream HUD)
+        val topCardX = 4f
         val topCardY = 6f
-        val topCardW = 136f
-        val topCardH = 54f
+        val topCardW = 138f
+        val topCardH = 50f
         val topCardRect = RectF(topCardX, topCardY, topCardX + topCardW, topCardY + topCardH)
 
-        fillPaint.color = darkCardColor
-        canvas.drawRoundRect(topCardRect, 11f, 11f, fillPaint)
-        strokePaint.color = borderGrayColor
+        fillPaint.color = Color.argb(77, 0, 0, 0)
+        canvas.drawRoundRect(
+            RectF(topCardX, topCardY + 2f, topCardX + topCardW, topCardY + topCardH + 2f),
+            12f,
+            12f,
+            fillPaint
+        )
+
+        fillPaint.color = Color.argb(245, 9, 10, 15)
+        canvas.drawRoundRect(topCardRect, 10f, 10f, fillPaint)
+        strokePaint.color = Color.rgb(46, 48, 56)
         strokePaint.strokeWidth = 1.0f
-        canvas.drawRoundRect(topCardRect, 11f, 11f, strokePaint)
+        canvas.drawRoundRect(topCardRect, 10f, 10f, strokePaint)
 
-        // Coral/Red distance pill (#EE675C) at top-left
-        val distPillW = 72f
-        val distPillH = 22f
-        val distPillRect = RectF(topCardX, topCardY, topCardX + distPillW, topCardY + distPillH)
-        fillPaint.color = Color.rgb(238, 103, 92)
-        canvas.drawRoundRect(distPillRect, 11f, 11f, fillPaint)
+        // Protruding Coral-Red distance pill at (x: 0, y: 2) outside black card
+        textPaint.textSize = 12.0f
+        val distTextW = textPaint.measureText(distText)
+        val distPillW = maxOf(84f, distTextW + 34f).coerceAtMost(106f)
+        val distPillH = 24f
+        val coralRect = RectF(0f, 2f, distPillW, 2f + distPillH)
+        fillPaint.color = Color.rgb(240, 98, 97)
+        canvas.drawRoundRect(coralRect, 11f, 11f, fillPaint)
 
-        // Turn icon inside coral pill
-        drawTurnIcon(canvas, turnCodeAny, topCardX + 12f, topCardY + 11f, 6.5f)
+        val coralInnerRect = RectF(1.2f, 3.2f, distPillW - 1.2f, 2f + distPillH - 1.2f)
+        strokePaint.color = Color.argb(217, 255, 255, 255)
+        strokePaint.strokeWidth = 1.0f
+        canvas.drawRoundRect(coralInnerRect, 10f, 10f, strokePaint)
+
+        // Enlarged Turn icon centered at (15, 14) inside protruding coral badge
+        drawTurnIcon(canvas, turnCodeAny, 15.0f, 14.0f, 8.6f)
 
         // Distance text inside coral pill
-        textPaint.textSize = 11.0f
         textPaint.color = Color.WHITE
         val distFm = textPaint.fontMetrics
-        val distTy = topCardY + (distPillH - (distFm.descent - distFm.ascent)) / 2f - distFm.ascent
-        canvas.drawText(distText, topCardX + 22f, distTy, textPaint)
+        val distTy = 2f + (distPillH - (distFm.descent - distFm.ascent)) / 2f - distFm.ascent
+        canvas.drawText(distText, 27.0f, distTy, textPaint)
 
-        // Next road name below coral pill (up to 2 lines)
-        if (roadText.isNotEmpty()) {
-            textPaint.textSize = 10.5f
-            textPaint.color = Color.WHITE
-            val maxLineW = topCardW - 14f
-            val words = roadText.split(" ")
-            var line1 = ""
-            var line2 = ""
-            for (w in words) {
-                val test = if (line1.isEmpty()) w else "$line1 $w"
-                if (textPaint.measureText(test) <= maxLineW) {
-                    line1 = test
-                } else {
-                    line2 = if (line2.isEmpty()) w else "$line2 $w"
-                }
+        // Next road name below coral pill (single line with crisp iOS-style marquee scroll when long)
+        val streetDisplay = if (roadText.isNotEmpty()) roadText else "Đi thẳng"
+        textPaint.textSize = 12.0f
+        textPaint.color = Color.rgb(248, 250, 252)
+        val streetW = textPaint.measureText(streetDisplay)
+        val streetAvailW = 120.0f
+        val streetFm = textPaint.fontMetrics
+        val streetBaselineY = 28.0f - streetFm.ascent
+        if (streetW > streetAvailW) {
+            val loopDist = streetW + 36.0f
+            val nowMs = System.currentTimeMillis()
+            val cycleMs = (loopDist * 35.0f).toLong().coerceAtLeast(1L)
+            val totalCycle = cycleMs + 2000L
+            val phaseMs = nowMs % totalCycle
+            val scrollX = when {
+                phaseMs < 1200L -> 0.0f
+                phaseMs > cycleMs + 1200L -> 0.0f
+                else -> (phaseMs - 1200L).toFloat() / 35.0f
             }
-            if (line1.isEmpty()) {
-                line1 = TextUtils.ellipsize(roadText, textPaint, maxLineW, TextUtils.TruncateAt.END).toString()
-            } else if (line2.isNotEmpty()) {
-                line2 = TextUtils.ellipsize(line2, textPaint, maxLineW, TextUtils.TruncateAt.END).toString()
-            }
-            val rFm = textPaint.fontMetrics
-            if (line2.isEmpty()) {
-                canvas.drawText(line1, topCardX + 7f, topCardY + 26f - rFm.ascent, textPaint)
-            } else {
-                textPaint.textSize = 9.5f
-                val rFm2 = textPaint.fontMetrics
-                canvas.drawText(line1, topCardX + 7f, topCardY + 23f - rFm2.ascent, textPaint)
-                canvas.drawText(line2, topCardX + 7f, topCardY + 35f - rFm2.ascent, textPaint)
-            }
+            val off = scrollX % loopDist
+            canvas.save()
+            canvas.clipRect(8.0f, 26.0f, 8.0f + streetAvailW + 4.0f, 52.0f)
+            canvas.drawText(streetDisplay, 10.0f - off, streetBaselineY, textPaint)
+            canvas.drawText(streetDisplay, 10.0f - off + loopDist, streetBaselineY, textPaint)
+            canvas.restore()
+        } else {
+            canvas.drawText(streetDisplay, 10.0f, streetBaselineY, textPaint)
         }
 
-        // 4. Speedometer Box (Bottom-left above trip card)
-        val btmCardY = height - 48f
-        val spdW = 48f
-        val spdH = 44f
-        val spdX = 6f
-        val spdY = btmCardY - spdH - 6f
-        val spdRect = RectF(spdX, spdY, spdX + spdW, spdY + spdH)
+        // 4. Speedometer Box placed above Bottom-Left Time Card (matches iOS HUD cyan border)
+        val spdRect = RectF(4f, 118f, 4f + 54f, 118f + 40f)
+        fillPaint.color = Color.argb(242, 24, 25, 30)
+        canvas.drawRoundRect(spdRect, 12f, 12f, fillPaint)
+        strokePaint.color = Color.argb(230, 56, 189, 248)
+        strokePaint.strokeWidth = 1.4f
+        canvas.drawRoundRect(spdRect, 12f, 12f, strokePaint)
 
-        fillPaint.color = darkCardColor
-        canvas.drawRoundRect(spdRect, 11f, 11f, fillPaint)
-        strokePaint.color = borderGrayColor
-        strokePaint.strokeWidth = 1.0f
-        canvas.drawRoundRect(spdRect, 11f, 11f, strokePaint)
-
-        textPaint.textSize = 16.0f
+        textPaint.textSize = 16.5f
         textPaint.color = Color.WHITE
         val spdStrW = textPaint.measureText(speedStr)
         val spdFm = textPaint.fontMetrics
-        canvas.drawText(speedStr, spdX + (spdW - spdStrW) / 2f, spdY + 5f - spdFm.ascent, textPaint)
+        canvas.drawText(speedStr, 4f + (54f - spdStrW) / 2f, 121f - spdFm.ascent, textPaint)
 
         val unitPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-            textSize = 8.5f
-            color = Color.rgb(189, 193, 198)
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            textSize = 9.0f
+            color = Color.rgb(148, 163, 184)
         }
         val unitW = unitPaint.measureText("km/h")
         val unitFm = unitPaint.fontMetrics
-        canvas.drawText("km/h", spdX + (spdW - unitW) / 2f, spdY + 26f - unitFm.ascent, unitPaint)
+        canvas.drawText("km/h", 4f + (54f - unitW) / 2f, 142f - unitFm.ascent, unitPaint)
 
-        // 5. Bottom-Left Trip Summary Card (Duration + ETA • Remaining Distance)
-        val btmCardX = 6f
-        val btmCardW = 126f
-        val btmCardH = 42f
-        val btmRect = RectF(btmCardX, btmCardY, btmCardX + btmCardW, btmCardY + btmCardH)
-
-        fillPaint.color = darkCardColor
-        canvas.drawRoundRect(btmRect, 11f, 11f, fillPaint)
-        strokePaint.color = borderGrayColor
+        // 5. Enlarged Bottom-Left Dark Trip Summary Card (x: 4, y: 166, w: 124, h: 42)
+        val btmRect = RectF(4f, 166f, 4f + 124f, 166f + 42f)
+        fillPaint.color = Color.argb(245, 30, 32, 37)
+        canvas.drawRoundRect(btmRect, 12f, 12f, fillPaint)
+        strokePaint.color = Color.rgb(63, 63, 70)
         strokePaint.strokeWidth = 1.0f
-        canvas.drawRoundRect(btmRect, 11f, 11f, strokePaint)
+        canvas.drawRoundRect(btmRect, 12f, 12f, strokePaint)
 
-        // Small 'X' close circle on the left of bottom card
-        val xCircleCx = btmCardX + 14f
-        val xCircleCy = btmCardY + btmCardH / 2f
-        fillPaint.color = Color.rgb(60, 64, 67)
-        canvas.drawCircle(xCircleCx, xCircleCy, 9f, fillPaint)
+        // Left '✕' circle at (19, 187), r=10
+        val xCircleCx = 19f
+        val xCircleCy = 187f
+        fillPaint.color = Color.rgb(56, 57, 62)
+        canvas.drawCircle(xCircleCx, xCircleCy, 10f, fillPaint)
 
-        strokePaint.color = Color.rgb(232, 234, 237)
-        strokePaint.strokeWidth = 1.6f
+        strokePaint.color = Color.WHITE
+        strokePaint.strokeWidth = 2.0f
         strokePaint.strokeCap = Paint.Cap.ROUND
-        canvas.drawLine(xCircleCx - 3.2f, xCircleCy - 3.2f, xCircleCx + 3.2f, xCircleCy + 3.2f, strokePaint)
-        canvas.drawLine(xCircleCx - 3.2f, xCircleCy + 3.2f, xCircleCx + 3.2f, xCircleCy - 3.2f, strokePaint)
+        canvas.drawLine(15.7f, 183.7f, 22.3f, 190.3f, strokePaint)
+        canvas.drawLine(22.3f, 183.7f, 15.7f, 190.3f, strokePaint)
 
         // Duration line (bold white)
-        textPaint.textSize = 11.5f
+        textPaint.textSize = 13.0f
         textPaint.color = Color.WHITE
-        val durDisplay = TextUtils.ellipsize(durText, textPaint, btmCardW - 30f, TextUtils.TruncateAt.END).toString()
+        val durDisplay = TextUtils.ellipsize(durText, textPaint, 90f, TextUtils.TruncateAt.END).toString()
         val durFm = textPaint.fontMetrics
-        canvas.drawText(durDisplay, btmCardX + 27f, btmCardY + 6f - durFm.ascent, textPaint)
+        canvas.drawText(durDisplay, 34f, 170f - durFm.ascent, textPaint)
 
         // Subtitle: "ETA • remDist"
-        unitPaint.textSize = 9.0f
-        unitPaint.color = Color.rgb(189, 193, 198)
-        val subDisplay = TextUtils.ellipsize(subStr, unitPaint, btmCardW - 30f, TextUtils.TruncateAt.END).toString()
+        unitPaint.textSize = 10.5f
+        unitPaint.color = Color.rgb(228, 228, 231)
+        val subDisplay = TextUtils.ellipsize(subStr, unitPaint, 90f, TextUtils.TruncateAt.END).toString()
         val subFm = unitPaint.fontMetrics
-        canvas.drawText(subDisplay, btmCardX + 27f, btmCardY + 23f - subFm.ascent, unitPaint)
+        canvas.drawText(subDisplay, 34f, 188f - subFm.ascent, unitPaint)
     }
 
     private fun drawTurnIcon(
@@ -1453,65 +1750,116 @@ class MainActivity : FlutterActivity() {
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             style = Paint.Style.STROKE
-            strokeWidth = 1.8f
+            strokeWidth = 2.4f
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
         val codeInt = (turnCodeAny as? Number)?.toInt()
         val codeStr = turnCodeAny.toString().lowercase()
-        val isLeft = codeInt == 1 || codeInt == 3 || codeInt == 5 || codeStr.contains("left")
-        val isRight = codeInt == 2 || codeInt == 4 || codeInt == 6 || codeStr.contains("right")
-        val isUturn = codeInt == 7 || codeStr.contains("uturn")
+        // Matches EspNavPayload & ESP32 firmware:
+        // 0: straight, 1: slight right, 2: right, 3: sharp right, 4: U-turn,
+        // 5: sharp left, 6: left, 7: slight left, 8: roundabout, 9: arrive
+        val isLeft = codeInt == 5 || codeInt == 6 || codeInt == 7 || codeStr.contains("left")
+        val isRight = codeInt == 1 || codeInt == 2 || codeInt == 3 || codeStr.contains("right")
+        val isUturn = codeInt == 4 || codeStr.contains("uturn") || codeStr.contains("u-turn")
+        val isRoundabout = codeInt == 8 || codeStr.contains("roundabout")
+        val isArrive = codeInt == 9 || codeStr.contains("arrive")
 
         val path = Path()
         when {
-            isLeft -> {
-                path.moveTo(cx + r * 0.3f, cy + r * 0.8f)
-                path.lineTo(cx + r * 0.3f, cy - r * 0.2f)
-                path.lineTo(cx - r * 0.7f, cy - r * 0.2f)
-                canvas.drawPath(path, p)
-
-                val head = Path().apply {
-                    moveTo(cx - r * 0.3f, cy - r * 0.65f)
-                    lineTo(cx - r * 0.75f, cy - r * 0.2f)
-                    lineTo(cx - r * 0.3f, cy + r * 0.25f)
-                }
-                canvas.drawPath(head, p)
-            }
-            isRight -> {
-                path.moveTo(cx - r * 0.3f, cy + r * 0.8f)
-                path.lineTo(cx - r * 0.3f, cy - r * 0.2f)
-                path.lineTo(cx + r * 0.7f, cy - r * 0.2f)
-                canvas.drawPath(path, p)
-
-                val head = Path().apply {
-                    moveTo(cx + r * 0.3f, cy - r * 0.65f)
-                    lineTo(cx + r * 0.75f, cy - r * 0.2f)
-                    lineTo(cx + r * 0.3f, cy + r * 0.25f)
-                }
-                canvas.drawPath(head, p)
-            }
             isUturn -> {
-                path.moveTo(cx + r * 0.45f, cy + r * 0.8f)
-                path.lineTo(cx + r * 0.45f, cy - r * 0.2f)
-                val arcRect = RectF(cx - r * 0.45f, cy - r * 0.75f, cx + r * 0.45f, cy + r * 0.15f)
+                path.moveTo(cx + r * 0.45f, cy + r * 0.78f)
+                path.lineTo(cx + r * 0.45f, cy - r * 0.15f)
+                val arcRect = RectF(cx - r * 0.45f, cy - r * 0.72f, cx + r * 0.45f, cy + r * 0.18f)
                 path.arcTo(arcRect, 0f, -180f)
                 path.lineTo(cx - r * 0.45f, cy + r * 0.55f)
                 canvas.drawPath(path, p)
 
                 val head = Path().apply {
-                    moveTo(cx - r * 0.8f, cy + r * 0.2f)
+                    moveTo(cx - r * 0.80f, cy + r * 0.22f)
                     lineTo(cx - r * 0.45f, cy + r * 0.65f)
-                    lineTo(cx - r * 0.1f, cy + r * 0.2f)
+                    lineTo(cx - r * 0.10f, cy + r * 0.22f)
+                }
+                canvas.drawPath(head, p)
+            }
+            isRoundabout -> {
+                canvas.drawCircle(cx, cy + r * 0.08f, r * 0.42f, p)
+                canvas.drawLine(cx, cy + r * 0.80f, cx, cy + r * 0.50f, p)
+                canvas.drawLine(cx + r * 0.30f, cy - r * 0.22f, cx + r * 0.68f, cy - r * 0.60f, p)
+                val head = Path().apply {
+                    moveTo(cx + r * 0.28f, cy - r * 0.62f)
+                    lineTo(cx + r * 0.72f, cy - r * 0.64f)
+                    lineTo(cx + r * 0.70f, cy - r * 0.20f)
+                }
+                canvas.drawPath(head, p)
+            }
+            isArrive -> {
+                canvas.drawLine(cx - r * 0.40f, cy - r * 0.70f, cx - r * 0.40f, cy + r * 0.78f, p)
+                val flagPaint = Paint(p).apply { style = Paint.Style.FILL }
+                val flag = Path().apply {
+                    moveTo(cx - r * 0.40f, cy - r * 0.70f)
+                    lineTo(cx + r * 0.68f, cy - r * 0.32f)
+                    lineTo(cx - r * 0.40f, cy + r * 0.06f)
+                    close()
+                }
+                canvas.drawPath(flag, flagPaint)
+            }
+            codeInt == 7 -> { // Slight left
+                path.moveTo(cx + r * 0.22f, cy + r * 0.78f)
+                path.lineTo(cx + r * 0.22f, cy + r * 0.05f)
+                path.lineTo(cx - r * 0.48f, cy - r * 0.62f)
+                canvas.drawPath(path, p)
+                val head = Path().apply {
+                    moveTo(cx - r * 0.55f, cy - r * 0.16f)
+                    lineTo(cx - r * 0.52f, cy - r * 0.66f)
+                    lineTo(cx - r * 0.02f, cy - r * 0.63f)
+                }
+                canvas.drawPath(head, p)
+            }
+            codeInt == 1 -> { // Slight right
+                path.moveTo(cx - r * 0.22f, cy + r * 0.78f)
+                path.lineTo(cx - r * 0.22f, cy + r * 0.05f)
+                path.lineTo(cx + r * 0.48f, cy - r * 0.62f)
+                canvas.drawPath(path, p)
+                val head = Path().apply {
+                    moveTo(cx + r * 0.02f, cy - r * 0.63f)
+                    lineTo(cx + r * 0.52f, cy - r * 0.66f)
+                    lineTo(cx + r * 0.55f, cy - r * 0.16f)
+                }
+                canvas.drawPath(head, p)
+            }
+            isLeft -> {
+                path.moveTo(cx + r * 0.35f, cy + r * 0.78f)
+                path.lineTo(cx + r * 0.35f, cy - r * 0.20f)
+                path.lineTo(cx - r * 0.68f, cy - r * 0.20f)
+                canvas.drawPath(path, p)
+
+                val head = Path().apply {
+                    moveTo(cx - r * 0.26f, cy - r * 0.64f)
+                    lineTo(cx - r * 0.72f, cy - r * 0.20f)
+                    lineTo(cx - r * 0.26f, cy + r * 0.24f)
+                }
+                canvas.drawPath(head, p)
+            }
+            isRight -> {
+                path.moveTo(cx - r * 0.35f, cy + r * 0.78f)
+                path.lineTo(cx - r * 0.35f, cy - r * 0.20f)
+                path.lineTo(cx + r * 0.68f, cy - r * 0.20f)
+                canvas.drawPath(path, p)
+
+                val head = Path().apply {
+                    moveTo(cx + r * 0.26f, cy - r * 0.64f)
+                    lineTo(cx + r * 0.72f, cy - r * 0.20f)
+                    lineTo(cx + r * 0.26f, cy + r * 0.24f)
                 }
                 canvas.drawPath(head, p)
             }
             else -> {
-                canvas.drawLine(cx, cy + r * 0.8f, cx, cy - r * 0.7f, p)
+                canvas.drawLine(cx, cy + r * 0.78f, cx, cy - r * 0.68f, p)
                 val head = Path().apply {
-                    moveTo(cx - r * 0.5f, cy - r * 0.2f)
-                    lineTo(cx, cy - r * 0.75f)
-                    lineTo(cx + r * 0.5f, cy - r * 0.2f)
+                    moveTo(cx - r * 0.52f, cy - r * 0.18f)
+                    lineTo(cx, cy - r * 0.74f)
+                    lineTo(cx + r * 0.52f, cy - r * 0.18f)
                 }
                 canvas.drawPath(head, p)
             }

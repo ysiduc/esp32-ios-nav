@@ -1636,6 +1636,8 @@ class Osm3dRenderer {
   }
 
   /// Collects de-duplicated, screen-projected street labels ordered by road importance.
+  /// When [strictTargetStreetOnly] is true, renders only labels matching [targetStreetName]
+  /// (i.e. the upcoming turn street) so the small display stays clutter-free.
   List<OsmScreenRoadLabel> collectVisibleRoadLabels({
     required int width,
     required int height,
@@ -1647,7 +1649,16 @@ class Osm3dRenderer {
     int skyHorizonPx = 0,
     bool avoidHudPills = false,
     int maxLabels = 7,
+    int minTier = 0,
+    String? targetStreetName,
+    bool strictTargetStreetOnly = false,
   }) {
+    final String normTarget =
+        targetStreetName == null ? '' : normalizeStreetNameForMatch(targetStreetName);
+    if (strictTargetStreetOnly && !_isSpecificStreetTarget(normTarget)) {
+      return const <OsmScreenRoadLabel>[];
+    }
+
     final visible = _collectVisibleTileViews(
       tiles,
       userWorldX,
@@ -1666,6 +1677,7 @@ class Osm3dRenderer {
     final candidates = <({
       OsmScreenRoadLabel label,
       double anchorDistSq,
+      bool isTargetMatch,
     })>[];
 
     for (final tv in visible.tileInfos) {
@@ -1673,6 +1685,11 @@ class Osm3dRenderer {
       final oy = tv.originY;
       final sz = tv.tileSizePx;
       for (final rl in tv.tile.roadLabels) {
+        final bool isTargetMatch = _isSpecificStreetTarget(normTarget) &&
+            streetNamesMatch(normalizeStreetNameForMatch(rl.name), normTarget);
+        if (strictTargetStreetOnly && !isTargetMatch) continue;
+        if (!isTargetMatch && rl.tier < minTier) continue;
+
         final wx = ox + rl.midX * sz;
         final wy = oy + rl.midY * sz;
         final rx = camera.worldToRight(wx, wy);
@@ -1717,11 +1734,15 @@ class Osm3dRenderer {
             tier: rl.tier,
           ),
           anchorDistSq: dxA * dxA + dyA * dyA,
+          isTargetMatch: isTargetMatch,
         ));
       }
     }
 
     candidates.sort((a, b) {
+      if (a.isTargetMatch != b.isTargetMatch) {
+        return a.isTargetMatch ? -1 : 1;
+      }
       final tCmp = b.label.tier.compareTo(a.label.tier);
       if (tCmp != 0) return tCmp;
       return a.anchorDistSq.compareTo(b.anchorDistSq);
@@ -1747,6 +1768,61 @@ class Osm3dRenderer {
       }
     }
     return accepted;
+  }
+
+  static const Set<String> _genericStreetNames = {
+    'di thang',
+    'tiep tuc',
+    'duong hien tai',
+    'dich den',
+    'diem den',
+    'san sang',
+    'vong xuyen',
+    'chuyen huong',
+    'quay dau',
+    'quay dau xe',
+  };
+
+  static bool _isSpecificStreetTarget(String normalized) =>
+      normalized.isNotEmpty && !_genericStreetNames.contains(normalized);
+
+  static bool streetNamesMatch(String aNorm, String bNorm) {
+    if (aNorm.isEmpty || bNorm.isEmpty) return false;
+    if (aNorm == bNorm) return true;
+    final minLen = math.min(aNorm.length, bNorm.length);
+    if (minLen < 4) return false;
+    return aNorm.contains(bNorm) || bNorm.contains(aNorm);
+  }
+
+  static String normalizeStreetNameForMatch(String raw) {
+    var s = raw.trim().toLowerCase();
+    if (s.isEmpty) return '';
+    const vietMap = {
+      'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+      'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+      'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+      'đ': 'd',
+      'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+      'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+      'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+      'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+      'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+      'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+      'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+      'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+      'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+    };
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      final ch = s[i];
+      buf.write(vietMap[ch] ?? ch);
+    }
+    s = buf.toString();
+    s = s.replaceFirst(
+      RegExp(r'^(duong|pho|ngo|hem|ngach|quoc lo|tinh lo|dai lo|ql|tl|dl)\s+'),
+      '',
+    );
+    return s.replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
   }
 
   static String _formatStreetLabel(String raw) {

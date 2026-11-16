@@ -23,6 +23,15 @@ class NavigationManager extends ChangeNotifier {
   bool _isNavigating = false;
   bool _isSimulating = false;
   bool _isRerouting = false;
+  bool _isDisposed = false;
+  bool _externalBleNavMode = false;
+  bool _externalBleHasActiveNav = false;
+  int _externalTurnCode = 0;
+  double _externalDistanceToTurn = 0.0;
+  double _externalTotalDistance = 0.0;
+  int _externalEtaMinutes = 0;
+  String _externalStreetName = '';
+  String? _externalArrivalTime;
   NavRoute? _activeRoute;
   NavRoute? _previewRoute;
   int _currentStepIndex = 0;
@@ -48,6 +57,9 @@ class NavigationManager extends ChangeNotifier {
   DateTime? _lastRerouteTime;
   DateTime _lastGpsFixTime = DateTime.now();
   DateTime _lastUiNotifyTime = DateTime.now();
+  LatLng? _lastSpeedCalcLoc;
+  DateTime? _lastSpeedCalcTime;
+  LatLng? _lastCourseCalcLoc;
 
   // Live reverse-geocoded street name under the vehicle
   String _liveReverseStreetName = '';
@@ -83,6 +95,193 @@ class NavigationManager extends ChangeNotifier {
   bool get isNavigating => _isNavigating;
   bool get isSimulating => _isSimulating;
   bool get isRerouting => _isRerouting;
+  bool get isExternalBleNavMode => _externalBleNavMode;
+
+  void setExternalBleNavActive(
+    bool active, {
+    bool hasActiveNav = false,
+    int turnCode = 0,
+    double distanceToTurn = 0.0,
+    double totalDistance = 0.0,
+    int etaMinutes = 0,
+    String streetName = '',
+    String? arrivalTime,
+  }) {
+    final bool effectiveActiveNav = active && hasActiveNav;
+    final int nextTurnCode = effectiveActiveNav ? turnCode : 0;
+    final double nextDist = effectiveActiveNav ? distanceToTurn : 0.0;
+    final double nextTot = effectiveActiveNav ? totalDistance : 0.0;
+    final int nextEta = effectiveActiveNav ? etaMinutes : 0;
+    final String nextStreet = effectiveActiveNav ? streetName.trim() : '';
+    final String? nextArr =
+        effectiveActiveNav && (arrivalTime?.trim().isNotEmpty ?? false)
+            ? arrivalTime!.trim()
+            : null;
+
+    final bool modeChanged = _externalBleNavMode != active;
+    final bool changed = modeChanged ||
+        _externalBleHasActiveNav != effectiveActiveNav ||
+        _externalTurnCode != nextTurnCode ||
+        (_externalDistanceToTurn - nextDist).abs() >= 0.5 ||
+        (_externalTotalDistance - nextTot).abs() >= 0.5 ||
+        _externalEtaMinutes != nextEta ||
+        _externalStreetName != nextStreet ||
+        _externalArrivalTime != nextArr;
+
+    _externalBleNavMode = active;
+    _externalBleHasActiveNav = effectiveActiveNav;
+    _externalTurnCode = nextTurnCode;
+    _externalDistanceToTurn = nextDist;
+    _externalTotalDistance = nextTot;
+    _externalEtaMinutes = nextEta;
+    _externalStreetName = nextStreet;
+    _externalArrivalTime = nextArr;
+
+    if (modeChanged && !kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (active) {
+        if (_positionStream != null || !_needsLocationPermission) {
+          _startContinuousGpsStream(allowForeground: true);
+        } else {
+          unawaited(refreshGpsPermissionAndStart(promptIfNeeded: false));
+        }
+      } else if (!_isNavigating) {
+        if (_positionStream != null) {
+          _startContinuousGpsStream(allowForeground: false);
+        }
+      }
+    }
+
+    if (active) {
+      _targetLocation ??= _currentLocation;
+      _targetHeading = _hasHeadingLock ? _smoothedHeading : _currentHeading;
+      if (_smoothMotionTimer == null || !_smoothMotionTimer!.isActive) {
+        _startSmoothMotionLoop();
+      }
+    } else if (!_isNavigating && !_isSimulating) {
+      _smoothMotionTimer?.cancel();
+      _smoothMotionTimer = null;
+    }
+
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
+  /// True when an external guidance source (e.g. Google Maps notifications) has active turn data.
+  bool get isExternalNavTelemetryActive =>
+      _externalBleNavMode && _externalBleHasActiveNav;
+
+  /// True when either built-in turn-by-turn or active external guidance is driving ESP32 Man 3.
+  bool get isAnyNavActive => _isNavigating || isExternalNavTelemetryActive;
+
+  int get effectiveTurnCode => _isNavigating
+      ? (upcomingStep?.turnCode ?? 0)
+      : (isExternalNavTelemetryActive ? _externalTurnCode : 0);
+
+  double get effectiveDistanceToNextManeuver => _isNavigating
+      ? _distanceToNextManeuver
+      : (isExternalNavTelemetryActive ? _externalDistanceToTurn : 0.0);
+
+  double get effectiveRemainingTotalDistance => _isNavigating
+      ? _remainingTotalDistance
+      : (isExternalNavTelemetryActive ? _externalTotalDistance : 0.0);
+
+  int get effectiveRemainingEtaMinutes => _isNavigating
+      ? _remainingEtaMinutes
+      : (isExternalNavTelemetryActive ? _externalEtaMinutes : 1);
+
+  String get effectiveNextStreetName {
+    if (_isNavigating) {
+      return cleanStreetName(upcomingStep?.streetName ?? currentStreetName);
+    }
+    if (isExternalNavTelemetryActive && _externalStreetName.isNotEmpty) {
+      return cleanStreetName(_externalStreetName);
+    }
+    return currentStreetName;
+  }
+
+  String? get effectiveArrivalTime =>
+      (!_isNavigating && isExternalNavTelemetryActive) ? _externalArrivalTime : null;
+
+  /// Route points rendered on the streamed ESP32 map (built-in nav / preview only; empty in Google Maps stream).
+  List<LatLng> get effectiveRoutePolylinePoints {
+    if (_isNavigating && remainingPolylinePoints.length >= 2) {
+      return remainingPolylinePoints;
+    }
+    if (isExternalNavTelemetryActive) {
+      return const <LatLng>[];
+    }
+    return (_activeRoute ?? _previewRoute)?.polylinePoints ?? const <LatLng>[];
+  }
+
+  /// Synthesizes a local upcoming-maneuver guide polyline ahead of the vehicle from external turn telemetry.
+  static List<LatLng> computeExternalTurnPreviewPolyline({
+    required LatLng origin,
+    required double headingDeg,
+    required double distanceMeters,
+    required int turnCode,
+  }) {
+    LatLng offsetByMeters(LatLng base, double meters, double bearingDeg) {
+      final bRad = bearingDeg * (math.pi / 180.0);
+      final latRad = base.latitude * (math.pi / 180.0);
+      final cosLat = math.cos(latRad).abs().clamp(0.15, 1.0);
+      final dLat = (meters * math.cos(bRad)) / 111320.0;
+      final dLon = (meters * math.sin(bRad)) / (111320.0 * cosLat);
+      return LatLng(base.latitude + dLat, base.longitude + dLon);
+    }
+
+    final bool hasTurnDist = distanceMeters > 0;
+    if (turnCode == 0 || turnCode == 1 || !hasTurnDist || distanceMeters > 240.0) {
+      final double straightLen =
+          hasTurnDist ? distanceMeters.clamp(14.0, 220.0) : 140.0;
+      return [origin, offsetByMeters(origin, straightLen, headingDeg)];
+    }
+
+    final double leg = distanceMeters.clamp(12.0, 220.0);
+    final LatLng turnPt = offsetByMeters(origin, leg, headingDeg);
+
+    if (turnCode == 5) {
+      // Smooth U-turn turnaround loop
+      final p1 = offsetByMeters(turnPt, 14.0, headingDeg - 85.0);
+      final p2 = offsetByMeters(p1, 55.0, headingDeg - 175.0);
+      return [origin, turnPt, p1, p2];
+    }
+
+    if (turnCode == 9) {
+      // Smooth roundabout arc exit
+      final r1 = offsetByMeters(turnPt, 16.0, headingDeg - 35.0);
+      final r2 = offsetByMeters(r1, 18.0, headingDeg + 25.0);
+      final r3 = offsetByMeters(r2, 55.0, headingDeg + 75.0);
+      return [origin, turnPt, r1, r2, r3];
+    }
+
+    const Map<int, double> turnAngleDeltas = {
+      2: 90.0, // right
+      3: 40.0, // slight right
+      4: 135.0, // sharp right
+      6: -90.0, // left
+      7: -40.0, // slight left
+      8: -135.0, // sharp left
+    };
+    final double deltaDeg = turnAngleDeltas[turnCode] ?? 0.0;
+    if (deltaDeg == 0.0) {
+      return [origin, turnPt];
+    }
+    return [origin, turnPt, offsetByMeters(turnPt, 70.0, headingDeg + deltaDeg)];
+  }
+
+  @visibleForTesting
+  void debugSetTelemetryKinematics({
+    required LatLng location,
+    required double headingDeg,
+    double speedKmh = 0.0,
+  }) {
+    _currentLocation = location;
+    _currentHeading = headingDeg;
+    _smoothedHeading = headingDeg;
+    _hasHeadingLock = true;
+    _currentSpeedKmh = speedKmh;
+  }
   bool get isVoiceEnabled => _isVoiceEnabled;
   bool get hasInitialLiveGpsFix => _hasInitialLiveGpsFix;
   bool get needsLocationPermission => _needsLocationPermission;
@@ -116,6 +315,7 @@ class NavigationManager extends ChangeNotifier {
   double get lastLiveAccuracyM => _lastLiveAccuracyM;
   double get currentSpeedKmh => _currentSpeedKmh;
   double get currentHeading => _currentHeading;
+  bool get hasHeadingLock => _hasHeadingLock;
   double get effectiveHeading {
     if (_isNavigating && _hasHeadingLock) {
       return _smoothedHeading;
@@ -123,8 +323,8 @@ class NavigationManager extends ChangeNotifier {
     if (_isNavigating && _minSegmentDistance <= 32.0 && _closestSegmentBearing > 0.0) {
       return _closestSegmentBearing;
     }
-    if (_currentHeading > 0.0 && _currentSpeedKmh >= 3.0) {
-      return _currentHeading;
+    if (_hasHeadingLock) {
+      return _smoothedHeading;
     }
     final targetRoute = _activeRoute ?? _previewRoute;
     if (targetRoute != null && targetRoute.polylinePoints.length >= 2 && _currentLocation != null) {
@@ -200,7 +400,7 @@ class NavigationManager extends ChangeNotifier {
 
   static bool _isArrivalOrGenericLabel(String s) {
     final lower = s.trim().toLowerCase();
-    return lower.isEmpty ||
+    if (lower.isEmpty ||
         lower == 'đường không tên' ||
         lower == 'đường chính' ||
         lower == 'điểm đến' ||
@@ -209,7 +409,31 @@ class NavigationManager extends ChangeNotifier {
         lower.contains('đến điểm đến') ||
         lower.contains('bên phải của bạn') ||
         lower.contains('bên trái của bạn') ||
-        lower.startsWith('đích:');
+        lower.startsWith('đích:') ||
+        lower.contains('+') ||
+        RegExp(r'^\d+$').hasMatch(lower)) {
+      return true;
+    }
+    const adminCities = {
+      'hà nội', 'ha noi', 'hanoi', 'thành phố hà nội', 'tp hà nội', 'tp. hà nội',
+      'hồ chí minh', 'ho chi minh', 'tp hcm', 'tp.hcm', 'sài gòn', 'sai gon',
+      'đà nẵng', 'da nang', 'hải phòng', 'hai phong', 'cần thơ', 'can tho',
+      'việt nam', 'vietnam', 'viet nam',
+    };
+    if (adminCities.contains(lower)) return true;
+    return lower.startsWith('quận ') ||
+        lower.startsWith('quan ') ||
+        lower.startsWith('phường ') ||
+        lower.startsWith('phuong ') ||
+        lower.startsWith('huyện ') ||
+        lower.startsWith('huyen ') ||
+        lower.startsWith('thị xã ') ||
+        lower.startsWith('thị trấn ') ||
+        lower.startsWith('xã ') ||
+        lower.startsWith('thành phố ') ||
+        lower.startsWith('tp ') ||
+        lower.startsWith('tp.') ||
+        lower.startsWith('tỉnh ');
   }
 
   /// Normalizes a road name for compact bottom-pill display (e.g. "Phố Nguyễn Cảnh Dị" -> "Nguyễn Cảnh Dị").
@@ -283,11 +507,10 @@ class NavigationManager extends ChangeNotifier {
           return prev;
         }
       }
-      if (route.steps.length == 1) {
-        final single = normalizeRoadPillName(route.steps.first.streetName);
-        if (!_isArrivalOrGenericLabel(single)) {
-          return single;
-        }
+      final curIdx = _currentStepIndex.clamp(0, route.steps.length - 1);
+      final cur = normalizeRoadPillName(route.steps[curIdx].streetName);
+      if (!_isArrivalOrGenericLabel(cur)) {
+        return cur;
       }
     }
     return 'Đường hiện tại';
@@ -331,20 +554,200 @@ class NavigationManager extends ChangeNotifier {
     } catch (_) {}
   }
 
+  static String localizeInstructionToVietnamese(
+    String raw, {
+    String maneuverType = '',
+    String? maneuverModifier,
+    String streetName = '',
+  }) {
+    var s = raw.replaceAll(RegExp(r'<[^>]*>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (s.isEmpty) {
+      return streetName.isNotEmpty ? 'Tiếp tục đi theo $streetName' : 'Tiếp tục đi thẳng';
+    }
+
+    // Translate leading "In 200 m, ..." or "Then ..." clauses cleanly
+    s = s.replaceFirst(RegExp(r'^then\s+', caseSensitive: false), '');
+    final inDistPrefix = RegExp(
+      r'^in\s+(\d+(?:[.,]\d+)?)\s*(m|km|ft|mi|miles)\s*[,:]?\s*(.+)$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (inDistPrefix != null) {
+      final numStr = inDistPrefix.group(1)!;
+      final unit = inDistPrefix.group(2)!.toLowerCase();
+      final tailVi = localizeInstructionToVietnamese(
+        inDistPrefix.group(3)!,
+        maneuverType: maneuverType,
+        maneuverModifier: maneuverModifier,
+        streetName: streetName,
+      );
+      final unitVi = unit == 'km' ? 'ki-lô-mét' : (unit == 'm' ? 'mét' : unit);
+      return 'Trong $numStr $unitVi, $tailVi';
+    }
+
+    // Leave strings intact only if they do NOT contain English direction/routing verbs
+    final bool looksEnglishNav = RegExp(
+      r'\b(?:head|go straight|proceed|follow|stay on|bear|turn|slight|sharp|keep|continue|make a|at the roundabout|enter the roundabout|exit roundabout|merge|take\b.*?\b(?:exit|ramp)|destination will be|you have arrived|onto|toward)\b',
+      caseSensitive: false,
+    ).hasMatch(s);
+    if (!looksEnglishNav &&
+        RegExp(r'[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]',
+                caseSensitive: false)
+            .hasMatch(s)) {
+      return s;
+    }
+
+    final lower = s.toLowerCase();
+    // Handle common English Goong / Google / Valhalla turn templates
+    if (lower.contains('your destination') || lower.contains('have arrived')) {
+      if (lower.contains('on the left')) return 'Điểm đến sẽ nằm ở bên trái';
+      if (lower.contains('on the right')) return 'Điểm đến sẽ nằm ở bên phải';
+      return 'Bạn đã đến điểm đến';
+    }
+    if (lower.contains('destination will be on the left')) {
+      return 'Điểm đến sẽ nằm ở bên trái';
+    }
+    if (lower.contains('destination will be on the right')) {
+      return 'Điểm đến sẽ nằm ở bên phải';
+    }
+
+    final roundaboutExit = RegExp(
+      r'(?:at the roundabout|enter the roundabout).*?(\d+)(?:st|nd|rd|th)?\s+exit(?:\s+(?:onto|to|toward)\s+(.+))?',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (roundaboutExit != null) {
+      final exitNum = roundaboutExit.group(1) ?? '1';
+      final road = (roundaboutExit.group(2) ?? streetName).trim();
+      return road.isNotEmpty
+          ? 'Vào vòng xuyến, đi theo lối ra thứ $exitNum vào $road'
+          : 'Vào vòng xuyến, đi theo lối ra thứ $exitNum';
+    }
+
+    final uTurnMatch = RegExp(
+      r'make a u-turn(?:\s+(?:at|on|onto)\s+(.+))?',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (uTurnMatch != null) {
+      final road = (uTurnMatch.group(1) ?? streetName).trim();
+      return road.isNotEmpty ? 'Quay đầu xe tại $road' : 'Quay đầu xe';
+    }
+
+    final headMatch = RegExp(
+      r'^head\s+(?:north|south|east|west|northeast|northwest|southeast|southwest)\s+(?:(on|toward)\s+(.+))?$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (headMatch != null) {
+      final prep = (headMatch.group(1) ?? '').toLowerCase();
+      var rest = (headMatch.group(2) ?? '').trim();
+      rest = rest.replaceAll(RegExp(r'\s+toward\s+', caseSensitive: false), ' về hướng ');
+      if (prep == 'toward') return 'Đi về hướng $rest';
+      return rest.isNotEmpty ? 'Đi theo $rest' : 'Đi thẳng';
+    }
+
+    const prefixRules = <({String pattern, String verb, String prep})>[
+      (pattern: r'^(?:turn\s+|bear\s+)?sharp\s+right\b', verb: 'Rẽ gắt sang phải', prep: 'vào'),
+      (pattern: r'^(?:turn\s+|bear\s+)?slight\s+right\b', verb: 'Chếch sang phải', prep: 'vào'),
+      (pattern: r'^keep\s+right\b', verb: 'Giữ bên phải', prep: 'vào'),
+      (pattern: r'^(?:turn|bear)\s+right\b', verb: 'Rẽ phải', prep: 'vào'),
+      (pattern: r'^(?:turn\s+|bear\s+)?sharp\s+left\b', verb: 'Rẽ gắt sang trái', prep: 'vào'),
+      (pattern: r'^(?:turn\s+|bear\s+)?slight\s+left\b', verb: 'Chếch sang trái', prep: 'vào'),
+      (pattern: r'^keep\s+left\b', verb: 'Giữ bên trái', prep: 'vào'),
+      (pattern: r'^(?:turn|bear)\s+left\b', verb: 'Rẽ trái', prep: 'vào'),
+      (pattern: r'^go\s+straight(?:\s+ahead)?\b', verb: 'Đi thẳng', prep: 'theo'),
+      (pattern: r'^(?:continue(?:\s+straight)?|proceed|follow|stay)\b', verb: 'Tiếp tục đi', prep: 'theo'),
+      (pattern: r'^merge\b', verb: 'Nhập làn', prep: 'vào'),
+      (pattern: r'^exit(?:\s+the)?\s+roundabout\b', verb: 'Ra khỏi vòng xuyến', prep: 'vào'),
+      (pattern: r'^take\s+(?:the\s+)?(?:\d+(?:st|nd|rd|th)?\s+)?(?:exit|ramp)(?:\s+(?:\d+[a-z]?))?\b', verb: 'Đi vào lối ra', prep: 'vào'),
+    ];
+
+    for (final rule in prefixRules) {
+      final re = RegExp(rule.pattern, caseSensitive: false);
+      if (!re.hasMatch(s)) continue;
+      final rawTail = s.replaceFirst(re, '').trim();
+      final bool isToward = RegExp(r'^toward\b', caseSensitive: false).hasMatch(rawTail);
+      var tail = rawTail.replaceFirst(
+        RegExp(r'^(?:onto|on|to|toward|at)\s+', caseSensitive: false),
+        '',
+      );
+      tail = tail.replaceAll(RegExp(r'\s+toward\s+', caseSensitive: false), ' về hướng ').trim();
+      if (tail.isEmpty) {
+        return rule.verb == 'Tiếp tục đi' ? 'Tiếp tục đi thẳng' : rule.verb;
+      }
+      final String joiner = isToward ? 'về hướng' : rule.prep;
+      return joiner.isEmpty ? '${rule.verb} $tail' : '${rule.verb} $joiner $tail';
+    }
+
+    // Fallback synthesis from maneuverType / maneuverModifier if unmatched English sentence
+    if (looksEnglishNav ||
+        RegExp(r'^(?:turn|head|continue|keep|make|take|merge|exit|go|bear|pass|proceed|follow|stay)\b',
+                caseSensitive: false)
+            .hasMatch(s)) {
+      final mod = (maneuverModifier ?? '').toLowerCase();
+      final mType = maneuverType.toLowerCase();
+      final target = streetName.trim();
+      final suffix = target.isNotEmpty ? ' vào $target' : '';
+      if (mType == 'arrive') return 'Bạn đã đến điểm đến';
+      if (mType == 'roundabout' || mType == 'rotary') return 'Đi vào vòng xuyến$suffix';
+      if (mod.contains('uturn') || mod.contains('u-turn')) return 'Quay đầu xe$suffix';
+      if (mod.contains('sharp right')) return 'Rẽ gắt sang phải$suffix';
+      if (mod.contains('slight right')) return 'Chếch sang phải$suffix';
+      if (mod.contains('right')) return 'Rẽ phải$suffix';
+      if (mod.contains('sharp left')) return 'Rẽ gắt sang trái$suffix';
+      if (mod.contains('slight left')) return 'Chếch sang trái$suffix';
+      if (mod.contains('left')) return 'Rẽ trái$suffix';
+      return target.isNotEmpty ? 'Tiếp tục đi thẳng theo $target' : 'Tiếp tục đi thẳng';
+    }
+
+    return s;
+  }
+
+  String _viStepPrompt(NavStep step) => localizeInstructionToVietnamese(
+        step.instruction,
+        maneuverType: step.maneuverTypeStr,
+        maneuverModifier: step.maneuverModifier,
+        streetName: step.streetName,
+      );
+
   void speakVoicePrompt(String text, {bool force = false}) {
     if ((!_isVoiceEnabled && !force) || text.trim().isEmpty) return;
+    final localized = localizeInstructionToVietnamese(text.trim());
     if (Platform.isIOS || Platform.isAndroid) {
       try {
-        _locationChannel.invokeMethod('speakGuidance', {'text': text.trim()});
+        _locationChannel.invokeMethod('speakGuidance', {'text': localized});
       } catch (_) {}
+    }
+  }
+
+  Future<({bool usingVietnamese, bool hasOfflineVietnamese, String voiceLocale})?>
+      getTtsVoiceStatus() async {
+    if (kIsWeb || !Platform.isAndroid) return null;
+    try {
+      final raw = await _locationChannel.invokeMethod<dynamic>('getTtsStatus');
+      if (raw is Map) {
+        return (
+          usingVietnamese: raw['usingVietnamese'] == true,
+          hasOfflineVietnamese: raw['hasOfflineVietnamese'] == true,
+          voiceLocale: (raw['voiceLocale']?.toString() ?? ''),
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<bool> openVietnameseTtsInstaller() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      return await _locationChannel.invokeMethod<bool>('installVietnameseTtsData') ?? false;
+    } catch (_) {
+      return false;
     }
   }
 
   void testVoiceGuidance() {
     if (_isNavigating && currentStep != null) {
       final dist = _distanceToNextManeuver.round();
+      final stepText = _viStepPrompt(currentStep!);
       speakVoicePrompt(
-        dist > 30 ? 'Còn $dist mét, ${currentStep!.instruction}' : currentStep!.instruction,
+        dist > 30 ? 'Còn $dist mét, $stepText' : stepText,
         force: true,
       );
     } else {
@@ -370,7 +773,9 @@ class NavigationManager extends ChangeNotifier {
   void _startIdleHeartbeat() {
     _idleHeartbeatTimer?.cancel();
     _idleHeartbeatTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!_isNavigating && bleService.isConnected) {
+      if (!_isNavigating &&
+          !(_externalBleNavMode && _externalBleHasActiveNav) &&
+          bleService.isConnected) {
         sendPreviewPayloadToEsp32();
       }
     });
@@ -494,6 +899,46 @@ class NavigationManager extends ChangeNotifier {
     );
   }
 
+  @visibleForTesting
+  static double computeFallbackSpeedKmh({
+    required double reportedSpeedMs,
+    required LatLng? prevLoc,
+    required DateTime? prevTime,
+    required LatLng newLoc,
+    required DateTime newTime,
+    required double accuracyM,
+  }) {
+    if (reportedSpeedMs > 0.25) {
+      return (reportedSpeedMs * 3.6).clamp(0.0, 160.0);
+    }
+    if (prevLoc != null && prevTime != null && accuracyM <= 35.0) {
+      final int dtMs = newTime.difference(prevTime).inMilliseconds;
+      if (dtMs >= 700 && dtMs <= 8000) {
+        final double distM = const Distance().as(LengthUnit.Meter, prevLoc, newLoc);
+        final double minMoveM = math.max(3.5, accuracyM * 0.25);
+        if (distM >= minMoveM) {
+          return ((distM / (dtMs / 1000.0)) * 3.6).clamp(0.0, 160.0);
+        }
+      }
+    }
+    return 0.0;
+  }
+
+  /// Called periodically during external Google Maps BLE nav to keep live GPS speed fresh
+  /// even when background GPS callbacks are throttled by OEM battery managers.
+  Future<void> refreshSpeedSampleIfStale() async {
+    if (_isNavigating || _isSimulating) return;
+    final ageMs = DateTime.now().difference(_lastGpsFixTime).inMilliseconds;
+    if (ageMs >= 2000 && !kIsWeb && Platform.isAndroid) {
+      await _fetchNativeLocationFallback();
+    }
+    final afterAgeMs = DateTime.now().difference(_lastGpsFixTime).inMilliseconds;
+    if (afterAgeMs > 8000 && _currentSpeedKmh > 0.0) {
+      _currentSpeedKmh = 0.0;
+      notifyListeners();
+    }
+  }
+
   Future<bool> _fetchNativeLocationFallback() async {
     if (!Platform.isAndroid) return false;
     try {
@@ -615,7 +1060,7 @@ class NavigationManager extends ChangeNotifier {
         }
       } catch (_) {}
 
-      _startContinuousGpsStream(allowForeground: _isNavigating);
+      _startContinuousGpsStream(allowForeground: _isNavigating || _externalBleNavMode);
 
       // Race Geolocator single-shot (with forceLocationManager fallback) against Android native LocationManager
       unawaited(
@@ -723,8 +1168,10 @@ class NavigationManager extends ChangeNotifier {
     )) {
       return;
     }
+    final bool isStrictlyNewer = pos.timestamp.isAfter(_lastGpsFixTime.add(const Duration(milliseconds: 450)));
     if (isSingleShot &&
         _hasInitialLiveGpsFix &&
+        !isStrictlyNewer &&
         _lastAccurateFixTime != null &&
         acc > _lastLiveAccuracyM + 3.0) {
       return;
@@ -742,7 +1189,16 @@ class NavigationManager extends ChangeNotifier {
 
     final rawLoc = LatLng(pos.latitude, pos.longitude);
     _rawGpsLocation = rawLoc;
-    final rawSpdKmh = (pos.speed >= 0 ? pos.speed * 3.6 : 0.0).clamp(0.0, 160.0);
+    final rawSpdKmh = computeFallbackSpeedKmh(
+      reportedSpeedMs: pos.speed,
+      prevLoc: _lastSpeedCalcLoc,
+      prevTime: _lastSpeedCalcTime,
+      newLoc: rawLoc,
+      newTime: now,
+      accuracyM: effectiveAcc,
+    );
+    _lastSpeedCalcLoc = rawLoc;
+    _lastSpeedCalcTime = now;
     // Dừng về 0 ngay khi đứng yên để dead-reckoning không đẩy vị trí vượt quá ngã tư
     final spdKmh = rawSpdKmh < 1.5
         ? 0.0
@@ -757,28 +1213,146 @@ class NavigationManager extends ChangeNotifier {
     }
 
     final bool isFirstLiveFix = !_hasInitialLiveGpsFix || _currentLocation == null;
-    _currentLocation = resolveNextIdleLocation(
-      currentLocation: _currentLocation,
+    final int prevRoundedKmh = _currentSpeedKmh.round();
+    final nextLoc = resolveNextIdleLocation(
+      currentLocation: _targetLocation ?? _currentLocation,
       hasInitialLiveGpsFix: _hasInitialLiveGpsFix,
       incomingLocation: rawLoc,
       incomingAccuracyM: effectiveAcc,
       previousAccuracyM: prevAcc,
       speedKmh: spdKmh,
     );
+    _targetLocation = nextLoc;
+    if (!_externalBleNavMode ||
+        isFirstLiveFix ||
+        _currentLocation == null ||
+        const Distance().as(LengthUnit.Meter, _currentLocation!, nextLoc) > 45.0) {
+      _currentLocation = nextLoc;
+    }
     _hasInitialLiveGpsFix = true;
     _currentSpeedKmh = spdKmh;
-    if (pos.heading >= 0 && spdKmh >= 2.0) {
-      _currentHeading = pos.heading;
-      _smoothedHeading = _hasHeadingLock
-          ? _lerpAngleDeg(_smoothedHeading, pos.heading, 0.45)
-          : pos.heading;
-      _hasHeadingLock = true;
+    final headingState = resolveReliableExternalHeading(
+      currentSmoothedHeading: _smoothedHeading,
+      currentHasHeadingLock: _hasHeadingLock,
+      rawSensorHeading: pos.heading,
+      hasSensorHeading: pos.heading >= 0.0,
+      speedKmh: spdKmh,
+      accuracyM: effectiveAcc,
+      prevCourseOrigin: _lastCourseCalcLoc,
+      incomingLocation: rawLoc,
+    );
+    _lastCourseCalcLoc = headingState.nextCourseOrigin;
+    _smoothedHeading = headingState.smoothedHeading;
+    _targetHeading = headingState.targetHeading;
+    _hasHeadingLock = headingState.hasHeadingLock;
+    if (headingState.hasHeadingLock) {
+      _currentHeading = headingState.targetHeading;
     }
-    onLocationChanged?.call(_currentLocation!, effectiveHeading);
-    if (isFirstLiveFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
+    if (!_externalBleNavMode || isFirstLiveFix) {
+      onLocationChanged?.call(_currentLocation!, effectiveHeading);
+    }
+    final bool speedChanged = _currentSpeedKmh.round() != prevRoundedKmh;
+    if (isFirstLiveFix || speedChanged || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
       _lastUiNotifyTime = now;
       notifyListeners();
     }
+  }
+
+  /// Filters noisy low-speed GPS bearing spikes and locks heading using displacement course + damped EMA.
+  @visibleForTesting
+  static ({
+    double smoothedHeading,
+    double targetHeading,
+    bool hasHeadingLock,
+    LatLng? nextCourseOrigin,
+  }) resolveReliableExternalHeading({
+    required double currentSmoothedHeading,
+    required bool currentHasHeadingLock,
+    required double rawSensorHeading,
+    required bool hasSensorHeading,
+    required double speedKmh,
+    required double accuracyM,
+    required LatLng? prevCourseOrigin,
+    required LatLng incomingLocation,
+  }) {
+    LatLng? nextOrigin = prevCourseOrigin;
+    if (nextOrigin == null && accuracyM <= 30.0) {
+      nextOrigin = incomingLocation;
+    }
+
+    double? displacementCourse;
+    if (prevCourseOrigin != null && accuracyM <= 25.0) {
+      final moveM = const Distance().as(LengthUnit.Meter, prevCourseOrigin, incomingLocation);
+      if (moveM >= 7.5) {
+        displacementCourse =
+            (const Distance().bearing(prevCourseOrigin, incomingLocation) + 360.0) % 360.0;
+        nextOrigin = incomingLocation;
+      }
+    }
+
+    final bool validSensorHeading = hasSensorHeading &&
+        rawSensorHeading >= 0.0 &&
+        accuracyM <= 30.0 &&
+        speedKmh >= 4.5 &&
+        (rawSensorHeading > 0.0 || speedKmh >= 7.0);
+
+    // Trust fresh sensor bearing immediately during turns so 1 Hz displacement vectors don't lag turns
+    double? candidate;
+    if (validSensorHeading) {
+      candidate = rawSensorHeading;
+    } else if (displacementCourse != null) {
+      candidate = displacementCourse;
+    }
+
+    if (candidate == null) {
+      return (
+        smoothedHeading: currentSmoothedHeading,
+        targetHeading: currentSmoothedHeading,
+        hasHeadingLock: currentHasHeadingLock,
+        nextCourseOrigin: nextOrigin,
+      );
+    }
+
+    if (!currentHasHeadingLock) {
+      return (
+        smoothedHeading: candidate,
+        targetHeading: candidate,
+        hasHeadingLock: true,
+        nextCourseOrigin: nextOrigin,
+      );
+    }
+
+    final diff = ((candidate - currentSmoothedHeading + 540.0) % 360.0) - 180.0;
+    if (speedKmh < 12.0 && diff.abs() < 5.0) {
+      return (
+        smoothedHeading: currentSmoothedHeading,
+        targetHeading: currentSmoothedHeading,
+        hasHeadingLock: true,
+        nextCourseOrigin: nextOrigin,
+      );
+    }
+
+    // Gentle outlier damper only when no displacement confirmed and very slow crawling
+    if (speedKmh < 9.0 && displacementCourse == null && diff.abs() > 75.0) {
+      final guarded = _lerpAngleDeg(currentSmoothedHeading, candidate, 0.15, maxStepDeg: 4.5);
+      return (
+        smoothedHeading: guarded,
+        targetHeading: guarded,
+        hasHeadingLock: true,
+        nextCourseOrigin: nextOrigin,
+      );
+    }
+
+    final double alpha = speedKmh >= 15.0 ? 0.45 : 0.30;
+    final double maxStep = speedKmh >= 15.0 ? 45.0 : 24.0;
+    final double nextSmoothed =
+        _lerpAngleDeg(currentSmoothedHeading, candidate, alpha, maxStepDeg: maxStep);
+    return (
+      smoothedHeading: nextSmoothed,
+      targetHeading: candidate,
+      hasHeadingLock: true,
+      nextCourseOrigin: nextOrigin,
+    );
   }
 
   /// Nội suy góc ngắn nhất (0..360 độ) có giới hạn tốc độ xoay tối đa mỗi frame để cua góc mượt mà không giật
@@ -1038,7 +1612,51 @@ class NavigationManager extends ChangeNotifier {
   void _startSmoothMotionLoop() {
     _smoothMotionTimer?.cancel();
     _smoothMotionTimer = Timer.periodic(const Duration(milliseconds: 33), (_) {
-      if (!_isNavigating || _isSimulating || _activeRoute == null) return;
+      if (_isSimulating) return;
+
+      // 30 FPS dead-reckoning & heading glide for external Google Maps stream mode
+      if (!_isNavigating) {
+        if (!_externalBleNavMode || _currentLocation == null) return;
+        final now = DateTime.now();
+        final msSinceGps = now.difference(_lastGpsFixTime).inMilliseconds;
+        final double leadFromRawM = (_rawGpsLocation != null && _targetLocation != null)
+            ? const Distance().as(LengthUnit.Meter, _rawGpsLocation!, _targetLocation!)
+            : 0.0;
+        if (_currentSpeedKmh >= 2.5 &&
+            msSinceGps < 1000 &&
+            _targetLocation != null &&
+            leadFromRawM < 12.0) {
+          final double stepMeters = (_currentSpeedKmh / 3.6) * 0.033 * 0.85;
+          final double brgRad = effectiveHeading * (math.pi / 180.0);
+          final double latRad = _targetLocation!.latitude * (math.pi / 180.0);
+          final double dLat = (stepMeters * math.cos(brgRad)) / 111320.0;
+          final double dLon =
+              (stepMeters * math.sin(brgRad)) / (111320.0 * math.cos(latRad).abs().clamp(0.15, 1.0));
+          _targetLocation = LatLng(
+            _targetLocation!.latitude + dLat,
+            _targetLocation!.longitude + dLon,
+          );
+        }
+        if (_targetLocation != null) {
+          final distDelta = const Distance().as(LengthUnit.Meter, _currentLocation!, _targetLocation!);
+          if (distDelta > 45.0) {
+            _currentLocation = _targetLocation;
+          } else if (distDelta > 0.05) {
+            _currentLocation = _lerpLatLng(_currentLocation!, _targetLocation!, 0.30);
+          }
+        }
+        if (_hasHeadingLock) {
+          _smoothedHeading = _lerpAngleDeg(_smoothedHeading, _targetHeading, 0.22, maxStepDeg: 10.0);
+        }
+        onLocationChanged?.call(_currentLocation!, effectiveHeading);
+        if (now.difference(_lastUiNotifyTime).inMilliseconds >= 200) {
+          _lastUiNotifyTime = now;
+          notifyListeners();
+        }
+        return;
+      }
+
+      if (_activeRoute == null) return;
       final pts = _activeRoute!.polylinePoints;
       if (pts.length < 2 || _currentLocation == null) return;
 
@@ -1153,10 +1771,11 @@ class NavigationManager extends ChangeNotifier {
       _lastSpokenStepIndex = _currentStepIndex;
       _lastSpokenStage = 0;
       final distM = (_distanceToNextManeuver / 10).round() * 10;
+      final stepText = _viStepPrompt(targetStep);
       if (distM > 50) {
-        speakVoicePrompt('Bắt đầu dẫn đường. Sau $distM mét, ${targetStep.instruction}');
+        speakVoicePrompt('Bắt đầu dẫn đường. Sau $distM mét, $stepText');
       } else {
-        speakVoicePrompt('Bắt đầu dẫn đường. ${targetStep.instruction}');
+        speakVoicePrompt('Bắt đầu dẫn đường. $stepText');
       }
     }
 
@@ -1211,7 +1830,7 @@ class NavigationManager extends ChangeNotifier {
     _refreshCurrentStreetName(_currentLocation!, force: true);
     if (route.steps.isNotEmpty) {
       final firstStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
-      speakVoicePrompt('Bắt đầu mô phỏng lộ trình. ${firstStep.instruction}');
+      speakVoicePrompt('Bắt đầu mô phỏng lộ trình. ${_viStepPrompt(firstStep)}');
     }
     _updateUserPosition(polyline.first, 42.0, initialHeading);
 
@@ -1304,7 +1923,13 @@ class NavigationManager extends ChangeNotifier {
       _lastSpokenStage = 0;
       if (directDistToStep > 240.0) {
         final roundedDist = (directDistToStep / 50).round() * 50;
-        speakVoicePrompt('Tiếp tục đi $roundedDist mét, sau đó ${targetStep.instruction}');
+        final viInst = localizeInstructionToVietnamese(
+          targetStep.instruction,
+          maneuverType: targetStep.maneuverTypeStr,
+          maneuverModifier: targetStep.maneuverModifier,
+          streetName: targetStep.streetName,
+        );
+        speakVoicePrompt('Tiếp tục đi $roundedDist mét, sau đó $viInst');
       }
       _refreshCurrentStreetName(effectiveLoc, force: true);
       notifyListeners();
@@ -1312,8 +1937,25 @@ class NavigationManager extends ChangeNotifier {
       _refreshCurrentStreetName(effectiveLoc);
     }
 
-    _distanceToNextManeuver = directDistToStep;
-    _checkAndSpeakManeuver(targetStep, directDistToStep);
+    final double snapLimit = computeAdaptiveSnapLimitMeters(_gpsAccuracy);
+    double distToStep = directDistToStep;
+    if (_minSegmentDistance <= snapLimit &&
+        pts.length >= 2 &&
+        stepPolyIdx > _closestPointIndex &&
+        stepPolyIdx < pts.length) {
+      double alongM = distanceCalculator.as(
+        LengthUnit.Meter,
+        effectiveLoc,
+        pts[math.min(_closestPointIndex + 1, pts.length - 1)],
+      );
+      for (int i = _closestPointIndex + 1; i < stepPolyIdx; i++) {
+        alongM += distanceCalculator.as(LengthUnit.Meter, pts[i], pts[i + 1]);
+      }
+      distToStep = alongM;
+    }
+
+    _distanceToNextManeuver = distToStep;
+    _checkAndSpeakManeuver(targetStep, distToStep);
     _updateRemainingMetrics();
   }
 
@@ -1333,16 +1975,23 @@ class NavigationManager extends ChangeNotifier {
       return;
     }
 
+    final viInst = localizeInstructionToVietnamese(
+      targetStep.instruction,
+      maneuverType: targetStep.maneuverTypeStr,
+      maneuverModifier: targetStep.maneuverModifier,
+      streetName: targetStep.streetName,
+    );
+
     // 1. Báo trước khi cách điểm rẽ từ 130m - 200m
     if (distMeters <= 200.0 && distMeters >= 110.0 && _lastSpokenStage < 1) {
       _lastSpokenStage = 1;
       final roundedDist = (distMeters / 10).round() * 10;
-      speakVoicePrompt('Còn $roundedDist mét, ${targetStep.instruction}');
+      speakVoicePrompt('Còn $roundedDist mét, $viInst');
     }
     // 2. Báo rẽ trực tiếp khi cách điểm rẽ <= 45m
     else if (distMeters <= 45.0 && _lastSpokenStage < 2) {
       _lastSpokenStage = 2;
-      speakVoicePrompt(targetStep.instruction);
+      speakVoicePrompt(viInst);
     }
   }
 
@@ -1479,7 +2128,7 @@ class NavigationManager extends ChangeNotifier {
             _lastSpokenStepIndex = _currentStepIndex;
             _lastSpokenStage = 0;
             if (currentStep != null) {
-              speakVoicePrompt('Đã cập nhật lộ trình mới. ${currentStep!.instruction}');
+              speakVoicePrompt('Đã cập nhật lộ trình mới. ${_viStepPrompt(currentStep!)}');
             }
             onRouteChanged?.call();
             onLocationChanged?.call(_currentLocation ?? latestPos, effectiveHeading);
@@ -1718,7 +2367,7 @@ class NavigationManager extends ChangeNotifier {
     _blePushTimer?.cancel();
 
     // Giữ luồng GPS chạy liên tục để vị trí hiện tại trên bản đồ luôn chuẩn xác khi tìm đường mới
-    if (_positionStream == null) {
+    if (!_isDisposed && _positionStream == null) {
       _startContinuousGpsStream();
     }
 
@@ -1729,7 +2378,15 @@ class NavigationManager extends ChangeNotifier {
   }
 
   @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
+  }
+
+  @override
   void dispose() {
+    _isDisposed = true;
     _idleHeartbeatTimer?.cancel();
     _positionStream?.cancel();
     _positionStream = null;

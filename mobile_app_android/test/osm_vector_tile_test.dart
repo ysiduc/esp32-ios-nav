@@ -499,6 +499,41 @@ void main() {
         // Must stay outside top-left maneuver HUD card
         expect(l.sx < 148 && l.sy < 88, isFalse);
       }
+
+      // Strict target street mode shows only the upcoming turn street (no unrelated road clutter)
+      final turnOnly = renderer.collectVisibleRoadLabels(
+        width: 320,
+        height: 216,
+        tiles: [tile],
+        userWorldX: tile.x * 1024.0 + 512.0,
+        userWorldY: tile.y * 1024.0 + 512.0,
+        displayZoom: 17,
+        camera: cam,
+        skyHorizonPx: 22,
+        avoidHudPills: true,
+        maxLabels: 1,
+        targetStreetName: 'Đại Từ',
+        strictTargetStreetOnly: true,
+      );
+      expect(turnOnly.length, 1);
+      expect(turnOnly.first.text, contains('Đại Từ'));
+
+      // Generic instruction like "Đi thẳng" hides floating map labels altogether
+      final straightOnly = renderer.collectVisibleRoadLabels(
+        width: 320,
+        height: 216,
+        tiles: [tile],
+        userWorldX: tile.x * 1024.0 + 512.0,
+        userWorldY: tile.y * 1024.0 + 512.0,
+        displayZoom: 17,
+        camera: cam,
+        skyHorizonPx: 22,
+        avoidHudPills: true,
+        maxLabels: 1,
+        targetStreetName: 'Đi thẳng',
+        strictTargetStreetOnly: true,
+      );
+      expect(straightOnly, isEmpty);
     });
 
     test('OsmVectorTile.extractBuildingsFromMask separates black-bordered magenta buildings into CW footprints', () {

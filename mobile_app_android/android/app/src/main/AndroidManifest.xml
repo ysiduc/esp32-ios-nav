@@ -81,6 +81,8 @@
             android:value="2" />
     </application>
     <queries>
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.google.android.tts" />
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

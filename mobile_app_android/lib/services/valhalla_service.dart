@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../models/route_model.dart';
+import 'navigation_manager.dart';
 
 class ValhallaService {
   // Public Valhalla Server (or your self-hosted server: http://localhost:8002/route)
@@ -78,16 +79,23 @@ class ValhallaService {
             : (polylinePoints.isNotEmpty ? polylinePoints.last : start);
 
         final mappedTypeStr = _mapValhallaTypeToString(valhallaType);
+        final mappedModifier = _mapValhallaTypeToModifier(valhallaType);
+        final viInst = NavigationManager.localizeInstructionToVietnamese(
+          instruction,
+          maneuverType: mappedTypeStr,
+          maneuverModifier: mappedModifier,
+          streetName: streetName,
+        );
 
         steps.add(NavStep(
           stepIndex: globalIndex++,
-          instruction: instruction.isNotEmpty ? instruction : 'Tiếp tục trên $streetName',
+          instruction: viInst.isNotEmpty ? viInst : 'Tiếp tục trên $streetName',
           streetName: streetName,
           distanceMeters: distanceMeters,
           durationSeconds: durationSeconds,
           coordinate: coord,
           maneuverTypeStr: mappedTypeStr,
-          maneuverModifier: _mapValhallaTypeToModifier(valhallaType),
+          maneuverModifier: mappedModifier,
         ));
       }
 
