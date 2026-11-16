@@ -1317,7 +1317,11 @@ class NavigationManager extends ChangeNotifier {
     _currentSongTitle = title.trim();
     _currentSongArtist = artist.trim();
     _isMusicPlaying = isPlaying;
-    sendPreviewPayloadToEsp32();
+    if (_isNavigating) {
+      _pushNavigationDataToBle();
+    } else {
+      sendPreviewPayloadToEsp32();
+    }
     notifyListeners();
   }
 

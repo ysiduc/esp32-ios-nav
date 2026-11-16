@@ -629,7 +629,7 @@ void processJsonPacket(const char* jsonStr) {
     }
   }
 
-  bool isNav = (doc["nav"] | 0) == 1;
+  bool isNav = doc["nav"].isNull() ? display.isNavigating() : (doc["nav"].as<int>() == 1);
   display.setNavData(curTurn, curDist, curTotalDist, curSpeed, curEta, curStreet.c_str(), curArrival.c_str(), curClock.c_str(), curBattery, parsedPts, parsedPtCount, isNav, curHeading);
 
   if (doc["song"].is<const char*>() || doc["song"].is<String>()) {
@@ -1160,22 +1160,24 @@ void loop() {
         g_skipNavPopup = display.isPopupActive() && (display.getCurrentState() == STATE_NAVIGATION);
         TJpgDec.drawJpg(0, mapY, frameBuf, frameLen);
         display.onFrameRendered();
-      } else if (jpgW > 0) {
+      } else if (jpgW > 0 && !display.isNavigating()) {
         int16_t mx, my, mw, mh, br;
         uint16_t bCol;
         display.getIdleMinimapRect(mx, my, mw, mh, br, bCol);
         display.setFullScreenStream(false);
-        g_clipX = mx; g_clipY = my; g_clipW = mw; g_clipH = mh;
-        g_clipMapOnly = true;
-        g_skipNavPopup = false;
-        tft.setViewport(mx, my, mw, mh, false);
-        TJpgDec.drawJpg(mx - (144 - mw) / 2, my - (224 - mh) / 2, frameBuf, frameLen);
-        tft.resetViewport();
-        g_clipMapOnly = false;
-        if (bCol != 0) {
-          tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, bCol);
+        if (display.getCurrentState() == STATE_APP_IDLE_MAP) {
+          g_clipX = mx; g_clipY = my; g_clipW = mw; g_clipH = mh;
+          g_clipMapOnly = true;
+          g_skipNavPopup = false;
+          tft.setViewport(mx, my, mw, mh, false);
+          TJpgDec.drawJpg(mx - (144 - mw) / 2, my - (224 - mh) / 2, frameBuf, frameLen);
+          tft.resetViewport();
+          g_clipMapOnly = false;
+          if (bCol != 0) {
+            tft.drawRoundRect(mx - 2, my - 2, mw + 4, mh + 4, br, bCol);
+          }
+          display.onFrameRendered();
         }
-        display.onFrameRendered();
       }
     }
     #endif

@@ -284,6 +284,7 @@ private:
   bool _needFullRedraw = true;
   bool _isAppConnected = false;
   bool _fullScreenStreamActive = false;
+  unsigned long _lastFullScreenFrameAt = 0;
   unsigned long _lastRenderTime = 0;
 
   // Watchface selection (0..5 built-in, 250 = custom ZIP theme on SPIFFS)
@@ -567,7 +568,10 @@ public:
   void restoreIdleMap() {
     _previewScreenMode = 0;
     _isAppConnected = true;
-    _currentState = _navData.isNavigating ? STATE_NAVIGATION : STATE_APP_IDLE_MAP;
+    _fullScreenStreamActive = false;
+    _lastFullScreenFrameAt = 0;
+    _navData.isNavigating = false;
+    _currentState = STATE_APP_IDLE_MAP;
     _needFullRedraw = true;
     Serial.println(F("[UI] Restored Idle Map state (Map Khoi)"));
   }
@@ -682,11 +686,20 @@ public:
     return _navData.isNavigating;
   }
 
-  void setNavigating(bool isNav) {
-    bool stateChanged = (_navData.isNavigating != isNav);
-    _navData.isNavigating = isNav;
-    if (isNav) _previewScreenMode = 0;
-    DisplayState targetState = isNav
+  bool _effectiveNavWithStreamHold(bool isNav) const {
+    if (isNav) return true;
+    if (_fullScreenStreamActive && _lastFullScreenFrameAt > 0 && (millis() - _lastFullScreenFrameAt < 2500UL)) {
+      // Keep Man 3 locked while 320x216 stream frames are actively flowing unless explicitly exited.
+      return true;
+    }
+    return false;
+  }
+
+  void _applyNavStateTarget(bool effectiveNav) {
+    bool stateChanged = (_navData.isNavigating != effectiveNav);
+    _navData.isNavigating = effectiveNav;
+    if (effectiveNav) _previewScreenMode = 0;
+    DisplayState targetState = effectiveNav
         ? STATE_NAVIGATION
         : (_previewScreenMode == 1
             ? STATE_STANDBY_WATCHFACE
@@ -697,24 +710,35 @@ public:
     }
   }
 
+  void setNavigating(bool isNav) {
+    _applyNavStateTarget(_effectiveNavWithStreamHold(isNav));
+  }
+
   void setFullScreenStream(bool active) {
     if (!_isAppConnected) {
       _fullScreenStreamActive = false;
+      _lastFullScreenFrameAt = 0;
       if (_currentState != STATE_STANDBY_WATCHFACE) {
         _currentState = STATE_STANDBY_WATCHFACE;
         _needFullRedraw = true;
       }
       return;
     }
-    if (_fullScreenStreamActive != active) {
-      _fullScreenStreamActive = active;
-      if (active) {
+    if (active) {
+      _lastFullScreenFrameAt = millis();
+      if (!_fullScreenStreamActive || _currentState != STATE_NAVIGATION) {
+        _fullScreenStreamActive = true;
         _currentState = STATE_NAVIGATION;
-      } else {
-        _currentState = _navData.isNavigating
-            ? STATE_NAVIGATION
-            : (_previewScreenMode == 1 ? STATE_STANDBY_WATCHFACE : STATE_APP_IDLE_MAP);
+        _needFullRedraw = true;
       }
+      return;
+    }
+    if (_fullScreenStreamActive) {
+      _fullScreenStreamActive = false;
+      _lastFullScreenFrameAt = 0;
+      _currentState = _navData.isNavigating
+          ? STATE_NAVIGATION
+          : (_previewScreenMode == 1 ? STATE_STANDBY_WATCHFACE : STATE_APP_IDLE_MAP);
       _needFullRedraw = true;
     }
   }
@@ -723,18 +747,7 @@ public:
                   const char* street, const char* arrival = "12:00", const char* clock = "12:00",
                   uint8_t battery = 85, const RoutePoint* pts = nullptr, uint8_t ptCount = 0,
                   bool isNav = false, int16_t head = 0) {
-    bool stateChanged = (_navData.isNavigating != isNav);
-    _navData.isNavigating = isNav;
-    if (isNav) _previewScreenMode = 0;
-    DisplayState targetState = isNav
-        ? STATE_NAVIGATION
-        : (_previewScreenMode == 1
-            ? STATE_STANDBY_WATCHFACE
-            : ((_previewScreenMode == 2 || _isAppConnected) ? STATE_APP_IDLE_MAP : STATE_STANDBY_WATCHFACE));
-    if (_currentState != targetState || stateChanged) {
-      _currentState = targetState;
-      _needFullRedraw = true;
-    }
+    _applyNavStateTarget(_effectiveNavWithStreamHold(isNav));
 
     _navData.turnCode = turn;
     _navData.distMeters = dist;

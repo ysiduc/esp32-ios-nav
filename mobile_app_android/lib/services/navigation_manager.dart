@@ -2226,7 +2226,11 @@ class NavigationManager extends ChangeNotifier {
     _currentSongTitle = title.trim();
     _currentSongArtist = artist.trim();
     _isMusicPlaying = isPlaying;
-    sendPreviewPayloadToEsp32();
+    if (_isNavigating) {
+      _pushNavigationDataToBle();
+    } else {
+      sendPreviewPayloadToEsp32();
+    }
     notifyListeners();
   }
 
@@ -2337,26 +2341,34 @@ class NavigationManager extends ChangeNotifier {
     bleService.sendNavPayload(payload);
   }
 
-  /// Transmit preview / standby telemetry to ESP32 so display shows Clock, ysiduc & Song when not navigating
+  /// Transmit preview / standby telemetry to ESP32 so display shows Clock, ysiduc & Song when not navigating.
+  /// Preserves active built-in or external Google Maps navigation telemetry so song/heartbeat ticks never flash Màn 2.
   void sendPreviewPayloadToEsp32() {
     if (!bleService.isConnected && !bleService.isWifiConnected) return;
     final now = DateTime.now();
     final h = now.hour.toString().padLeft(2, '0');
     final m = now.minute.toString().padLeft(2, '0');
     final curClock = '$h:$m';
-    final upcomingPts = _isNavigating ? computeUpcomingRoutePoints() : <List<int>>[];
+    final bool navActive = isAnyNavActive;
+    final bool builtInNav = _isNavigating;
+    final upcomingPts = builtInNav ? computeUpcomingRoutePoints() : <List<int>>[];
+    final String street = builtInNav
+        ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '')
+        : (isExternalNavTelemetryActive
+            ? (effectiveNextStreetName.isNotEmpty ? effectiveNextStreetName : 'Đang dẫn đường')
+            : 'Sẵn sàng');
 
     _currentBattery = bleService.lastKnownBattery;
     final payload = EspNavPayload(
-      isNavigating: _isNavigating,
-      turnCode: _isNavigating ? (currentStep?.turnCode ?? 0) : 0,
-      distanceToTurn: _isNavigating ? _distanceToNextManeuver.round() : 0,
-      totalDistance: _isNavigating ? _remainingTotalDistance.round() : 0,
-      etaMinutes: _isNavigating ? _remainingEtaMinutes : 0,
-      streetName: _isNavigating ? (currentStep?.streetName.isNotEmpty == true ? currentStep!.streetName : '') : 'Sẵn sàng',
+      isNavigating: navActive,
+      turnCode: navActive ? effectiveTurnCode : 0,
+      distanceToTurn: navActive ? effectiveDistanceToNextManeuver.round() : 0,
+      totalDistance: navActive ? effectiveRemainingTotalDistance.round() : 0,
+      etaMinutes: navActive ? effectiveRemainingEtaMinutes : 0,
+      streetName: street,
       currentSpeed: _currentSpeedKmh.round(),
-      stepIndex: _isNavigating ? _currentStepIndex : 0,
-      totalSteps: _isNavigating ? (_activeRoute?.steps.length ?? 1) : 0,
+      stepIndex: builtInNav ? _currentStepIndex : 0,
+      totalSteps: builtInNav ? (_activeRoute?.steps.length ?? 1) : (navActive ? 1 : 0),
       latitude: _currentLocation?.latitude,
       longitude: _currentLocation?.longitude,
       heading: effectiveHeading.round(),

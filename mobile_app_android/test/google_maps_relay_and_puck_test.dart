@@ -224,6 +224,18 @@ void main() {
       expect(json['eta'], 8);
       expect(json['street'], 'Lê Lợi');
 
+      // Updating music metadata / elapsed position while Google Maps is navigating must NEVER emit nav:0
+      ble.sentPayloads.clear();
+      nav.setSong('Đêm Nay Không Ngủ', 'Lê Hiếu', isPlaying: true);
+      nav.sendPreviewPayloadToEsp32();
+      expect(ble.sentPayloads, isNotEmpty);
+      for (final rawTx in ble.sentPayloads) {
+        final tx = jsonDecode(rawTx) as Map<String, dynamic>;
+        expect(tx['nav'], 1);
+        expect(tx['turn'], 6);
+        expect(tx['street'], 'Lê Lợi');
+      }
+
       // Optional switch to BLE-only Man 2 mode stops Wi-Fi stream cleanly
       relay.setStreamMapEnabled(false);
       expect(relay.streamMapEnabled, isFalse);

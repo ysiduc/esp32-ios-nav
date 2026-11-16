@@ -91,6 +91,18 @@ class EspNotificationListenerService : NotificationListenerService() {
     private var lastGmapsSignature: String = ""
     private var lastGmapsSentMs: Long = 0L
 
+    // Google Maps frequently swaps/reposts its navigation notification during turn transitions or rerouting;
+    // debounce removal briefly so transient NotificationManager churn never flickers ESP32 Man 3 -> Man 2 -> Man 3.
+    private val pendingGmapsEndRunnable = Runnable {
+        val stillActive = scanActiveGoogleMapsInternal(dispatchToFlutter = false)
+        if (stillActive == null && (activeGoogleMapsKey != null || cachedGoogleMapsNav != null)) {
+            activeGoogleMapsKey = null
+            cachedGoogleMapsNav = null
+            lastGmapsSignature = ""
+            MainActivity.onNativeGoogleMapsNavEnded()
+        }
+    }
+
     private val sessionsChangedListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
         registerControllers(controllers)
     }
@@ -111,6 +123,7 @@ class EspNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(pendingGmapsEndRunnable)
         unregisterControllers()
         try {
             mediaSessionManager?.removeOnActiveSessionsChangedListener(sessionsChangedListener)
@@ -305,10 +318,8 @@ class EspNotificationListenerService : NotificationListenerService() {
         if (sbn.packageName == GOOGLE_MAPS_PACKAGE) {
             val remaining = scanActiveGoogleMapsInternal(dispatchToFlutter = true)
             if (remaining == null && (activeGoogleMapsKey == sbn.key || cachedGoogleMapsNav != null)) {
-                activeGoogleMapsKey = null
-                cachedGoogleMapsNav = null
-                lastGmapsSignature = ""
-                MainActivity.onNativeGoogleMapsNavEnded()
+                mainHandler.removeCallbacks(pendingGmapsEndRunnable)
+                mainHandler.postDelayed(pendingGmapsEndRunnable, 1600L)
             }
             return
         }
@@ -445,6 +456,7 @@ class EspNotificationListenerService : NotificationListenerService() {
         payload["isCategoryNav"] = isCategoryNav
         payload["timestampMs"] = System.currentTimeMillis()
 
+        mainHandler.removeCallbacks(pendingGmapsEndRunnable)
         activeGoogleMapsKey = sbn.key
         cachedGoogleMapsNav = payload
 
