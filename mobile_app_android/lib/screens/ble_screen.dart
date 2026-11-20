@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../models/esp_payload.dart';
 import '../services/ble_service.dart';
 import '../services/phone_call_service.dart';
+import '../widgets/firmware_update_sheet.dart';
 
 class BleScreen extends StatefulWidget {
   final VoidCallback? onBackToMap;
@@ -262,6 +263,11 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
 
                 // 2. ESP32 Bluetooth Name & Wi-Fi SoftAP Settings Card
                 _buildDeviceConfigCard(bleService),
+
+                const SizedBox(height: 12),
+
+                // 2b. ESP32 Firmware OTA Update via .zip Card
+                _buildFirmwareUpdateCard(bleService),
 
                 const SizedBox(height: 12),
 
@@ -658,6 +664,82 @@ class _BleScreenState extends State<BleScreen> with SingleTickerProviderStateMix
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildFirmwareUpdateCard(BleService bleService) {
+    final fwVer = bleService.espFirmwareVersion;
+    final subtitle = fwVer != null && fwVer.isNotEmpty
+        ? 'Phiên bản trên mạch: v$fwVer • Nạp qua file .zip'
+        : 'Chọn file firmware .zip để cập nhật ESP32 qua Wi-Fi';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _cardColor,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _borderColor, width: 1.1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(8),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF5856D6).withAlpha(22),
+            ),
+            child: const Icon(
+              Icons.system_update_rounded,
+              color: Color(0xFF5856D6),
+              size: 21,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Cập nhật Firmware ESP32',
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: _textSecondary, fontSize: 11.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF5856D6).withAlpha(22),
+              foregroundColor: const Color(0xFF5856D6),
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.folder_zip_rounded, size: 15),
+            label: const Text('Nạp .zip', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+            onPressed: () => showFirmwareUpdateSheet(context),
+          ),
+        ],
+      ),
     );
   }
 

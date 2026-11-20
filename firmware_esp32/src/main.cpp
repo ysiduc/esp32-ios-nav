@@ -8,10 +8,15 @@
 #include <esp_wifi.h>
 #include <tcpip_adapter.h>
 #include <Preferences.h>
+#include <Update.h>
 #include "display_ui.h"
 #include "ancs_service.h"
 #include "cts_service.h"
 #include "ams_service.h"
+
+#ifndef FW_VERSION
+#define FW_VERSION "2.0.0"
+#endif
 
 // ESP32 SoftAP (no Internet):
 //  - Port 8081: Non-Blocking Zero-Alloc TCP Binary Stream (0xAA 0xBB lenH lenL jpeg / 0xAA 0xCC lenH lenL json)
@@ -55,6 +60,7 @@ static String buildDeviceConfigJson(bool restarting) {
          "\",\"mode\":\"" + String(isSta ? "STA" : "AP") +
          "\",\"ip\":\"" + ipStr +
          "\",\"port\":8081,\"tcp\":" + String(tcpConnected ? 1 : 0) +
+         ",\"fw_ver\":\"" FW_VERSION "\",\"ota\":1" +
          ",\"restarting\":" + String(restarting ? 1 : 0) + "}";
 }
 
@@ -184,6 +190,55 @@ static void flushPendingTcpAcks() {
   const uint8_t n = (count > 8) ? 8 : count;
   memset(acks, 'K', n);
   tcpStreamClient.write(acks, n);
+}
+
+// =========================================================================
+// Lock-Step Wi-Fi TCP OTA Firmware Update Pipeline (0xAA 0xE0..0xE3)
+// tcpStreamTask reads packets into otaRxBuf; loop() exclusively owns Update & TFT.
+// =========================================================================
+static uint8_t otaRxBuf[8192];
+static volatile bool otaActive = false;
+static volatile uint8_t otaCmdType = 0; // 0xE0=BEGIN, 0xE1=DATA, 0xE2=END, 0xE3=ABORT, 0xE4=DISCONNECT
+static volatile size_t otaRxLen = 0;
+static volatile uint8_t otaRespBuf[2] = {0, 0};
+static volatile uint8_t otaRespLen = 0;
+static size_t otaTotalSize = 0;
+static size_t otaWritten = 0;
+static unsigned long otaLastActivityMs = 0;
+static unsigned long otaLastUiUpdateMs = 0;
+static char otaLabel[64] = "";
+static bool otaRestartPending = false;
+static unsigned long otaRestartAt = 0;
+static unsigned long otaErrorHoldUntil = 0;
+
+static void enqueueOtaResp(uint8_t b1, uint8_t b2 = 0) {
+  portENTER_CRITICAL(&frameMux);
+  otaRespBuf[0] = b1;
+  otaRespBuf[1] = b2;
+  otaRespLen = (b2 != 0) ? 2 : 1;
+  portEXIT_CRITICAL(&frameMux);
+}
+
+static void resetOtaResp() {
+  portENTER_CRITICAL(&frameMux);
+  otaRespLen = 0;
+  portEXIT_CRITICAL(&frameMux);
+}
+
+static void flushPendingOtaResp() {
+  uint8_t buf[2] = {0, 0};
+  uint8_t len = 0;
+  portENTER_CRITICAL(&frameMux);
+  len = otaRespLen;
+  if (len > 0) {
+    buf[0] = otaRespBuf[0];
+    buf[1] = otaRespBuf[1];
+    otaRespLen = 0;
+  }
+  portEXIT_CRITICAL(&frameMux);
+  if (len > 0 && tcpStreamClient && tcpStreamClient.connected()) {
+    tcpStreamClient.write(buf, len);
+  }
 }
 
 static uint8_t currentBleFrameId = 255;
@@ -681,6 +736,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
   void onWrite(NimBLECharacteristic* pCharacteristic) {
+    if (otaActive || otaRestartPending) return;
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) return;
 
@@ -785,6 +841,12 @@ static void tcpStreamTask(void* param) {
       if (tcpStreamClient) tcpStreamClient.stop();
       tcpConnected = false;
       resetTcpAcks();
+      resetOtaResp();
+      if (otaActive && !otaRestartPending) {
+        portENTER_CRITICAL(&frameMux);
+        otaCmdType = 0xE4;
+        portEXIT_CRITICAL(&frameMux);
+      }
       rxState = 0;
       rxPos = 0;
       staWasConnected = false;
@@ -838,6 +900,12 @@ static void tcpStreamTask(void* param) {
           if (tcpStreamClient) tcpStreamClient.stop();
           tcpConnected = false;
       resetTcpAcks();
+      resetOtaResp();
+      if (otaActive && !otaRestartPending) {
+        portENTER_CRITICAL(&frameMux);
+        otaCmdType = 0xE4;
+        portEXIT_CRITICAL(&frameMux);
+      }
           rxState = 0;
           rxPos = 0;
           pendingWifiStatusNotify = true;
@@ -874,13 +942,22 @@ static void tcpStreamTask(void* param) {
       tcpStreamClient.stop();
       tcpConnected = false;
       resetTcpAcks();
+      resetOtaResp();
+      if (otaActive && !otaRestartPending) {
+        portENTER_CRITICAL(&frameMux);
+        otaCmdType = 0xE4;
+        portEXIT_CRITICAL(&frameMux);
+      }
       rxState = 0;
       rxPos = 0;
       Serial.println("[TCP 8081] iPhone disconnected");
     }
 
     if (tcpStreamClient && tcpStreamClient.connected()) {
-      flushPendingTcpAcks();
+      flushPendingOtaResp();
+      if (!otaActive) {
+        flushPendingTcpAcks();
+      }
 
       int loops = 0;
       while (tcpStreamClient.available() > 0 && loops++ < 256) {
@@ -891,11 +968,14 @@ static void tcpStreamTask(void* param) {
           int c = tcpStreamClient.read();
           if (c < 0) break;
           pktType = (uint8_t)c;
-          if (pktType == 0xBB || pktType == 0xCC) {
+          if (pktType == 0xBB || pktType == 0xCC ||
+              pktType == 0xE0 || pktType == 0xE1 || pktType == 0xE2 || pktType == 0xE3) {
             rxState = 2;
           } else if (pktType == 0xDD) {
-            const uint8_t ack = 'K';
-            tcpStreamClient.write(&ack, 1);
+            if (!otaActive) {
+              const uint8_t ack = 'K';
+              tcpStreamClient.write(&ack, 1);
+            }
             rxState = 0;
           } else if (pktType == 0xAA) {
             rxState = 1;
@@ -912,7 +992,13 @@ static void tcpStreamTask(void* param) {
           if (c < 0) break;
           pktLen |= (uint8_t)c;
           rxPos = 0;
-          if (pktLen == 0 || (pktType == 0xBB && pktLen > 32768) || (pktType == 0xCC && pktLen > 1023)) {
+          const bool validLen =
+              (pktType == 0xBB && pktLen > 0 && pktLen <= 32768) ||
+              (pktType == 0xCC && pktLen > 0 && pktLen <= 1023) ||
+              (pktType == 0xE0 && pktLen > 0 && pktLen <= 512) ||
+              (pktType == 0xE1 && pktLen > 0 && pktLen <= sizeof(otaRxBuf)) ||
+              ((pktType == 0xE2 || pktType == 0xE3) && pktLen > 0 && pktLen <= 16);
+          if (!validLen) {
             rxState = 0;
           } else {
             if (pktType == 0xBB) {
@@ -921,13 +1007,18 @@ static void tcpStreamTask(void* param) {
             rxState = 4;
           }
         } else if (rxState == 4) {
+          const bool isOtaPkt = (pktType >= 0xE0 && pktType <= 0xE3);
+          if (isOtaPkt && otaCmdType != 0) {
+            // Wait for main loop() to finish writing the previous OTA chunk to Flash
+            break;
+          }
           int avail = tcpStreamClient.available();
           if (avail <= 0) break;
           size_t remain = pktLen - rxPos;
           size_t toRead = ((size_t)avail < remain) ? (size_t)avail : remain;
           uint8_t* dst = (pktType == 0xBB)
               ? (framePool[writerSlot] + rxPos)
-              : ((uint8_t*)tcpJsonBuf + rxPos);
+              : (isOtaPkt ? (otaRxBuf + rxPos) : ((uint8_t*)tcpJsonBuf + rxPos));
           int got = tcpStreamClient.read(dst, toRead);
           if (got > 0) {
             rxPos += (size_t)got;
@@ -936,20 +1027,29 @@ static void tcpStreamTask(void* param) {
           }
           if (rxPos >= pktLen) {
             if (pktType == 0xBB) {
-              if (pktLen > 100 && framePool[writerSlot][0] == 0xFF && framePool[writerSlot][1] == 0xD8) {
-                if (publishCompleteFrameFromWriter(writerSlot, pktLen)) {
-                  // Superseded an un-drawn queued frame; release 1 credit immediately for 2-frame pipelining.
+              if (!otaActive && !otaRestartPending) {
+                if (pktLen > 100 && framePool[writerSlot][0] == 0xFF && framePool[writerSlot][1] == 0xD8) {
+                  if (publishCompleteFrameFromWriter(writerSlot, pktLen)) {
+                    // Superseded an un-drawn queued frame; release 1 credit immediately for 2-frame pipelining.
+                    enqueueTcpAck();
+                  }
+                } else {
                   enqueueTcpAck();
                 }
-              } else {
-                enqueueTcpAck();
               }
             } else if (pktType == 0xCC) {
-              tcpJsonBuf[pktLen] = '\0';
-              tcpJsonLen = pktLen;
-              tcpJsonAvailable = true;
-              const uint8_t ack = 'K';
-              tcpStreamClient.write(&ack, 1);
+              if (!otaActive && !otaRestartPending) {
+                tcpJsonBuf[pktLen] = '\0';
+                tcpJsonLen = pktLen;
+                tcpJsonAvailable = true;
+                const uint8_t ack = 'K';
+                tcpStreamClient.write(&ack, 1);
+              }
+            } else if (isOtaPkt) {
+              portENTER_CRITICAL(&frameMux);
+              otaRxLen = pktLen;
+              otaCmdType = pktType;
+              portEXIT_CRITICAL(&frameMux);
             }
             rxState = 0;
             rxPos = 0;
@@ -957,7 +1057,10 @@ static void tcpStreamTask(void* param) {
         }
       }
 
-      flushPendingTcpAcks();
+      flushPendingOtaResp();
+      if (!otaActive) {
+        flushPendingTcpAcks();
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(1));
@@ -1007,6 +1110,11 @@ void setup() {
 
   // 2. Start Display (safe to render SPIFFS JPEGs)
   display.init();
+#ifdef OTA_TEST_BANNER
+  display.drawOtaProgress(100, 1024, 1024, "OTA TEST v" FW_VERSION " OK!", false, true);
+  delay(2200);
+  display.forceRedraw();
+#endif
 
   // 2. Start NimBLE Server (Max MTU 517 for High-Speed BLE Stream)
   NimBLEDevice::init(bleName.c_str());
@@ -1093,6 +1201,215 @@ void setup() {
                 bleName.c_str(), hotspotMode ? "Hotspot STA" : "SoftAP");
 }
 
+static bool handleOtaInLoop() {
+  if (otaRestartPending) {
+    if (millis() >= otaRestartAt) {
+      otaRestartPending = false;
+      Serial.println("[OTA] Rebooting into updated firmware...");
+      delay(60);
+      ESP.restart();
+    }
+    return true;
+  }
+
+  uint8_t cmd = 0;
+  size_t len = 0;
+  portENTER_CRITICAL(&frameMux);
+  cmd = otaCmdType;
+  len = otaRxLen;
+  portEXIT_CRITICAL(&frameMux);
+
+  if (cmd == 0xE0) {
+    char jsonBuf[513];
+    size_t copyLen = (len < 512) ? len : 512;
+    memcpy(jsonBuf, otaRxBuf, copyLen);
+    jsonBuf[copyLen] = '\0';
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, jsonBuf);
+    size_t fwSize = err ? 0 : (size_t)(doc["size"] | 0);
+    String md5Str = err ? String("") : String(doc["md5"] | "");
+    String verStr = err ? String("") : String(doc["ver"] | "");
+    String nameStr = err ? String("") : String(doc["name"] | "firmware.bin");
+
+    if (otaActive) {
+      Update.abort();
+      otaActive = false;
+    }
+
+    if (fwSize < 65536 || fwSize > 3342336) {
+      Serial.printf("[OTA] Reject invalid firmware size: %u\n", (unsigned)fwSize);
+      portENTER_CRITICAL(&frameMux);
+      otaCmdType = 0;
+      portEXIT_CRITICAL(&frameMux);
+      enqueueOtaResp('E', '1');
+      display.drawOtaProgress(0, 0, fwSize, "Kích thước firmware không hợp lệ", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+      return true;
+    }
+
+    if (!Update.begin(fwSize, U_FLASH)) {
+      Serial.printf("[OTA] Update.begin(%u) failed: %s\n", (unsigned)fwSize, Update.errorString());
+      portENTER_CRITICAL(&frameMux);
+      otaCmdType = 0;
+      portEXIT_CRITICAL(&frameMux);
+      enqueueOtaResp('E', '1');
+      display.drawOtaProgress(0, 0, fwSize, "Không mở được phân vùng OTA", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+      return true;
+    }
+
+    md5Str.trim();
+    md5Str.toLowerCase();
+    if (md5Str.length() == 32) {
+      Update.setMD5(md5Str.c_str());
+    }
+
+    if (verStr.length() > 0) {
+      snprintf(otaLabel, sizeof(otaLabel), "Phiên bản %s (%u KB)",
+               verStr.c_str(), (unsigned)((fwSize + 512) / 1024));
+    } else {
+      snprintf(otaLabel, sizeof(otaLabel), "%s (%u KB)",
+               nameStr.c_str(), (unsigned)((fwSize + 512) / 1024));
+    }
+
+    otaTotalSize = fwSize;
+    otaWritten = 0;
+    otaLastActivityMs = millis();
+    otaLastUiUpdateMs = 0;
+    otaErrorHoldUntil = 0;
+    otaActive = true;
+    // Discard any pending JPEG frame while OTA owns the display
+    portENTER_CRITICAL(&frameMux);
+    latestReadySlot = -1;
+    otaCmdType = 0;
+    portEXIT_CRITICAL(&frameMux);
+
+    display.forceRedraw();
+    display.drawOtaProgress(0, 0, otaTotalSize, otaLabel, false, false);
+    enqueueOtaResp('O');
+    Serial.printf("[OTA] Begin: size=%u md5=%s label='%s'\n",
+                  (unsigned)fwSize, md5Str.c_str(), otaLabel);
+    return true;
+
+  } else if (cmd == 0xE1) {
+    if (!otaActive) {
+      portENTER_CRITICAL(&frameMux);
+      otaCmdType = 0;
+      portEXIT_CRITICAL(&frameMux);
+      enqueueOtaResp('E', '5');
+      return false;
+    }
+    size_t written = Update.write(otaRxBuf, len);
+    portENTER_CRITICAL(&frameMux);
+    otaCmdType = 0;
+    portEXIT_CRITICAL(&frameMux);
+
+    if (written != len) {
+      Serial.printf("[OTA] Update.write failed (%u/%u): %s\n",
+                    (unsigned)written, (unsigned)len, Update.errorString());
+      Update.abort();
+      otaActive = false;
+      enqueueOtaResp('E', '2');
+      display.drawOtaProgress(0, otaWritten, otaTotalSize, "Lỗi ghi bộ nhớ Flash", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+      return true;
+    }
+
+    otaWritten += written;
+    otaLastActivityMs = millis();
+    uint8_t pct = (otaTotalSize > 0)
+        ? (uint8_t)((uint64_t)otaWritten * 100ULL / (uint64_t)otaTotalSize)
+        : 0;
+    if (pct > 100) pct = 100;
+    if (pct == 100 || (millis() - otaLastUiUpdateMs >= 180UL)) {
+      otaLastUiUpdateMs = millis();
+      display.drawOtaProgress(pct, otaWritten, otaTotalSize, otaLabel, false, false);
+    }
+    enqueueOtaResp('O');
+    return true;
+
+  } else if (cmd == 0xE2) {
+    size_t expectedEndSize = otaTotalSize;
+    if (len >= 4) {
+      expectedEndSize = ((size_t)otaRxBuf[0] << 24) |
+                        ((size_t)otaRxBuf[1] << 16) |
+                        ((size_t)otaRxBuf[2] << 8) |
+                        (size_t)otaRxBuf[3];
+    }
+    portENTER_CRITICAL(&frameMux);
+    otaCmdType = 0;
+    portEXIT_CRITICAL(&frameMux);
+
+    if (!otaActive) {
+      enqueueOtaResp('E', '5');
+      return false;
+    }
+    if (otaWritten != otaTotalSize || otaWritten != expectedEndSize) {
+      Serial.printf("[OTA] Size mismatch: written=%u expected=%u/%u\n",
+                    (unsigned)otaWritten, (unsigned)otaTotalSize, (unsigned)expectedEndSize);
+      Update.abort();
+      otaActive = false;
+      enqueueOtaResp('E', '4');
+      display.drawOtaProgress(0, otaWritten, otaTotalSize, "Thiếu dữ liệu firmware", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+      return true;
+    }
+    if (!Update.end(false)) {
+      Serial.printf("[OTA] Update.end failed (MD5/verify): %s\n", Update.errorString());
+      Update.abort();
+      otaActive = false;
+      enqueueOtaResp('E', '3');
+      display.drawOtaProgress(0, otaWritten, otaTotalSize, "Sai mã kiểm tra MD5", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+      return true;
+    }
+
+    otaActive = false;
+    otaRestartPending = true;
+    otaRestartAt = millis() + 750UL;
+    display.drawOtaProgress(100, otaTotalSize, otaTotalSize, otaLabel, false, true);
+    enqueueOtaResp('R');
+    Serial.printf("[OTA] Success (%u bytes verified)! Reboot scheduled.\n", (unsigned)otaWritten);
+    return true;
+
+  } else if (cmd == 0xE3 || cmd == 0xE4) {
+    portENTER_CRITICAL(&frameMux);
+    otaCmdType = 0;
+    portEXIT_CRITICAL(&frameMux);
+    if (otaActive) {
+      Update.abort();
+      otaActive = false;
+      Serial.printf("[OTA] Aborted (reason=0x%02X)\n", cmd);
+      display.forceRedraw();
+    }
+    if (cmd == 0xE3) {
+      enqueueOtaResp('A');
+    }
+    return false;
+  }
+
+  if (otaActive) {
+    if (millis() - otaLastActivityMs > 20000UL) {
+      Serial.println("[OTA] Inactivity timeout (>20s) -> aborting cleanly");
+      Update.abort();
+      otaActive = false;
+      display.drawOtaProgress(0, otaWritten, otaTotalSize, "Quá thời gian kết nối", true, false);
+      otaErrorHoldUntil = millis() + 2500UL;
+    }
+    return true;
+  }
+
+  if (otaErrorHoldUntil > 0) {
+    if (millis() < otaErrorHoldUntil) {
+      return true;
+    }
+    otaErrorHoldUntil = 0;
+    display.forceRedraw();
+  }
+  return false;
+}
+
 void loop() {
   // Handle deferred reboot after custom BLE name save
   if (pendingBleRestart && millis() >= pendingBleRestartAt) {
@@ -1100,6 +1417,12 @@ void loop() {
     Serial.println("[BLE] Rebooting to apply new Bluetooth name...");
     delay(50);
     ESP.restart();
+  }
+
+  // Exclusive OTA Flash update loop (pauses map streaming & HUD updates safely)
+  if (handleOtaInLoop()) {
+    delay(1);
+    return;
   }
 
   // Safely push deferred Wi-Fi mode/IP change notifications from main loop thread

@@ -14,10 +14,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/mapbox_config.dart';
 import '../models/route_model.dart';
 import 'ble_service.dart';
+import 'firmware_ota_service.dart';
 import 'navigation_manager.dart';
 import 'osm_vector_tile.dart';
 
-class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
+class EspStreamService extends ChangeNotifier
+    with WidgetsBindingObserver
+    implements EspOtaTransport {
   BleService bleService;
   NavigationManager? navManager;
 
@@ -262,12 +265,78 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   ConnectionTask<Socket>? _apConnectTask;
   Socket? _tcpApSocket;
   String? _activeTcpTargetIp;
+  int _activeTcpTargetPort = espApTcpPort;
   StreamSubscription<Uint8List>? _tcpApSub;
   bool _tcpApReadyForNextFrame = true;
   DateTime _lastTcpSendTime = DateTime.fromMillisecondsSinceEpoch(0);
   WebSocket? _apSocket;
   bool _apConnecting = false;
   bool _isDisposed = false;
+  bool _otaModeActive = false;
+  void Function(Uint8List chunk)? _otaRxListener;
+  void Function(String reason)? _otaDisconnectListener;
+
+  bool get isOtaModeActive => _otaModeActive;
+
+  @override
+  bool get hasActiveTcpStream => _tcpApSocket != null;
+
+  @override
+  String? get activeTcpEndpointLabel =>
+      _tcpApSocket == null ? null : '${_activeTcpTargetIp ?? espApIp}:$_activeTcpTargetPort';
+
+  @override
+  Future<bool> ensureWifiTcpConnectedForOta({
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    if (_tcpApSocket != null) return true;
+    unawaited(_tryConnectEspAp());
+    final deadline = DateTime.now().add(timeout);
+    while (!_isDisposed && DateTime.now().isBefore(deadline)) {
+      if (_tcpApSocket != null) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (_tcpApSocket == null && !_apConnecting) {
+        unawaited(_tryConnectEspAp());
+      }
+    }
+    return _tcpApSocket != null;
+  }
+
+  @override
+  void beginOtaTransport({
+    required void Function(Uint8List chunk) onRx,
+    required void Function(String reason) onDisconnected,
+  }) {
+    _otaModeActive = true;
+    _otaRxListener = onRx;
+    _otaDisconnectListener = onDisconnected;
+    notifyListeners();
+  }
+
+  @override
+  Future<bool> sendOtaRawPacket(Uint8List packet) async {
+    final sock = _tcpApSocket;
+    if (sock == null || !_otaModeActive) return false;
+    try {
+      sock.add(packet);
+      await sock.flush();
+      _lastTcpSendTime = DateTime.now();
+      return true;
+    } catch (e) {
+      _closeTcpApSocket(sock, notifyIfEmpty: true);
+      return false;
+    }
+  }
+
+  @override
+  void endOtaTransport() {
+    _otaModeActive = false;
+    _otaRxListener = null;
+    _otaDisconnectListener = null;
+    _tcpApReadyForNextFrame = true;
+    _lastTcpSendTime = DateTime.now();
+    if (!_isDisposed) notifyListeners();
+  }
 
   void _startEspApConnector() {
     _apConnectTimer?.cancel();
@@ -327,6 +396,9 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tcpApSub = null;
     _tcpApSocket = null;
     _activeTcpTargetIp = null;
+    if (_otaModeActive) {
+      _otaDisconnectListener?.call('Wi-Fi TCP đóng');
+    }
     try {
       target.destroy();
     } catch (_) {}
@@ -345,6 +417,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     sock.setOption(SocketOption.tcpNoDelay, true);
     _tcpApSocket = sock;
     _activeTcpTargetIp = displayIp;
+    _activeTcpTargetPort = displayPort;
     _tcpApReadyForNextFrame = true;
     _lastTcpSendTime = DateTime.now();
     _consecutiveWifiErrors = 0;
@@ -358,6 +431,10 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _tcpApSub?.cancel();
     _tcpApSub = sock.listen(
       (chunk) {
+        if (_otaModeActive) {
+          _otaRxListener?.call(chunk);
+          return;
+        }
         for (final b in chunk) {
           if (b == 0x4B) {
             _tcpApReadyForNextFrame = true;
@@ -376,7 +453,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
     _apKeepaliveTimer?.cancel();
     _apKeepaliveTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       final s = _tcpApSocket;
-      if (s == null) return;
+      if (s == null || _otaModeActive) return;
       if (DateTime.now().difference(_lastTcpSendTime).inMilliseconds >= 3500) {
         try {
           s.add(const [0xAA, 0xDD]);
@@ -709,7 +786,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Render 144x224 (Standby) or 320x216 (Active Navigation) Real Street Map & Stream with Zero-Lag Flow Control
   Future<void> _renderAndStreamHeadlessFrame() async {
-    if (!_isStreaming || _isCapturing || _isSendingWifi) return;
+    if (_otaModeActive || !_isStreaming || _isCapturing || _isSendingWifi) return;
 
     if (!bleService.isConnected && !_isForeground) {
       return;
@@ -1653,6 +1730,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _dispatchTransmission(Uint8List jpegBytes) {
+    if (_otaModeActive) return;
     final now = DateTime.now();
 
     // 1. Primary SoftAP Raw TCP Stream (192.168.4.1:8081) -> Strict zero-backlog pacing via post-draw 'K' ACK
@@ -1712,6 +1790,7 @@ class EspStreamService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Broadcast JSON telemetry to connected ESP32 peers (Raw TCP 8081 or WebSocket 8080)
   void broadcastTelemetry(String jsonStr) {
+    if (_otaModeActive) return;
     final tcpSock = _tcpApSocket;
     if (tcpSock != null) {
       try {

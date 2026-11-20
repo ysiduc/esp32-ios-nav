@@ -286,6 +286,10 @@ private:
   bool _fullScreenStreamActive = false;
   unsigned long _lastFullScreenFrameAt = 0;
   unsigned long _lastRenderTime = 0;
+  bool _otaScreenDrawn = false;
+  uint8_t _lastOtaPct = 255;
+  bool _lastOtaError = false;
+  bool _lastOtaComplete = false;
 
   // Watchface selection (0..5 built-in, 250 = custom ZIP theme on SPIFFS)
   uint8_t _watchfaceStyle = 0;
@@ -858,6 +862,125 @@ public:
   void forceRedraw() {
     _needFullRedraw = true;
     _minimapDrawn = false;
+    _otaScreenDrawn = false;
+    _lastOtaPct = 255;
+    _lastOtaError = false;
+    _lastOtaComplete = false;
+  }
+
+  // Dedicated full-screen Firmware OTA progress view on ST7789 (called exclusively from loop())
+  void drawOtaProgress(uint8_t pct, size_t writtenBytes, size_t totalBytes,
+                       const char* subtitle, bool isError = false, bool isComplete = false) {
+#if defined(DISPLAY_TFT_ST7789)
+    if (pct > 100) pct = 100;
+    const bool fullReset = !_otaScreenDrawn || (_lastOtaError != isError) || (_lastOtaComplete != isComplete);
+    if (!fullReset && pct == _lastOtaPct) {
+      return;
+    }
+
+    tft.resetViewport();
+    const uint16_t bgCol = tft.color565(9, 15, 26);
+    const uint16_t cardCol = tft.color565(18, 28, 46);
+    const uint16_t accentCol = isError
+        ? tft.color565(255, 69, 58)
+        : (isComplete ? tft.color565(48, 209, 88) : tft.color565(10, 132, 255));
+    const uint16_t borderCol = isError
+        ? tft.color565(255, 90, 80)
+        : (isComplete ? tft.color565(64, 224, 108) : tft.color565(56, 152, 255));
+    const uint16_t trackCol = tft.color565(30, 44, 68);
+    const uint16_t subTextCol = tft.color565(168, 186, 212);
+
+    if (fullReset) {
+      _otaScreenDrawn = true;
+      _lastOtaError = isError;
+      _lastOtaComplete = isComplete;
+      tft.fillScreen(bgCol);
+      tft.fillRoundRect(14, 16, 292, 208, 16, cardCol);
+      tft.drawRoundRect(14, 16, 292, 208, 16, borderCol);
+
+      // Header badge
+      tft.fillRoundRect(28, 28, 264, 30, 9, accentCol);
+      char hdrNfc[64];
+      copyUtf8Nfc(
+          isError ? "LỖI CẬP NHẬT FIRMWARE"
+                  : (isComplete ? "CẬP NHẬT THÀNH CÔNG" : "CẬP NHẬT FIRMWARE OTA"),
+          hdrNfc, sizeof(hdrNfc));
+      u8f.setFont(u8g2_font_unifont_t_vietnamese2);
+      u8f.setFontMode(1);
+      u8f.setForegroundColor(TFT_WHITE);
+      u8f.setBackgroundColor(accentCol);
+      int16_t hw = u8f.getUTF8Width(hdrNfc);
+      u8f.setCursor((320 - hw) / 2, 49);
+      u8f.print(hdrNfc);
+
+      // Subtitle / file name / status detail
+      char subNfc[96];
+      copyUtf8Nfc((subtitle && subtitle[0]) ? subtitle : "Hoa hướng dương ESP32-S3", subNfc, sizeof(subNfc));
+      u8f.setFontMode(0);
+      u8f.setForegroundColor(subTextCol);
+      u8f.setBackgroundColor(cardCol);
+      int16_t sw = u8f.getUTF8Width(subNfc);
+      int16_t sx = (sw < 276) ? (320 - sw) / 2 : 22;
+      u8f.setCursor(sx, 82);
+      u8f.print(subNfc);
+
+      // Progress track frame
+      tft.fillRoundRect(28, 134, 264, 22, 9, trackCol);
+      tft.drawRoundRect(28, 134, 264, 22, 9, borderCol);
+
+      // Footer warning
+      char warnNfc[96];
+      copyUtf8Nfc(
+          isError ? "Giữ nguyên bản firmware cũ"
+                  : (isComplete ? "Đang khởi động lại thiết bị..." : "KHÔNG TẮT NGUỒN ESP32!"),
+          warnNfc, sizeof(warnNfc));
+      u8f.setForegroundColor(isError ? tft.color565(255, 160, 150)
+                                     : (isComplete ? tft.color565(130, 245, 165) : tft.color565(255, 204, 0)));
+      u8f.setBackgroundColor(cardCol);
+      int16_t ww = u8f.getUTF8Width(warnNfc);
+      u8f.setCursor((320 - ww) / 2, 206);
+      u8f.print(warnNfc);
+    }
+
+    _lastOtaPct = pct;
+
+    // Big percentage number
+    tft.fillRect(60, 92, 200, 34, cardCol);
+    char pctBuf[16];
+    snprintf(pctBuf, sizeof(pctBuf), "%u%%", pct);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, cardCol);
+    tft.drawString(pctBuf, 160, 109, 4);
+
+    // Fill progress bar cleanly
+    int16_t innerW = (int16_t)(((uint32_t)260 * pct) / 100U);
+    tft.fillRoundRect(30, 136, 260, 18, 7, trackCol);
+    if (innerW >= 6) {
+      tft.fillRoundRect(30, 136, innerW, 18, 7, accentCol);
+    } else if (innerW > 0) {
+      tft.fillRect(30, 136, innerW, 18, accentCol);
+    }
+
+    // KB counter
+    tft.fillRect(32, 162, 256, 22, cardCol);
+    char kbBuf[48];
+    if (totalBytes > 0) {
+      snprintf(kbBuf, sizeof(kbBuf), "%u / %u KB",
+               (unsigned)((writtenBytes + 512) / 1024),
+               (unsigned)((totalBytes + 512) / 1024));
+    } else {
+      snprintf(kbBuf, sizeof(kbBuf), "Đang chuẩn bị Flash...");
+    }
+    u8f.setFont(u8g2_font_unifont_t_vietnamese2);
+    u8f.setFontMode(0);
+    u8f.setForegroundColor(TFT_WHITE);
+    u8f.setBackgroundColor(cardCol);
+    int16_t kw = u8f.getUTF8Width(kbBuf);
+    u8f.setCursor((320 - kw) / 2, 179);
+    u8f.print(kbBuf);
+#else
+    (void)pct; (void)writtenBytes; (void)totalBytes; (void)subtitle; (void)isError; (void)isComplete;
+#endif
   }
 
   // Called after JPEG frame decode in main.cpp

@@ -85,6 +85,8 @@ class BleService extends ChangeNotifier {
   bool _pendingConfigPushOnConnect = false;
   String? _lastConnectedDeviceId;
   int _brightnessPct = 100;
+  String? _espFirmwareVersion;
+  bool _espSupportsOta = false;
 
   // Getters
   bool get isScanning => _isScanning;
@@ -93,6 +95,8 @@ class BleService extends ChangeNotifier {
   String? get connectedDeviceName => _connectedDeviceName;
   String get customBleName => _customBleName;
   int get brightnessPct => _brightnessPct;
+  String? get espFirmwareVersion => _espFirmwareVersion;
+  bool get espSupportsOta => _espSupportsOta;
   String? get lastScanError => _lastScanError;
   bool get needsBlePermission => _needsBlePermission;
   bool get needsLocationServiceForBle => _needsLocationServiceForBle;
@@ -1282,9 +1286,20 @@ class BleService extends ChangeNotifier {
           _wifiMode = 'AP';
           _espStaIp = null;
         }
+        final fwVer = (json['fw_ver'] as String?)?.trim();
+        if (fwVer != null && fwVer.isNotEmpty) {
+          _espFirmwareVersion = fwVer;
+        }
+        final rawOta = json['ota'];
+        if (rawOta is bool) {
+          _espSupportsOta = rawOta;
+        } else if (rawOta is num) {
+          _espSupportsOta = rawOta != 0;
+        }
         _addLog(
           'Đồng bộ cấu hình ESP32: BT="$_customBleName", Mode=$_wifiMode'
-          '${_espReportedTcpConnected != null ? ", TCP=${_espReportedTcpConnected! ? 1 : 0}" : ""}',
+          '${_espReportedTcpConnected != null ? ", TCP=${_espReportedTcpConnected! ? 1 : 0}" : ""}'
+          '${_espFirmwareVersion != null ? ", FW=v$_espFirmwareVersion" : ""}',
           isTx: false,
         );
         notifyListeners();

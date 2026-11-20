@@ -6,6 +6,7 @@ import '../models/route_model.dart';
 import '../services/ble_service.dart';
 import '../services/navigation_manager.dart';
 import '../services/saved_places_service.dart';
+import '../widgets/firmware_update_sheet.dart';
 import '../widgets/map_provider_settings_sheet.dart';
 import 'ble_screen.dart';
 import 'esp_interface_screen.dart';
@@ -524,6 +525,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           onTap: () {
                             Navigator.pop(context);
                             setState(() => _currentIndex = 2);
+                          },
+                        ),
+                        const Divider(height: 1, indent: 58, color: Color(0xFFE5E5EA)),
+                        _buildIosMenuTile(
+                          icon: Icons.system_update_rounded,
+                          iconBg: const Color(0xFF34C759),
+                          title: 'Cập nhật Firmware (.zip)',
+                          subtitle: bleService.espFirmwareVersion != null
+                              ? 'Trên mạch: v${bleService.espFirmwareVersion} • Nạp không dây OTA'
+                              : 'Nạp firmware ESP32-S3 qua Wi-Fi từ file .zip',
+                          isSelected: false,
+                          onTap: () {
+                            Navigator.pop(context);
+                            showFirmwareUpdateSheet(context);
                           },
                         ),
                       ],
