@@ -2110,8 +2110,8 @@ class EspStreamService extends ChangeNotifier
         url = apiKey.isNotEmpty
             ? 'https://api.maptiler.com/maps/$style/256/$z/$x/$y@2x.$ext?key=$apiKey&language=vi'
             : (isDark
-                ? 'https://a.basemaps.cartocdn.com/dark_all/$z/$x/$y@2x.png'
-                : 'https://a.basemaps.cartocdn.com/rastertiles/voyager/$z/$x/$y@2x.png');
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
       }
 
       var response = await http.get(
@@ -2123,13 +2123,9 @@ class EspStreamService extends ChangeNotifier
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         final fallbackUrl = isGoong
             ? 'https://mt2.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=vi&apistyle=$_goongMapApiStyle'
-            : (apiKey.isNotEmpty
-                ? (isDark
-                    ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=$apiKey&language=vi'
-                    : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=$apiKey&language=vi')
-                : (isDark
-                    ? 'https://b.basemaps.cartocdn.com/dark_all/$z/$x/$y@2x.png'
-                    : 'https://b.basemaps.cartocdn.com/rastertiles/voyager/$z/$x/$y@2x.png'));
+            : (isDark
+                ? 'https://api.maptiler.com/maps/streets-v2-dark/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi'
+                : 'https://api.maptiler.com/maps/streets-v2/256/$z/$x/$y@2x.png?key=dtGJ2HGvyxQPKNlHznvY&language=vi');
         response = await http.get(
           Uri.parse(fallbackUrl),
           headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},

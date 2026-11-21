@@ -200,11 +200,7 @@ public struct MapLibreNativeRepresentable: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> UIView {
         #if canImport(MapLibre)
-        let apiKey = Bundle.main.object(forInfoDictionaryKey: "MAPTILER_API_KEY") as? String ?? ""
-        let styleUrlStr = apiKey.isEmpty
-            ? "https://tiles.openfreemap.org/styles/liberty"
-            : "https://api.maptiler.com/maps/streets-v2/style.json?key=\(apiKey)"
-        let styleUrl = URL(string: styleUrlStr)!
+        let styleUrl = URL(string: "https://api.maptiler.com/maps/streets-v2/style.json?key=dtGJ2HGvyxQPKNlHznvY")!
         let mapView = MLNMapView(frame: .zero, styleURL: styleUrl)
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         mapView.showsUserLocation = true
