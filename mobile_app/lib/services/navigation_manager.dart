@@ -12,11 +12,14 @@ import 'apple_maps_service.dart';
 import 'ble_service.dart';
 import 'goong_service.dart';
 import 'mapbox_directions_service.dart';
+import 'navigation_alert_engine.dart';
 import 'phone_media_service.dart';
 
 class NavigationManager extends ChangeNotifier {
   final BleService bleService;
   final MapboxDirectionsService _directionsService = MapboxDirectionsService();
+  late final NavigationAlertEngine alertEngine;
+  bool _hasLoadedIdleTraffic = false;
   PhoneMediaService? _mediaService;
 
   // Active navigation state
@@ -131,6 +134,9 @@ class NavigationManager extends ChangeNotifier {
 
   void setPreviewRoute(NavRoute? route) {
     _previewRoute = route;
+    if (route != null && route.polylinePoints.length >= 2) {
+      unawaited(alertEngine.loadTrafficForRoute(route.polylinePoints));
+    }
     notifyListeners();
   }
   PhoneMediaService? get mediaService => _mediaService;
@@ -335,6 +341,10 @@ class NavigationManager extends ChangeNotifier {
   NavStep? get upcomingStep => currentStep;
 
   NavigationManager({required this.bleService, PhoneMediaService? mediaService}) {
+    alertEngine = NavigationAlertEngine(
+      fallbackSpeaker: (text) => speakVoicePrompt(text),
+    );
+    alertEngine.addListener(notifyListeners);
     _loadVoicePreference();
     _initGps();
     _startIdleHeartbeat();
@@ -350,6 +360,7 @@ class NavigationManager extends ChangeNotifier {
       final saved = prefs.getBool(_prefVoiceKey);
       if (saved != null) {
         _isVoiceEnabled = saved;
+        alertEngine.setVoiceEnabled(saved);
         notifyListeners();
       }
     } catch (_) {}
@@ -357,6 +368,7 @@ class NavigationManager extends ChangeNotifier {
 
   Future<void> setVoiceEnabled(bool enabled) async {
     _isVoiceEnabled = enabled;
+    alertEngine.setVoiceEnabled(enabled);
     if (!enabled && Platform.isIOS) {
       try {
         _locationChannel.invokeMethod('stopGuidance');
@@ -622,6 +634,18 @@ class NavigationManager extends ChangeNotifier {
           ? _lerpAngleDeg(_smoothedHeading, pos.heading, 0.45)
           : pos.heading;
       _hasHeadingLock = true;
+    }
+    if (!_hasLoadedIdleTraffic && _currentLocation != null) {
+      _hasLoadedIdleTraffic = true;
+      unawaited(alertEngine.loadTrafficAroundLocation(_currentLocation!));
+    }
+    if (_currentLocation != null) {
+      alertEngine.updatePosition(
+        location: _currentLocation!,
+        speedKmh: _currentSpeedKmh,
+        headingDeg: effectiveHeading,
+        speakAlerts: _currentSpeedKmh >= 10.0,
+      );
     }
     onLocationChanged?.call(_currentLocation!, effectiveHeading);
     if (isFirstLiveFix || now.difference(_lastUiNotifyTime).inMilliseconds >= 1500) {
@@ -1161,6 +1185,9 @@ class NavigationManager extends ChangeNotifier {
     // Đảm bảo luồng GPS liên tục và bộ nội suy 30 FPS luôn chạy
     _startContinuousGpsStream();
     _startSmoothMotionLoop();
+    if (route.polylinePoints.length >= 2) {
+      unawaited(alertEngine.loadTrafficForRoute(route.polylinePoints));
+    }
     _refreshCurrentStreetName(_currentLocation!, force: true);
     if (_currentLocation != null) {
       _updateUserPosition(liveStartLoc, _currentSpeedKmh, _currentHeading);
@@ -1207,6 +1234,9 @@ class NavigationManager extends ChangeNotifier {
     _lastSpokenStepIndex = _currentStepIndex;
     _lastSpokenStage = 0;
     _refreshCurrentStreetName(_currentLocation!, force: true);
+    if (polyline.length >= 2) {
+      unawaited(alertEngine.loadTrafficForRoute(polyline));
+    }
     if (route.steps.isNotEmpty) {
       final firstStep = route.steps[_currentStepIndex.clamp(0, route.steps.length - 1)];
       speakVoicePrompt('Bắt đầu mô phỏng lộ trình. ${firstStep.instruction}');
@@ -1255,6 +1285,11 @@ class NavigationManager extends ChangeNotifier {
       _currentHeading = _smoothedHeading;
 
       _updateStepAndMetricsOnTick(_currentLocation!);
+      alertEngine.updatePosition(
+        location: _currentLocation!,
+        speedKmh: _currentSpeedKmh,
+        headingDeg: effectiveHeading,
+      );
       onLocationChanged?.call(_currentLocation!, effectiveHeading);
 
       final now = DateTime.now();
@@ -1412,6 +1447,11 @@ class NavigationManager extends ChangeNotifier {
 
     final effectiveLoc = _currentLocation ?? _targetLocation ?? rawLocation;
     _updateStepAndMetricsOnTick(effectiveLoc);
+    alertEngine.updatePosition(
+      location: effectiveLoc,
+      speedKmh: _currentSpeedKmh,
+      headingDeg: effectiveHeading,
+    );
 
     // 2. Kiểm tra đi chệch lộ trình và tính lại đường mượt mà (Auto-Rerouting)
     if (!_isSimulating && !_isRerouting) {
@@ -1492,6 +1532,7 @@ class NavigationManager extends ChangeNotifier {
               speakVoicePrompt('Đã cập nhật lộ trình mới. ${currentStep!.instruction}');
             }
             onRouteChanged?.call();
+            unawaited(alertEngine.loadTrafficForRoute(newRoute.polylinePoints));
             onLocationChanged?.call(_currentLocation ?? latestPos, effectiveHeading);
             _sendCurrentPayloadToEsp32();
           }
@@ -1730,6 +1771,7 @@ class NavigationManager extends ChangeNotifier {
     _simulationTimer?.cancel();
     _smoothMotionTimer?.cancel();
     _blePushTimer?.cancel();
+    alertEngine.resetTripAlerts();
 
     // Giữ luồng GPS chạy liên tục để vị trí hiện tại trên bản đồ luôn chuẩn xác khi tìm đường mới
     if (_positionStream == null) {
@@ -1748,6 +1790,8 @@ class NavigationManager extends ChangeNotifier {
     _positionStream?.cancel();
     _positionStream = null;
     stopNavigation();
+    alertEngine.removeListener(notifyListeners);
+    alertEngine.dispose();
     super.dispose();
   }
 }

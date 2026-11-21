@@ -18,6 +18,7 @@ import '../services/goong_service.dart';
 import '../services/apple_maps_service.dart';
 import '../services/mapbox_directions_service.dart';
 import '../services/navigation_manager.dart';
+import '../services/overpass_traffic_service.dart';
 import '../services/saved_places_service.dart';
 import '../services/search_service.dart';
 import '../services/map_settings_service.dart';
@@ -96,6 +97,13 @@ class MapScreenState extends State<MapScreen> {
   DateTime _lastFastLineUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   final ValueNotifier<({Offset pos, double rotationRad})?> _vehiclePuckNotifier =
       ValueNotifier<({Offset pos, double rotationRad})?>(null);
+
+  // Quick Utility Filter Chips (⛽ Cây xăng, ⚡ Trạm sạc, 🅿️ Bãi đỗ xe)
+  String? _activeUtilityKey; // 'fuel' | 'charging_station' | 'parking'
+  bool _isLoadingUtilities = false;
+  List<MapPlace> _utilityResults = [];
+  MapPlace? _selectedUtilityPoi;
+  final Map<String, MapPlace> _utilityCircleIdToPlace = {};
 
   void _refreshSearchModal() {
     if (mounted) {
@@ -284,8 +292,10 @@ class MapScreenState extends State<MapScreen> {
   /// Called when MaplibreMap is created and controller is ready
   void _onMapCreated(ml.MapLibreMapController controller) {
     _mapController?.removeListener(_onMapCameraChanged);
+    _mapController?.onCircleTapped.remove(_onMapCircleTapped);
     _mapController = controller;
     controller.addListener(_onMapCameraChanged);
+    controller.onCircleTapped.add(_onMapCircleTapped);
     _mapReady = true;
 
     final navManager = Provider.of<NavigationManager>(context, listen: false);
@@ -293,6 +303,20 @@ class MapScreenState extends State<MapScreen> {
       _userPosition = navManager.currentLocation!;
     }
     _tryCenterOnInitialUserLocation(animate: false);
+  }
+
+  void _onMapCircleTapped(ml.Circle circle) {
+    final poi = _utilityCircleIdToPlace[circle.id];
+    if (poi == null || !mounted) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _selectedUtilityPoi = poi;
+    });
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLng(
+        ml.LatLng(poi.coordinate.latitude, poi.coordinate.longitude),
+      ),
+    );
   }
 
   void _onMapCameraChanged() {
@@ -418,12 +442,51 @@ class MapScreenState extends State<MapScreen> {
     }
   }
 
-  /// Update native vector circle marker for destination pin in Apple Maps Orange
+  /// Update native vector circle markers for destination pin + nearby utility POIs (⛽ / ⚡ / 🅿️)
   Future<void> _updateDestinationMarker() async {
     final ctrl = _mapController;
     if (ctrl == null || !_mapReady) return;
     try {
       await ctrl.clearCircles();
+      _utilityCircleIdToPlace.clear();
+
+      // 1. Vẽ marker tiện ích quanh vị trí hiện tại nếu đang lọc (Cây xăng / Trạm sạc / Bãi đỗ xe)
+      if (_utilityResults.isNotEmpty) {
+        final String hexColor = switch (_activeUtilityKey) {
+          'fuel' => '#EF4444',
+          'charging_station' => '#10B981',
+          'parking' => '#2563EB',
+          _ => '#F59E0B',
+        };
+        for (final poi in _utilityResults) {
+          final isPicked = _selectedUtilityPoi?.coordinate == poi.coordinate;
+          final pt = ml.LatLng(poi.coordinate.latitude, poi.coordinate.longitude);
+          final outer = await ctrl.addCircle(
+            ml.CircleOptions(
+              geometry: pt,
+              circleRadius: isPicked ? 16.0 : 12.0,
+              circleColor: hexColor,
+              circleOpacity: isPicked ? 0.35 : 0.22,
+              circleStrokeWidth: 1.5,
+              circleStrokeColor: hexColor,
+            ),
+          );
+          final core = await ctrl.addCircle(
+            ml.CircleOptions(
+              geometry: pt,
+              circleRadius: isPicked ? 9.5 : 7.5,
+              circleColor: hexColor,
+              circleOpacity: 1.0,
+              circleStrokeWidth: 2.5,
+              circleStrokeColor: '#FFFFFF',
+            ),
+          );
+          _utilityCircleIdToPlace[outer.id] = poi;
+          _utilityCircleIdToPlace[core.id] = poi;
+        }
+      }
+
+      // 2. Vẽ điểm đích đang chọn
       if (_selectedPlace != null) {
         final pt = ml.LatLng(
           _selectedPlace!.coordinate.latitude,
@@ -549,6 +612,7 @@ class MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _mapController?.removeListener(_onMapCameraChanged);
+    _mapController?.onCircleTapped.remove(_onMapCircleTapped);
     MapSettingsService().removeListener(_onMapProviderChanged);
     _savedPlacesService.removeListener(_refreshSearchModal);
     _debounceTimer?.cancel();
@@ -1109,20 +1173,30 @@ class MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
-          // 2. Top-Left Controls: 3-line Menu Button + Weather Pill
+          // 2. Top-Left Controls: 3-line Menu Button + Weather Pill + Quick Utility Chips
           // -----------------------------------------------------------
           if (!isDriving)
             SafeArea(
               child: Align(
                 alignment: Alignment.topLeft,
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 16.0, top: 8.0),
-                  child: Row(
+                  padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 8.0),
+                  child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildMenuButton(context, bleService),
-                      const SizedBox(width: 8),
-                      _buildAppleWeatherPill(),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildMenuButton(context, bleService),
+                          const SizedBox(width: 8),
+                          _buildAppleWeatherPill(),
+                        ],
+                      ),
+                      if (_viewMode == 0) ...[
+                        const SizedBox(height: 10),
+                        _buildQuickUtilityChipsBar(navManager),
+                      ],
                     ],
                   ),
                 ),
@@ -1171,18 +1245,26 @@ class MapScreenState extends State<MapScreen> {
             ),
 
           // -----------------------------------------------------------
-          // 5. Active Driving Top Maneuver Banner (Google Maps Emerald Card)
+          // 5. Active Driving Top Maneuver Banner + Quick Utility Chips
           // -----------------------------------------------------------
           if (isDriving)
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
-                child: _buildAppleActiveDrivingTurnBanner(navManager),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildAppleActiveDrivingTurnBanner(navManager),
+                    const SizedBox(height: 8),
+                    _buildQuickUtilityChipsBar(navManager, compact: true),
+                  ],
+                ),
               ),
             ),
 
           // -----------------------------------------------------------
-          // 6. Active Driving Bottom HUD + Right 4-Button Stack + Left "Về giữa" (Google Maps Layout)
+          // 6. Active Driving Bottom HUD + Speed Limit / Camera Alert + Right 4-Button Stack
           // -----------------------------------------------------------
           if (isDriving)
             Positioned(
@@ -1194,45 +1276,57 @@ class MapScreenState extends State<MapScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_selectedUtilityPoi != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                        child: _buildSelectedUtilityPoiCard(_selectedUtilityPoi!, isDriving: true),
+                      ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          if (!_isAutoCentering || _isDrivingZoomOverview)
-                            Material(
-                              color: Colors.white.withValues(alpha: 0.96),
-                              elevation: 4,
-                              shadowColor: Colors.black26,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                side: const BorderSide(color: Color(0xFFE5E5EA)),
-                              ),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(24),
-                                onTap: _recenterToVehicle,
-                                child: const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.near_me_rounded, color: Color(0xFF007AFF), size: 18),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'Về giữa',
-                                        style: TextStyle(
-                                          color: Color(0xFF1C1C1E),
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
-                                        ),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildDrivingTrafficHudCluster(navManager),
+                              if (!_isAutoCentering || _isDrivingZoomOverview) ...[
+                                const SizedBox(height: 10),
+                                Material(
+                                  color: Colors.white.withValues(alpha: 0.96),
+                                  elevation: 4,
+                                  shadowColor: Colors.black26,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(24),
+                                    side: const BorderSide(color: Color(0xFFE5E5EA)),
+                                  ),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(24),
+                                    onTap: _recenterToVehicle,
+                                    child: const Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.near_me_rounded, color: Color(0xFF007AFF), size: 18),
+                                          SizedBox(width: 6),
+                                          Text(
+                                            'Về giữa',
+                                            style: TextStyle(
+                                              color: Color(0xFF1C1C1E),
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                    ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            )
-                          else
-                            const SizedBox.shrink(),
+                              ],
+                            ],
+                          ),
                           const Spacer(),
                           Column(
                             mainAxisSize: MainAxisSize.min,
@@ -1284,13 +1378,22 @@ class MapScreenState extends State<MapScreen> {
           // -----------------------------------------------------------
           // 7. Bottom Panels (Browse / Place Sheet / Route Preview)
           // -----------------------------------------------------------
-          // Mode 0: Browse Map Bottom Search Capsule (Screenshot 1)
+          // Mode 0: Browse Map Bottom Search Capsule + Selected Utility POI Card
           if (!isDriving && _viewMode == 0)
             Positioned(
               bottom: 20,
               left: 16,
               right: 16,
-              child: _buildAppleBottomSearchCapsule(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_selectedUtilityPoi != null) ...[
+                    _buildSelectedUtilityPoiCard(_selectedUtilityPoi!, isDriving: false),
+                    const SizedBox(height: 10),
+                  ],
+                  _buildAppleBottomSearchCapsule(),
+                ],
+              ),
             ),
 
           // Mode 1: Place Details Inspector Sheet (Screenshot 3)
@@ -4526,6 +4629,457 @@ class MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // NHIỆM VỤ 3: Thanh tìm nhanh Tiện ích (⛽ Cây xăng, ⚡ Trạm sạc, 🅿️ Bãi đỗ xe)
+  // -------------------------------------------------------------
+  Widget _buildQuickUtilityChipsBar(NavigationManager navManager, {bool compact = false}) {
+    const items = <({
+      String key,
+      String emoji,
+      String label,
+      String keyword,
+      Color accent,
+    })>[
+      (key: 'fuel', emoji: '⛽', label: 'Cây xăng', keyword: 'cây xăng', accent: Color(0xFFEF4444)),
+      (key: 'charging_station', emoji: '⚡', label: 'Trạm sạc', keyword: 'trạm sạc VinFast', accent: Color(0xFF10B981)),
+      (key: 'parking', emoji: '🅿️', label: 'Bãi đỗ xe', keyword: 'bãi đỗ xe', accent: Color(0xFF2563EB)),
+    ];
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final item in items) ...[
+            GestureDetector(
+              onTap: () => _onQuickUtilityChipTapped(
+                key: item.key,
+                keyword: item.keyword,
+                label: item.label,
+                navManager: navManager,
+              ),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 10 : 12,
+                  vertical: compact ? 6 : 7,
+                ),
+                decoration: BoxDecoration(
+                  color: _activeUtilityKey == item.key
+                      ? item.accent
+                      : Colors.white.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _activeUtilityKey == item.key
+                        ? item.accent
+                        : Colors.black.withValues(alpha: 0.08),
+                    width: 1.0,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.10),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isLoadingUtilities && _activeUtilityKey == item.key)
+                      const SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    else
+                      Text(item.emoji, style: TextStyle(fontSize: compact ? 12.5 : 13.5)),
+                    const SizedBox(width: 5),
+                    Text(
+                      item.label,
+                      style: TextStyle(
+                        color: _activeUtilityKey == item.key
+                            ? Colors.white
+                            : const Color(0xFF1C1C1E),
+                        fontSize: compact ? 12 : 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (_activeUtilityKey != null)
+            GestureDetector(
+              onTap: _clearQuickUtilities,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.65),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.close_rounded, color: Colors.white, size: 14),
+                    SizedBox(width: 3),
+                    Text(
+                      'Ẩn',
+                      style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _onQuickUtilityChipTapped({
+    required String key,
+    required String keyword,
+    required String label,
+    required NavigationManager navManager,
+  }) async {
+    HapticFeedback.selectionClick();
+    if (_activeUtilityKey == key && !_isLoadingUtilities) {
+      _clearQuickUtilities();
+      return;
+    }
+
+    final center = navManager.currentLocation ?? _userPosition;
+    setState(() {
+      _activeUtilityKey = key;
+      _isLoadingUtilities = true;
+      _utilityResults = [];
+      _selectedUtilityPoi = null;
+    });
+
+    final results = await GoongService().searchNearbyUtilities(
+      center,
+      keyword: keyword,
+      amenityTag: key,
+      categoryLabel: label,
+      radiusMeters: 5000,
+      limit: 12,
+    );
+
+    if (!mounted || _activeUtilityKey != key) return;
+    setState(() {
+      _isLoadingUtilities = false;
+      _utilityResults = results;
+      _selectedUtilityPoi = results.isNotEmpty ? results.first : null;
+    });
+    await _updateDestinationMarker();
+    if (!mounted) return;
+
+    if (results.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Không tìm thấy $label trong bán kính 5 km quanh bạn.'),
+        ),
+      );
+      return;
+    }
+
+    if (!navManager.isNavigating) {
+      final pts = <LatLng>[center, ...results.take(5).map((e) => e.coordinate)];
+      _fitRouteBounds(pts, topPadding: 140, bottomPadding: 220);
+    }
+  }
+
+  void _clearQuickUtilities() {
+    setState(() {
+      _activeUtilityKey = null;
+      _isLoadingUtilities = false;
+      _utilityResults = [];
+      _selectedUtilityPoi = null;
+    });
+    _updateDestinationMarker();
+  }
+
+  Widget _buildSelectedUtilityPoiCard(MapPlace poi, {required bool isDriving}) {
+    final String badgeEmoji = switch (_activeUtilityKey) {
+      'fuel' => '⛽',
+      'charging_station' => '⚡',
+      'parking' => '🅿️',
+      _ => '📍',
+    };
+    final double? distM = poi.distanceMeters;
+    final String distLabel = distM == null
+        ? ''
+        : (distM >= 1000
+            ? '${(distM / 1000.0).toStringAsFixed(1)} km'
+            : '${distM.round()} m');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF2F2F7),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(child: Text(badgeEmoji, style: const TextStyle(fontSize: 20))),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  poi.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF1C1C1E),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  distLabel.isNotEmpty
+                      ? '$distLabel • ${poi.displayName}'
+                      : poi.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF636366),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF34C759),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: () async {
+              final target = poi;
+              _clearQuickUtilities();
+              if (isDriving) {
+                final navManager = Provider.of<NavigationManager>(context, listen: false);
+                final startPos = navManager.currentLocation ?? _userPosition;
+                final routes = await _directionsService.calculateMultipleRoutes(
+                  startPos,
+                  target.coordinate,
+                  mode: _transportMode,
+                  bypassCache: true,
+                );
+                if (!mounted || routes.isEmpty) return;
+                setState(() {
+                  _selectedPlace = target;
+                  _routes = routes;
+                  _selectedRouteIndex = 0;
+                });
+                navManager.startNavigation(routes.first);
+                _updateRouteOnMap();
+                _updateDestinationMarker();
+              } else {
+                await _calculateRoutesForPlace(target);
+              }
+            },
+            child: const Text(
+              'Đi tới đây',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: () => setState(() => _selectedUtilityPoi = null),
+            child: const Icon(Icons.close_rounded, color: Color(0xFF8E8E93), size: 20),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------
+  // NHIỆM VỤ 4: Cụm Biển báo tốc độ viền đỏ + Bong bóng tốc độ + Camera phạt nguội khi dẫn đường
+  // -------------------------------------------------------------
+  Widget _buildDrivingTrafficHudCluster(NavigationManager navManager) {
+    final alertEngine = navManager.alertEngine;
+    final int speedKmh = navManager.currentSpeedKmh.round();
+    final int speedLimit = alertEngine.currentSpeedLimitKmh;
+    final bool isOverSpeed = alertEngine.isOverSpeed;
+    final TrafficHazardNode? hazard = alertEngine.upcomingHazard;
+    final double? hazardDistM = alertEngine.upcomingHazardDistanceM;
+    final bool flashRedOn = isOverSpeed && ((DateTime.now().millisecondsSinceEpoch ~/ 400) % 2 == 0);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // 1. Bong bóng tốc độ hiện tại (nhấp nháy Đỏ khi quá tốc độ >= 3 km/h)
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: isOverSpeed
+                ? (flashRedOn ? const Color(0xFFDC2626) : const Color(0xFF991B1B))
+                : const Color(0xFF18191E).withValues(alpha: 0.94),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isOverSpeed
+                  ? (flashRedOn ? const Color(0xFFFCA5A5) : const Color(0xFFEF4444))
+                  : const Color(0xFF38BDF8),
+              width: isOverSpeed ? 2.6 : 1.8,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (isOverSpeed ? const Color(0xFFEF4444) : Colors.black).withValues(alpha: 0.32),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '$speedKmh',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  height: 1.0,
+                ),
+              ),
+              Text(
+                'km/h',
+                style: TextStyle(
+                  color: isOverSpeed ? const Color(0xFFFEE2E2) : const Color(0xFF94A3B8),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+
+        // 2. Biển báo giới hạn tốc độ viền đỏ chuẩn VN (cập nhật động từ OSM/Camera)
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFFEF4444), width: 5.0),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.24),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Center(
+            child: Text(
+              '$speedLimit',
+              style: TextStyle(
+                color: const Color(0xFF111827),
+                fontSize: speedLimit >= 100 ? 14.5 : 17.5,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ),
+        ),
+
+        // 3. Huy hiệu Camera phạt nguội / Biển báo nguy hiểm kèm khoảng cách đếm ngược (< 300m)
+        if (hazard != null && hazardDistM != null && hazardDistM < 300.0) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: hazard.type == TrafficHazardType.speedCamera
+                  ? const Color(0xFFB91C1C).withValues(alpha: 0.96)
+                  : const Color(0xFFD97706).withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 1.4),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  hazard.type == TrafficHazardType.speedCamera
+                      ? Icons.videocam_rounded
+                      : Icons.warning_amber_rounded,
+                  color: Colors.white,
+                  size: 19,
+                ),
+                const SizedBox(width: 6),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hazard.type == TrafficHazardType.speedCamera ? 'CAMERA' : 'CHÚ Ý',
+                      style: const TextStyle(
+                        color: Color(0xFFFDE047),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    Text(
+                      '${hazardDistM.round()} m',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w900,
+                        height: 1.05,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

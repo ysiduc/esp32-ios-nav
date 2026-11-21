@@ -1,0 +1,226 @@
+[
+  {
+    "id": "cam_hn_01",
+    "lat": 21.0285,
+    "lng": 105.8542,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội khu vực Hồ Hoàn Kiếm - Đinh Tiên Hoàng"
+  },
+  {
+    "id": "cam_hn_02",
+    "lat": 21.0246,
+    "lng": 105.8531,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội ngã tư Hàng Bài - Tràng Tiền"
+  },
+  {
+    "id": "cam_hn_03",
+    "lat": 21.0079,
+    "lng": 105.8508,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội ngã tư Đại Cồ Việt - Phố Huế"
+  },
+  {
+    "id": "cam_hn_04",
+    "lat": 20.9852,
+    "lng": 105.8414,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Giải Phóng - Kim Đồng"
+  },
+  {
+    "id": "cam_hn_05",
+    "lat": 20.9921,
+    "lng": 105.8037,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera phạt nguội ngã tư Nguyễn Trãi - Khuất Duy Tiến"
+  },
+  {
+    "id": "cam_hn_06",
+    "lat": 21.0169,
+    "lng": 105.7836,
+    "type": "speed_camera",
+    "limit": 80,
+    "desc": "Camera giám sát tốc độ Vành đai 3 trên cao - Keangnam"
+  },
+  {
+    "id": "cam_hn_07",
+    "lat": 21.0365,
+    "lng": 105.7802,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera phạt nguội nút giao Mai Dịch - Phạm Văn Đồng"
+  },
+  {
+    "id": "cam_hn_08",
+    "lat": 20.9718,
+    "lng": 105.8245,
+    "type": "speed_camera",
+    "limit": 80,
+    "desc": "Camera giám sát tốc độ Vành đai 3 trên cao - Linh Đàm"
+  },
+  {
+    "id": "cam_hn_09",
+    "lat": 21.0915,
+    "lng": 105.8214,
+    "type": "speed_camera",
+    "limit": 80,
+    "desc": "Camera giám sát tốc độ Cầu Nhật Tân - Võ Nguyên Giáp"
+  },
+  {
+    "id": "cam_hn_10",
+    "lat": 21.0056,
+    "lng": 105.7462,
+    "type": "speed_camera",
+    "limit": 100,
+    "desc": "Camera giám sát tốc độ Đại lộ Thăng Long"
+  },
+  {
+    "id": "cam_hn_11",
+    "lat": 20.9614,
+    "lng": 105.7646,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Quốc Lộ 6 - Ngã ba Ba La Hà Đông"
+  },
+  {
+    "id": "cam_hn_12",
+    "lat": 20.9712,
+    "lng": 105.7788,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Quang Trung - Lê Trọng Tấn Hà Đông"
+  },
+  {
+    "id": "cam_hn_13",
+    "lat": 21.0031,
+    "lng": 105.8758,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera giám sát tốc độ Cầu Vĩnh Tuy"
+  },
+  {
+    "id": "cam_hn_14",
+    "lat": 21.0289,
+    "lng": 105.8139,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội ngã tư Kim Mã - Liễu Giai"
+  },
+  {
+    "id": "cam_ct_01",
+    "lat": 20.9378,
+    "lng": 105.8574,
+    "type": "speed_camera",
+    "limit": 100,
+    "desc": "Camera bắn tốc độ Cao tốc Pháp Vân - Cầu Giẽ (Km185)"
+  },
+  {
+    "id": "cam_ct_02",
+    "lat": 20.9889,
+    "lng": 105.9482,
+    "type": "speed_camera",
+    "limit": 120,
+    "desc": "Camera giám sát Cao tốc Hà Nội - Hải Phòng (Km5)"
+  },
+  {
+    "id": "cam_ct_03",
+    "lat": 21.2254,
+    "lng": 105.7712,
+    "type": "speed_camera",
+    "limit": 100,
+    "desc": "Camera bắn tốc độ Cao tốc Nội Bài - Lào Cai (Km6)"
+  },
+  {
+    "id": "cam_hcm_01",
+    "lat": 10.8012,
+    "lng": 106.7114,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Ngã tư Hàng Xanh - Điện Biên Phủ"
+  },
+  {
+    "id": "cam_hcm_02",
+    "lat": 10.8009,
+    "lng": 106.7521,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera giám sát tốc độ Xa lộ Hà Nội - Cầu Rạch Chiếc"
+  },
+  {
+    "id": "cam_hcm_03",
+    "lat": 10.7749,
+    "lng": 106.7192,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera giám sát tốc độ Mai Chí Thọ - Hầm Thủ Thiêm"
+  },
+  {
+    "id": "cam_hcm_04",
+    "lat": 10.7524,
+    "lng": 106.6625,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera giám sát tốc độ Đại lộ Võ Văn Kiệt"
+  },
+  {
+    "id": "cam_hcm_05",
+    "lat": 10.7305,
+    "lng": 106.6987,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera giám sát tốc độ Nguyễn Văn Linh - Phú Mỹ Hưng"
+  },
+  {
+    "id": "cam_hcm_06",
+    "lat": 10.8247,
+    "lng": 106.7136,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera phạt nguội Đại lộ Phạm Văn Đồng - Bình Lợi"
+  },
+  {
+    "id": "cam_hcm_07",
+    "lat": 10.8016,
+    "lng": 106.6401,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Cộng Hòa - Trường Chinh"
+  },
+  {
+    "id": "cam_hcm_08",
+    "lat": 10.8442,
+    "lng": 106.6138,
+    "type": "speed_camera",
+    "limit": 60,
+    "desc": "Camera phạt nguội Quốc lộ 1A - Ngã tư An Sương"
+  },
+  {
+    "id": "cam_ct_04",
+    "lat": 10.7932,
+    "lng": 106.7875,
+    "type": "speed_camera",
+    "limit": 100,
+    "desc": "Camera bắn tốc độ Cao tốc TP.HCM - Long Thành - Dầu Giây"
+  },
+  {
+    "id": "cam_ct_05",
+    "lat": 10.6789,
+    "lng": 106.5194,
+    "type": "speed_camera",
+    "limit": 100,
+    "desc": "Camera bắn tốc độ Cao tốc TP.HCM - Trung Lương"
+  },
+  {
+    "id": "cam_dn_01",
+    "lat": 16.0611,
+    "lng": 108.2275,
+    "type": "speed_camera",
+    "limit": 50,
+    "desc": "Camera phạt nguội Cầu Rồng - Nguyễn Văn Linh Đà Nẵng"
+  }
+]

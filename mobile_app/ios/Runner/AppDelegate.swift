@@ -443,6 +443,10 @@ import UniformTypeIdentifiers
     let speedStr = (hud["speedStr"] as? String) ?? "0"
     let etaText = ((hud["etaText"] as? String) ?? "1 phút").precomposedStringWithCanonicalMapping
     let subText = ((hud["subText"] as? String) ?? "00:00 • 0 km").precomposedStringWithCanonicalMapping
+    let speedLimit = (hud["speedLimit"] as? Int) ?? 50
+    let isOverSpeed = (hud["isOverSpeed"] as? Bool) ?? false
+    let hazardType = (hud["hazardType"] as? String) ?? ""
+    let hazardDistM = (hud["hazardDistM"] as? Int) ?? -1
 
     // 1. Google Maps 3D Vehicle Puck (Soft blue aura + white disc + cobalt arrow)
     ctx.saveGState()
@@ -567,13 +571,29 @@ import UniformTypeIdentifiers
       streetNs.draw(at: CGPoint(x: 10.0, y: 27.5), withAttributes: streetAttrs)
     }
 
-    // 4. Speedometer Box placed above Bottom-Left Time Card (x: 4, y: 118, w: 54, h: 40)
+    // 4. Speedometer Box (nhấp nháy Đỏ khi quá tốc độ) + Biển báo tốc độ viền đỏ + Huy hiệu Camera phạt nguội
+    let flashRedOn = isOverSpeed && ((Int(Date().timeIntervalSince1970 * 1000) / 400) % 2 == 0)
     let speedRect = CGRect(x: 4.0, y: 118.0, width: 54.0, height: 40.0)
     let speedPath = UIBezierPath(roundedRect: speedRect, cornerRadius: 12.0)
-    UIColor(red: 0.094, green: 0.098, blue: 0.118, alpha: 0.95).setFill()
+    if isOverSpeed {
+      (flashRedOn
+        ? UIColor(red: 0.863, green: 0.149, blue: 0.149, alpha: 0.97)
+        : UIColor(red: 0.600, green: 0.106, blue: 0.106, alpha: 0.97)
+      ).setFill()
+    } else {
+      UIColor(red: 0.094, green: 0.098, blue: 0.118, alpha: 0.95).setFill()
+    }
     speedPath.fill()
-    UIColor(red: 0.220, green: 0.741, blue: 0.973, alpha: 0.90).setStroke()
-    speedPath.lineWidth = 1.4
+    if isOverSpeed {
+      (flashRedOn
+        ? UIColor(red: 0.988, green: 0.647, blue: 0.647, alpha: 1.0)
+        : UIColor(red: 0.937, green: 0.267, blue: 0.267, alpha: 1.0)
+      ).setStroke()
+      speedPath.lineWidth = 2.0
+    } else {
+      UIColor(red: 0.220, green: 0.741, blue: 0.973, alpha: 0.90).setStroke()
+      speedPath.lineWidth = 1.4
+    }
     speedPath.stroke()
 
     let spdNumAttrs: [NSAttributedString.Key: Any] = [
@@ -589,7 +609,9 @@ import UniformTypeIdentifiers
 
     let unitAttrs: [NSAttributedString.Key: Any] = [
       .font: UIFont.systemFont(ofSize: 9.0, weight: .bold),
-      .foregroundColor: UIColor(red: 0.580, green: 0.639, blue: 0.722, alpha: 1.0)
+      .foregroundColor: isOverSpeed
+        ? UIColor(red: 0.996, green: 0.886, blue: 0.886, alpha: 1.0)
+        : UIColor(red: 0.580, green: 0.639, blue: 0.722, alpha: 1.0)
     ]
     let unitNs = "km/h" as NSString
     let unitSize = unitNs.size(withAttributes: unitAttrs)
@@ -597,6 +619,74 @@ import UniformTypeIdentifiers
       at: CGPoint(x: 4.0 + (54.0 - unitSize.width) / 2.0, y: 142.0),
       withAttributes: unitAttrs
     )
+
+    // 4b. Biển báo tốc độ giới hạn viền đỏ động (cx: 79, cy: 138, r: 16.5)
+    let limCx: CGFloat = 79.0
+    let limCy: CGFloat = 138.0
+    UIColor(white: 0.0, alpha: 0.35).setFill()
+    ctx.fillEllipse(in: CGRect(x: limCx - 17.5, y: limCy - 17.0, width: 35.0, height: 35.0))
+    UIColor.white.setFill()
+    ctx.fillEllipse(in: CGRect(x: limCx - 16.5, y: limCy - 16.5, width: 33.0, height: 33.0))
+    let limRing = UIBezierPath(ovalIn: CGRect(x: limCx - 14.5, y: limCy - 14.5, width: 29.0, height: 29.0))
+    UIColor(red: 0.937, green: 0.267, blue: 0.267, alpha: 1.0).setStroke()
+    limRing.lineWidth = 3.8
+    limRing.stroke()
+
+    let limAttrs: [NSAttributedString.Key: Any] = [
+      .font: UIFont.systemFont(ofSize: speedLimit >= 100 ? 10.5 : 12.5, weight: .black),
+      .foregroundColor: UIColor(red: 0.067, green: 0.094, blue: 0.153, alpha: 1.0)
+    ]
+    let limNs = "\(speedLimit)" as NSString
+    let limSize = limNs.size(withAttributes: limAttrs)
+    limNs.draw(
+      at: CGPoint(x: limCx - limSize.width / 2.0, y: limCy - limSize.height / 2.0),
+      withAttributes: limAttrs
+    )
+
+    // 4c. Huy hiệu Camera phạt nguội / Biển báo kèm khoảng cách đếm ngược (< 300m)
+    if !hazardType.isEmpty && hazardDistM >= 0 && hazardDistM < 300 {
+      let isCam = (hazardType == "speed_camera")
+      let camRect = CGRect(x: 100.0, y: 121.0, width: 56.0, height: 34.0)
+      let camPath = UIBezierPath(roundedRect: camRect, cornerRadius: 10.0)
+      (isCam
+        ? UIColor(red: 0.725, green: 0.110, blue: 0.110, alpha: 0.96)
+        : UIColor(red: 0.851, green: 0.467, blue: 0.024, alpha: 0.96)
+      ).setFill()
+      camPath.fill()
+      UIColor(white: 1.0, alpha: 0.86).setStroke()
+      camPath.lineWidth = 1.2
+      camPath.stroke()
+
+      if isCam {
+        // Thân camera + ống kính nổi bật
+        let bodyPath = UIBezierPath(roundedRect: CGRect(x: 119.0, y: 125.0, width: 18.0, height: 11.0), cornerRadius: 2.5)
+        UIColor.white.setFill()
+        bodyPath.fill()
+        UIColor(red: 0.725, green: 0.110, blue: 0.110, alpha: 1.0).setFill()
+        ctx.fillEllipse(in: CGRect(x: 124.8, y: 127.3, width: 6.4, height: 6.4))
+        UIColor(red: 0.992, green: 0.878, blue: 0.278, alpha: 1.0).setFill()
+        ctx.fillEllipse(in: CGRect(x: 126.6, y: 129.1, width: 2.8, height: 2.8))
+      } else {
+        let tri = UIBezierPath()
+        tri.move(to: CGPoint(x: 128.0, y: 124.0))
+        tri.addLine(to: CGPoint(x: 135.0, y: 136.0))
+        tri.addLine(to: CGPoint(x: 121.0, y: 136.0))
+        tri.close()
+        UIColor.white.setFill()
+        tri.fill()
+      }
+
+      let camDistAttrs: [NSAttributedString.Key: Any] = [
+        .font: UIFont.systemFont(ofSize: 10.5, weight: .black),
+        .foregroundColor: UIColor.white
+      ]
+      let camDistNs = "\(hazardDistM)m" as NSString
+      let camDistSize = camDistNs.size(withAttributes: camDistAttrs)
+      camDistNs.draw(
+        at: CGPoint(x: 100.0 + (56.0 - camDistSize.width) / 2.0, y: 139.5),
+        withAttributes: camDistAttrs
+      )
+    }
 
     // 5. Enlarged Bottom-Left Dark Trip Summary Card (x: 4, y: 166, w: 124, h: 42)
     let summaryRect = CGRect(x: 4.0, y: 166.0, width: 124.0, height: 42.0)

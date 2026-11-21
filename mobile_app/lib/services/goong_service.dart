@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../config/goong_config.dart';
 import '../models/route_model.dart';
+import 'overpass_traffic_service.dart';
 
 /// Dịch vụ Goong Map: Tìm kiếm địa điểm, Geocoding & Tính toán đường đi (Routing)
 class GoongService {
@@ -22,6 +23,7 @@ class GoongService {
   Future<List<MapPlace>> searchPlaces(
     String query, {
     LatLng? nearLocation,
+    int? radiusMeters,
     int limit = 12,
   }) async {
     if (!GoongConfig.hasRestApiKey) return [];
@@ -29,7 +31,7 @@ class GoongService {
     if (clean.length < 2) return [];
 
     final cacheKey =
-        '${clean.toLowerCase()}_${nearLocation?.latitude.toStringAsFixed(2)}_${nearLocation?.longitude.toStringAsFixed(2)}';
+        '${clean.toLowerCase()}_${nearLocation?.latitude.toStringAsFixed(2)}_${nearLocation?.longitude.toStringAsFixed(2)}_${radiusMeters ?? 0}';
     if (_autocompleteCache.containsKey(cacheKey)) {
       return _autocompleteCache[cacheKey]!;
     }
@@ -39,6 +41,9 @@ class GoongService {
           '${GoongConfig.placeAutoCompleteUrl}?api_key=${GoongConfig.restApiKey}&input=${Uri.encodeComponent(clean)}&limit=$limit';
       if (nearLocation != null) {
         urlStr += '&location=${nearLocation.latitude},${nearLocation.longitude}';
+        if (radiusMeters != null && radiusMeters > 0) {
+          urlStr += '&radius=$radiusMeters';
+        }
       }
 
       final res = await http.get(Uri.parse(urlStr)).timeout(const Duration(milliseconds: 4500));
@@ -73,6 +78,78 @@ class GoongService {
       debugPrint('[GoongService] searchPlaces error: $e');
       return [];
     }
+  }
+
+  /// Tìm nhanh tiện ích quanh tọa độ [center] trong bán kính [radiusMeters] (mặc định 5000m):
+  /// Kết hợp Goong Place AutoComplete (`location=$lat,$lng&radius=5000`) + Overpass API (`amenity=...`),
+  /// giải mã tọa độ chính xác và gộp lọc trùng trong bán kính 60m.
+  Future<List<MapPlace>> searchNearbyUtilities(
+    LatLng center, {
+    required String keyword,
+    required String amenityTag,
+    required String categoryLabel,
+    int radiusMeters = 5000,
+    int limit = 12,
+  }) async {
+    const distCalc = Distance();
+    final overpassFuture = OverpassTrafficService().searchNearbyAmenities(
+      center,
+      amenityTag: amenityTag,
+      defaultName: categoryLabel,
+      radiusMeters: radiusMeters,
+      limit: limit,
+    );
+
+    final goongFuture = () async {
+      final raw = await searchPlaces(
+        keyword,
+        nearLocation: center,
+        radiusMeters: radiusMeters,
+        limit: 6,
+      );
+      if (raw.isEmpty) return const <MapPlace>[];
+      final detailFutures = raw.take(5).map((p) async {
+        if (p.placeId == null || p.placeId!.isEmpty) return null;
+        final d = await getPlaceDetail(
+          p.placeId!,
+          fallbackName: p.name,
+          fallbackDisplay: p.displayName,
+          userLocation: center,
+        );
+        if (d == null) return null;
+        if (d.coordinate.latitude == 0 && d.coordinate.longitude == 0) return null;
+        final distM = distCalc.as(LengthUnit.Meter, center, d.coordinate);
+        if (distM > radiusMeters * 1.6) return null;
+        return MapPlace(
+          displayName: d.displayName,
+          name: d.name,
+          coordinate: d.coordinate,
+          type: amenityTag,
+          category: categoryLabel,
+          placeId: d.placeId,
+          distanceMeters: distM,
+        );
+      });
+      final resolved = await Future.wait(detailFutures);
+      return resolved.whereType<MapPlace>().toList();
+    }();
+
+    final results = await Future.wait([goongFuture, overpassFuture]);
+    final merged = <MapPlace>[];
+
+    for (final list in results) {
+      for (final item in list) {
+        final isDup = merged.any(
+          (e) => distCalc.as(LengthUnit.Meter, e.coordinate, item.coordinate) <= 60.0,
+        );
+        if (!isDup) {
+          merged.add(item);
+        }
+      }
+    }
+
+    merged.sort((a, b) => (a.distanceMeters ?? 999999).compareTo(b.distanceMeters ?? 999999));
+    return merged.take(limit).toList();
   }
 
   /// 2. Lấy tọa độ chi tiết của địa điểm (Place Detail)

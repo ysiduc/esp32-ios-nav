@@ -17,6 +17,7 @@ import 'ble_service.dart';
 import 'firmware_ota_service.dart';
 import 'navigation_manager.dart';
 import 'osm_vector_tile.dart';
+import 'overpass_traffic_service.dart';
 
 class EspStreamService extends ChangeNotifier
     with WidgetsBindingObserver
@@ -1662,6 +1663,7 @@ class EspStreamService extends ChangeNotifier
               ? '${(totalDistM / 1000.0).toStringAsFixed(1)} km'
               : '${totalDistM.round()} m');
 
+      final alertEngine = navManager?.alertEngine;
       final hudData = <String, dynamic>{
         'vx': vx.toDouble(),
         'vy': vy.toDouble(),
@@ -1673,6 +1675,10 @@ class EspStreamService extends ChangeNotifier
         'etaText': etaText,
         'subText': '$arrStr • $totDistStr',
         'isDark': isDark,
+        'speedLimit': alertEngine?.currentSpeedLimitKmh ?? 50,
+        'isOverSpeed': alertEngine?.isOverSpeed ?? false,
+        'hazardType': alertEngine?.upcomingHazard?.type.wireKey ?? '',
+        'hazardDistM': alertEngine?.upcomingHazardDistanceM?.round() ?? -1,
       };
 
       if (Platform.isIOS) {
@@ -2679,17 +2685,32 @@ class EspStreamService extends ChangeNotifier
       streetTp.paint(canvas, const Offset(10.0, 27.5));
     }
 
-    // --- 5. SPEEDOMETER BOX ABOVE BOTTOM-LEFT TIME CARD (x: 4, y: 118, w: 58, h: 42) ---
+    // --- 5. SPEEDOMETER BOX + RED SPEED LIMIT SIGN + CAMERA BADGE ABOVE BOTTOM-LEFT CARD ---
+    final alertEngine = navManager?.alertEngine;
+    final int speedLimitKmh = alertEngine?.currentSpeedLimitKmh ?? 50;
+    final bool isOverSpeed = alertEngine?.isOverSpeed ?? false;
+    final TrafficHazardNode? upcomingHazard = alertEngine?.upcomingHazard;
+    final double? hazardDistM = alertEngine?.upcomingHazardDistanceM;
+    final bool flashRedOn = isOverSpeed && ((DateTime.now().millisecondsSinceEpoch ~/ 400) % 2 == 0);
+
     final speedBoxRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(4.0, 118.0, 58.0, 42.0),
+      const Rect.fromLTWH(4.0, 118.0, 54.0, 40.0),
       const Radius.circular(12.0),
     );
-    canvas.drawRRect(speedBoxRect, Paint()..color = const Color(0xF218191E));
     canvas.drawRRect(
       speedBoxRect,
       Paint()
-        ..color = const Color(0xE638BDF8)
-        ..strokeWidth = 1.4
+        ..color = isOverSpeed
+            ? (flashRedOn ? const Color(0xF5DC2626) : const Color(0xF5991B1B))
+            : const Color(0xF218191E),
+    );
+    canvas.drawRRect(
+      speedBoxRect,
+      Paint()
+        ..color = isOverSpeed
+            ? (flashRedOn ? const Color(0xFFFCA5A5) : const Color(0xFFEF4444))
+            : const Color(0xE638BDF8)
+        ..strokeWidth = isOverSpeed ? 2.0 : 1.4
         ..style = PaintingStyle.stroke,
     );
 
@@ -2707,14 +2728,14 @@ class EspStreamService extends ChangeNotifier
     )..layout();
     curSpdTp.paint(
       canvas,
-      Offset(4.0 + (58.0 - curSpdTp.width) / 2.0, 122.0),
+      Offset(4.0 + (54.0 - curSpdTp.width) / 2.0, 121.0),
     );
 
     final unitTp = TextPainter(
-      text: const TextSpan(
+      text: TextSpan(
         text: 'km/h',
         style: TextStyle(
-          color: Color(0xFF94A3B8),
+          color: isOverSpeed ? const Color(0xFFFEE2E2) : const Color(0xFF94A3B8),
           fontSize: 9.0,
           fontWeight: FontWeight.w700,
           height: 1.0,
@@ -2724,8 +2745,89 @@ class EspStreamService extends ChangeNotifier
     )..layout();
     unitTp.paint(
       canvas,
-      Offset(4.0 + (58.0 - unitTp.width) / 2.0, 144.0),
+      Offset(4.0 + (54.0 - unitTp.width) / 2.0, 142.0),
     );
+
+    // Biển báo tốc độ giới hạn viền đỏ động (cx: 79, cy: 138, r: 17)
+    const Offset limitCenter = Offset(79.0, 138.0);
+    canvas.drawCircle(limitCenter, 17.5, Paint()..color = const Color(0x55000000));
+    canvas.drawCircle(limitCenter, 16.5, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      limitCenter,
+      14.5,
+      Paint()
+        ..color = const Color(0xFFEF4444)
+        ..strokeWidth = 3.8
+        ..style = PaintingStyle.stroke,
+    );
+    final limitTp = TextPainter(
+      text: TextSpan(
+        text: '$speedLimitKmh',
+        style: TextStyle(
+          color: const Color(0xFF111827),
+          fontSize: speedLimitKmh >= 100 ? 10.5 : 12.5,
+          fontWeight: FontWeight.w900,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    limitTp.paint(
+      canvas,
+      Offset(limitCenter.dx - limitTp.width / 2.0, limitCenter.dy - limitTp.height / 2.0),
+    );
+
+    // Huy hiệu Camera phạt nguội / Biển báo kèm khoảng cách đếm ngược (< 300m)
+    if (upcomingHazard != null && hazardDistM != null && hazardDistM < 300.0) {
+      final bool isCam = upcomingHazard.type == TrafficHazardType.speedCamera;
+      final camRect = RRect.fromRectAndRadius(
+        const Rect.fromLTWH(100.0, 121.0, 56.0, 34.0),
+        const Radius.circular(10.0),
+      );
+      canvas.drawRRect(
+        camRect,
+        Paint()..color = isCam ? const Color(0xF5B91C1C) : const Color(0xF5D97706),
+      );
+      canvas.drawRRect(
+        camRect,
+        Paint()
+          ..color = Colors.white.withAlpha(220)
+          ..strokeWidth = 1.2
+          ..style = PaintingStyle.stroke,
+      );
+      // Icon camera gọn sắc nét ở trên
+      if (isCam) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(const Rect.fromLTWH(119.0, 125.0, 18.0, 11.0), const Radius.circular(2.5)),
+          Paint()..color = Colors.white,
+        );
+        canvas.drawCircle(const Offset(128.0, 130.5), 3.2, Paint()..color = const Color(0xFFB91C1C));
+        canvas.drawCircle(const Offset(128.0, 130.5), 1.4, Paint()..color = const Color(0xFFFDE047));
+      } else {
+        final tri = ui.Path()
+          ..moveTo(128.0, 124.0)
+          ..lineTo(135.0, 136.0)
+          ..lineTo(121.0, 136.0)
+          ..close();
+        canvas.drawPath(tri, Paint()..color = Colors.white);
+      }
+      final camDistTp = TextPainter(
+        text: TextSpan(
+          text: '${hazardDistM.round()}m',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w900,
+            height: 1.0,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      camDistTp.paint(
+        canvas,
+        Offset(100.0 + (56.0 - camDistTp.width) / 2.0, 140.0),
+      );
+    }
 
     // --- 6. ENLARGED BOTTOM-LEFT DARK TRIP SUMMARY PILL (x: 4, y: 166, w: 138, h: 44) ---
     final summaryRect = RRect.fromRectAndRadius(
