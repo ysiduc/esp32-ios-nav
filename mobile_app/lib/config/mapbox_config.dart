@@ -2,9 +2,10 @@
 /// MapTiler provides vector tiles compatible with MapLibre GL
 class MapboxConfig {
   // ============================================================
-  // MAPTILER API KEY
+  // MAPTILER API KEY (--dart-define=MAPTILER_API_KEY=...)
   // ============================================================
-  static const String maptilerApiKey = 'dtGJ2HGvyxQPKNlHznvY';
+  static const String maptilerApiKey =
+      String.fromEnvironment('MAPTILER_API_KEY', defaultValue: '');
 
   // Fallback / legacy Mapbox token (optional)
   static const String accessToken = '';

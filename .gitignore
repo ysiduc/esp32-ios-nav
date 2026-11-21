@@ -41,3 +41,8 @@ migrate_working_dir/
 default.profraw
 *.ipa
 *.app
+
+# Local secret dart-define files
+dart_defines.json
+.env
+.env.*

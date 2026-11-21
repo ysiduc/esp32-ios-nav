@@ -46,11 +46,18 @@ jobs:
 
       - name: 6. Build iOS Release (No CodeSign)
         working-directory: mobile_app
+        env:
+          GOONG_MAPTILES_KEY: ${{ secrets.GOONG_MAPTILES_KEY }}
+          GOONG_REST_API_KEY: ${{ secrets.GOONG_REST_API_KEY }}
+          MAPTILER_API_KEY: ${{ secrets.MAPTILER_API_KEY }}
         run: |
           set -o pipefail
           flutter build ios \
             --release \
             --no-codesign \
+            --dart-define=GOONG_MAPTILES_KEY="$GOONG_MAPTILES_KEY" \
+            --dart-define=GOONG_REST_API_KEY="$GOONG_REST_API_KEY" \
+            --dart-define=MAPTILER_API_KEY="$MAPTILER_API_KEY" \
             --verbose \
             2>&1 | tee ../build_full.log
 
