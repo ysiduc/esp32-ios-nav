@@ -61,7 +61,7 @@ class MapboxDirectionsService {
       final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
       if (goongRoute != null) {
         routes.add(goongRoute.copyWith(
-          title: 'Tuyến Goong Map',
+          title: 'Tuyến đề xuất',
           subtitle: 'Nhanh nhất (Tối ưu giao thông VN)',
           isFastest: true,
         ));

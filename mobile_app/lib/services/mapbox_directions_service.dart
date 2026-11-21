@@ -41,41 +41,52 @@ class MapboxDirectionsService {
 
     List<NavRoute> routes = [];
 
-    // Priority 1: Tính lộ trình & Realtime Rerouting bằng Apple Maps (MKDirections gốc trên iOS)
-    // Nếu người dùng chọn chế độ chỉ dùng Goong trong Settings thì ưu tiên Goong trước, ngược lại mặc định luôn dùng Apple Maps
-    final preferAppleRouting = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
-    if (preferAppleRouting) {
+    // Priority 1: Khi dùng bản đồ Việt Nam có REST API Key và đi xe máy/ô tô (không phải đi bộ),
+    // ưu tiên Direction API cùng hệ bản đồ (hỗ trợ chuẩn làn xe máy VN + đường vẽ bám sát 1:1 mặt đường hiển thị).
+    final bool isWalkingMode = mode == 'foot' || mode == 'walking';
+    final bool preferNativeApple = MapSettingsService().isAppleMaps && AppleMapsService.isSupported;
+    final bool preferVnRoadGraphFirst =
+        !isWalkingMode && GoongConfig.hasRestApiKey && (mode == 'bike' || !preferNativeApple || GoongConfig.hasMapTilesKey);
+
+    if (preferVnRoadGraphFirst) {
+      final vehicle = (mode == 'driving') ? 'car' : 'bike';
+      final vnRoutes = await _goongService.calculateMultipleRoutes(start, destination, vehicle: vehicle);
+      if (vnRoutes.isNotEmpty) {
+        for (int i = 0; i < vnRoutes.length; i++) {
+          routes.add(vnRoutes[i].copyWith(
+            title: i == 0 ? 'Tuyến đề xuất' : 'Lộ trình ${i + 1}',
+            subtitle: i == 0 ? 'Nhanh nhất (Tối ưu giao thông VN)' : vnRoutes[i].summary,
+            isFastest: i == 0,
+          ));
+        }
+      }
+    }
+
+    // Priority 2 (hoặc Priority 1 khi đi bộ / không có key VN): MKDirections gốc trên iOS
+    if (routes.isEmpty && AppleMapsService.isSupported) {
       try {
         final appleRoutes = await AppleMapsService().calculateMultipleRoutes(start, destination, mode: mode);
         if (appleRoutes.isNotEmpty) {
           routes.addAll(appleRoutes);
         }
       } catch (e) {
-        debugPrint('[DirectionsService] Lỗi tính lộ trình Apple Maps: $e');
+        debugPrint('[DirectionsService] Lỗi tính lộ trình native iOS: $e');
       }
     }
 
-    // Fallback sang Goong Direction API nếu Apple Maps không trả về kết quả (hoặc khi chọn chế độ Goong thuần)
-    if (routes.isEmpty && GoongConfig.hasRestApiKey) {
+    // Fallback sang Direction API VN nếu ưu tiên native không trả về kết quả
+    if (routes.isEmpty && !preferVnRoadGraphFirst && GoongConfig.hasRestApiKey) {
       final vehicle = (mode == 'driving') ? 'car' : 'bike';
-      final goongRoute = await _goongService.calculateRoute(start, destination, vehicle: vehicle);
-      if (goongRoute != null) {
-        routes.add(goongRoute.copyWith(
-          title: 'Tuyến Goong Map',
-          subtitle: 'Nhanh nhất (Tối ưu giao thông VN)',
-          isFastest: true,
-        ));
-      }
-    }
-
-    // Nếu chọn chế độ Goong thuần mà Goong lỗi/hết quota thì tự động fallback sang Apple Maps
-    if (routes.isEmpty && !preferAppleRouting && AppleMapsService.isSupported) {
-      try {
-        final appleRoutes = await AppleMapsService().calculateMultipleRoutes(start, destination, mode: mode);
-        if (appleRoutes.isNotEmpty) {
-          routes.addAll(appleRoutes);
+      final vnRoutes = await _goongService.calculateMultipleRoutes(start, destination, vehicle: vehicle);
+      if (vnRoutes.isNotEmpty) {
+        for (int i = 0; i < vnRoutes.length; i++) {
+          routes.add(vnRoutes[i].copyWith(
+            title: i == 0 ? 'Tuyến đề xuất' : 'Lộ trình ${i + 1}',
+            subtitle: i == 0 ? 'Nhanh nhất (Tối ưu giao thông VN)' : vnRoutes[i].summary,
+            isFastest: i == 0,
+          ));
         }
-      } catch (_) {}
+      }
     }
 
     // Chỉ gọi OSRM làm phương án dự phòng khi cả Apple Maps và Goong đều chưa trả về lộ trình

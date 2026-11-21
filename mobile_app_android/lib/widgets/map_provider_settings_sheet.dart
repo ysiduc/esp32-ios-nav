@@ -91,41 +91,41 @@ class _MapProviderSheetContentState extends State<_MapProviderSheetContent> {
 
               const SizedBox(height: 18),
 
-              // Option 1: Hybrid Goong Search + Apple Maps Routing (iOS)
+              // Option 1: Auto Routing
               _buildProviderCard(
                 provider: MapProvider.appleMaps,
-                title: 'Goong Tìm kiếm + Apple Maps Lộ trình',
+                title: 'Chế độ tự động (Tìm kiếm + Lộ trình)',
                 badge: 'Khuyên dùng • Siêu mượt',
                 badgeColor: const Color(0xFF34C759),
                 description:
-                    'Tìm địa chỉ, số nhà, ngõ hẻm bằng Goong Map chuẩn Việt Nam; Tính toán lộ trình, ETA và dẫn đường Realtime 30 FPS bằng Apple Maps (MKDirections) gốc trên iPhone.',
+                    'Tìm địa chỉ, số nhà, ngõ hẻm chuẩn Việt Nam; tự động chọn bộ máy tính lộ trình nhanh và bám đường tốt nhất.',
                 icon: Icons.map_rounded,
                 iconColor: const Color(0xFF007AFF),
                 isSelected: current == MapProvider.appleMaps,
                 isSupportedOnDevice: AppleMapsService.isSupported,
                 onTap: () {
                   _settings.setProvider(MapProvider.appleMaps);
-                  _showToast(context, 'Đã kích hoạt: Tìm kiếm Goong + Lộ trình Apple Maps');
+                  _showToast(context, 'Đã kích hoạt: Chế độ tự động');
                 },
               ),
 
               const SizedBox(height: 12),
 
-              // Option 2: Goong API Full
+              // Option 2: Vietnam Server Full
               _buildProviderCard(
                 provider: MapProvider.goong,
-                title: 'Goong API Toàn bộ (Tìm kiếm + Lộ trình)',
+                title: 'Máy chủ Việt Nam (Tìm kiếm + Lộ trình)',
                 badge: 'Dùng Quota Key riêng',
                 badgeColor: const Color(0xFFFF9500),
                 description:
-                    'Sử dụng Goong API cho cả tìm kiếm và tính lộ trình xe máy. Tiêu tốn lượt gọi Direction API từ Goong Config.',
+                    'Sử dụng máy chủ bản đồ Việt Nam cho cả tìm kiếm và tính lộ trình xe máy. Tiêu tốn lượt gọi API theo khóa cấu hình.',
                 icon: Icons.navigation_rounded,
                 iconColor: const Color(0xFFFF9500),
                 isSelected: current == MapProvider.goong,
                 isSupportedOnDevice: true,
                 onTap: () {
                   _settings.setProvider(MapProvider.goong);
-                  _showToast(context, 'Đã chuyển sang Goong API toàn bộ');
+                  _showToast(context, 'Đã chuyển sang máy chủ Việt Nam');
                 },
               ),
             ],

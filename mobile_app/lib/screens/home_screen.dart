@@ -113,24 +113,31 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     children: [
                       Container(
-                        width: 46,
-                        height: 46,
+                        width: 50,
+                        height: 50,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF007AFF), Color(0xFF00C6FF)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
                           borderRadius: BorderRadius.circular(14),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF007AFF).withValues(alpha: 0.3),
+                              color: Colors.black.withValues(alpha: 0.18),
                               blurRadius: 8,
                               offset: const Offset(0, 3),
                             ),
                           ],
                         ),
-                        child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 26),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Image.asset(
+                            'assets/themes/app_icon.png',
+                            width: 50,
+                            height: 50,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: const Color(0xFF007AFF),
+                              child: const Icon(Icons.navigation_rounded, color: Colors.white, size: 26),
+                            ),
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       const Expanded(
@@ -148,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             SizedBox(height: 2),
                             Text(
-                              'Smart HUD • Goong & Apple Maps',
+                              'Smart HUD • Dẫn đường xe máy',
                               style: TextStyle(
                                 color: Color(0xFF8E8E93),
                                 fontSize: 12,
@@ -261,7 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: Icons.map_rounded,
                           iconBg: const Color(0xFF007AFF),
                           title: 'Bản đồ dẫn đường',
-                          subtitle: 'Goong Tìm kiếm • Apple Maps Realtime',
+                          subtitle: 'Tìm kiếm & dẫn đường thời gian thực',
                           isSelected: _currentIndex == 0,
                           onTap: () {
                             Navigator.pop(context);
@@ -409,7 +416,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: Icons.alt_route_rounded,
                           iconBg: const Color(0xFF00C7BE),
                           title: 'Dịch vụ Bản đồ & Lộ trình',
-                          subtitle: 'Goong Tìm kiếm + Apple Maps Dẫn đường',
+                          subtitle: 'Nguồn dữ liệu bản đồ & lộ trình',
                           isSelected: false,
                           onTap: () {
                             Navigator.pop(context);

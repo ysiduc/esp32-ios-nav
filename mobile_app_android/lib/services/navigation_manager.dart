@@ -46,6 +46,11 @@ class NavigationManager extends ChangeNotifier {
   double _targetHeading = 0.0;
   double _smoothedHeading = 0.0;
   bool _hasHeadingLock = false;
+  double _gpsCourseDeg = -1.0;
+  DateTime? _gpsCourseAt;
+  LatLng? _lastCourseFixLoc;
+  DateTime? _lastCourseFixTime;
+  bool _followRouteHeading = false;
   double _distanceToNextManeuver = 0.0;
   double _remainingTotalDistance = 0.0;
   int _currentBattery = 85;
@@ -291,7 +296,8 @@ class NavigationManager extends ChangeNotifier {
   NavRoute? get previewRoute => _previewRoute;
   int get closestPointIndex => _closestPointIndex;
 
-  /// Danh sách các điểm polyline còn lại phía trước đầu xe (đã cắt bỏ phần đường đã đi qua)
+  /// Danh sách các điểm polyline còn lại phía trước đầu xe (đã cắt bỏ phần đường đã đi qua).
+  /// Bắt đầu từ hình chiếu vuông góc trên tuyến đường để vạch luôn bám sát mặt đường.
   List<LatLng> get remainingPolylinePoints {
     final route = _activeRoute;
     if (route == null || route.polylinePoints.isEmpty) return [];
@@ -299,8 +305,32 @@ class NavigationManager extends ChangeNotifier {
     if (!_isNavigating || _currentLocation == null || pts.length < 2) {
       return pts;
     }
-    final segIdx = _closestPointIndex.clamp(0, pts.length - 2);
-    return [_currentLocation!, ...pts.sublist(segIdx + 1)];
+    return trimRemainingPolyline(pts, _closestPointIndex, _currentLocation!);
+  }
+
+  /// Cắt phần đường đã đi qua: bắt đầu từ hình chiếu trên tuyến rồi nối các đỉnh phía trước.
+  @visibleForTesting
+  static List<LatLng> trimRemainingPolyline(List<LatLng> pts, int hintSegIdx, LatLng pos) {
+    if (pts.length < 2) return pts;
+    final int hint = hintSegIdx.clamp(0, pts.length - 2);
+    final int from = math.max(0, hint - 3);
+    final int to = math.min(pts.length - 2, hint + 40);
+    int bestIdx = hint;
+    double bestDist = double.infinity;
+    LatLng bestPt = pts[hint];
+    for (int i = from; i <= to; i++) {
+      final proj = _projectPointOnSegment(pos, pts[i], pts[i + 1]);
+      if (proj.distanceMeters < bestDist - 0.01) {
+        bestDist = proj.distanceMeters;
+        bestIdx = i;
+        bestPt = proj.point;
+      }
+    }
+    final out = <LatLng>[bestPt, ...pts.sublist(bestIdx + 1)];
+    if (out.length > 2 && const Distance().as(LengthUnit.Meter, out[0], out[1]) < 0.3) {
+      out.removeAt(1);
+    }
+    return out;
   }
 
   void setPreviewRoute(NavRoute? route) {
@@ -1240,7 +1270,33 @@ class NavigationManager extends ChangeNotifier {
     final spdKmh = rawSpdKmh < 1.5
         ? 0.0
         : (_currentSpeedKmh == 0.0 ? rawSpdKmh : (_currentSpeedKmh * 0.35 + rawSpdKmh * 0.65));
-    final hdg = pos.heading >= 0 ? pos.heading : _currentHeading;
+    final bool courseOk = pos.heading >= 0 &&
+        spdKmh >= 4.0 &&
+        (pos.headingAccuracy <= 0 || pos.headingAccuracy <= 50.0);
+    if (courseOk) {
+      _gpsCourseDeg = pos.heading;
+      _gpsCourseAt = now;
+      _lastCourseFixLoc = rawLoc;
+      _lastCourseFixTime = now;
+    } else if (_lastCourseFixLoc != null && _lastCourseFixTime != null) {
+      final elapsedMs = now.difference(_lastCourseFixTime!).inMilliseconds;
+      final movedM = const Distance().as(LengthUnit.Meter, _lastCourseFixLoc!, rawLoc);
+      if (movedM >= 5.0 && elapsedMs <= 6000 && effectiveAcc <= 25.0) {
+        _gpsCourseDeg = (const Distance().bearing(_lastCourseFixLoc!, rawLoc) + 360.0) % 360.0;
+        _gpsCourseAt = now;
+        _lastCourseFixLoc = rawLoc;
+        _lastCourseFixTime = now;
+      } else if (elapsedMs > 6000) {
+        _lastCourseFixLoc = rawLoc;
+        _lastCourseFixTime = now;
+      }
+    } else {
+      _lastCourseFixLoc = rawLoc;
+      _lastCourseFixTime = now;
+    }
+    final hdg = courseOk
+        ? pos.heading
+        : (_hasFreshGpsCourse(now) ? _gpsCourseDeg : (pos.heading >= 0 ? pos.heading : _currentHeading));
     _lastGpsFixTime = now;
 
     if (_isNavigating) {
@@ -1402,6 +1458,65 @@ class NavigationManager extends ChangeNotifier {
     return (current + step + 360.0) % 360.0;
   }
 
+  /// Chênh lệch góc nhỏ nhất giữa hai hướng (0..180 độ)
+  @visibleForTesting
+  static double angleDiffDeg(double a, double b) {
+    return (((a - b + 540.0) % 360.0) - 180.0).abs();
+  }
+
+  /// Histeresis bám hướng đoạn đường (22° khóa, 38° nhả) để không tự đoán xe đã rẽ.
+  @visibleForTesting
+  static bool shouldFollowRouteBearing({
+    required double courseDeg,
+    required double routeBearingDeg,
+    required bool wasFollowing,
+  }) {
+    return angleDiffDeg(courseDeg, routeBearingDeg) <= (wasFollowing ? 38.0 : 22.0);
+  }
+
+  bool _hasFreshGpsCourse(DateTime now) {
+    return _gpsCourseDeg >= 0.0 &&
+        _gpsCourseAt != null &&
+        now.difference(_gpsCourseAt!).inMilliseconds <= 4500;
+  }
+
+  double _navTargetHeading(double routeBearingDeg, {required bool onRoute}) {
+    final now = DateTime.now();
+    if (_hasFreshGpsCourse(now) && _currentSpeedKmh >= 5.0) {
+      _followRouteHeading = onRoute &&
+          shouldFollowRouteBearing(
+            courseDeg: _gpsCourseDeg,
+            routeBearingDeg: routeBearingDeg,
+            wasFollowing: _followRouteHeading,
+          );
+      return _followRouteHeading ? routeBearingDeg : _gpsCourseDeg;
+    }
+    _followRouteHeading = false;
+    return _hasHeadingLock ? _targetHeading : routeBearingDeg;
+  }
+
+  double _navTargetHeadingAtStart(double routeBearingDeg, {required bool onRoute}) {
+    final now = DateTime.now();
+    if (_hasFreshGpsCourse(now) && _currentSpeedKmh >= 5.0) {
+      final follow = onRoute &&
+          shouldFollowRouteBearing(
+            courseDeg: _gpsCourseDeg,
+            routeBearingDeg: routeBearingDeg,
+            wasFollowing: false,
+          );
+      return follow ? routeBearingDeg : _gpsCourseDeg;
+    }
+    return routeBearingDeg;
+  }
+
+  static double _segmentBearingDeg(LatLng a, LatLng b) {
+    final cosLat = math.cos(a.latitude * (math.pi / 180.0));
+    final dx = (b.longitude - a.longitude) * cosLat * 111320.0;
+    final dy = (b.latitude - a.latitude) * 110540.0;
+    if (dx * dx + dy * dy <= 0.001) return 0.0;
+    return ((math.atan2(dx, dy) * (180.0 / math.pi)) + 360.0) % 360.0;
+  }
+
   /// Nội suy tuyến tính tọa độ LatLng
   static LatLng _lerpLatLng(LatLng a, LatLng b, double t) {
     return LatLng(
@@ -1410,13 +1525,14 @@ class NavigationManager extends ChangeNotifier {
     );
   }
 
-  /// Tìm điểm nằm phía trước [lookAheadMeters] dọc theo polyline để tính góc hướng nhìn mượt mà trước khi vào cua
+  /// Tìm điểm nằm phía trước [lookAheadMeters] dọc theo polyline, dừng tại góc cua gấp (> 25°).
   static LatLng _pointAlongPolylineAhead(
     List<LatLng> pts,
     int segIdx,
     LatLng startPt,
-    double lookAheadMeters,
-  ) {
+    double lookAheadMeters, {
+    double maxTurnAngleDeg = 25.0,
+  }) {
     if (pts.isEmpty) return startPt;
     if (pts.length == 1) return pts.first;
 
@@ -1424,6 +1540,7 @@ class NavigationManager extends ChangeNotifier {
     double remaining = lookAheadMeters;
     LatLng cur = startPt;
     int idx = segIdx.clamp(0, pts.length - 2);
+    double curSegBearing = _segmentBearingDeg(pts[idx], pts[idx + 1]);
 
     while (idx < pts.length - 1) {
       final nextVertex = pts[idx + 1];
@@ -1434,6 +1551,13 @@ class NavigationManager extends ChangeNotifier {
       }
       remaining -= segRemaining;
       cur = nextVertex;
+      if (idx + 2 < pts.length && maxTurnAngleDeg < 180.0) {
+        final nextSegBearing = _segmentBearingDeg(pts[idx + 1], pts[idx + 2]);
+        if (angleDiffDeg(curSegBearing, nextSegBearing) > maxTurnAngleDeg) {
+          return nextVertex;
+        }
+        curSegBearing = nextSegBearing;
+      }
       idx++;
     }
     return pts.last;
@@ -1444,8 +1568,10 @@ class NavigationManager extends ChangeNotifier {
     List<LatLng> pts,
     int segIdx,
     LatLng startPt,
-    double advanceMeters,
-  ) {
+    double advanceMeters, {
+    bool stopAtSharpTurn = false,
+    double maxTurnAngleDeg = 25.0,
+  }) {
     if (pts.length < 2 || advanceMeters <= 0.001) {
       return (point: startPt, segmentIndex: segIdx.clamp(0, math.max(0, pts.length - 2)));
     }
@@ -1454,6 +1580,7 @@ class NavigationManager extends ChangeNotifier {
     double remaining = advanceMeters;
     LatLng cur = startPt;
     int idx = segIdx.clamp(0, pts.length - 2);
+    double curSegBearing = _segmentBearingDeg(pts[idx], pts[idx + 1]);
 
     while (idx < pts.length - 1) {
       final nextVertex = pts[idx + 1];
@@ -1464,6 +1591,13 @@ class NavigationManager extends ChangeNotifier {
       }
       remaining -= segRemaining;
       cur = nextVertex;
+      if (stopAtSharpTurn && idx + 2 < pts.length) {
+        final nextSegBearing = _segmentBearingDeg(pts[idx + 1], pts[idx + 2]);
+        if (angleDiffDeg(curSegBearing, nextSegBearing) > maxTurnAngleDeg) {
+          return (point: nextVertex, segmentIndex: idx);
+        }
+        curSegBearing = nextSegBearing;
+      }
       idx++;
     }
     return (point: pts.last, segmentIndex: pts.length - 2);
@@ -1555,6 +1689,15 @@ class NavigationManager extends ChangeNotifier {
     final int startSearch = fullRouteScan ? 0 : math.max(0, _closestPointIndex - 2);
     double cumulativeAheadMeters = 0.0;
     const distCalc = Distance();
+    final now = DateTime.now();
+    final bool hasMotionCourse = _currentSpeedKmh >= 4.5 && _hasFreshGpsCourse(now);
+
+    double headingPenalty(double segBearingDeg) {
+      if (!hasMotionCourse) return 0.0;
+      final hDiff = angleDiffDeg(_gpsCourseDeg, segBearingDeg);
+      if (hDiff <= 35.0) return 0.0;
+      return (hDiff - 35.0) * 0.45;
+    }
 
     for (int i = startSearch; i < pts.length - 1; i++) {
       final proj = _projectPointOnSegment(rawLocation, pts[i], pts[i + 1]);
@@ -1567,14 +1710,7 @@ class NavigationManager extends ChangeNotifier {
       if (!fullRouteScan && cumulativeAheadMeters > 65.0) {
         penalty += (cumulativeAheadMeters - 65.0) * 0.12;
       }
-      // Nếu đang di chuyển có hướng rõ ràng, phạt các đoạn đường ngược chiều (> 100 độ)
-      if (_currentSpeedKmh >= 6.0 && _currentHeading > 0.0) {
-        double hDiff = (_currentHeading - proj.bearingDeg).abs() % 360.0;
-        if (hDiff > 180.0) hDiff = 360.0 - hDiff;
-        if (hDiff > 100.0) {
-          penalty += 14.0;
-        }
-      }
+      penalty += headingPenalty(proj.bearingDeg);
 
       final score = proj.distanceMeters + penalty;
       if (score < minScore) {
@@ -1586,11 +1722,13 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
-    // Nếu khoảng cách ở đoạn phía trước vẫn lớn (> 20m), quét lại toàn bộ tuyến đường để tránh ghim nhầm đoạn song song
+    // Nếu khoảng cách ở đoạn phía trước vẫn lớn (> 20m), quét lại phần trước đó (có áp dụng phạt hướng chạy)
     if (bestRawDist > 20.0 && startSearch > 0) {
       for (int i = 0; i < startSearch; i++) {
         final proj = _projectPointOnSegment(rawLocation, pts[i], pts[i + 1]);
-        if (proj.distanceMeters < bestRawDist) {
+        final score = proj.distanceMeters + headingPenalty(proj.bearingDeg);
+        if (score < minScore) {
+          minScore = score;
           bestRawDist = proj.distanceMeters;
           bestIdx = i;
           bestPoint = proj.point;
@@ -1599,11 +1737,11 @@ class NavigationManager extends ChangeNotifier {
       }
     }
 
-    // Tính góc hướng nhìn vừa phải theo tốc độ (8m - 22m) để xoay camera êm ái qua góc cua mà không văng tâm
-    final double lookAheadMeters = (_currentSpeedKmh * 0.35).clamp(8.0, 22.0);
+    // Nhìn trước rất ngắn (4-10m) và dừng ở góc cua > 25° để không xoay camera trước khi rẽ
+    final double lookAheadMeters = (_currentSpeedKmh * 0.15).clamp(4.0, 10.0);
     final LatLng lookAheadPt = _pointAlongPolylineAhead(pts, bestIdx, bestPoint, lookAheadMeters);
     final double dLook = distCalc.as(LengthUnit.Meter, bestPoint, lookAheadPt);
-    if (dLook > 1.5) {
+    if (dLook >= 2.5) {
       bestBearing = (distCalc.bearing(bestPoint, lookAheadPt) + 360.0) % 360.0;
     }
 
@@ -1700,28 +1838,42 @@ class NavigationManager extends ChangeNotifier {
       final now = DateTime.now();
       final msSinceGps = now.difference(_lastGpsFixTime).inMilliseconds;
       final double snapLimit = computeAdaptiveSnapLimitMeters(_gpsAccuracy);
-      final bool isOnRoute = _minSegmentDistance <= snapLimit;
+      final bool courseKnown = _hasFreshGpsCourse(now) && _currentSpeedKmh >= 5.0;
+      final bool headingDiverged =
+          courseKnown && angleDiffDeg(_gpsCourseDeg, _closestSegmentBearing) > 50.0;
+      final double effectiveSnapLimit = headingDiverged ? math.min(snapLimit, 7.0) : snapLimit;
+      final bool isOnRoute = _minSegmentDistance <= effectiveSnapLimit;
 
       // 1. Dead-Reckoning: Dự đoán vị trí tiến lên dọc theo lộ trình dựa trên vận tốc thực tế (< 1.0s & giới hạn <= 12m khỏi GPS thô)
       final double leadFromRawM = (_rawGpsLocation != null && _targetLocation != null)
           ? const Distance().as(LengthUnit.Meter, _rawGpsLocation!, _targetLocation!)
           : 0.0;
+      final bool movingAlongRoute =
+          !courseKnown || angleDiffDeg(_gpsCourseDeg, _closestSegmentBearing) <= 45.0;
       if (isOnRoute &&
+          movingAlongRoute &&
           _currentSpeedKmh >= 2.5 &&
           msSinceGps < 1000 &&
           _targetLocation != null &&
           leadFromRawM < 12.0) {
         final double stepMeters = (_currentSpeedKmh / 3.6) * 0.033 * 0.85;
-        final adv = _advanceAlongPolyline(pts, _closestPointIndex, _targetLocation!, stepMeters);
+        final adv = _advanceAlongPolyline(
+          pts,
+          _closestPointIndex,
+          _targetLocation!,
+          stepMeters,
+          stopAtSharpTurn: true,
+        );
         _targetLocation = adv.point;
         _closestPointIndex = adv.segmentIndex;
 
-        final double lookAheadM = (_currentSpeedKmh * 0.35).clamp(8.0, 22.0);
+        final double lookAheadM = (_currentSpeedKmh * 0.15).clamp(4.0, 10.0);
         final lookPt = _pointAlongPolylineAhead(pts, _closestPointIndex, _targetLocation!, lookAheadM);
         final dLook = const Distance().as(LengthUnit.Meter, _targetLocation!, lookPt);
-        if (dLook > 1.5) {
-          _targetHeading = (const Distance().bearing(_targetLocation!, lookPt) + 360.0) % 360.0;
-          _closestSegmentBearing = _targetHeading;
+        if (dLook >= 2.5) {
+          final routeBrg = (const Distance().bearing(_targetLocation!, lookPt) + 360.0) % 360.0;
+          _closestSegmentBearing = routeBrg;
+          _targetHeading = _navTargetHeading(routeBrg, onRoute: true);
         }
       }
 
@@ -1795,8 +1947,9 @@ class NavigationManager extends ChangeNotifier {
         _targetLocation = snap.snappedPoint;
         _closestPointIndex = snap.segmentIndex;
       }
-      _targetHeading = snap.bearingDeg;
-      _smoothedHeading = snap.bearingDeg;
+      _followRouteHeading = false;
+      _targetHeading = _navTargetHeadingAtStart(snap.bearingDeg, onRoute: snap.distanceMeters <= 45.0);
+      _smoothedHeading = _targetHeading;
       _hasHeadingLock = true;
     }
 
@@ -2060,18 +2213,22 @@ class NavigationManager extends ChangeNotifier {
       _minSegmentDistance = snap.distanceMeters;
       _closestSegmentBearing = snap.bearingDeg;
 
-      if (snap.distanceMeters <= snapLimit) {
+      final now = DateTime.now();
+      final bool headingDiverged = _hasFreshGpsCourse(now) &&
+          _currentSpeedKmh >= 5.0 &&
+          angleDiffDeg(_gpsCourseDeg, snap.bearingDeg) > 50.0;
+      final double effectiveSnapLimit = headingDiverged ? math.min(snapLimit, 7.0) : snapLimit;
+
+      if (snap.distanceMeters <= effectiveSnapLimit) {
         _targetLocation = snap.snappedPoint;
         _closestPointIndex = snap.segmentIndex;
-        _targetHeading = snap.bearingDeg;
+        _targetHeading = _navTargetHeading(snap.bearingDeg, onRoute: true);
         if (_currentLocation == null) {
           _currentLocation = snap.snappedPoint;
         }
       } else {
         _targetLocation = rawLocation;
-        if (heading >= 0.0 && _currentSpeedKmh >= 3.0) {
-          _targetHeading = heading;
-        }
+        _targetHeading = _navTargetHeading(snap.bearingDeg, onRoute: false);
         if (_currentLocation == null) {
           _currentLocation = rawLocation;
         }
@@ -2082,7 +2239,7 @@ class NavigationManager extends ChangeNotifier {
       _minSegmentDistance = 0.0;
     }
 
-    if (!_hasHeadingLock && _targetHeading > 0.0) {
+    if (!_hasHeadingLock && _targetHeading >= 0.0) {
       _smoothedHeading = _targetHeading;
       _hasHeadingLock = true;
     }
@@ -2109,9 +2266,10 @@ class NavigationManager extends ChangeNotifier {
     }
 
     double headingDiff = 0.0;
-    if (_currentSpeedKmh >= 10.0 && _currentHeading > 0.0 && _closestSegmentBearing > 0.0) {
-      headingDiff = (_currentHeading - _closestSegmentBearing).abs() % 360.0;
-      if (headingDiff > 180.0) headingDiff = 360.0 - headingDiff;
+    final now = DateTime.now();
+    final double activeCourse = _hasFreshGpsCourse(now) ? _gpsCourseDeg : _currentHeading;
+    if (_currentSpeedKmh >= 8.0 && activeCourse >= 0.0 && _closestSegmentBearing >= 0.0) {
+      headingDiff = angleDiffDeg(activeCourse, _closestSegmentBearing);
     }
 
     // Trừ hao sai số ngang của cảm biến GPS để không báo lệch đường giả trong phố hẹp
@@ -2121,11 +2279,11 @@ class NavigationManager extends ChangeNotifier {
     final bool isSeverelyOffRoute = _minSegmentDistance > 46.0 && effectiveOffDist > 30.0;
     final bool isModeratelyOffRoute = _minSegmentDistance > 32.0 && effectiveOffDist > 20.0;
     final bool isWrongDirectionOffRoute =
-        _minSegmentDistance > 22.0 && _currentSpeedKmh >= 12.0 && headingDiff > 85.0;
+        _minSegmentDistance > 16.0 && _currentSpeedKmh >= 8.0 && headingDiff > 60.0;
 
     if (isSeverelyOffRoute || isModeratelyOffRoute || isWrongDirectionOffRoute) {
       _consecutiveOffRouteCount++;
-      final int requiredCount = isSeverelyOffRoute ? 2 : 3;
+      final int requiredCount = (isSeverelyOffRoute || isWrongDirectionOffRoute) ? 2 : 3;
 
       if (_consecutiveOffRouteCount >= requiredCount) {
         _isRerouting = true;

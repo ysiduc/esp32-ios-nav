@@ -218,14 +218,24 @@ class GoongService {
       final distanceVal = (leg['distance']?['value'] as num?)?.toDouble() ?? 0.0;
       final durationVal = (leg['duration']?['value'] as num?)?.toDouble() ?? 0.0;
 
-      // Giải mã Polyline chuẩn 5 chữ số thập phân
-      final polylineStr = r['overview_polyline']?['points'] as String? ?? '';
-      final polylinePoints = _decodePolyline(polylineStr);
+      // Ưu tiên ghép polyline chi tiết từ từng bước rẽ để đường dẫn bám sát mặt đường hơn overview_polyline
+      final overviewStr = r['overview_polyline']?['points'] as String? ?? '';
+      final overviewPoints = _decodePolyline(overviewStr);
+      final stitchedPoints = <LatLng>[];
+      const distCalc = Distance();
 
       final steps = <NavStep>[];
       final rawSteps = leg['steps'] as List? ?? [];
       int idx = 0;
       for (final s in rawSteps) {
+        final stepPolyStr = s['polyline']?['points'] as String? ?? '';
+        final stepPolyPts = stepPolyStr.isNotEmpty ? _decodePolyline(stepPolyStr) : const <LatLng>[];
+        for (final pt in stepPolyPts) {
+          if (stitchedPoints.isEmpty ||
+              distCalc.as(LengthUnit.Meter, stitchedPoints.last, pt) >= 0.5) {
+            stitchedPoints.add(pt);
+          }
+        }
         final htmlInstruction = s['html_instructions'] as String? ?? s['instruction'] as String? ?? '';
         final strippedInstruction =
             htmlInstruction.replaceAll(RegExp(r'<[^>]*>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -234,7 +244,9 @@ class GoongService {
         final startLoc = s['start_location'] as Map<String, dynamic>?;
         final stepCoord = (startLoc != null)
             ? LatLng((startLoc['lat'] as num).toDouble(), (startLoc['lng'] as num).toDouble())
-            : (polylinePoints.isNotEmpty ? polylinePoints.first : start);
+            : (stepPolyPts.isNotEmpty
+                ? stepPolyPts.first
+                : (overviewPoints.isNotEmpty ? overviewPoints.first : start));
 
         final maneuver = s['maneuver'] as String? ?? 'turn-straight';
         final (mType, mMod) = _parseGoongManeuver(maneuver);
@@ -261,12 +273,17 @@ class GoongService {
         ));
       }
 
+      final polylinePoints = (stitchedPoints.length >= 2 && stitchedPoints.length >= overviewPoints.length)
+          ? stitchedPoints
+          : overviewPoints;
+
+      final rawSummary = (leg['summary'] as String? ?? '').trim();
       final route = NavRoute(
         totalDistanceMeters: distanceVal,
         totalDurationSeconds: durationVal,
         polylinePoints: polylinePoints,
         steps: steps,
-        summary: leg['summary'] as String? ?? 'Lộ trình Goong Map ($vehicle)',
+        summary: rawSummary.isNotEmpty ? rawSummary : 'Lộ trình đề xuất',
       );
       _directionsCache[cacheKey] = route;
       return route;

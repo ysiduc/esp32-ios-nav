@@ -1553,10 +1553,10 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
             items: const [
               DropdownMenuItem(value: 'osm-3d', child: Text('OSM 3D Khối')),
               DropdownMenuItem(value: 'osm-3d-dark', child: Text('OSM 3D Khối (Tối)')),
-              DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN')),
-              DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
-              DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
-              DropdownMenuItem(value: 'streets-v2-dark', child: Text('MapTiler Dark')),
+              DropdownMenuItem(value: 'goong-streets', child: Text('Bản đồ Việt Nam (Sáng)')),
+              DropdownMenuItem(value: 'goong-dark', child: Text('Bản đồ Việt Nam (Tối)')),
+              DropdownMenuItem(value: 'streets-v2', child: Text('Bản đồ đường phố (Sáng)')),
+              DropdownMenuItem(value: 'streets-v2-dark', child: Text('Bản đồ đường phố (Tối)')),
               DropdownMenuItem(value: 'hybrid', child: Text('Hybrid (Vệ tinh)')),
             ],
             onChanged: (val) {

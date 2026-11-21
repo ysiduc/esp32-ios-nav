@@ -1551,13 +1551,13 @@ class _EspInterfaceScreenState extends State<EspInterfaceScreen> {
               fontWeight: FontWeight.w700,
             ),
             items: const [
-              DropdownMenuItem(value: 'osm-3d', child: Text('OSM 3D Khối')),
-              DropdownMenuItem(value: 'osm-3d-dark', child: Text('OSM 3D Khối (Tối)')),
-              DropdownMenuItem(value: 'goong-streets', child: Text('Goong Map VN')),
-              DropdownMenuItem(value: 'goong-dark', child: Text('Goong Map Dark')),
-              DropdownMenuItem(value: 'streets-v2', child: Text('MapTiler Streets')),
-              DropdownMenuItem(value: 'streets-v2-dark', child: Text('MapTiler Dark')),
-              DropdownMenuItem(value: 'hybrid', child: Text('Hybrid (Vệ tinh)')),
+              DropdownMenuItem(value: 'osm-3d', child: Text('Bản đồ 3D Khối (Sáng)')),
+              DropdownMenuItem(value: 'osm-3d-dark', child: Text('Bản đồ 3D Khối (Tối)')),
+              DropdownMenuItem(value: 'goong-streets', child: Text('Bản đồ Việt Nam (Sáng)')),
+              DropdownMenuItem(value: 'goong-dark', child: Text('Bản đồ Việt Nam (Tối)')),
+              DropdownMenuItem(value: 'streets-v2', child: Text('Đường phố (Sáng)')),
+              DropdownMenuItem(value: 'streets-v2-dark', child: Text('Đường phố (Tối)')),
+              DropdownMenuItem(value: 'hybrid', child: Text('Vệ tinh kết hợp')),
             ],
             onChanged: (val) {
               if (val == null) return;

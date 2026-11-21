@@ -2319,7 +2319,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                isApple ? 'Tìm kiếm Apple Maps' : 'Tìm kiếm Goong Map',
+                'Tìm kiếm địa điểm, tuyến đường...',
                 style: const TextStyle(
                   color: Colors.black87,
                   fontSize: 15,
@@ -2349,13 +2349,13 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      isApple ? Icons.apple_rounded : Icons.map_rounded,
+                      isApple ? Icons.explore_rounded : Icons.map_rounded,
                       size: 14,
                       color: isApple ? const Color(0xFF007AFF) : const Color(0xFFD97706),
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      isApple ? 'Apple' : 'Goong',
+                      isApple ? 'Tự động' : 'Bản đồ VN',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
@@ -2473,11 +2473,9 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                           fontSize: 16,
                                           fontWeight: FontWeight.w500,
                                         ),
-                                        decoration: InputDecoration(
-                                          hintText: MapSettingsService().isAppleMaps
-                                              ? 'Tìm kiếm Apple Maps...'
-                                              : 'Tìm kiếm Goong Map...',
-                                          hintStyle: const TextStyle(color: Colors.black38, fontSize: 16),
+                                        decoration: const InputDecoration(
+                                          hintText: 'Tìm địa chỉ, quán ăn, ngõ hẻm...',
+                                          hintStyle: TextStyle(color: Colors.black38, fontSize: 16),
                                           border: InputBorder.none,
                                           isDense: true,
                                         ),
@@ -2561,7 +2559,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
-                                      MapSettingsService().isAppleMaps ? Icons.apple_rounded : Icons.map_rounded,
+                                      MapSettingsService().isAppleMaps ? Icons.explore_rounded : Icons.map_rounded,
                                       size: 13,
                                       color: MapSettingsService().isAppleMaps
                                           ? const Color(0xFF007AFF)
@@ -2570,8 +2568,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                                     const SizedBox(width: 4),
                                     Text(
                                       MapSettingsService().isAppleMaps
-                                          ? 'Apple Maps (Native iOS)'
-                                          : 'Goong API (Key riêng)',
+                                          ? 'Chế độ tự động'
+                                          : 'Máy chủ Việt Nam',
                                       style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.bold,
@@ -3228,7 +3226,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text('Định tuyến:', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                        Text('Goong Search • Apple Maps Realtime', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF34C759))),
+                        Text('Dẫn đường chuẩn Việt Nam', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF34C759))),
                       ],
                     ),
                   ],
@@ -3389,7 +3387,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                MapSettingsService().isAppleMaps ? '🍎 Apple Maps' : '🟢 Goong Map',
+                                MapSettingsService().isAppleMaps ? 'Chế độ tự động' : 'Máy chủ VN',
                                 style: TextStyle(
                                   color: MapSettingsService().isAppleMaps
                                       ? const Color(0xFF007AFF)
@@ -3597,9 +3595,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                idx == 0
-                                    ? (MapSettingsService().isAppleMaps ? 'Nhanh nhất (Apple)' : 'Nhanh nhất (Goong)')
-                                    : 'Tuyến ${idx + 1}',
+                                idx == 0 ? 'Nhanh nhất' : 'Tuyến ${idx + 1}',
                                 style: TextStyle(
                                   color: isSelected ? Colors.white.withOpacity(0.9) : const Color(0xFF34C759),
                                   fontSize: 11,
@@ -3646,7 +3642,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                           ),
                           Text(
                             _selectedRouteIndex == 0
-                                ? (MapSettingsService().isAppleMaps ? 'Nhanh nhất (Apple Maps)' : 'Nhanh nhất (Goong Map)')
+                                ? 'Tuyến nhanh nhất'
                                 : 'Lộ trình thay thế ${_selectedRouteIndex + 1}',
                             style: TextStyle(
                               fontSize: 12,
@@ -4763,7 +4759,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               const SizedBox(height: 14),
               _buildThemeOption(
                 title: 'Bản đồ Đường phố (Streets)',
-                subtitle: 'Giao diện vector sắc nét, tải nhanh chuẩn MapTiler',
+                subtitle: 'Giao diện vector sắc nét, tải nhanh và rõ tên đường',
                 mode: MapThemeMode.streets,
                 icon: Icons.map_rounded,
               ),
@@ -4806,13 +4802,13 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 title: const Text(
-                  'Cấu hình Goong Map Key',
+                  'Cấu hình khóa API bản đồ',
                   style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 subtitle: Text(
                   GoongConfig.isConfigured
-                      ? 'Đang kích hoạt Goong Map (Bản đồ & Dẫn đường chuẩn VN)'
-                      : 'Chưa cấu hình (Bấm vào đây để nhập key từ goong.io)',
+                      ? 'Đang kích hoạt (Bản đồ & Dẫn đường chuẩn VN)'
+                      : 'Chưa cấu hình (Bấm vào đây để nhập khóa API)',
                   style: TextStyle(
                     color: GoongConfig.isConfigured ? const Color(0xFF1E8E3E) : const Color(0xFF8E8E93),
                     fontSize: 11.5,
@@ -4831,7 +4827,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Dialog nhập MapTiles Key và REST API Key của Goong Map (Unified iOS Light Theme)
+  /// Dialog nhập MapTiles Key và REST API Key (Unified iOS Light Theme)
   void _showGoongKeyDialog() {
     final mapTilesCtrl = TextEditingController(text: GoongConfig.maptilesKey);
     final restApiCtrl = TextEditingController(text: GoongConfig.restApiKey);
@@ -4849,7 +4845,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Cấu hình Goong Map Key',
+                  'Cấu hình khóa API bản đồ',
                   style: TextStyle(color: Color(0xFF1C1C1E), fontSize: 17, fontWeight: FontWeight.bold),
                 ),
               ),
@@ -4861,7 +4857,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Goong Map là hệ thống bản đồ số 1 tại Việt Nam, tìm chính xác số nhà, ngõ ngách và dẫn đường phân làn xe máy chuẩn xác.',
+                  'Khóa API bản đồ giúp hiển thị chi tiết số nhà, ngõ hẻm và hỗ trợ dẫn đường phân làn xe máy tại Việt Nam.',
                   style: TextStyle(color: Color(0xFF636366), fontSize: 12.5, height: 1.4),
                 ),
                 const SizedBox(height: 14),
@@ -4871,7 +4867,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   decoration: InputDecoration(
                     labelText: '1. MapTiles Key (Hiển thị bản đồ)',
                     labelStyle: const TextStyle(color: Color(0xFF007AFF), fontSize: 12, fontWeight: FontWeight.w600),
-                    hintText: 'Dán MapTiles key từ account.goong.io',
+                    hintText: 'Dán MapTiles key của bạn',
                     hintStyle: const TextStyle(color: Color(0xFFC7C7CC), fontSize: 11),
                     filled: true,
                     fillColor: const Color(0xFFF2F2F7),
@@ -4897,7 +4893,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   decoration: InputDecoration(
                     labelText: '2. REST API Key (Tìm kiếm & Dẫn đường)',
                     labelStyle: const TextStyle(color: Color(0xFF1E8E3E), fontSize: 12, fontWeight: FontWeight.w600),
-                    hintText: 'Dán API key từ account.goong.io',
+                    hintText: 'Dán REST API key của bạn',
                     hintStyle: const TextStyle(color: Color(0xFFC7C7CC), fontSize: 11),
                     filled: true,
                     fillColor: const Color(0xFFF2F2F7),
@@ -4929,7 +4925,7 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          'Đăng ký miễn phí tại: account.goong.io/keys',
+                          'Nhập khóa dịch vụ bản đồ nếu bạn muốn dùng hạn mức riêng.',
                           style: TextStyle(color: Color(0xFF3A3A3C), fontSize: 11.5),
                         ),
                       ),
@@ -4962,8 +4958,8 @@ class MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     backgroundColor: const Color(0xFF34C759),
                     content: Text(
                       GoongConfig.isConfigured
-                          ? 'Đã kích hoạt toàn bộ dịch vụ Goong Map thành công!'
-                          : 'Đã lưu cấu hình Goong Map',
+                          ? 'Đã kích hoạt dịch vụ bản đồ thành công!'
+                          : 'Đã lưu cấu hình khóa bản đồ',
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ),

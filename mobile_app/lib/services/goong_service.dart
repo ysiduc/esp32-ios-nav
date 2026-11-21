@@ -187,45 +187,93 @@ class GoongService {
     LatLng destination, {
     String vehicle = 'bike',
   }) async {
-    if (!GoongConfig.hasRestApiKey) return null;
+    final routes = await calculateMultipleRoutes(start, destination, vehicle: vehicle);
+    return routes.isNotEmpty ? routes.first : null;
+  }
+
+  /// Lấy danh sách lộ trình độ phân giải cao (ghép polyline chi tiết từ từng bước rẽ để bám sát mặt đường).
+  Future<List<NavRoute>> calculateMultipleRoutes(
+    LatLng start,
+    LatLng destination, {
+    String vehicle = 'bike',
+  }) async {
+    if (!GoongConfig.hasRestApiKey) return [];
     final cacheKey =
         '${start.latitude.toStringAsFixed(4)},${start.longitude.toStringAsFixed(4)}'
         '-${destination.latitude.toStringAsFixed(4)},${destination.longitude.toStringAsFixed(4)}-$vehicle';
     if (_directionsCache.containsKey(cacheKey)) {
-      return _directionsCache[cacheKey]!;
+      return [_directionsCache[cacheKey]!];
     }
 
     try {
       final url = Uri.parse(
         '${GoongConfig.directionUrl}?origin=${start.latitude},${start.longitude}'
         '&destination=${destination.latitude},${destination.longitude}'
-        '&vehicle=$vehicle&api_key=${GoongConfig.restApiKey}',
+        '&vehicle=$vehicle&language=vi&api_key=${GoongConfig.restApiKey}',
       );
 
       final res = await http.get(url).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) return [];
 
       final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final routes = data['routes'] as List? ?? [];
-      if (routes.isEmpty) return null;
+      final parsed = parseDirectionResponse(
+        data,
+        fallbackStart: start,
+        vehicle: vehicle,
+      );
+      if (parsed.isNotEmpty) {
+        _directionsCache[cacheKey] = parsed.first;
+      }
+      return parsed;
+    } catch (e) {
+      debugPrint('[GoongService] calculateRoute error: $e');
+      return [];
+    }
+  }
 
-      final r = routes.first as Map<String, dynamic>;
-      final legs = r['legs'] as List? ?? [];
-      if (legs.isEmpty) return null;
+  /// Giải mã phản hồi Direction API thành danh sách [NavRoute] với polyline chi tiết ghép từ từng step.
+  @visibleForTesting
+  static List<NavRoute> parseDirectionResponse(
+    Map<String, dynamic> data, {
+    required LatLng fallbackStart,
+    String vehicle = 'bike',
+  }) {
+    final rawRoutes = data['routes'] as List? ?? [];
+    if (rawRoutes.isEmpty) return [];
+
+    const distCalc = Distance();
+    final parsedRoutes = <NavRoute>[];
+
+    for (final rawRoute in rawRoutes) {
+      if (rawRoute is! Map<String, dynamic>) continue;
+      final legs = rawRoute['legs'] as List? ?? [];
+      if (legs.isEmpty) continue;
 
       final leg = legs.first as Map<String, dynamic>;
       final distanceVal = (leg['distance']?['value'] as num?)?.toDouble() ?? 0.0;
       final durationVal = (leg['duration']?['value'] as num?)?.toDouble() ?? 0.0;
 
-      // Giải mã Polyline chuẩn 5 chữ số thập phân
-      final polylineStr = r['overview_polyline']?['points'] as String? ?? '';
-      final polylinePoints = _decodePolyline(polylineStr);
+      // Ưu tiên ghép polyline độ phân giải cao từ từng step để đường dẫn bám sát từng khúc cua
+      final overviewStr = rawRoute['overview_polyline']?['points'] as String? ?? '';
+      final overviewPoints = decodePolyline(overviewStr);
+      final stitchedPoints = <LatLng>[];
 
       final steps = <NavStep>[];
       final rawSteps = leg['steps'] as List? ?? [];
       int idx = 0;
       for (final s in rawSteps) {
-        final htmlInstruction = s['html_instructions'] as String? ?? s['instruction'] as String? ?? '';
+        if (s is! Map<String, dynamic>) continue;
+        final stepPolyStr = s['polyline']?['points'] as String? ?? '';
+        final stepPolyPts = stepPolyStr.isNotEmpty ? decodePolyline(stepPolyStr) : const <LatLng>[];
+        for (final pt in stepPolyPts) {
+          if (stitchedPoints.isEmpty ||
+              distCalc.as(LengthUnit.Meter, stitchedPoints.last, pt) >= 0.5) {
+            stitchedPoints.add(pt);
+          }
+        }
+
+        final htmlInstruction =
+            s['html_instructions'] as String? ?? s['instruction'] as String? ?? '';
         final cleanInstruction =
             htmlInstruction.replaceAll(RegExp(r'<[^>]*>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
         final stepDist = (s['distance']?['value'] as num?)?.toDouble() ?? 0.0;
@@ -233,10 +281,12 @@ class GoongService {
         final startLoc = s['start_location'] as Map<String, dynamic>?;
         final stepCoord = (startLoc != null)
             ? LatLng((startLoc['lat'] as num).toDouble(), (startLoc['lng'] as num).toDouble())
-            : (polylinePoints.isNotEmpty ? polylinePoints.first : start);
+            : (stepPolyPts.isNotEmpty
+                ? stepPolyPts.first
+                : (overviewPoints.isNotEmpty ? overviewPoints.first : fallbackStart));
 
         final maneuver = s['maneuver'] as String? ?? 'turn-straight';
-        final (mType, mMod) = _parseGoongManeuver(maneuver);
+        final (mType, mMod) = _parseGoongManeuverStatic(maneuver);
 
         steps.add(NavStep(
           stepIndex: idx++,
@@ -250,22 +300,24 @@ class GoongService {
         ));
       }
 
-      final route = NavRoute(
+      final polylinePoints = (stitchedPoints.length >= 2 && stitchedPoints.length >= overviewPoints.length)
+          ? stitchedPoints
+          : overviewPoints;
+
+      final rawSummary = (leg['summary'] as String? ?? '').trim();
+      parsedRoutes.add(NavRoute(
         totalDistanceMeters: distanceVal,
         totalDurationSeconds: durationVal,
         polylinePoints: polylinePoints,
         steps: steps,
-        summary: leg['summary'] as String? ?? 'Lộ trình Goong Map ($vehicle)',
-      );
-      _directionsCache[cacheKey] = route;
-      return route;
-    } catch (e) {
-      debugPrint('[GoongService] calculateRoute error: $e');
-      return null;
+        summary: rawSummary.isNotEmpty ? rawSummary : 'Lộ trình đề xuất',
+      ));
     }
+
+    return parsedRoutes;
   }
 
-  (String, String) _parseGoongManeuver(String maneuver) {
+  static (String, String) _parseGoongManeuverStatic(String maneuver) {
     final m = maneuver.toLowerCase();
     if (m.contains('arrive')) return ('arrive', 'straight');
     if (m.contains('depart')) return ('depart', 'straight');
@@ -280,7 +332,9 @@ class GoongService {
     return ('turn', 'straight');
   }
 
-  List<LatLng> _decodePolyline(String encoded) {
+  /// Giải mã chuỗi Google Encoded Polyline chuẩn 5 chữ số thập phân.
+  @visibleForTesting
+  static List<LatLng> decodePolyline(String encoded) {
     final poly = <LatLng>[];
     int index = 0, len = encoded.length;
     int lat = 0, lng = 0;
@@ -291,17 +345,18 @@ class GoongService {
         b = encoded.codeUnitAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
-      } while (b >= 0x20);
+      } while (b >= 0x20 && index < len);
       int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
       lat += dlat;
 
+      if (index >= len) break;
       shift = 0;
       result = 0;
       do {
         b = encoded.codeUnitAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
-      } while (b >= 0x20);
+      } while (b >= 0x20 && index < len);
       int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
       lng += dlng;
 

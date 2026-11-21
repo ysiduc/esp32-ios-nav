@@ -175,7 +175,7 @@ class AppleMapsService {
   NavRoute? _parseAppleRoute(Map<String, dynamic> r, {int routeIndex = 0}) {
     final distM = (r['distance'] as num?)?.toDouble() ?? 0.0;
     final durSec = (r['expectedTravelTime'] as num?)?.toDouble() ?? 0.0;
-    final name = (r['name'] as String?) ?? 'Lộ trình Apple Maps';
+    final name = (r['name'] as String?) ?? 'Lộ trình đề xuất';
 
     // Parse coordinates
     final rawCoords = r['coordinates'] as List? ?? [];
@@ -220,7 +220,7 @@ class AppleMapsService {
       polylinePoints: polylinePoints,
       steps: steps,
       summary: name,
-      title: routeIndex == 0 ? 'Nhanh nhất (Apple Maps)' : 'Lộ trình $routeIndex (Apple Maps)',
+      title: routeIndex == 0 ? 'Nhanh nhất' : 'Lộ trình ${routeIndex + 1}',
       subtitle: name,
       isFastest: routeIndex == 0,
       isShortest: false,

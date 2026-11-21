@@ -225,38 +225,39 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
       var routesData: [[String: Any]] = []
 
       for (index, route) in response.routes.enumerated() {
-        // Tọa độ polyline
+        // Tọa độ polyline tổng quan
         let pointCount = route.polyline.pointCount
-        var coords: [[Double]] = []
-        var polylinePoints = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: pointCount)
-        route.polyline.getCoordinates(&polylinePoints, range: NSRange(location: 0, length: pointCount))
+        var overviewPoints = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: pointCount)
+        route.polyline.getCoordinates(&overviewPoints, range: NSRange(location: 0, length: pointCount))
 
-        for p in polylinePoints {
-          coords.append([p.latitude, p.longitude])
-        }
-
-        // Encoded polyline string
-        let encodedPolyline = PolylineEncoder.encode(polylinePoints)
-
-        // Các bước điều hướng (Steps)
+        // Các bước điều hướng (Steps) + ghép polyline từng step để lấy độ chi tiết tối đa
         // Lưu ý: Trong MapKit, mỗi MKRoute.Step dẫn tới điểm rẽ ở CUỐI polyline của step đó.
         // Step 0 thường là bước khởi hành 0m không có chỉ dẫn -> bỏ qua để tránh nhảy bước sớm.
+        var stitchedStepPoints: [CLLocationCoordinate2D] = []
         var stepsData: [[String: Any]] = []
         for step in route.steps {
-          let cleanInstr = step.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-          if cleanInstr.isEmpty && step.distance < 5.0 {
-            continue
-          }
-
           let stepPtCount = step.polyline.pointCount
           var stepCoord = step.polyline.coordinate
           if stepPtCount > 0 {
             var stepPts = [CLLocationCoordinate2D](repeating: CLLocationCoordinate2D(), count: stepPtCount)
             step.polyline.getCoordinates(&stepPts, range: NSRange(location: 0, length: stepPtCount))
+            for pt in stepPts {
+              if let prev = stitchedStepPoints.last {
+                let dLat = abs(prev.latitude - pt.latitude)
+                let dLng = abs(prev.longitude - pt.longitude)
+                if dLat < 0.000004 && dLng < 0.000004 { continue }
+              }
+              stitchedStepPoints.append(pt)
+            }
             // Điểm thực hiện thao tác rẽ nằm ở CUỐI đoạn đường của step
             if let lastPt = stepPts.last {
               stepCoord = lastPt
             }
+          }
+
+          let cleanInstr = step.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+          if cleanInstr.isEmpty && step.distance < 5.0 {
+            continue
           }
 
           let stepDict: [String: Any] = [
@@ -269,6 +270,18 @@ class AppleMapsService: NSObject, MKLocalSearchCompleterDelegate {
           ]
           stepsData.append(stepDict)
         }
+
+        let polylinePoints = (stitchedStepPoints.count > overviewPoints.count)
+          ? stitchedStepPoints
+          : overviewPoints
+        var coords: [[Double]] = []
+        coords.reserveCapacity(polylinePoints.count)
+        for p in polylinePoints {
+          coords.append([p.latitude, p.longitude])
+        }
+
+        // Encoded polyline string
+        let encodedPolyline = PolylineEncoder.encode(polylinePoints)
 
         let routeDict: [String: Any] = [
           "routeIndex": index,
