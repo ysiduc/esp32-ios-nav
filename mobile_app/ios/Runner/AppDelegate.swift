@@ -566,7 +566,7 @@ import UniformTypeIdentifiers
       let off = scrollX.truncatingRemainder(dividingBy: loopDist)
       streetNs.draw(at: CGPoint(x: 8.0 - off, y: 26.0), withAttributes: streetAttrs)
       streetNs.draw(at: CGPoint(x: 8.0 - off + loopDist, y: 26.0), withAttributes: streetAttrs)
-      ctx.restore()
+      ctx.restoreGState()
     } else {
       streetNs.draw(at: CGPoint(x: 8.0, y: 26.0), withAttributes: streetAttrs)
     }
@@ -708,7 +708,7 @@ import UniformTypeIdentifiers
     ctx.move(to: CGPoint(x: 20.0, y: 181.0))
     ctx.addLine(to: CGPoint(x: 14.0, y: 187.0))
     ctx.strokePath()
-    ctx.restore()
+    ctx.restoreGState()
 
     let etaAttrs: [NSAttributedString.Key: Any] = [
       .font: UIFont.systemFont(ofSize: 11.0, weight: .heavy),
