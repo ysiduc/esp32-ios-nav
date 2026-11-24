@@ -10,7 +10,7 @@ on:
 jobs:
   build-flutter-ios:
     name: Compile Flutter iOS IPA
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 90
 
     steps:
